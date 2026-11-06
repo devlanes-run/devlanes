@@ -152,13 +152,33 @@ pub async fn call(
             } else {
                 Value::Null
             };
+            // Only the board shows box lanes, and `status` lists only the
+            // boxes' link states, so `remote ls` runs when a box is linked
+            // and the card asked for no single lane.
+            let linked = output
+                .data
+                .get("hosts")
+                .and_then(Value::as_array)
+                .is_some_and(|hosts| !hosts.is_empty());
+            let hosts = if linked && args.lane.is_none() {
+                let ls = ["remote".to_owned(), "ls".to_owned()];
+                let output = runner.json(&cwd, &ls, &context.ct).await.map_err(io)?;
+                if output.exit_code == 0 {
+                    output.data
+                } else {
+                    Value::Null
+                }
+            } else {
+                Value::Null
+            };
             let lanes = output
                 .data
                 .get("items")
                 .and_then(Value::as_array)
                 .map_or(0, Vec::len);
             let mut result = text_result(format!("{lanes} lanes"), false);
-            result.structured_content = Some(json!({"status": output.data, "top": top}));
+            result.structured_content =
+                Some(json!({"status": output.data, "top": top, "hosts": hosts}));
             Ok(result.into())
         }
         "app_logs" => {

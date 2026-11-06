@@ -18,6 +18,8 @@ sha2.workspace = true
 
 [dev-dependencies]
 devlanes-proto = { path = "../proto" }
+# The box registry `remote ls` lists, for the box lane fixtures.
+devlanes-transport = { path = "../transport" }
 insta = { version = "1", features = ["json"] }
 serde_json.workspace = true
 sha2.workspace = true

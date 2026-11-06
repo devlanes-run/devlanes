@@ -45,7 +45,8 @@ pub const CWD: &str = "Directory to run in, which picks the worktree and its lan
 Relative paths start from the server's directory.";
 
 /// Description of the app-only `app_snapshot` tool.
-pub const APP_SNAPSHOT: &str = "Lanes and units for the lane card, with metrics when asked.";
+pub const APP_SNAPSHOT: &str = "Lanes and units for the lane card, with metrics when asked, \
+and the lanes of linked boxes when no lane is asked for.";
 
 /// Description of the app-only `app_logs` tool.
 pub const APP_LOGS: &str = "Log lines of units for the card's log viewer.";

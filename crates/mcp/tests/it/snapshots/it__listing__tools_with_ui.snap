@@ -74,7 +74,7 @@ expression: tools
   },
   {
     "name": "app_snapshot",
-    "description": "Lanes and units for the lane card, with metrics when asked.",
+    "description": "Lanes and units for the lane card, with metrics when asked, and the lanes of linked boxes when no lane is asked for.",
     "inputSchema": {
       "type": "object",
       "properties": {

@@ -236,6 +236,85 @@ export function laneUrl(lane) {
 }
 
 /**
+ * The lanes of linked boxes in `remote ls --json` output, shaped like the
+ * LaneSummary rows of the board, as `BoxHost::lanes` in crates/tui/src/boxes.rs
+ * builds them. `reference` is `acme@1 @hetzner`, `box` the lane's own
+ * reference on the box, `link` the box's link state and `skipped` the
+ * `skipped_lanes` entry when this machine does not mirror the lane.
+ * @param {any} list the `host.list` document
+ * @returns {any[]}
+ */
+export function boxLanes(list) {
+  const rows = [];
+  for (const host of (list && list.items) || []) {
+    const registry = host.registry;
+    if (!host.host || !registry) continue;
+    for (const info of registry.lanes || []) {
+      const box = `${info.key.project}@${info.key.lane}`;
+      const own = (registry.units || []).filter((u) => `${u.key.lane.project}@${u.key.lane.lane}` === box);
+      const units = own
+        .filter((u) => u.key.kind !== 'container')
+        .map((u) => {
+          const urls = boxUrls(host, box, u);
+          return { name: u.key.name, state: u.state, kind: u.key.kind, role: u.key.kind, hidden: u.hidden, urls, public_url: urls[0] };
+        });
+      const containers = own.filter((u) => u.key.kind === 'container' && !u.hidden);
+      rows.push({
+        reference: `${box} @${host.host}`,
+        box,
+        host: host.host,
+        link: host.state,
+        project: info.key.project,
+        index: info.index,
+        units,
+        state: boxLaneState(units, containers.length > 0),
+        skipped: (host.skipped_lanes || []).find((s) => s.lane === box) || null,
+      });
+    }
+  }
+  return rows.sort((a, b) => a.project.localeCompare(b.project) || a.index - b.index || a.host.localeCompare(b.host));
+}
+
+/**
+ * What opens a box unit on this machine, as the TUI lists it: the URLs of its
+ * hostnames this machine routes, then the loopback address of each port
+ * mirrored here, IPv4 when it is bound there.
+ * @param {any} host a `host.list` item
+ * @param {string} box the lane's reference on the box
+ * @param {any} unit a registry unit
+ * @returns {string[]}
+ */
+function boxUrls(host, box, unit) {
+  const urls = [];
+  for (const name of unit.hosts || []) {
+    const route = (host.routes || []).find((r) => r.host.toLowerCase() === name.host.toLowerCase());
+    if (route && route.url) urls.push(route.url);
+  }
+  for (const port of unit.ports || []) {
+    const mirrored = (host.ports || []).find((p) => p.port === port.port && p.lane === box && p.unit === unit.key.name);
+    if (!mirrored || (mirrored.state || 'bound') !== 'bound') continue;
+    const addresses = mirrored.addresses || [];
+    if (addresses.includes('127.0.0.1')) urls.push(`http://127.0.0.1:${port.port}`);
+    else if (addresses.includes('::1')) urls.push(`http://[::1]:${port.port}`);
+  }
+  return [...new Set(urls)];
+}
+
+/**
+ * A box lane's state from its services, as the TUI derives it: starting while
+ * one starts, running while one is up or a container runs, then failed, else idle.
+ * @param {any[]} units
+ * @param {boolean} containers
+ */
+function boxLaneState(units, containers) {
+  const services = units.filter((u) => u.kind === 'service');
+  if (services.some((u) => ['starting', 'queued'].includes(u.state))) return 'starting';
+  if (containers || services.some((u) => ['ready', 'running'].includes(u.state))) return 'running';
+  if (services.some((u) => u.state === 'failed')) return 'failed';
+  return 'idle';
+}
+
+/**
  * A unit reference such as `acme@2:api`; `unit` may already be one.
  * @param {string} lane
  * @param {string} unit

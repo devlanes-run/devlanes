@@ -76,7 +76,15 @@ fn main() -> ExitCode {
         }
     }
     let data = if has("status") {
-        json!({"items": [{"reference": "acme@1", "state": "running", "units": []}]})
+        let mut status =
+            json!({"items": [{"reference": "acme@1", "state": "running", "units": []}]});
+        // A linked box, which `status` lists by its link state only.
+        if var("FAKE_HOSTS").is_some() {
+            status["hosts"] = json!([{"host": "hetzner", "state": "connected"}]);
+        }
+        status
+    } else if has("remote") && has("ls") {
+        json!({"items": [{"host": "hetzner", "state": "connected", "registry": {"lanes": [], "units": []}}]})
     } else if has("top") {
         json!({"lanes": []})
     } else if has("logs") {

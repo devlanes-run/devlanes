@@ -1,0 +1,546 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: boxes
+---
+{
+  "items": [
+    {
+      "host": "ci-box",
+      "state": "reconnecting",
+      "transport": "ssh",
+      "retry_in_ms": 4000,
+      "error": "connection refused",
+      "last_connected_ms": 1793913600000
+    },
+    {
+      "host": "fork-b",
+      "state": "needs_pairing",
+      "transport": "ssh",
+      "connected_since_ms": null,
+      "ports": [
+        {
+          "port": 30060,
+          "lane": "acme@6",
+          "unit": "web",
+          "state": "bound",
+          "addresses": [
+            "127.0.0.1",
+            "::1"
+          ],
+          "conflicts": [],
+          "relay": null,
+          "last_error": null
+        }
+      ],
+      "routes": [
+        {
+          "host": "web.acme6.localhost",
+          "port": 30060,
+          "lane": "acme@6",
+          "unit": "web",
+          "url": "https://web.acme6.localhost",
+          "state": "pairing_needed"
+        }
+      ],
+      "skipped_lanes": [
+        {
+          "lane": "shop@0",
+          "hosts": [
+            "web.shop.localhost"
+          ],
+          "box": "hetzner",
+          "reason": "hetzner's shop@0 is in use",
+          "cause": "box_chosen",
+          "winner": "hetzner",
+          "winner_lane": "shop@0",
+          "can_use": true
+        }
+      ],
+      "skipped_hosts": [],
+      "syncs": [],
+      "warnings": [],
+      "registry": {
+        "lanes": [
+          {
+            "key": {
+              "project": "acme",
+              "lane": "6"
+            },
+            "index": 6,
+            "domain": "acme6.localhost"
+          },
+          {
+            "key": {
+              "project": "shop",
+              "lane": "0"
+            },
+            "index": 0,
+            "domain": "shop.localhost"
+          }
+        ],
+        "units": [
+          {
+            "key": {
+              "lane": {
+                "project": "acme",
+                "lane": "6"
+              },
+              "kind": "service",
+              "name": "web"
+            },
+            "hidden": false,
+            "state": "ready",
+            "ports": [
+              {
+                "name": "default",
+                "port": 30060
+              }
+            ],
+            "hosts": [
+              {
+                "host": "web.acme6.localhost",
+                "port": 30060,
+                "fallback": false,
+                "host_header": "keep"
+              }
+            ]
+          },
+          {
+            "key": {
+              "lane": {
+                "project": "shop",
+                "lane": "0"
+              },
+              "kind": "service",
+              "name": "web"
+            },
+            "hidden": false,
+            "state": "ready",
+            "ports": [
+              {
+                "name": "default",
+                "port": 30000
+              }
+            ],
+            "hosts": [
+              {
+                "host": "web.shop.localhost",
+                "port": 30000,
+                "fallback": false,
+                "host_header": "keep"
+              }
+            ]
+          }
+        ]
+      },
+      "box": {
+        "version": "0.11.0",
+        "label": null,
+        "https_port": 443,
+        "ports_range": "30000-30999"
+      },
+      "suffixes": [
+        "localhost"
+      ],
+      "proxy": {
+        "https_port": 443,
+        "box_port": null,
+        "open": false
+      },
+      "chosen_lanes": []
+    },
+    {
+      "host": "hetzner",
+      "state": "connected",
+      "transport": "ssh",
+      "connected_since_ms": 1793992800000,
+      "ports": [
+        {
+          "port": 30010,
+          "lane": "acme@1",
+          "unit": "api",
+          "state": "bound",
+          "addresses": [
+            "127.0.0.1",
+            "::1"
+          ],
+          "conflicts": [],
+          "relay": null,
+          "last_error": null
+        },
+        {
+          "port": 30011,
+          "lane": "acme@1",
+          "unit": "web",
+          "state": "bound",
+          "addresses": [
+            "127.0.0.1",
+            "::1"
+          ],
+          "conflicts": [],
+          "relay": null,
+          "last_error": null
+        },
+        {
+          "port": 30013,
+          "lane": "acme@1",
+          "unit": "postgres",
+          "state": "bound",
+          "addresses": [
+            "127.0.0.1",
+            "::1"
+          ],
+          "conflicts": [],
+          "relay": null,
+          "last_error": null
+        },
+        {
+          "port": 30030,
+          "lane": "acme@3",
+          "unit": "api",
+          "state": "bound",
+          "addresses": [
+            "127.0.0.1",
+            "::1"
+          ],
+          "conflicts": [],
+          "relay": null,
+          "last_error": null
+        },
+        {
+          "port": 30031,
+          "lane": "acme@3",
+          "unit": "web",
+          "state": "bound",
+          "addresses": [
+            "127.0.0.1",
+            "::1"
+          ],
+          "conflicts": [],
+          "relay": null,
+          "last_error": null
+        },
+        {
+          "port": 30000,
+          "lane": "shop@0",
+          "unit": "web",
+          "state": "bound",
+          "addresses": [
+            "127.0.0.1",
+            "::1"
+          ],
+          "conflicts": [],
+          "relay": null,
+          "last_error": null
+        }
+      ],
+      "routes": [
+        {
+          "host": "api.acme1.localhost",
+          "port": 30010,
+          "lane": "acme@1",
+          "unit": "api",
+          "url": "https://api.acme1.localhost",
+          "state": "ready"
+        },
+        {
+          "host": "web.acme1.localhost",
+          "port": 30011,
+          "lane": "acme@1",
+          "unit": "web",
+          "url": "https://web.acme1.localhost",
+          "state": "ready"
+        },
+        {
+          "host": "api.acme3.localhost",
+          "port": 30030,
+          "lane": "acme@3",
+          "unit": "api",
+          "url": "https://api.acme3.localhost",
+          "state": "ready"
+        },
+        {
+          "host": "web.acme3.localhost",
+          "port": 30031,
+          "lane": "acme@3",
+          "unit": "web",
+          "url": "https://web.acme3.localhost",
+          "state": "starting"
+        },
+        {
+          "host": "web.shop.localhost",
+          "port": 30000,
+          "lane": "shop@0",
+          "unit": "web",
+          "url": "https://web.shop.localhost",
+          "state": "ready"
+        }
+      ],
+      "skipped_lanes": [
+        {
+          "lane": "acme@0",
+          "hosts": [
+            "web.acme.localhost"
+          ],
+          "box": null,
+          "reason": "acme@0 runs on this machine",
+          "cause": "local_running",
+          "winner": null,
+          "winner_lane": "acme@0",
+          "can_use": false,
+          "holds": "processes"
+        }
+      ],
+      "skipped_hosts": [],
+      "syncs": [],
+      "warnings": [],
+      "registry": {
+        "lanes": [
+          {
+            "key": {
+              "project": "acme",
+              "lane": "0"
+            },
+            "index": 0,
+            "domain": "acme.localhost"
+          },
+          {
+            "key": {
+              "project": "acme",
+              "lane": "1"
+            },
+            "index": 1,
+            "domain": "acme1.localhost"
+          },
+          {
+            "key": {
+              "project": "acme",
+              "lane": "3"
+            },
+            "index": 3,
+            "domain": "acme3.localhost"
+          },
+          {
+            "key": {
+              "project": "shop",
+              "lane": "0"
+            },
+            "index": 0,
+            "domain": "shop.localhost"
+          }
+        ],
+        "units": [
+          {
+            "key": {
+              "lane": {
+                "project": "acme",
+                "lane": "0"
+              },
+              "kind": "service",
+              "name": "web"
+            },
+            "hidden": false,
+            "state": "ready",
+            "ports": [
+              {
+                "name": "default",
+                "port": 30000
+              }
+            ],
+            "hosts": [
+              {
+                "host": "web.acme.localhost",
+                "port": 30000,
+                "fallback": false,
+                "host_header": "keep"
+              }
+            ]
+          },
+          {
+            "key": {
+              "lane": {
+                "project": "acme",
+                "lane": "1"
+              },
+              "kind": "service",
+              "name": "api"
+            },
+            "hidden": false,
+            "state": "ready",
+            "ports": [
+              {
+                "name": "default",
+                "port": 30010
+              }
+            ],
+            "hosts": [
+              {
+                "host": "api.acme1.localhost",
+                "port": 30010,
+                "fallback": false,
+                "host_header": "keep"
+              }
+            ]
+          },
+          {
+            "key": {
+              "lane": {
+                "project": "acme",
+                "lane": "1"
+              },
+              "kind": "service",
+              "name": "web"
+            },
+            "hidden": false,
+            "state": "ready",
+            "ports": [
+              {
+                "name": "default",
+                "port": 30011
+              }
+            ],
+            "hosts": [
+              {
+                "host": "web.acme1.localhost",
+                "port": 30011,
+                "fallback": false,
+                "host_header": "keep"
+              }
+            ]
+          },
+          {
+            "key": {
+              "lane": {
+                "project": "acme",
+                "lane": "1"
+              },
+              "kind": "task",
+              "name": "migrate"
+            },
+            "hidden": false,
+            "state": "exited",
+            "ports": [],
+            "hosts": []
+          },
+          {
+            "key": {
+              "lane": {
+                "project": "acme",
+                "lane": "1"
+              },
+              "kind": "container",
+              "name": "postgres"
+            },
+            "hidden": false,
+            "state": "running",
+            "ports": [
+              {
+                "name": "default",
+                "port": 30013
+              }
+            ],
+            "hosts": []
+          },
+          {
+            "key": {
+              "lane": {
+                "project": "acme",
+                "lane": "3"
+              },
+              "kind": "service",
+              "name": "api"
+            },
+            "hidden": false,
+            "state": "ready",
+            "ports": [
+              {
+                "name": "default",
+                "port": 30030
+              }
+            ],
+            "hosts": [
+              {
+                "host": "api.acme3.localhost",
+                "port": 30030,
+                "fallback": false,
+                "host_header": "keep"
+              }
+            ]
+          },
+          {
+            "key": {
+              "lane": {
+                "project": "acme",
+                "lane": "3"
+              },
+              "kind": "service",
+              "name": "web"
+            },
+            "hidden": false,
+            "state": "starting",
+            "ports": [
+              {
+                "name": "default",
+                "port": 30031
+              }
+            ],
+            "hosts": [
+              {
+                "host": "web.acme3.localhost",
+                "port": 30031,
+                "fallback": false,
+                "host_header": "keep"
+              }
+            ]
+          },
+          {
+            "key": {
+              "lane": {
+                "project": "shop",
+                "lane": "0"
+              },
+              "kind": "service",
+              "name": "web"
+            },
+            "hidden": false,
+            "state": "ready",
+            "ports": [
+              {
+                "name": "default",
+                "port": 30000
+              }
+            ],
+            "hosts": [
+              {
+                "host": "web.shop.localhost",
+                "port": 30000,
+                "fallback": false,
+                "host_header": "keep"
+              }
+            ]
+          }
+        ]
+      },
+      "box": {
+        "version": "0.11.0",
+        "label": null,
+        "https_port": 443,
+        "ports_range": "30000-30999"
+      },
+      "suffixes": [
+        "localhost"
+      ],
+      "proxy": {
+        "https_port": 443,
+        "box_port": null,
+        "open": false
+      },
+      "chosen_lanes": [
+        "shop@0"
+      ]
+    }
+  ],
+  "yielded_local_lanes": [],
+  "truncated": false,
+  "next_cursor": null
+}

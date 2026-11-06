@@ -324,16 +324,29 @@ async fn cancelling_kills_the_command() {
 }
 
 #[tokio::test]
-/// The app-only tools run JSON commands and return their documents.
+/// The app-only tools run JSON commands and return their documents. With a
+/// box linked, a snapshot of every lane adds `remote ls`; one of a lane does not.
 async fn app_tools_return_json() {
     tokio::time::timeout(LIMIT, async {
-        let harness = connect(TestClient::new().with_ui(), Lifecycle::Initialize, |_| {}).await;
+        let harness = connect(
+            TestClient::new().with_ui(),
+            Lifecycle::Initialize,
+            |config| {
+                config.env.insert("FAKE_HOSTS".into(), "1".into());
+            },
+        )
+        .await;
         let snapshot = harness
             .call_with("app_snapshot", json!({"lane": "acme@1", "metrics": true}))
             .await;
         let structured = snapshot.structured_content.expect("structured content");
         assert_eq!(structured["status"]["items"][0]["reference"], "acme@1");
         assert_eq!(structured["top"], json!({"lanes": []}));
+        assert_eq!(structured["hosts"], Value::Null);
+        let board = harness.call_with("app_snapshot", json!({})).await;
+        let structured = board.structured_content.expect("structured content");
+        assert_eq!(structured["hosts"]["items"][0]["host"], "hetzner");
+        assert_eq!(structured["top"], Value::Null);
         let logs = harness
             .call_with(
                 "app_logs",
@@ -359,6 +372,8 @@ async fn app_tools_return_json() {
             [
                 "--output json status acme@1",
                 "--output json debug top --lane acme@1",
+                "--output json status",
+                "--output json remote ls",
                 "--output json logs acme@1:api --tail 50 --grep error",
                 "--output agent stop acme@1:api",
             ]
