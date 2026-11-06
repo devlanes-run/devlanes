@@ -32,6 +32,11 @@ pub struct Preview {
     /// The host's container width in pixels; `None` fills the preview.
     pub width: Option<u32>,
     pub display_modes: &'static [&'static str],
+    /// The display mode the host opens the card in.
+    pub display_mode: &'static str,
+    /// Clicks the fake host makes in the card: `{click, afterMs}`, `click` the
+    /// start of a button's label.
+    pub steps: Vec<Value>,
     /// `ui/notifications/tool-input` arguments: `{args, cwd}`.
     pub input: Value,
     /// The `CallToolResult`; `None` keeps the call running.
@@ -95,6 +100,11 @@ pub fn all() -> Vec<Preview> {
             "clean plan of a read-only server",
         ),
         daemon_stopped(),
+        superseded(),
+        poll_stopped(),
+        clean_confirm(),
+        logs_fullscreen(),
+        board_fullscreen(),
     ]
 }
 
@@ -267,8 +277,14 @@ fn page(items: Vec<LaneSummary>) -> Value {
     serde_json::to_value(Page::complete(items)).expect("fixtures serialize")
 }
 
-/// The MCP server's `structuredContent` around a command's JSON output.
+/// The MCP server's `structuredContent` around a command's JSON output. Data that
+/// names one lane (a start or clean result, a status of one lane) makes the
+/// server's first card for that lane in these fixtures, so `card` is 1.
 fn content(command: &str, args: &[&str], exit_code: i32, view: Option<&str>, data: Value) -> Value {
+    let one_lane = data["lane"].is_string()
+        || data["items"]
+            .as_array()
+            .is_some_and(|items| items.len() == 1 && items[0]["reference"].is_string());
     json!({
         "command": command,
         "args": args,
@@ -277,6 +293,7 @@ fn content(command: &str, args: &[&str], exit_code: i32, view: Option<&str>, dat
         "view": view,
         "data": data,
         "read_only": false,
+        "card": one_lane.then_some(1),
     })
 }
 
@@ -372,9 +389,14 @@ fn snapshot(lanes: &[&LaneSummary]) -> Value {
 fn snapshot_with(lanes: &[&LaneSummary], extra: &Value, boxes: Value) -> Value {
     let mut status = page(lanes.iter().map(|lane| (*lane).clone()).collect());
     merge(&mut status, extra);
+    // Each fixture's card is the only one for its lane.
+    let newest: serde_json::Map<String, Value> = lanes
+        .iter()
+        .map(|lane| (lane.reference.clone(), json!(1)))
+        .collect();
     app(
         &format!("{} lanes", lanes.len()),
-        json!({"status": status, "top": top(lanes), "hosts": boxes}),
+        json!({"status": status, "top": top(lanes), "hosts": boxes, "newest_card": newest}),
     )
 }
 
@@ -495,6 +517,8 @@ fn lane_starting() -> Preview {
         title: "lane card while it starts",
         width: None,
         display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&["start"]),
         result: None,
         result_delay_ms: 0,
@@ -526,6 +550,8 @@ fn lane_ready() -> Preview {
         title: "lane card, ready",
         width: None,
         display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&["start"]),
         result: Some(tool_result(
             "acme@1 (feat/checkout): 3/3 ready\nready acme@1:api    https://api.acme1.localhost\nready acme@1:web    https://acme1.localhost\nready acme@1:worker",
@@ -572,6 +598,8 @@ fn lane_failed() -> Preview {
         title: "lane card with a failed service",
         width: None,
         display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&args),
         result: Some(tool_result(
             "failed acme@2 fix/auth-redirect 2/3 failed=api\nfailed acme@2:api exit=1 ready check http /health did not pass in 30s",
@@ -613,6 +641,8 @@ fn lane_frozen() -> Preview {
         title: "lane card, frozen",
         width: None,
         display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&args),
         result: Some(tool_result(
             "running acme@3 feat/search 3/3 power=frozen",
@@ -687,6 +717,8 @@ fn board_of(
         title,
         width,
         display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&["status"]),
         result: Some(tool_result(
             &text,
@@ -1000,6 +1032,8 @@ fn failure_start() -> Preview {
         title: "failure card after a failed start",
         width: None,
         display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&["start"]),
         result: Some(tool_result(
             "acme@2 (fix/auth-redirect): 1/3 ready, 2 failed\nfailed acme@2:api exit=1\napi#118 TypeError: Cannot read properties of undefined (reading 'callbackUrl')",
@@ -1035,6 +1069,8 @@ fn failure_why() -> Preview {
         title: "failure card for debug why",
         width: None,
         display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&args),
         result: Some(tool_result(
             "failed acme@2:api exit=1 ready check http /health did not pass in 30s\nmore: devlanes logs acme@2:api --tail 200",
@@ -1059,9 +1095,11 @@ fn failure_logs() -> Preview {
     let args = ["logs", "acme@2:api", "--tail", "17"];
     Preview {
         name: "failure-logs",
-        title: "log viewer for logs, inline only",
+        title: "failure card for logs",
         width: None,
-        display_modes: &["inline"],
+        display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&args),
         result: Some(tool_result(
             "api#103 > acme-api@0.4.0 dev\n...\napi#119 [devlanes] process exited with code 1",
@@ -1152,6 +1190,8 @@ fn clean() -> Preview {
         title: "clean planner",
         width: None,
         display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&args),
         result: Some(tool_result(
             "acme@4 (chore/deps): a clean deletes volume acme-lane4_pgdata 1.2 GiB and the data folder 310 MiB\nask the user, then run devlanes lane clean acme@4 --yes",
@@ -1181,6 +1221,8 @@ fn pair() -> Preview {
         title: "pairing code",
         width: Some(480),
         display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&["daemon", "pair"]),
         result: Some(tool_result(
             "K7QM-3XWD (valid 10 minutes)",
@@ -1204,6 +1246,68 @@ fn pair() -> Preview {
     }
 }
 
+/// The ready lane card after the agent made a newer card for acme@1: the first
+/// snapshot says so, and the card shrinks to one line and stops polling.
+fn superseded() -> Preview {
+    let mut preview = lane_ready();
+    preview.name = "lane-superseded";
+    preview.title = "older lane card once a newer one is below";
+    preview.result_delay_ms = 0;
+    for rule in &mut preview.tools {
+        if rule["name"] == "app_snapshot" {
+            rule["results"][0]["structuredContent"]["newest_card"]["acme@1"] = json!(2);
+        }
+    }
+    preview
+}
+
+/// The ready lane card whose snapshots fail after the first one, until the card
+/// gives up and shows when it was last fresh (about 15 seconds in).
+fn poll_stopped() -> Preview {
+    let mut preview = lane_ready();
+    preview.name = "poll-stopped";
+    preview.title = "lane card after polling stopped";
+    let failed = json!({
+        "content": [{"type": "text", "text": "devlanes did not answer"}],
+        "isError": true,
+    });
+    for rule in &mut preview.tools {
+        if rule["name"] == "app_snapshot" {
+            let first = rule["results"][0].clone();
+            rule["results"] = json!([first, failed]);
+        }
+    }
+    preview
+}
+
+/// The clean planner after the person pressed "Clean @4": the action bar asks
+/// to confirm.
+fn clean_confirm() -> Preview {
+    let mut preview = clean();
+    preview.name = "clean-confirm";
+    preview.title = "clean planner, confirm step";
+    preview.steps = vec![json!({"click": "Clean @4", "afterMs": 2500})];
+    preview
+}
+
+/// The failure card of `logs` opened in fullscreen: the whole log with a filter.
+fn logs_fullscreen() -> Preview {
+    let mut preview = failure_logs();
+    preview.name = "logs-fullscreen";
+    preview.title = "fullscreen log viewer";
+    preview.display_mode = "fullscreen";
+    preview
+}
+
+/// The lanes board opened in fullscreen: CPU and a button each per lane.
+fn board_fullscreen() -> Preview {
+    let mut preview = board();
+    preview.name = "board-fullscreen";
+    preview.title = "fullscreen lanes board";
+    preview.display_mode = "fullscreen";
+    preview
+}
+
 fn text() -> Preview {
     let args = ["exec", "--name", "storybook", "--", "pnpm", "storybook"];
     Preview {
@@ -1211,6 +1315,8 @@ fn text() -> Preview {
         title: "a command without a card, which stays empty",
         width: None,
         display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
         input: input(&args),
         result: Some(tool_result(
             "ready acme@0:storybook pid=41234\n  logs: devlanes logs acme@0:storybook --tail 100\n  stop: devlanes stop acme@0:storybook",

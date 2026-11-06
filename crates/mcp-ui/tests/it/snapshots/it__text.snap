@@ -16,5 +16,6 @@ expression: preview.structured()
   "exit_code": 0,
   "view": null,
   "data": null,
-  "read_only": false
+  "read_only": false,
+  "card": null
 }

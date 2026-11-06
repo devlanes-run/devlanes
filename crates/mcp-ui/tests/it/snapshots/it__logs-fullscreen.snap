@@ -1,0 +1,143 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "logs",
+  "args": [
+    "logs",
+    "acme@2:api",
+    "--tail",
+    "17"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": "failure",
+  "data": {
+    "items": [
+      {
+        "unit": "api",
+        "seq": 103,
+        "timestamp_ms": 1793999765150,
+        "text": "> acme-api@0.4.0 dev",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 104,
+        "timestamp_ms": 1793999765200,
+        "text": "> tsx watch src/server.ts",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 105,
+        "timestamp_ms": 1793999765250,
+        "text": "[info] node v22.11.0, pnpm 9.12",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 106,
+        "timestamp_ms": 1793999765300,
+        "text": "[info] PORT=20023 HOST=127.0.0.1",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 107,
+        "timestamp_ms": 1793999765350,
+        "text": "[info] DEVLANES_LANE=2",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 108,
+        "timestamp_ms": 1793999765400,
+        "text": "[info] reading .env.local",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 109,
+        "timestamp_ms": 1793999765450,
+        "text": "[info] loading config",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 110,
+        "timestamp_ms": 1793999765500,
+        "text": "[info] connecting to postgres 127.0.0.1:20021/acme_2",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 111,
+        "timestamp_ms": 1793999765550,
+        "text": "[warn] AUTH_REDIRECT_URL not set, using default",
+        "level": "warn"
+      },
+      {
+        "unit": "api",
+        "seq": 112,
+        "timestamp_ms": 1793999765600,
+        "text": "[info] postgres ready (12 ms)",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 113,
+        "timestamp_ms": 1793999765650,
+        "text": "[info] registering routes (42)",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 114,
+        "timestamp_ms": 1793999765700,
+        "text": "[info] auth: building redirect table",
+        "level": "info"
+      },
+      {
+        "unit": "api",
+        "seq": 115,
+        "timestamp_ms": 1793999765750,
+        "text": "TypeError: Cannot read properties of undefined (reading 'callbackUrl')",
+        "level": "error"
+      },
+      {
+        "unit": "api",
+        "seq": 116,
+        "timestamp_ms": 1793999765800,
+        "text": "    at buildRedirect (src/auth/redirect.ts:31:22)",
+        "level": "error"
+      },
+      {
+        "unit": "api",
+        "seq": 117,
+        "timestamp_ms": 1793999765850,
+        "text": "    at registerAuth (src/routes/auth.ts:12:3)",
+        "level": "error"
+      },
+      {
+        "unit": "api",
+        "seq": 118,
+        "timestamp_ms": 1793999765900,
+        "text": "    at main (src/server.ts:48:9)",
+        "level": "error"
+      },
+      {
+        "unit": "api",
+        "seq": 119,
+        "timestamp_ms": 1793999765950,
+        "text": "[devlanes] process exited with code 1",
+        "level": "info"
+      }
+    ],
+    "truncated": true,
+    "next_cursor": "before:api#103"
+  },
+  "read_only": false,
+  "card": null
+}

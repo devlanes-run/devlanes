@@ -150,5 +150,6 @@ expression: preview.structured()
     "truncated": false,
     "next_cursor": null
   },
-  "read_only": false
+  "read_only": false,
+  "card": 1
 }
