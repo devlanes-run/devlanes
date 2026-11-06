@@ -19,6 +19,10 @@ use serde_json::json;
 /// still going then.
 const BUDGET: Duration = Duration::from_millis(300);
 
+/// Longest wait for stdin to end; Claude Code writes its JSON and closes it
+/// right after starting the command.
+const STDIN_WAIT: Duration = Duration::from_millis(100);
+
 /// Most bytes read from stdin; Claude Code sends a few KiB.
 const STDIN_LIMIT: u64 = 1 << 20;
 
@@ -41,7 +45,7 @@ pub fn run() -> ExitCode {
 
 /// The rendered line, or `None` without a daemon, a lane or an answer.
 async fn line() -> Option<String> {
-    let input = tokio::task::spawn_blocking(|| {
+    let read = tokio::task::spawn_blocking(|| {
         let mut text = String::new();
         let stdin = std::io::stdin();
         // A terminal means a person typed the command: there is no JSON to wait for.
@@ -49,9 +53,13 @@ async fn line() -> Option<String> {
             let _ = stdin.lock().take(STDIN_LIMIT).read_to_string(&mut text);
         }
         StatuslineInput::parse(&text)
-    })
-    .await
-    .ok()?;
+    });
+    // A host that leaves stdin open without writing must not use up the
+    // budget: after a short wait the line is for the current directory.
+    let input = match tokio::time::timeout(STDIN_WAIT, read).await {
+        Ok(read) => read.ok()?,
+        Err(_) => StatuslineInput::parse(""),
+    };
     let cwd = match input.cwd {
         Some(cwd) => cwd,
         None => std::env::current_dir().ok()?,
