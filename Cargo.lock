@@ -1467,6 +1467,7 @@ dependencies = [
  "devlanes-proto",
  "devlanes-version",
  "insta",
+ "is-ai-agent",
  "rmcp",
  "serde",
  "serde_json",
