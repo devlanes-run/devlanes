@@ -820,6 +820,9 @@ Without --start, a terminal asks whether to start the new lane right away."
         /// Lane to clean ([project@]lane) [default: pick from a list]
         #[arg(id = "clean_lane", value_name = "LANE")]
         lane: Option<String>,
+        /// Print what the clean would stop, run and delete, with sizes, and change nothing; needs no --yes
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
     Gc,
@@ -1294,9 +1297,14 @@ impl Cli {
                     Method::LaneNew,
                     json!({"name": name, "start": start, "events": *start && start_events}),
                 ),
-                LaneCommand::Clean { lane } => {
+                LaneCommand::Clean { lane, dry_run } => {
                     context.lane.clone_from(lane);
-                    (Method::LaneClean, json!({"lane": lane}))
+                    let method = if *dry_run {
+                        Method::LaneCleanPlan
+                    } else {
+                        Method::LaneClean
+                    };
+                    (method, json!({"lane": lane}))
                 }
                 LaneCommand::Gc => (Method::LaneGc, json!({})),
             },
@@ -1535,7 +1543,7 @@ impl Cli {
                 (vec!["run"], K::Task, false)
             }
             Some(Command::Lane {
-                command: LaneCommand::Clean { lane: None },
+                command: LaneCommand::Clean { lane: None, .. },
             }) => (vec!["lane", "clean"], K::Lane, false),
             _ => return None,
         };

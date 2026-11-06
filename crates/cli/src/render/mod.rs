@@ -185,6 +185,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::Status | Method::LaneList => lanes::status(data, cx),
         Method::LaneNew => lanes::lane_new(data, cx),
         Method::LaneClean => lanes::lane_clean(data, cx),
+        Method::LaneCleanPlan => lanes::lane_clean_plan(data, cx),
         Method::LaneGc => lanes::lane_gc(data),
         Method::Exec => lanes::exec(data, cx),
         Method::Wait => lanes::wait(data, cx),

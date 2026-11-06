@@ -328,6 +328,7 @@ devlanes lane clean [OPTIONS] [LANE]
 ```
 
 - `[LANE]`: Lane to clean ([project@]lane) [default: pick from a list]
+- `--dry-run`: Print what the clean would stop, run and delete, with sizes, and change nothing; needs no --yes
 
 ### devlanes lane gc
 

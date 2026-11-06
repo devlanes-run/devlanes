@@ -207,6 +207,10 @@ fn entire_command_inventory_builds_actions() {
             &["lane", "clean", "acme@2", "--yes"],
             Some(Method::LaneClean),
         ),
+        (
+            &["lane", "clean", "acme@2", "--dry-run"],
+            Some(Method::LaneCleanPlan),
+        ),
         (&["lane", "gc", "--yes"], Some(Method::LaneGc)),
         (&["infra", "up"], Some(Method::InfraUp)),
         (&["infra", "down"], Some(Method::InfraDown)),

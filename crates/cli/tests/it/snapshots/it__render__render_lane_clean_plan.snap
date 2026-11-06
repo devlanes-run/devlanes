@@ -1,0 +1,49 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+would clean acme@4 (chore/deps):
+  stop      acme@4:api (started by codex)
+  stop      acme@4:web
+  run       drop-cache: redis-cli -n ${{ lane.index }} FLUSHDB
+  teardown  database (in postgres): dropdb acme_4
+  remove    container devlanes-acme-lane4-redis
+  remove    compose container acme-lane4-postgres-1
+  remove    compose project acme-lane4
+  remove    volume acme-lane4_pgdata (1.2 GiB)
+  remove    volume devlanes-acme-lane4-cache (size unknown)
+  delete    data /home/dev/.devlanes/data/acme/7 (310.0 MiB)
+  delete    logs (12.1 KiB)
+  free      ports 20040-20049
+next: devlanes lane clean acme@4 --yes
+--- plain (exit 0)
+would clean acme@4 (chore/deps):
+  stop      acme@4:api (started by codex)
+  stop      acme@4:web
+  run       drop-cache: redis-cli -n ${{ lane.index }} FLUSHDB
+  teardown  database (in postgres): dropdb acme_4
+  remove    container devlanes-acme-lane4-redis
+  remove    compose container acme-lane4-postgres-1
+  remove    compose project acme-lane4
+  remove    volume acme-lane4_pgdata (1.2 GiB)
+  remove    volume devlanes-acme-lane4-cache (size unknown)
+  delete    data /home/dev/.devlanes/data/acme/7 (310.0 MiB)
+  delete    logs (12.1 KiB)
+  free      ports 20040-20049
+next: devlanes lane clean acme@4 --yes
+--- agent (exit 0)
+would clean acme@4 (chore/deps):
+  stop acme@4:api actor=codex
+  stop acme@4:web
+  run drop-cache: redis-cli -n ${{ lane.index }} FLUSHDB
+  teardown database (in postgres): dropdb acme_4
+  remove container devlanes-acme-lane4-redis
+  remove compose container acme-lane4-postgres-1
+  remove compose project acme-lane4
+  remove volume acme-lane4_pgdata (1.2 GiB)
+  remove volume devlanes-acme-lane4-cache (size unknown)
+  delete data /home/dev/.devlanes/data/acme/7 (310.0 MiB)
+  delete logs (12.1 KiB)
+  free ports 20040-20049
+next: devlanes lane clean acme@4 --yes
