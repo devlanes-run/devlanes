@@ -71,6 +71,8 @@ Replicas each get their own ports: `${{ self.port }}` differs per replica, named
 | `${{ lanes.main.services.api.url }}` | the same service in lane 0, for profiles that reuse one backend |
 | `${{ projects.billing.services.api.public_url \| default('https://billing.staging.example.invalid') }}` | a service of another running devlanes project |
 
+`projects.<name>.services` reads one lane of another project, among its lanes that run at least one service: the lane on the same branch, else the one with the same `lane.name` (`main` or `lane<N>`, so the same lane number), else its lane 0. A project with none of these is missing, so give the expression a `default`. The value is fixed when the unit starts; restart it to follow another lane of that project.
+
 A dash in a name becomes an underscore: `services.crm_api`, or `services['crm-api']`. `public_url` does not exist for a service without hosts; filter it with `default` or use `url`.
 
 Two services may read each other's `url` and `public_url`. Only `env.PORT` and `hosts` take part in the cycle check.
@@ -167,7 +169,7 @@ Not every field sees every namespace. `lanes.vars` see `project`, `lane` and `en
 
 ### .env files
 
-`${{ env.X }}` reads the shell that ran devlanes first, then `<worktree>/.env`, falling back to the primary worktree's `.env` (new worktrees have no gitignored files). The `.env` file feeds expressions only; devlanes never injects it into processes. Name what a process needs:
+`${{ env.X }}` reads the shell that ran devlanes first, then the `.env` next to the project file in the lane's worktree, falling back to the same file in the primary worktree (new worktrees have no gitignored files). The `.env` file feeds expressions only; devlanes never injects it into processes. Name what a process needs:
 
 ```yaml devlanes
 global_env:
@@ -177,7 +179,7 @@ global_env:
 
 or let the app load its own dotenv. Most dotenv loaders do not overwrite variables that are already set, so `global_env` wins over the file when both define a key.
 
-Compose interpolation is separate: `infra.env` and the worktree's `.env` (passed with `--env-file`) reach `docker compose`, the process environment does not.
+Compose interpolation is separate: `infra.env` and the `.env` next to the project file (passed with `--env-file`) reach `docker compose`, the process environment does not.
 
 ## Local overrides
 

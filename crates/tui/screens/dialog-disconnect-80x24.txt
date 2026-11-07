@@ -10,8 +10,8 @@
 │   syncs     acm│ Disconnect hetzner?                        │                │
 │   ! the box run│                                            │ll the same     │
 │     release on │ Its ports and hostnames stop working here. │                │
-│   ! the box sto│ Its lanes keep running on the box.         │le-linger or    │
-│     devlanes da│                                            │                │
+│   ! the box sto│ Its lanes keep running on the box.         │ enable-linger  │
+│     "$USER" the│                                            │                │
 │   ! this machin│ y disconnect   n cancel                    │ion denied).    │
 │     Open its ho└────────────────────────────────────────────┘                │
 │                                                                              │
@@ -36,7 +36,7 @@
 9: 0 bold yellow, 4-13 dim, 14-16 green, 17 bold yellow, 19-37 bold, 62 bold yellow, 79 bold yellow
 10: 0 bold yellow, 4-16 yellow, 17 bold yellow, 62 bold yellow, 63-73 yellow, 79 bold yellow
 11: 0 bold yellow, 6-16 yellow, 17 bold yellow, 62 bold yellow, 79 bold yellow
-12: 0 bold yellow, 4-16 yellow, 17 bold yellow, 62 bold yellow, 63-74 yellow, 79 bold yellow
+12: 0 bold yellow, 4-16 yellow, 17 bold yellow, 62 bold yellow, 63-76 yellow, 79 bold yellow
 13: 0 bold yellow, 6-16 yellow, 17 bold yellow, 62 bold yellow, 79 bold yellow
 14: 0 bold yellow, 4-16 yellow, 17 bold yellow, 19 bold, 20-30 dim, 34 bold, 35-41 dim, 62 bold yellow, 63-74 yellow, 79 bold yellow
 15: 0 bold yellow, 6-16 yellow, 17-62 bold yellow, 79 bold yellow

@@ -14,6 +14,8 @@ crates/config/schema.json       linguist-generated=true merge=ours
 crates/config/user-schema.json  linguist-generated=true merge=ours
 docs/reference/cli.md           linguist-generated=true merge=ours
 docs/reference/config.md        linguist-generated=true merge=ours
+# Minified, so diffs show nothing a reviewer can read; rerun `pnpm build` in crates/mcp-ui/ui.
+crates/mcp-ui/ui/dist/lane.html linguist-generated=true -diff merge=ours
 
 # Generated, but left visible in pull request diffs because reviewing them is their purpose.
 crates/tui/screens/*.txt        merge=ours

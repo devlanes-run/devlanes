@@ -524,7 +524,7 @@ pub fn boxes() -> Value {
                        "compared": 214, "errors": [], "error": null, "updated_ms": NOW_MS}],
             "warnings": [
                 format!("the box runs devlanes 0.9.2 and this machine {VERSION}. Install the same release on both."),
-                "the box stops your processes at logout. Run loginctl enable-linger or devlanes daemon install there.",
+                "the box stops your processes at logout. Run `sudo loginctl enable-linger \"$USER\"` there.",
                 "this machine cannot use the box's HTTPS port 443 (permission denied). Open its hostnames on port 8443.",
             ],
             "registry": {

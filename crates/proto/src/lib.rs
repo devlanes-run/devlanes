@@ -146,6 +146,26 @@ pub enum Method {
     LaneNew,
     #[serde(rename = "lane.clean")]
     LaneClean,
+    /// What `lane.clean` with the same `{lane}` params would do, doing none of
+    /// it and needing no `yes` (`lane clean --dry-run`). A method of its own
+    /// rather than a flag, so an older daemon answers `unknown_method` instead
+    /// of cleaning. Reply `{lane, project, index, branch, path, worktree,
+    /// running, tasks, teardown, hooks_skipped, containers, compose_project,
+    /// volumes, infra_error, data_dir, logs_bytes, ports}`: `worktree` is
+    /// `present` or `missing`; `running` the live units as `{unit, actor}`;
+    /// `tasks` the `lane.clean` tasks and `teardown` the `infra.teardown`
+    /// entries it would run, as `{name, run}` (teardown adds `container`), with
+    /// `run` as the config writes it; `hooks_skipped` why neither runs
+    /// (`worktree_missing`, `needs_env` or a config error code), else `null`;
+    /// `containers` the lane's own containers as `{name, kind}` (`container` or
+    /// `compose`), `compose_project` the lane's Compose project when it has
+    /// containers or volumes, `volumes` as `{name, bytes}`; `infra_error` the
+    /// message when the containers could not be listed; `data_dir` `{path,
+    /// bytes}` or `null` without a lane record; `logs_bytes` the size of the
+    /// logs it deletes; `ports` the block it frees as `{start, size}`. Sizes are
+    /// `null` when unknown.
+    #[serde(rename = "lane.clean.plan")]
+    LaneCleanPlan,
     #[serde(rename = "lane.gc")]
     LaneGc,
     #[serde(rename = "exec")]
@@ -623,6 +643,24 @@ pub const REPLACE_STEP: &str = "waiting for the old daemon";
 /// The line a restarting client writes on the replacing daemon's stdin, after
 /// the plan, right before it asks the old daemon to stop.
 pub const REPLACE_GO: &str = "go";
+
+/// Set by `devlanes mcp` for each command it runs: the file that also gets
+/// what `--output json` would print.
+pub const JSON_OUT_ENV: &str = "DEVLANES_JSON_OUT";
+
+/// Set to `1` by `devlanes mcp` for each command it runs: the command sends
+/// no shell environment, so the daemon uses the one the lane already has.
+pub const ENV_FROM_LANE_ENV: &str = "DEVLANES_ENV_FROM_LANE";
+
+/// Set to `1` by `devlanes mcp` for the commands its cards poll with: the
+/// command never starts the daemon and fails with `daemon_not_running` when
+/// none runs.
+pub const NO_SPAWN_ENV: &str = "DEVLANES_NO_SPAWN";
+
+/// Variables that belong to the one devlanes process `devlanes mcp` started
+/// with them. They never reach an auto-spawned daemon, a client environment
+/// sent to the daemon, or the command `with` runs.
+pub const CALL_ENV: [&str; 3] = [JSON_OUT_ENV, ENV_FROM_LANE_ENV, NO_SPAWN_ENV];
 
 impl Selection {
     /// Requested profiles: `profile` first, then `profiles`, without repeats and

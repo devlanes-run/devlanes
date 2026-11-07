@@ -3,6 +3,7 @@
 //! what it started.
 
 mod attach;
+mod clean_plan;
 mod concurrent_starts;
 mod containers;
 mod engine;
@@ -57,7 +58,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-pub use fakes::{FakeInfra, FakeProcesses, FakeRunner, PlanJournal};
+pub use fakes::{FakeInfra, FakeProcesses, FakeRunner, NoteContributor, PlanJournal};
 
 /// Upper bound for every test body.
 pub const LIMIT: Duration = Duration::from_secs(60);

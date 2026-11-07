@@ -1,0 +1,249 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "status",
+  "args": [
+    "status"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": "board",
+  "data": {
+    "items": [
+      {
+        "reference": "acme-platform-monorepo@12",
+        "project": "acme-platform-monorepo",
+        "index": 12,
+        "branch": "feature/JIRA-12345-rewrite-the-checkout-flow-to-support-multiple-currencies",
+        "path": "/work/acme-platform-monorepo-feature-JIRA-12345-rewrite-the-checkout-flow-to-support-multiple-currencies",
+        "state": "running",
+        "config_changed": false,
+        "units": [
+          {
+            "name": "web",
+            "lane": "acme-platform-monorepo@12",
+            "state": "ready",
+            "pid": 60123,
+            "exit_code": null,
+            "ports": {
+              "http": 20123
+            },
+            "urls": [
+              "http://127.0.0.1:20123",
+              "https://acme-platform-monorepo12.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "a-very-long-agent-name-from-a-new-host",
+              "session_id": "a-very-long-agent-name-from-a-new-host-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "display_name": "storefront-web-server-with-a-long-name",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://acme-platform-monorepo12.localhost"
+          }
+        ],
+        "profile": null,
+        "profiles": [],
+        "moves_to": null,
+        "domain": "acme-platform-monorepo12.localhost",
+        "port_block": [
+          20120,
+          20129
+        ],
+        "reason": null,
+        "needs_env": false,
+        "containers": []
+      },
+      {
+        "reference": "acme-platform-monorepo@13",
+        "project": "acme-platform-monorepo",
+        "index": 13,
+        "branch": "main",
+        "name": "experiment-with-a-second-lane-on-the-same-folder",
+        "path": "/work/acme-platform-monorepo-main",
+        "state": "idle",
+        "config_changed": false,
+        "units": [],
+        "profile": null,
+        "profiles": [],
+        "moves_to": null,
+        "domain": "acme-platform-monorepo13.localhost",
+        "port_block": [
+          20130,
+          20139
+        ],
+        "reason": null,
+        "needs_env": false,
+        "containers": []
+      },
+      {
+        "reference": "acme@2",
+        "project": "acme",
+        "index": 2,
+        "branch": "fix/auth-redirect",
+        "path": "/work/acme-fix-auth-redirect",
+        "state": "failed",
+        "config_changed": false,
+        "units": [
+          {
+            "name": "api",
+            "lane": "acme@2",
+            "state": "failed",
+            "pid": null,
+            "exit_code": 1,
+            "ports": {
+              "http": 20022
+            },
+            "urls": [
+              "http://127.0.0.1:20022",
+              "https://api.acme2.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "codex",
+              "session_id": "codex-session"
+            },
+            "reason": {
+              "code": "ready_timeout",
+              "data": {
+                "check": "http /health",
+                "timeout_ms": 30000
+              },
+              "exit_code": 1
+            },
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "finished_at_ms": 1793999820000,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api.acme2.localhost"
+          },
+          {
+            "name": "web",
+            "lane": "acme@2",
+            "state": "ready",
+            "pid": 60023,
+            "exit_code": null,
+            "ports": {
+              "http": 20023
+            },
+            "urls": [
+              "http://127.0.0.1:20023",
+              "https://acme2.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "codex",
+              "session_id": "codex-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://acme2.localhost"
+          },
+          {
+            "name": "worker",
+            "lane": "acme@2",
+            "state": "ready",
+            "pid": 60024,
+            "exit_code": null,
+            "ports": {
+              "http": 20024
+            },
+            "urls": [
+              "http://127.0.0.1:20024"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "codex",
+              "session_id": "codex-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "database",
+            "lane": "acme@2",
+            "state": "exited",
+            "pid": null,
+            "exit_code": 0,
+            "ports": {},
+            "urls": [],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "task",
+            "autostart": false,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "pty": false,
+            "role": "setup"
+          }
+        ],
+        "profile": null,
+        "profiles": [],
+        "moves_to": null,
+        "domain": "acme2.localhost",
+        "port_block": [
+          20020,
+          20029
+        ],
+        "reason": null,
+        "needs_env": false,
+        "containers": [
+          {
+            "name": "postgres",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          },
+          {
+            "name": "redis",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          }
+        ]
+      }
+    ],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "read_only": false,
+  "card": null
+}

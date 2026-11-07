@@ -7,6 +7,7 @@
 
 mod lanes;
 mod other;
+mod statusline;
 mod words;
 
 use devlanes_proto::{Event, LeftProcess, Method, events};
@@ -15,6 +16,7 @@ use serde_json::Value;
 pub(crate) use lanes::display_url;
 pub(crate) use other::doctor_failed;
 pub use other::{DoctorCheck, DoctorState, doctor_checks_of, watch_line};
+pub use statusline::{StatuslineInput, statusline, statusline_lane};
 pub use words::status_hint;
 pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording, lane_drift, unit_drift};
 
@@ -183,6 +185,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::Status | Method::LaneList => lanes::status(data, cx),
         Method::LaneNew => lanes::lane_new(data, cx),
         Method::LaneClean => lanes::lane_clean(data, cx),
+        Method::LaneCleanPlan => lanes::lane_clean_plan(data, cx),
         Method::LaneGc => lanes::lane_gc(data),
         Method::Exec => lanes::exec(data, cx),
         Method::Wait => lanes::wait(data, cx),

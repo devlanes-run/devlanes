@@ -12,7 +12,7 @@ Usage: devlanes logs [OPTIONS] [UNIT]...
 
 Arguments:
   [UNIT]...
-          Units to read ([lane:]unit, globs, +tag) [default: pick from a list]
+          Units to read ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: pick from a list]
 
 Options:
       --all
@@ -31,7 +31,7 @@ Options:
           Only lines newer than a duration (5m), a time in milliseconds, or start (the lane's last start)
 
       --grep <REGEX>
-          Only lines matching this regular expression
+          Only lines matching this regular expression, such as timeout|refused
 
       --level <LEVEL>
           Only lines at this level or above: debug, info, warn or error
@@ -71,7 +71,7 @@ Global options:
           Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
 
       --lane <LANE>
-          Use this lane ([project@]lane) instead of the current worktree's
+          Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's
 
       --yes
           Confirm actions that would ask first; needed when no terminal can prompt

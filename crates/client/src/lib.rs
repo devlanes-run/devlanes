@@ -148,7 +148,7 @@ pub enum Error {
     #[error("{}; see {}", stalled_message(.step.as_deref()), .log.display())]
     StartupStalled { step: Option<String>, log: PathBuf },
     #[error(
-        "auto-spawn refused in sandbox ({0}); start devlanes outside the sandbox or run devlanes daemon install"
+        "auto-spawn refused in sandbox ({0}); start devlanes outside the sandbox, run devlanes daemon install, or register devlanes mcp with the agent"
     )]
     Sandbox(&'static str),
     #[error("HOME or DEVLANES_HOME is required")]
@@ -761,7 +761,8 @@ const PLATFORM_ENV: &[&str] = &[
 
 /// The allowlisted part of `vars` for an auto-spawned daemon, minus `remove`.
 /// Anything else a shell carries (tokens, project variables) stays out of a
-/// process that serves every later shell.
+/// process that serves every later shell, and so do the variables `devlanes
+/// mcp` sets for one command ([`devlanes_proto::CALL_ENV`]).
 #[cfg(not(target_family = "wasm"))]
 fn daemon_env(
     vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
@@ -771,7 +772,10 @@ fn daemon_env(
         let Some(name) = name.to_str() else {
             return false;
         };
-        !remove.iter().any(|removed| same_name(name, removed))
+        !remove
+            .iter()
+            .chain(&devlanes_proto::CALL_ENV)
+            .any(|removed| same_name(name, removed))
             && (DAEMON_ENV
                 .iter()
                 .chain(PLATFORM_ENV)
@@ -925,6 +929,10 @@ async fn start_daemon(
         Some(replace) => command.env(devlanes_proto::REPLACE_ENV, replace.pid.to_string()),
         None => command.env_remove(devlanes_proto::REPLACE_ENV),
     };
+    // A session of its own from the first instruction, so a signal to this
+    // command's process group, such as `devlanes mcp` killing a cancelled
+    // call's group, cannot reach a daemon that has not detached yet.
+    devlanes_sys::new_session(command.as_std_mut());
     let mut child = command
         .args(["daemon", "run"])
         .env("DEVLANES_HOME", &paths.home)
@@ -1752,11 +1760,14 @@ mod tests {
         assert!(user_config_startup_error("STATE_LEGACY_SCHEMA: old").is_none());
     }
 
-    /// Allowlisted names and prefixes pass, secrets and removed names do not.
+    /// Allowlisted names and prefixes pass, secrets, removed names and the
+    /// variables of one `devlanes mcp` command do not.
     #[test]
     fn daemon_env_is_allowlisted() {
         let vars = [
             ("PATH", "/usr/bin"),
+            ("DEVLANES_JSON_OUT", "/tmp/devlanes-mcp-1.json"),
+            ("DEVLANES_ENV_FROM_LANE", "1"),
             ("SSH_AUTH_SOCK", "/tmp/agent"),
             ("SSH_CONNECTION", "1.2.3.4"),
             ("LC_ALL", "C"),

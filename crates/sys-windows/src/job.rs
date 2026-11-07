@@ -1,11 +1,12 @@
 //! Job objects: the Windows grouping for a unit's processes.
 //!
 //! Jobs created here do not allow breakaway unless [`Job::allow_breakaway`]
-//! is called, which only tests standing in for another program's job do.
-//! Git for Windows' MSYS2 runtime asks for `CREATE_BREAKAWAY_FROM_JOB` for
-//! every child it starts whenever the job allows it, so a job that allowed it
-//! would lose every process a `sh -c` starts. A tool that insists on breaking
-//! away gets access denied.
+//! is called, which tests standing in for another program's job do, and
+//! `devlanes mcp`, whose commands may start the daemon. Git for Windows'
+//! MSYS2 runtime asks for `CREATE_BREAKAWAY_FROM_JOB` for every child it
+//! starts whenever the job allows it, so a job that allowed it would lose
+//! every process a `sh -c` starts. A tool that insists on breaking away gets
+//! access denied.
 
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
@@ -13,7 +14,7 @@ use std::ptr;
 
 use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, HANDLE};
 use windows_sys::Win32::System::JobObjects::{
-    CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
     JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
     JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -21,7 +22,9 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
     TerminateJobObject,
 };
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, PROCESS_SET_QUOTA, PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE,
+};
 
 use crate::proc::{ProcessEntry, process_where};
 use crate::util::{owned, raw};
@@ -173,9 +176,43 @@ impl Job {
     }
 
     /// Lets members leave the job with `CREATE_BREAKAWAY_FROM_JOB`, keeping
-    /// its other limits, as Win32-OpenSSH's session job does. For tests that
-    /// run a program the way sshd would; see the module documentation.
+    /// its other limits, as Win32-OpenSSH's session job does. See the module
+    /// documentation for what that costs.
     pub fn allow_breakaway(&self) -> io::Result<()> {
+        self.change_limits(|flags| flags | JOB_OBJECT_LIMIT_BREAKAWAY_OK)
+    }
+
+    /// Turns [`JobOptions::kill_on_close`] on or off, keeping the other
+    /// limits. Off before the last handle closes lets the members outlive it.
+    pub fn set_kill_on_close(&self, kill_on_close: bool) -> io::Result<()> {
+        self.change_limits(|flags| {
+            if kill_on_close {
+                flags | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            } else {
+                flags & !JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            }
+        })
+    }
+
+    /// Adds `pid`, a process started with `CREATE_SUSPENDED` by a spawner that
+    /// cannot pass a job (such as `std::process`), and resumes it, so it and
+    /// everything it starts run in the job from their first instruction. The
+    /// caller must hold a handle of the process, so the PID still names it.
+    /// Returns whether it joined the job; it runs either way. An error means
+    /// it could not be resumed and is still suspended.
+    pub fn adopt_suspended(&self, pid: u32) -> io::Result<bool> {
+        let access = PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME;
+        let process = crate::proc::open(pid, access)?
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        // SAFETY: both handles are open; the process handle has the rights
+        // AssignProcessToJobObject needs.
+        let joined = unsafe { AssignProcessToJobObject(self.raw(), raw(&process)) } != 0;
+        crate::power::resume_handle(&process)?;
+        Ok(joined)
+    }
+
+    /// Sets the job's limit flags to what `change` makes of them.
+    fn change_limits(&self, change: impl FnOnce(u32) -> u32) -> io::Result<()> {
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         let size = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
         // SAFETY: the job is open; `limits` matches the class and size.
@@ -191,7 +228,7 @@ impl Job {
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
-        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        limits.BasicLimitInformation.LimitFlags = change(limits.BasicLimitInformation.LimitFlags);
         // SAFETY: the job is open; `limits` matches the class and size.
         let ok = unsafe {
             SetInformationJobObject(

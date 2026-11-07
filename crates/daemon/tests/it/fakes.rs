@@ -99,6 +99,26 @@ impl devlanes_core::contrib::Contributor for PlanJournal {
     }
 }
 
+/// Contributor that adds the launch note `note for <name>` to every unit.
+pub struct NoteContributor;
+
+#[async_trait]
+impl devlanes_core::contrib::Contributor for NoteContributor {
+    fn id(&self) -> &'static str {
+        "note"
+    }
+
+    /// Adds the note; the rest of the draft is left as it is.
+    async fn apply(
+        &self,
+        draft: &mut devlanes_core::contrib::LaunchDraft,
+        cx: &devlanes_core::contrib::ContribCx<'_>,
+    ) -> Result<(), Error> {
+        draft.notes.push(format!("note for {}", cx.name));
+        Ok(())
+    }
+}
+
 /// Records every spawned script in order.
 #[derive(Default, Clone)]
 pub struct Journal(pub Arc<Mutex<Vec<String>>>);
@@ -627,6 +647,8 @@ pub struct FakeInfra {
     pub started_at: Arc<Mutex<Option<String>>>,
     /// When set, `up` fails with this error.
     pub fail_up: Arc<Mutex<Option<InfraError>>>,
+    /// When set, `lane_resources` fails with this error, as without Docker.
+    pub fail_resources: Arc<Mutex<Option<InfraError>>>,
     /// When set, the state `namespace` reports for the lane's `db`, such as
     /// `exited 1` for one an `up` that failed never started. `healthy`
     /// otherwise.
@@ -805,6 +827,18 @@ impl InfraProvider for FakeInfra {
     async fn remove_lane(&self, _: &str, lane: u32) -> Result<Value, InfraError> {
         self.record(format!("remove {lane}"));
         Ok(json!({"containers": []}))
+    }
+    /// The lane's compose `db` and one volume, as the real provider lists them.
+    async fn lane_resources(&self, project: &str, lane: u32) -> Result<Value, InfraError> {
+        self.query("lane_resources");
+        if let Some(error) = self.fail_resources.lock().ok().and_then(|e| e.clone()) {
+            return Err(error);
+        }
+        Ok(json!({
+            "compose_project": format!("{project}-lane{lane}"),
+            "containers": [{"name": format!("{project}-lane{lane}-db-1"), "kind": "compose"}],
+            "volumes": [{"name": format!("{project}-lane{lane}_pgdata"), "bytes": 4096}],
+        }))
     }
     /// Every container started at the scripted time; none run without one.
     async fn containers_started_at(

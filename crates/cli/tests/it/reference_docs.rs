@@ -35,7 +35,7 @@ fn render(root: &Command) -> String {
          crates/cli/tests/it/reference_docs.rs. Edit the help text in crates/cli, then run \
          DEVLANES_BLESS=1 cargo nextest run -p devlanes-cli. -->\n\n\
          Every `devlanes` command and option with its help text; `devlanes <command> --help` \
-         prints the same.\n\n",
+         prints the same. Commands hidden from `--help` are listed at the end.\n\n",
     );
     if let Some(about) = root.get_long_about().or(root.get_about()) {
         page.push_str(&format!("{}\n\n", about.to_string().trim()));
@@ -57,7 +57,50 @@ fn render(root: &Command) -> String {
     for sub in visible(root) {
         command(&mut page, sub, "devlanes");
     }
+    page.push_str(
+        "\n## Hidden commands\n\nHidden from `--help` because you rarely type them. A \
+         `remote.<box>.command` must end with `devlanes tunnel --stdio` \
+         ([remote boxes reached by a command](../guides/remote-command.md)); devlanes, ssh \
+         and the install scripts run the others.\n\n",
+    );
+    let mut found = Vec::new();
+    hidden(root, "devlanes", &mut found);
+    for (usage, help) in found {
+        page.push_str(&format!("- `{usage}`: {help}\n"));
+    }
     page
+}
+
+/// Hidden commands and options as `(usage, help)`: a hidden subcommand once,
+/// without its children, and each hidden option of a visible command.
+fn hidden(command: &Command, path: &str, found: &mut Vec<(String, String)>) {
+    for arg in command
+        .get_arguments()
+        .filter(|arg| arg.is_hide_set() && !arg.is_global_set())
+        .filter(|arg| !matches!(arg.get_id().as_str(), "help" | "version"))
+    {
+        if let Some(long) = arg.get_long() {
+            let help = arg
+                .get_help()
+                .map(|help| help.to_string())
+                .unwrap_or_default();
+            found.push((format!("{path} --{long}"), help));
+        }
+    }
+    for sub in command
+        .get_subcommands()
+        .filter(|sub| sub.get_name() != "help")
+    {
+        if sub.is_hide_set() {
+            let about = sub
+                .get_about()
+                .map(|about| about.to_string())
+                .unwrap_or_default();
+            found.push((usage(sub), about));
+        } else {
+            hidden(sub, &format!("{path} {}", sub.get_name()), found);
+        }
+    }
 }
 
 /// One `###` section per command, depth first in definition order.

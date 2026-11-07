@@ -2220,6 +2220,24 @@ impl InfraProvider for ContainerInfra {
         Ok(Value::Object(report))
     }
 
+    /// The lane's compose project, plain containers and volumes that
+    /// [`Self::remove_lane`] would remove, read from the Engine API.
+    async fn lane_resources(&self, project: &str, lane: u32) -> Result<Value, InfraError> {
+        let Some(docker) = &self.docker else {
+            return Ok(json!({}));
+        };
+        let compose = devlanes_infra_compose::lane_project_name(project, lane).ok();
+        let contents = docker
+            .lane_contents(project, lane, compose.as_deref())
+            .await
+            .map_err(docker_error(&format!("list the containers of lane {lane}")))?;
+        Ok(json!({
+            "compose_project": compose.filter(|_| contents.compose),
+            "containers": contents.containers,
+            "volumes": contents.volumes,
+        }))
+    }
+
     /// Pauses the lane's own compose services and plain containers.
     async fn pause_lane(&self, project: &str, lane: u32) -> Result<usize, InfraError> {
         let compose = self

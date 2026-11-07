@@ -28,7 +28,7 @@ services:
       ./scripts/gen-certs.sh .devlanes/certs
 ```
 
-`run` starts in the lane's worktree root, or in `cwd` when set. Expressions work in both forms: `run: uvicorn app:main --port ${{ self.port }}`.
+`run` starts in the project file's directory (the worktree root unless the file sits in a subdirectory), or in `cwd` when set, relative to that directory. Expressions work in both forms: `run: uvicorn app:main --port ${{ self.port }}`.
 
 devlanes never edits a `run` command, so it cannot be combined with `preset`: `devlanes config check` refuses the pair. To keep a hand-written command, drop the preset and add its flags yourself; [presets](presets.md) lists what each one adds.
 
@@ -49,7 +49,7 @@ tasks:
 
 `run_script` is a mapping with two keys, both required:
 
-- `file`: the file that defines the script, relative to the worktree root (not to the directory of `devlanes.yaml`). It must stay inside the worktree. Its name picks the runner (table below).
+- `file`: the file that defines the script, relative to the project file's directory (the worktree root unless the file sits in a subdirectory). It must stay inside the lane's worktree. Its name picks the runner (table below).
 - `name`: the script, target, recipe, task or binary in that file.
 
 A string such as `run_script: apps/api/package.json#dev` is refused with the mapping to write instead. The command always runs in the directory of `file`, so `devlanes config check` refuses a `cwd` on the same unit, including one inherited through `extends`. `${{ }}` is not evaluated in `file` or `name`.

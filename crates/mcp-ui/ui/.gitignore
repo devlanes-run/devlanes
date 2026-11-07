@@ -1,0 +1,4 @@
+node_modules
+# The built card is committed: the Rust build embeds it and never runs Node.
+dist/*
+!dist/lane.html

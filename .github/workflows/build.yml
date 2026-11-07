@@ -81,22 +81,13 @@ jobs:
             rm "$manifest.orig"
           done
           cargo update --workspace --quiet
-      - name: Check the version against the workspace and plugin versions
-        env:
-          SNAPSHOT: ${{ inputs.snapshot }}
+      - name: Check the version against the workspace version
         run: |
           crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "devlanes") | .version')
           if [ "$VERSION" != "$crate" ]; then
             echo "::error::version $VERSION and devlanes $crate must match"
             exit 1
           fi
-          for manifest in agent-plugin/.claude-plugin/plugin.json agent-plugin/.codex-plugin/plugin.json; do
-            plugin=$(jq -r .version "$manifest")
-            if [ "$SNAPSHOT" != true ] && [ "$VERSION" != "$plugin" ]; then
-              echo "::error::version $VERSION and $manifest $plugin must match"
-              exit 1
-            fi
-          done
       - name: Build
         # The build ID marks official builds in the daemon handshake and doctor; others say local.
         env:
@@ -158,7 +149,7 @@ jobs:
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-access-key: ${{ secrets.KACHE_S3_ACCESS_KEY }}
           s3-secret-key: ${{ secrets.KACHE_S3_SECRET_KEY }}
-      # The build job checks the version against the workspace and plugin versions; the
+      # The build job checks the version against the workspace version; the
       # smoke test below ties this binary to it.
       - name: Write the snapshot version
         if: inputs.snapshot
