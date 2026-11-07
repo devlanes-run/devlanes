@@ -673,14 +673,13 @@ impl Inner {
     ) -> Result<LanePair, RpcError> {
         let parsed: LaneRef = reference.parse().map_err(reference_error)?;
         let scope = match &parsed.project {
-            // A reference naming its project never looks at the cwd, unless the
-            // daemon does not know that project yet: then the request's `--file`
-            // or the cwd's file may be the one that registers it (a first start,
-            // or one after `lane clean` forgot it). A known project leaves the
-            // cwd's unregistered.
+            // A reference naming its project never resolves through the cwd. A
+            // project the daemon does not know yet is registered when the request's
+            // `--file` or the cwd's file names it (a first start, or one after
+            // `lane clean` forgot it).
             Some(name) => {
                 if self.project_by_name(name).is_err() {
-                    let _ = self.reference_scope(context).await;
+                    self.register_named(name, context).await;
                 }
                 Vec::new()
             }

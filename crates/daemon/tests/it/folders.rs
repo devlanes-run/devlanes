@@ -508,8 +508,9 @@ async fn a_project_whose_lanes_were_all_cleaned_is_forgotten() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// Starting another project's lane from a cleaned project's folder leaves that
-/// project forgotten, whether `--lane` or a unit names the lane; naming the
-/// folder's own project still registers it again.
+/// project forgotten, whether `--lane` or a unit names the lane, and so does
+/// naming a project no file there names; naming the folder's own project still
+/// registers it again.
 async fn naming_another_projects_lane_leaves_a_cleaned_project_forgotten() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -548,6 +549,12 @@ async fn naming_another_projects_lane_leaves_a_cleaned_project_forgotten() {
             (by_lane.lane.as_str(), by_unit.lane.as_str()),
             ("beta@0", "beta@0")
         );
+        // A project that no file here names is not found, and registers nothing.
+        let error = h
+            .call(Method::Status, json!({}), on_lane(&a, "gamma@0"))
+            .await
+            .expect_err("unknown project");
+        assert_eq!(error.code, "not_found");
         let lanes: Vec<String> = status(&h, cx(&tmp.path))
             .await
             .into_iter()

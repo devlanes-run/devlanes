@@ -213,6 +213,27 @@ impl ClientDriver {
         }
     }
 
+    /// [`Self::lanes`] for a start's `context`, and the context that answered, for
+    /// the snapshot after an interrupt. A lane that does not resolve yet (the branch
+    /// of a worktree added a moment ago) falls back to its project, or to the cwd
+    /// for a short reference, which resolves through the cwd anyway.
+    async fn start_snapshot(&mut self, context: &Context) -> (Option<Vec<LaneSummary>>, Context) {
+        let lanes = self.lanes(context).await;
+        let Some(reference) = context.lane.as_deref().filter(|_| lanes.is_none()) else {
+            return (lanes, context.clone());
+        };
+        let project = reference
+            .parse::<devlanes_core::refs::LaneRef>()
+            .ok()
+            .and_then(|lane| lane.project);
+        let fallback = Context {
+            lane: None,
+            project: project.or_else(|| context.project.clone()),
+            ..context.clone()
+        };
+        (self.lanes(&fallback).await, fallback)
+    }
+
     /// One request, mapping transport failures to the structured error shape.
     async fn call(
         &mut self,
@@ -243,35 +264,34 @@ impl ClientDriver {
     }
 }
 
-/// `request`'s context with `lane` set, when `--lane` is absent, from the first
-/// unit that names a lane (`beta@0:web`): the lane the daemon resolves for the
-/// start. A `status` sent with it resolves that lane instead of the cwd's
-/// project, so it registers nothing from the cwd.
+/// `request`'s context with `lane` set to the lane the daemon resolves for the
+/// start (a unit's lane before `--lane`). A `status` with it registers nothing
+/// from the cwd when that lane names a known project.
 pub fn start_context(request: &Request) -> Context {
-    let mut context = request.context.clone();
-    if context.lane.is_none() {
-        context.lane = request
-            .params
-            .get("units")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            // A unit that does not parse is reported by the start itself.
-            .find_map(|unit| unit.parse::<devlanes_core::refs::UnitRef>().ok()?.lane)
-            .map(|lane| match lane.project {
-                Some(project) => format!("{project}@{}", lane.selector),
-                None => lane.selector,
-            });
+    let unit_lane = request
+        .params
+        .get("units")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        // A unit that does not parse is reported by the start itself.
+        .find_map(|unit| unit.parse::<devlanes_core::refs::UnitRef>().ok()?.lane)
+        .map(|lane| match lane.project {
+            Some(project) => format!("{project}@{}", lane.selector),
+            None => lane.selector,
+        });
+    Context {
+        lane: unit_lane.or_else(|| request.context.lane.clone()),
+        ..request.context.clone()
     }
-    context
 }
 
 /// The lane and units an interrupted start owns, from lane snapshots taken before
 /// the start and after the interrupt: units active now that were not active before.
 /// A lane that was idle (or did not exist) before belongs to the start as a whole.
-/// `lane` comes from the request or the start's events; otherwise the lane whose
-/// worktree contains `cwd`.
+/// `lane` comes from the request, the first snapshot or the start's events;
+/// otherwise the lane whose worktree contains `cwd`.
 pub fn interrupted_ownership(
     before: &[LaneSummary],
     after: &[LaneSummary],
@@ -526,9 +546,9 @@ impl WithDriver for ClientDriver {
             // project's folder does not register that folder's project.
             let context = start_context(request);
             // Only needed to work out ownership if a signal cuts the start short.
-            let before = match self.signals {
-                Some(_) => self.lanes(&context).await,
-                None => None,
+            let (before, snapshot) = match self.signals {
+                Some(_) => self.start_snapshot(&context).await,
+                None => (None, context.clone()),
             };
             let id = self
                 .client
@@ -539,13 +559,12 @@ impl WithDriver for ClientDriver {
                 )
                 .await
                 .map_err(rpc_error)?;
-            // A unit's short lane (`1:web`) matches no summary's reference, so it
-            // is left to the start's events, which name the lane in full.
-            let mut lane = request
-                .context
-                .lane
-                .clone()
-                .or_else(|| context.lane.clone().filter(|lane| lane.contains('@')));
+            // A lane-scoped snapshot holds the lane under its full reference, which
+            // `interrupted_ownership` matches; a short `1` matches no summary.
+            let mut lane = match before.as_deref() {
+                Some([one]) if snapshot.lane.is_some() => Some(one.reference.clone()),
+                _ => context.lane.clone(),
+            };
             loop {
                 let frame = match self.signals.as_mut() {
                     Some(signals) => tokio::select! {
@@ -554,7 +573,7 @@ impl WithDriver for ClientDriver {
                             // The daemon keeps starting after a client leaves, so the units
                             // this start brought up so far are stopped by the teardown.
                             if let Some(before) = &before {
-                                let after = self.lanes(&context).await.unwrap_or_default();
+                                let after = self.lanes(&snapshot).await.unwrap_or_default();
                                 if let Some(owned) = interrupted_ownership(
                                     before,
                                     &after,
