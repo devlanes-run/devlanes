@@ -165,7 +165,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                  "permitted": ["localhost", "test"], "suggestion": "api.acme.test"}},
                 {"code": "memory_baseline", "data": {"peak_memory_bytes": 8_589_934_592_u64,
                  "available_memory_bytes": 4_294_967_296_u64, "units": []}},
-                {"code": "lanes_to_resume", "data": {"lanes": ["acme@1", "shop@0"]}},
+                {"code": "lanes_to_resume", "data": {"lanes": ["acme@1", "acme@3"], "others": 4}},
             ]);
             ready
         }),
@@ -243,6 +243,13 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::Stop,
             page(vec![unit("api", "stopped"), unit("web", "exited")]),
         ),
+        // `stop --mine` in acme while the session's units also run in shop.
+        ("stop_mine_elsewhere", Method::Stop, {
+            let mut stopped = page(vec![unit("api", "stopped")]);
+            stopped["warnings"] = json!([{"code": "mine_elsewhere",
+                "data": {"lanes": ["shop@0"], "projects": ["shop"]}}]);
+            stopped
+        }),
         (
             "status",
             Method::Status,
@@ -488,7 +495,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::Env,
             json!({"lane": "acme@2", "unit": "api", "items": [
             {"key": "PORT", "value": "20101", "layer": "devlanes"},
-            {"key": "API_TOKEN", "value": "tok_test", "layer": "global"},
+            {"key": "API_TOKEN", "value": "[redacted]", "layer": "global"},
             {"key": "NODE_ENV", "value": "development", "layer": "service"},
         ], "truncated": false, "next_cursor": null}),
         ),

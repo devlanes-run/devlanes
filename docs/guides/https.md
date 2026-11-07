@@ -154,7 +154,7 @@ proxy:
 ## Checking
 
 ```sh
-devlanes url ls                                   # routed hostnames with lane, unit, port and state
+devlanes url ls                                   # the project's routed hostnames with lane, unit, port and state
 curl -sS https://api.acme2.localhost/healthz     # works without -k once the CA is trusted
 curl -sS --cacert ~/.devlanes/ca/ca.pem https://api.acme2.localhost/healthz
 devlanes doctor                                   # proxy ports, CA, trust per store, hosts file
@@ -162,4 +162,4 @@ devlanes doctor                                   # proxy ports, CA, trust per s
 
 On Windows, add `--ssl-revoke-best-effort` to both `curl.exe` commands.
 
-`ERR_CERT_AUTHORITY_INVALID` in a browser means that browser's store does not have the CA: Firefox and Chromium on Linux need their own entries in `tls.trust`. A certificate error for a name that `url ls` lists under another lane means two lanes claim it. `curl: (35)` or `handshake failure` on a name `url ls` does not show means the service has no `hosts` entry for it.
+`ERR_CERT_AUTHORITY_INVALID` in a browser means that browser's store does not have the CA: Firefox and Chromium on Linux need their own entries in `tls.trust`. A certificate error for a name that `url ls` run outside a project lists under another lane means two lanes claim it. `curl: (35)` or `handshake failure` on a name `url ls` does not show means the service has no `hosts` entry for it.

@@ -726,6 +726,9 @@ pub enum Msg {
     Tick,
     /// The terminal gained (`true`) or lost focus.
     Focus(bool),
+    /// The lanes the daemon resolved for the TUI's directory and the CLI's
+    /// `-p`, `--file` or `--lane` ([`crate::api::DaemonApi::home_lanes`]).
+    Home(Vec<String>),
     Status(Result<Vec<LaneSummary>, ApiError>),
     Subscribed(Result<(), ApiError>),
     Event(Event),
@@ -1286,6 +1289,8 @@ pub struct App {
     pub dialog_area: RefCell<Option<Rect>>,
     /// The working directory, to open on its lane first.
     cwd: Option<PathBuf>,
+    /// [`Msg::Home`]'s lanes: the TUI opens on one of them.
+    home: Vec<String>,
     pub connection: Connection,
     /// How the daemon stands for the user, on top of the connection.
     pub daemon_state: DaemonState,
@@ -1475,6 +1480,7 @@ impl App {
             pane_press: None,
             dialog_area: RefCell::new(None),
             cwd: None,
+            home: Vec::new(),
             connection: Connection::Connecting,
             daemon_state: DaemonState::Online,
             starting_since: None,
@@ -1832,6 +1838,7 @@ impl App {
                     }
                 }
             },
+            Msg::Home(home) => self.home = home,
             Msg::Status(Ok(lanes)) => {
                 self.connection = Connection::Online;
                 self.loaded = true;
@@ -3024,31 +3031,60 @@ impl App {
         self.sync_attach(effects);
     }
 
-    /// The lane to open on: the one the TUI this one replaces showed, the
-    /// one whose worktree holds the working directory, the first project with
-    /// something running, else the first lane.
+    /// The lane to open on: the one the TUI this one replaces showed, the one
+    /// whose worktree holds the working directory (among [`Msg::Home`]'s lanes
+    /// when the daemon named some, a folder's own lane before its `lane new`
+    /// extras; when several projects share the folder, one with something
+    /// running, else the first in list order),
+    /// the first home lane with something running, else the first home lane;
+    /// without home lanes, the first project with something running, else the
+    /// first lane.
     fn initial_lane(&self) -> Option<String> {
         if let Some(lane) = &self.reopen_lane
             && self.lane(lane).is_some()
         {
             return Some(lane.clone());
         }
-        if let Some(cwd) = &self.cwd
-            && let Some(lane) = self
-                .lanes
-                .iter()
-                .filter(|lane| {
-                    !lane.path.as_os_str().is_empty()
-                        && devlanes_core::paths::path_starts_with(cwd, &lane.path)
-                })
-                .max_by_key(|lane| lane.path.as_os_str().len())
-        {
-            return Some(lane.reference.clone());
-        }
-        let running = self
+        let home: Vec<&LaneSummary> = self
             .lanes
             .iter()
+            .filter(|lane| self.home.contains(&lane.reference))
+            .collect();
+        let candidates: Vec<&LaneSummary> = if home.is_empty() {
+            self.lanes.iter().collect()
+        } else {
+            home.clone()
+        };
+        if let Some(cwd) = &self.cwd {
+            let mut best: Option<((usize, bool, bool), &LaneSummary)> = None;
+            for lane in &candidates {
+                if lane.path.as_os_str().is_empty()
+                    || !devlanes_core::paths::path_starts_with(cwd, &lane.path)
+                {
+                    continue;
+                }
+                let key = (
+                    lane.path.as_os_str().len(),
+                    lane.name.is_none(),
+                    lane.units.iter().any(|u| is_active(&u.state)),
+                );
+                if best.is_none_or(|(best, _)| key > best) {
+                    best = Some((key, lane));
+                }
+            }
+            if let Some((_, lane)) = best {
+                return Some(lane.reference.clone());
+            }
+        }
+        let running = candidates
+            .iter()
+            .copied()
             .find(|lane| lane.units.iter().any(|u| is_active(&u.state)));
+        if !home.is_empty() {
+            return running
+                .or(home.first().copied())
+                .map(|lane| lane.reference.clone());
+        }
         // Box lanes only when this machine has none of its own.
         running
             .or(self.lanes.first())

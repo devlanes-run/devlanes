@@ -1,7 +1,7 @@
 //! Read-mostly methods: status, lanes, logs, wait, errors, why, env, url, doctor
 //! and subscriptions.
 
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use devlanes_core::env::EnvLayer;
 use devlanes_proto::{Context, LaneSummary, LogLine, LogQuery, Page, RpcError, events};
@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use crate::{
     Session,
     engine::{Inner, LanePair, params, required},
-    model::{ConfigState, is_mine, lane_summary},
+    model::{ConfigState, ProjectRt, is_mine, lane_summary},
     registry::internal,
     stream::LaneEvents,
     units::{UnitHost, UnitState, now_ms, query_log_dir},
@@ -127,26 +127,83 @@ async fn process_name(pid: u32) -> Option<String> {
     .flatten()
 }
 
+/// What a read request covers ([`Inner::read_scope`]).
+pub(crate) enum ReadScope {
+    /// Every project; its lanes as of the request.
+    All(Vec<LanePair>),
+    /// The `-p` or `--file` project, the cwd's, or every project sharing the cwd's
+    /// folder, with lanes they gain later.
+    Projects(Vec<Arc<ProjectRt>>),
+    /// The `--lane`.
+    Lane(LanePair),
+}
+
+impl ReadScope {
+    /// The lanes covered now.
+    pub(crate) fn lanes(&self) -> Vec<LanePair> {
+        match self {
+            Self::All(lanes) => lanes.clone(),
+            Self::Projects(projects) => projects
+                .iter()
+                .flat_map(|project| {
+                    project
+                        .lanes()
+                        .into_iter()
+                        .map(move |lane| (project.clone(), lane))
+                })
+                .collect(),
+            Self::Lane(pair) => vec![pair.clone()],
+        }
+    }
+
+    /// Whether the lane `reference` of `project` is covered, including lanes created
+    /// after the scope was built (a `status --watch` that outlives a `lane new`).
+    pub(crate) fn covers(&self, project: &str, reference: &str) -> bool {
+        match self {
+            Self::All(_) => true,
+            Self::Projects(projects) => projects.iter().any(|p| p.name() == project),
+            Self::Lane((p, lane)) => reference == lane.st().reference(&p.name()),
+        }
+    }
+}
+
+/// How [`Inner::read_scope`] treats a cwd whose project fails to resolve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Strictness {
+    /// Every project instead, except for a project name another file or repository
+    /// holds: `status`, `lane ls`, `debug errors`, `url ls`, `debug top`.
+    Lenient,
+    /// The error, so `stop --mine` never widens to every project by accident.
+    Strict,
+}
+
 impl Inner {
-    /// Lanes a read request covers: `all`, the context lane/project, else the cwd's
-    /// project, else every project (outside any repo).
-    pub(crate) async fn scope_lanes(
+    /// What a read request covers: every project for `all`, the `--lane`, the `--file`
+    /// or `-p` project, else the cwd's project or every project sharing the cwd's
+    /// folder (a repository root holding several), else every project.
+    pub(crate) async fn read_scope(
         self: &Arc<Self>,
         context: &Context,
         all: bool,
-    ) -> Result<Vec<LanePair>, RpcError> {
-        // Never registers a project: completion asks `all` without a cwd.
+        strictness: Strictness,
+    ) -> Result<ReadScope, RpcError> {
+        // Never registers a project: completion and the TUI's monitor ask `all`.
         if all {
-            return Ok(self.all_lanes());
+            return Ok(ReadScope::All(self.all_lanes()));
         }
-        // A `--file` names the project outright, and fails loudly when it cannot load.
-        let cwd_project = if context.file.is_some() {
-            self.project_for(context).await?
+        if context.lane.is_some() {
+            return Ok(ReadScope::Lane(self.target_lane(context).await?));
+        }
+        let named = context.file.is_some() || context.project.is_some();
+        let projects = if named {
+            // A `--file` names the project outright, and fails loudly when it cannot load.
+            self.project_for(context).await?.into_iter().collect()
         } else if context.cwd.as_os_str().is_empty() {
-            None
+            Vec::new()
         } else {
-            match self.project_here(context).await {
-                Ok(project) => project,
+            match self.projects_here(context).await {
+                Ok(projects) => projects,
+                Err(error) if strictness == Strictness::Strict => return Err(error),
                 // A name another file or repository holds is the answer, not every lane.
                 Err(error)
                     if matches!(
@@ -156,36 +213,50 @@ impl Inner {
                 {
                     return Err(error);
                 }
-                Err(_) => None,
+                Err(_) => Vec::new(),
             }
         };
-        if context.lane.is_some() {
-            return Ok(vec![self.target_lane(context).await?]);
+        if projects.is_empty() {
+            return Ok(ReadScope::All(self.all_lanes()));
         }
-        if let Some(name) = &context.project {
-            let lanes: Vec<_> = self
-                .all_lanes()
-                .into_iter()
-                .filter(|(project, _)| project.name() == *name)
-                .collect();
-            if lanes.is_empty() {
-                return Err(RpcError::new("not_found", json!({"reference": name}), 3));
-            }
-            return Ok(lanes);
-        }
-        if let Some(project) = &cwd_project
+        Ok(ReadScope::Projects(projects))
+    }
+
+    /// Claims the cwd's lane when `scope` is the cwd's one project, as running
+    /// devlanes in a worktree makes it a lane. `-p` from elsewhere and a folder
+    /// shared by several projects say nothing about which lane.
+    async fn claim_here(self: &Arc<Self>, context: &Context, scope: &ReadScope) {
+        if context.project.is_none()
+            && let ReadScope::Projects(projects) = scope
+            && let [project] = projects.as_slice()
             && let Some(lane) = Self::lane_at(project, &context.cwd)
         {
             self.claim_lane(project, &lane).await;
         }
-        match cwd_project {
-            Some(project) => Ok(project
-                .lanes()
-                .into_iter()
-                .map(|lane| (project.clone(), lane))
-                .collect()),
-            None => Ok(self.all_lanes()),
-        }
+    }
+
+    /// Lanes `status`, `lane ls` and `debug errors` cover ([`Self::read_scope`],
+    /// lenient), claiming the cwd's lane.
+    pub(crate) async fn scope_lanes(
+        self: &Arc<Self>,
+        context: &Context,
+        all: bool,
+    ) -> Result<Vec<LanePair>, RpcError> {
+        let scope = self.read_scope(context, all, Strictness::Lenient).await?;
+        self.claim_here(context, &scope).await;
+        Ok(scope.lanes())
+    }
+
+    /// Lanes `stop --mine` without units and `status --mine` cover
+    /// ([`Self::read_scope`], strict).
+    pub(crate) async fn mine_scope(
+        self: &Arc<Self>,
+        context: &Context,
+    ) -> Result<Vec<LanePair>, RpcError> {
+        Ok(self
+            .read_scope(context, false, Strictness::Strict)
+            .await?
+            .lanes())
     }
 
     /// Lane summaries with the sampler's latest CPU and memory.
@@ -228,12 +299,20 @@ impl Inner {
         session: &Session,
     ) -> Result<Value, RpcError> {
         let args: StatusParams = params(value)?;
-        let lanes = self.scope_lanes(context, args.all).await?;
+        // `--mine` lists what a unit-less `stop --mine` would stop.
+        let strictness = if args.mine && !args.all {
+            Strictness::Strict
+        } else {
+            Strictness::Lenient
+        };
+        let scope = self.read_scope(context, args.all, strictness).await?;
+        if strictness == Strictness::Lenient {
+            self.claim_here(context, &scope).await;
+        }
+        let lanes = scope.lanes();
         let mine = args.mine.then_some(&context.actor);
         let items = self.summaries(&lanes, mine);
         if args.watch {
-            let scope: BTreeSet<String> = items.iter().map(|lane| lane.reference.clone()).collect();
-            let everything = args.all || context.lane.is_none() && context.project.is_none();
             // The first snapshot goes to this watcher only. It is built once the
             // watcher subscribed: a change between `items` and the subscription
             // would otherwise reach the watcher in neither.
@@ -247,16 +326,16 @@ impl Inner {
                     })
                     .collect()
             };
+            // By project rather than by the snapshot's lanes, so a lane the project
+            // gains later (`lane new`, a new worktree) shows too.
             self.bus
                 .forward_from(session, snapshot, |event| {
+                    let lane = &event.data["lane"];
                     event.event == events::LANE_CHANGED
-                        && (everything
-                            || event
-                                .data
-                                .get("lane")
-                                .and_then(|l| l.get("reference"))
-                                .and_then(Value::as_str)
-                                .is_some_and(|r| scope.contains(r)))
+                        && scope.covers(
+                            lane["project"].as_str().unwrap_or_default(),
+                            lane["reference"].as_str().unwrap_or_default(),
+                        )
                 })
                 .await;
         }
@@ -850,7 +929,7 @@ impl Inner {
                 self.refresh_views(&project).await;
             }
             let st = lane.st();
-            let env = st
+            let mut env = st
                 .view
                 .as_ref()
                 .map(|view| view.lane_env.clone())
@@ -863,6 +942,17 @@ impl Inner {
                         )
                     })
                 })?;
+            // `--explain` output ends up in transcripts and bug reports; the plain
+            // listing keeps real values for `eval` and subshells.
+            if args.explain {
+                let secrets = devlanes_core::env::secret_values(
+                    env.iter(),
+                    devlanes_core::env::SecretValues::Credentials,
+                );
+                for (key, value) in env.iter_mut() {
+                    *value = devlanes_core::env::redact_value(key, value, &secrets);
+                }
+            }
             return Ok(json!({"lane": st.reference(&project.name()), "env": env}));
         }
         let unit = args.unit.unwrap_or_default();
@@ -916,11 +1006,16 @@ impl Inner {
             }
         };
         if args.explain {
+            let secrets = devlanes_core::env::secret_values(
+                env.values.iter(),
+                devlanes_core::env::SecretValues::Credentials,
+            );
             let items: Vec<Value> = env
                 .values
                 .iter()
                 .map(|(key, value)| {
                     let layer = env.sources.get(key).copied().unwrap_or(EnvLayer::Client);
+                    let value = devlanes_core::env::redact_value(key, value, &secrets);
                     json!({"key": key, "value": value, "layer": layer_word(layer)})
                 })
                 .collect();

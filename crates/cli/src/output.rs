@@ -148,8 +148,8 @@ pub trait Reporter: Send + Sync {
         })
     }
 
-    /// Progress is silent in agent mode; explicit log/event subscriptions and the
-    /// output of a foreground `run` still stream.
+    /// Progress is silent in agent mode; explicit log/event subscriptions,
+    /// `status --watch` and the output of a foreground `run` still stream.
     fn event(&self, method: Method, event: &Event) -> Result<Rendered, serde_json::Error> {
         if self.mode() == OutputMode::Json {
             return Ok(Rendered {
@@ -168,7 +168,10 @@ pub trait Reporter: Send + Sync {
         let task_output = method == Method::Run && event.event == devlanes_proto::events::LOG;
         if self.runtime().quiet
             || self.mode() == OutputMode::Agent
-                && !matches!(method, Method::Logs | Method::InfraLogs | Method::Subscribe)
+                && !matches!(
+                    method,
+                    Method::Logs | Method::InfraLogs | Method::Subscribe | Method::Status
+                )
                 && !task_output
         {
             return Ok(Rendered::default());
@@ -646,8 +649,8 @@ fn continuation(report: &Report<'_>) -> String {
 /// - start, restart, reload, `lane new --start` and resume: 124 when the start timed out,
 ///   1 on any failure or when not ready, else 0;
 /// - wait: 0 only when ready;
-/// - stop, status, lane ls: 1 only for a failed unit or lane, never for a leftover
-///   nonzero exit code of a unit that stopped normally;
+/// - stop, status, lane ls, url ls: 1 only for a failed unit, lane or route, never
+///   for a leftover nonzero exit code of a unit that stopped normally;
 /// - run: the task's exit code.
 pub(crate) fn result_exit_code(method: Method, data: &Value) -> u8 {
     match method {
@@ -676,7 +679,7 @@ pub(crate) fn result_exit_code(method: Method, data: &Value) -> u8 {
                 exit::FAILED
             }
         }
-        Method::Stop | Method::Status | Method::LaneList => {
+        Method::Stop | Method::Status | Method::LaneList | Method::Hosts => {
             if failed_state(data) {
                 exit::FAILED
             } else {

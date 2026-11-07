@@ -19,7 +19,9 @@ pub use clap_complete::Shell;
 pub use completion::*;
 pub use output::*;
 pub use progress::*;
-pub use render::{DoctorCheck, DoctorState, bytes, doctor_checks_of, endpoint_label, status_hint};
+pub use render::{
+    DoctorCheck, DoctorState, bytes, doctor_checks_of, endpoint_label, status_hint, watch_line,
+};
 pub use runtime::*;
 pub use terminal::*;
 pub use with::*;

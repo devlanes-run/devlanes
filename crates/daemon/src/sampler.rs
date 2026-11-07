@@ -194,6 +194,10 @@ struct MetricsParams {
     /// Also send `windows` (min/avg/max) per row; always on past the raw ring.
     #[serde(default)]
     windows: bool,
+    /// Every project, as the TUI's monitor asks; else the request's scope like
+    /// `status`.
+    #[serde(default)]
+    all: bool,
 }
 
 /// The raw ring: 15 minutes at one point per second.
@@ -703,18 +707,44 @@ impl Inner {
             points: args.points.filter(|points| *points > 0),
             windows: args.windows || range_ms > RAW_RANGE_MS,
         };
+        // Before the lock below, a std mutex that must not be held across an await.
+        let scope = self
+            .read_scope(context, args.all, crate::query::Strictness::Lenient)
+            .await?;
+        // Remembered and container rows of the scope: a project's, or one lane's
+        // plus its project's shared containers.
+        let keep: Box<dyn Fn(&Subject) -> bool + Send> = match &scope {
+            crate::query::ReadScope::All(_) => Box::new(|_| true),
+            crate::query::ReadScope::Projects(projects) => {
+                let ids: Vec<_> = projects.iter().map(|project| project.id).collect();
+                Box::new(move |subject| subject.project().is_some_and(|id| ids.contains(&id)))
+            }
+            crate::query::ReadScope::Lane((project, lane)) => {
+                let (project, lane) = (project.id, lane.st().record.as_ref().map(|r| r.id));
+                Box::new(move |subject| match subject.lane() {
+                    Some(id) => Some(id) == lane,
+                    None => {
+                        matches!(subject, Subject::Container { .. })
+                            && subject.project() == Some(project)
+                    }
+                })
+            }
+        };
+        // Lanes with a record now; remembered rows of any other lane are `removed`.
+        let current: BTreeSet<LaneId> = self
+            .all_lanes()
+            .iter()
+            .filter_map(|(_, lane)| lane.st().record.as_ref().map(|record| record.id))
+            .collect();
         let state = lock(&self.metrics);
         let mut units = Vec::new();
         let mut lanes = Vec::new();
         // Series already sent, so no remembered row repeats one.
         let mut sent: BTreeSet<Subject> = BTreeSet::new();
-        // Lanes with a record now; remembered rows of any other lane are `removed`.
-        let mut current: BTreeSet<LaneId> = BTreeSet::new();
-        for (project, lane) in self.all_lanes() {
+        for (project, lane) in scope.lanes() {
             let st = lane.st();
             let reference = st.reference(&project.name());
             let lane_id = st.record.as_ref().map(|record| record.id);
-            current.extend(lane_id);
             for (name, rec) in &st.units {
                 let alive = rec.host.is_alive();
                 // From the lane's id rather than `subjects`, which is keyed by
@@ -795,10 +825,11 @@ impl Inner {
             lanes.push(row);
             sent.insert(subject);
         }
-        let (ended_units, ended_lanes) = remembered_entries(&state, &view, &sent, &current);
+        let (ended_units, ended_lanes) =
+            remembered_entries(&state, &view, &sent, &current, keep.as_ref());
         units.extend(ended_units);
         lanes.extend(ended_lanes);
-        units.extend(container_entries(&state, &view, &current));
+        units.extend(container_entries(&state, &view, &current, keep.as_ref()));
         let system = self.integ.system_pressure.is_some().then(|| {
             let reading = state.system.clone().unwrap_or_default();
             let history: Vec<Value> = state
@@ -1068,11 +1099,12 @@ fn remembered_entries(
     view: &View,
     sent: &BTreeSet<Subject>,
     current: &BTreeSet<LaneId>,
+    keep: &dyn Fn(&Subject) -> bool,
 ) -> (Vec<Value>, Vec<Value>) {
     let mut units = Vec::new();
     let mut lanes = Vec::new();
     for (subject, label) in &state.labels {
-        if sent.contains(subject) {
+        if sent.contains(subject) || !keep(subject) {
             continue;
         }
         let series = state.history.series(subject);
@@ -1124,7 +1156,12 @@ fn remembered_entries(
 /// ones that are no longer listed. Containers without a reading this tick are
 /// `ended` and sent only while their newest point is inside the range.
 /// Replicas of one service are told apart by their container name.
-fn container_entries(state: &MetricsState, view: &View, current: &BTreeSet<LaneId>) -> Vec<Value> {
+fn container_entries(
+    state: &MetricsState,
+    view: &View,
+    current: &BTreeSet<LaneId>,
+    keep: &dyn Fn(&Subject) -> bool,
+) -> Vec<Value> {
     let gone = state
         .labels
         .iter()
@@ -1138,7 +1175,9 @@ fn container_entries(state: &MetricsState, view: &View, current: &BTreeSet<LaneI
         .containers
         .iter()
         .chain(gone)
-        .filter(|(subject, row)| row.latest.is_some() || view.holds(state.history.series(subject)))
+        .filter(|(subject, row)| {
+            keep(subject) && (row.latest.is_some() || view.holds(state.history.series(subject)))
+        })
         .collect();
     rows.iter()
         .map(|(subject, row)| {
@@ -1347,7 +1386,8 @@ mod tests {
         }
         let sent = BTreeSet::from([unit_in(3, "api")]);
         let current = BTreeSet::from([LaneId(1), LaneId(3)]);
-        let (units, lanes) = remembered_entries(&state, &last_ten_seconds(now), &sent, &current);
+        let (units, lanes) =
+            remembered_entries(&state, &last_ten_seconds(now), &sent, &current, &|_| true);
         let units: Vec<_> = units.iter().map(summary).collect();
         assert_eq!(
             units,
@@ -1440,7 +1480,7 @@ mod tests {
             state.labels.insert(subject, Label::Container(row));
         }
         let current = BTreeSet::from([LaneId(1), LaneId(3)]);
-        let rows = container_entries(&state, &last_ten_seconds(now), &current);
+        let rows = container_entries(&state, &last_ten_seconds(now), &current, &|_| true);
         let rows: Vec<(String, String, bool, bool)> = rows
             .iter()
             .map(|row| {

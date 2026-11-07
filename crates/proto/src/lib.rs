@@ -206,6 +206,10 @@ pub enum Method {
     /// `history` rows of `[ts_ms, cpu_percent, memory_bytes]`, plus `windows`
     /// when asked for or past the raw ring.
     ///
+    /// Rows cover the request's scope as `status` does (the `--lane`, the `-p`
+    /// project, the cwd's project, else every project), or every project with
+    /// `all: true`.
+    ///
     /// Every unit and lane row also has `series`, the stable key of its
     /// history (unique per row; `null` for a unit of a lane that has no
     /// record yet), `ended` and `removed`. `ended` rows belong to units,

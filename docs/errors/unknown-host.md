@@ -19,12 +19,12 @@ Over HTTPS the browser shows a certificate error instead of this page, because t
 - The request went to `localhost` or `127.0.0.1` without a lane hostname.
 - Another server, such as Caddy or nginx, was meant to answer, but the daemon holds the port.
 
-For clients on this machine requesting `localhost`, an IP address or a `.localhost` name, the page lists the routed hostnames and suggests the closest one. Other names get no list, so a website that re-resolves its domain to 127.0.0.1 cannot read your projects and branches.
+For clients on this machine requesting `localhost`, an IP address or a `.localhost` name, the page lists the routed hostnames of the project the requested name belongs to (by its lane domain or the closest routed name), or every routed hostname when it cannot tell, and suggests the closest one. Other names get no list, so a website that re-resolves its domain to 127.0.0.1 cannot read your projects and branches.
 
 ## Fix
 
 ```sh
-devlanes url ls          # routed hostnames with lane, service and state
+devlanes url ls          # the project's routed hostnames with lane, service and state; every project's outside one
 devlanes config check
 devlanes remote ls       # lanes on a box
 devlanes doctor

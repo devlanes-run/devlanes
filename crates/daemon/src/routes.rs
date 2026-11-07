@@ -9,13 +9,14 @@ use std::{
     },
 };
 
-use devlanes_proto::LaneWarning;
+use devlanes_proto::{Context, LaneWarning, RpcError};
 use serde_json::{Value, json};
 
 use crate::{
     engine::Inner,
     integrations::{RouteEntry, RouteStatus},
     model::{LaneRt, LaneSt, ProjectRt},
+    query::ReadScope,
     units::UnitState,
 };
 
@@ -354,14 +355,34 @@ impl Inner {
             .collect()
     }
 
-    /// `hosts`: every route with its lane, unit, port and state, and for this
-    /// machine's own routes the URL each reporting client opens it at.
-    pub(crate) fn hosts(&self) -> Value {
+    /// `hosts`: the routes of the request's scope (as `status`'s) with their lane,
+    /// unit, port and state, and for this machine's own routes the URL each
+    /// reporting client opens it at. A box route counts by its project and the box
+    /// lane's reference, so `--lane` on a local lane that yielded its hostnames to a
+    /// box lane with another reference lists none of them.
+    pub(crate) async fn hosts_method(
+        self: &Arc<Self>,
+        context: &Context,
+    ) -> Result<Value, RpcError> {
+        let scope = self
+            .read_scope(context, false, crate::query::Strictness::Lenient)
+            .await?;
+        let references: Option<BTreeSet<String>> = match &scope {
+            ReadScope::All(_) => None,
+            _ => Some(
+                scope
+                    .lanes()
+                    .iter()
+                    .map(|(project, lane)| lane.st().reference(&project.name()))
+                    .collect(),
+            ),
+        };
         let https_port = self.integ.routes.https_port();
         let unmirrored = self.route_unmirrored();
         let items: Vec<Value> = self
             .route_entries()
             .into_iter()
+            .filter(|route| scope.covers(&route.project, &route.lane))
             .map(|route| {
                 let state = route_state(&route.status);
                 // Wildcards have no single address to open.
@@ -393,13 +414,27 @@ impl Inner {
                 })
             })
             .collect();
-        json!({
+        // A conflict shows from either lane's side.
+        let warnings: Vec<LaneWarning> = self
+            .route_warnings()
+            .into_iter()
+            .filter(|warning| {
+                references.as_ref().is_none_or(|references| {
+                    ["lane", "other"].iter().any(|key| {
+                        warning.data[*key]
+                            .as_str()
+                            .is_some_and(|lane| references.contains(lane))
+                    })
+                })
+            })
+            .collect();
+        Ok(json!({
             "items": items,
-            "warnings": self.route_warnings(),
+            "warnings": warnings,
             "proxy": self.integ.routes.status(),
             "truncated": false,
             "next_cursor": null,
-        })
+        }))
     }
 }
 

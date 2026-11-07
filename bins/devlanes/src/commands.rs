@@ -150,11 +150,12 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             let paths = paths()?;
             // Before the request: switching to an installed update restarts the daemon.
             crate::update::startup(runtime, &paths).await;
+            let context = request.context.clone();
             let code = rpc(cli, runtime, request).await?;
             if code != 0 {
                 return Ok(code);
             }
-            crate::wiring::open_ui(runtime, &paths).await
+            crate::wiring::open_ui(runtime, &paths, Some(context)).await
         }
         Action::RpcThenOfferStart(request) => {
             let data = match call(request.clone()).await {
@@ -190,7 +191,7 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             let action = cli.action(runtime).map_err(|error| usage(&error))?;
             Box::pin(run(&cli, runtime, action)).await
         }
-        Action::Ui => ui(runtime).await,
+        Action::Ui(context) => ui(runtime, context).await,
         Action::StartUi { request, forced } => {
             let paths = paths()?;
             if !forced && !crate::start_ui::open_on_start(&paths) {
@@ -512,6 +513,11 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
         }
         .reserve(RUN_SUMMARY_BYTES)
     });
+    // `status --watch`: the last line printed per lane. A gated start sends many
+    // changes that read the same once counted, and agents pay for each line.
+    let mut watch_lines: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    let dedup_watch = method == Method::Status && runtime.mode != devlanes_cli::OutputMode::Json;
     let stream = async {
         loop {
             match client.next_frame().await.map_err(rpc_error)? {
@@ -525,6 +531,17 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                     tracing::trace!(event = %event.event, seq = event.seq, "event received");
                     progress.event(&event);
                     crate::terminal::title_event(&mut title, &event);
+                    if dedup_watch && event.event == devlanes_proto::events::LANE_CHANGED {
+                        let lane = event.data["lane"]["reference"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                        let line = devlanes_cli::watch_line(&event);
+                        if watch_lines.get(&lane) == Some(&line) {
+                            continue;
+                        }
+                        watch_lines.insert(lane, line);
+                    }
                     let rendered = match log_stream.as_mut() {
                         Some(stream) => stream.event(&event),
                         None => reporter.event(method, &event),
@@ -1032,6 +1049,14 @@ fn more_hint(method: Method, request: &Request) -> Option<Hint> {
         }
         // The config has no cursor; a bigger budget prints all of it.
         Method::ConfigShow => Some(scoped(request, &["debug", "config", "--budget", "1048576"])),
+        Method::Hosts => Some(scoped(
+            request,
+            &["url", "ls", "--output", "json", "--budget", "1048576"],
+        )),
+        Method::Metrics => Some(scoped(
+            request,
+            &["debug", "top", "--output", "json", "--budget", "1048576"],
+        )),
         _ => None,
     }
 }
@@ -1199,8 +1224,8 @@ async fn daemon_logs(follow: bool, tail: usize) -> Result<u8, RpcError> {
 }
 
 /// Opens the TUI; it is just another client of the same daemon.
-async fn ui(runtime: &Runtime) -> Result<u8, RpcError> {
-    crate::wiring::ui(runtime, &paths()?).await
+async fn ui(runtime: &Runtime, context: devlanes_proto::Context) -> Result<u8, RpcError> {
+    crate::wiring::ui(runtime, &paths()?, context).await
 }
 
 #[cfg(test)]

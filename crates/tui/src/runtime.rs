@@ -621,7 +621,13 @@ impl Executor {
             }
             Effect::Refresh => {
                 tokio::spawn(async move {
-                    deliver(&sender, Msg::Status(api.status().await)).await;
+                    let status = api.status().await;
+                    // Before the lanes, so the first `Status` can open on one of them.
+                    let home = api.home_lanes();
+                    if !home.is_empty() {
+                        deliver(&sender, Msg::Home(home)).await;
+                    }
+                    deliver(&sender, Msg::Status(status)).await;
                 });
             }
             Effect::Subscribe => {

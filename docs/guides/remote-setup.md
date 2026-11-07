@@ -239,7 +239,7 @@ Synced folders land under `%USERPROFILE%\.devlanes\sync`. Windows keeps only a r
 ```sh
 devlanes remote ls                                  # connected, reconnecting, needs_auth or needs_pairing (with the error), failed
 devlanes daemon clients                             # on the box: paired machines and the ones connected now
-devlanes url ls                                     # the box's hostnames next to your local ones
+devlanes url ls                                     # the box's hostnames of this project next to your local ones; outside a project, all of them
 devlanes status --json | jq .clients                # on the box: who is connected and what each mirrors
 devlanes url print web                              # on the box: the URL each connected client opens
 curl -sS https://api.acme.localhost/healthz          # from the client, once the box lane is ready

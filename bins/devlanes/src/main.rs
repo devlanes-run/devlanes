@@ -139,7 +139,7 @@ fn main() -> ExitCode {
     }
     // Not for the daemon, which logs to its file and inherits DEVLANES_VERBOSE,
     // nor for the TUI, whose screen stderr lines would garble.
-    let verbose = if matches!(action, Action::Ui | Action::StartUi { .. }) {
+    let verbose = if matches!(action, Action::Ui(_) | Action::StartUi { .. }) {
         0
     } else {
         runtime.verbose
@@ -161,7 +161,7 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     let _retained = matches!(
         action,
-        Action::Ui | Action::StartUi { .. } | Action::RpcThenUi(_) | Action::Update(_)
+        Action::Ui(_) | Action::StartUi { .. } | Action::RpcThenUi(_) | Action::Update(_)
     )
     .then(devlanes_client::Paths::discover)
     .and_then(Result::ok)

@@ -54,7 +54,10 @@
     </table>
   </div>
   {% if v.hidden > 0 %}
-  <p class="note">{{ v.hidden }} more in <code>devlanes url ls</code>.</p>
+  <p class="note">{{ v.hidden }} more in <code>{{ v.url_ls }}</code>.</p>
+  {% endif %}
+  {% if v.others > 0 %}
+  <p class="note">{{ v.others }} more in other projects; <code>devlanes url ls</code> outside a project lists them.</p>
   {% endif %}
   {% endif %}
   <h2>Diagnose</h2>
