@@ -1400,6 +1400,49 @@ fn ctrl_c_exits_read_as_interrupted() {
 }
 
 #[test]
+/// Agent lines leave `exit=` off a unit that a Windows stop ended, as a Unix
+/// stop by signal carries no code; a failure or another code keeps it.
+fn stopped_ctrl_c_exits_drop_the_code() {
+    let interrupted = i64::from(0xC000_013A_u32.cast_signed());
+    let agent = |method: Method, data: &Value| {
+        runtime(OutputMode::Agent)
+            .reporter()
+            .result(&Report::new(method, data))
+            .expect("render")
+            .stdout
+    };
+    let with_code = |state: &str, code: i64| {
+        let mut unit = unit("api", state);
+        unit["exit_code"] = json!(code);
+        unit
+    };
+    for (state, code, kept) in [
+        ("stopped", interrupted, !cfg!(windows)),
+        ("failed", interrupted, true),
+        ("stopped", 3, true),
+    ] {
+        let field = format!("exit={code}");
+        let items = json!({"items": [with_code(state, code)]});
+        let status =
+            json!({"items": [lane(Some(2), "main", "running", vec![with_code(state, code)])]});
+        let wait = json!({"lane": "acme@2", "unit": "api", "state": state, "exit_code": code});
+        for (method, data) in [
+            (Method::Stop, &items),
+            (Method::Status, &status),
+            (Method::Wait, &wait),
+        ] {
+            let text = agent(method, data);
+            assert_eq!(
+                text.contains(&field),
+                kept,
+                "{state} {code} {method:?}: {text}"
+            );
+            assert!(text.contains("acme@2"), "{text}");
+        }
+    }
+}
+
+#[test]
 /// A human terminal with colors gets a unit's colors back, each line ending in a
 /// reset and nothing but SGR kept; every other output gets plain text.
 fn logs_keep_colors_only_where_they_show() {

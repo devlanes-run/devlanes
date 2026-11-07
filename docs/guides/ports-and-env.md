@@ -262,7 +262,7 @@ lanes:
   data_dir: /Volumes/fast/devlanes
 ```
 
-On Windows the folder is under `%USERPROFILE%\.devlanes\data`, `lanes.data_dir` may also start with `~\` or a drive letter, and `${{ lane.data_path }}` and `DEVLANES_LANE_DATA` are written with `/` (`C:/Users/acme/.devlanes/data/acme/3`), which Windows programs accept and `sh` strings leave intact.
+On Windows the folder is under `%USERPROFILE%\.devlanes\data`, `lanes.data_dir` may also start with `~\` or a drive letter, and `${{ lane.data_path }}`, `DEVLANES_LANE_DATA` and the Wrangler registry variables are written with `/` (`C:/Users/acme/.devlanes/data/acme/3`), which Windows programs accept and `sh` strings leave intact.
 
 devlanes creates the folder when the lane is created and again before each start, run and container start, so deleting it by hand is safe while the lane is stopped. `devlanes lane clean` deletes it after `lane.clean` tasks and teardown have run, and the project's folder goes with its last lane. A lane that comes back after a clean starts with an empty folder.
 

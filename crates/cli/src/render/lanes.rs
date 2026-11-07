@@ -5,8 +5,8 @@ use devlanes_proto::{LaneSummary, RpcError, StartResult, UnitFailureData, UnitSu
 use serde_json::Value;
 
 use super::{
-    Ctx, Outcome, bytes, clean, display_value, int, leftover_notes, leftover_notes_of, list,
-    percent, plural, table, tail_lines, text, tree, words,
+    Ctx, Outcome, bytes, clean, display_value, exit_field, int, leftover_notes, leftover_notes_of,
+    list, percent, plural, table, tail_lines, text, tree, words,
 };
 use crate::Hint;
 
@@ -107,7 +107,7 @@ pub(crate) fn unit_line(unit: &UnitSummary, cx: &Ctx<'_>) -> String {
         line.push_str(&format!(" {place}"));
     }
     if let Some(code) = unit.exit_code {
-        line.push_str(&format!(" exit={code}"));
+        line.push_str(&exit_field(&unit.state.to_lowercase(), code.into()));
     }
     // The line keeps `ready` first: a frozen unit still serves, its next request thaws it.
     if let Some(power) = &unit.power {
@@ -666,7 +666,7 @@ pub(super) fn stop(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                 clean(&unit.name)
             );
             if let Some(code) = unit.exit_code.filter(|code| *code != 0) {
-                line.push_str(&format!(" exit={code}"));
+                line.push_str(&exit_field(word, code.into()));
             }
             // A stopped orphan keeps `orphaned_since_ms`.
             if unit.orphaned_since_ms.is_some() {
@@ -1277,7 +1277,7 @@ pub(super) fn wait(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     };
     let mut line = format!("{} {target}", cx.state(word));
     if let Some(code) = int(data, "exit_code") {
-        line.push_str(&format!(" exit={code}"));
+        line.push_str(&exit_field(word, code));
     }
     let mut lines = vec![line];
     match word {

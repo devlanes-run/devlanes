@@ -136,8 +136,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     #[cfg(unix)]
     let interrupt = tokio::signal::ctrl_c();
-    // Windows stops send Ctrl-Break for SIGTERM and Ctrl-C for SIGINT; with
-    // `--ignore-sigterm` both are swallowed, so only termination ends it.
+    // Windows stops send Ctrl-C or Ctrl-Break; with `--ignore-sigterm` both
+    // are swallowed, so only termination ends it. The event is printed so
+    // tests can tell which one arrived.
     #[cfg(windows)]
     let (mut ctrl_break, mut ctrl_c) = (
         tokio::signal::windows::ctrl_break()?,
@@ -146,11 +147,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(windows)]
     let shutdown = async {
         loop {
-            tokio::select! {
-                _ = ctrl_break.recv() => {}
-                _ = ctrl_c.recv() => {}
-            }
+            let event = tokio::select! {
+                _ = ctrl_break.recv() => "ctrl-break",
+                _ = ctrl_c.recv() => "ctrl-c",
+            };
             if !args.ignore_sigterm {
+                println!("STOPPING {event}");
+                let _ = std::io::stdout().flush();
                 break;
             }
         }
