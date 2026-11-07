@@ -106,14 +106,14 @@ infra:
     database: docker compose exec -T postgres createdb -U postgres ${{ lane.db_name }}
     vhost:
       run: docker compose exec -T rabbitmq rabbitmqctl add_vhost ${{ lane.vhost }}
-      container: rabbitmq       # run again when this container restarts (its data may be gone)
+      container: rabbitmq       # run again once this container restarted and is healthy (its data may be gone)
       ignore_errors: true       # "already exists" is fine
       timeout: 60s
   teardown:
     database: docker compose exec -T postgres dropdb -U postgres --if-exists --force ${{ lane.db_name }}
 ```
 
-`setup` entries run once per lane, after its containers are healthy, and are recorded as done; later starts skip them. They run concurrently, so an entry must not depend on another one. A failure (without `ignore_errors`) stops the start and names the entry. `teardown` runs on `devlanes lane clean`, in order, and never on `stop`. Tasks can reuse entries as steps: `steps: [infra.teardown.database, infra.setup.database, migrate, seed]`. `devlanes run infra.setup.database` runs one entry again on its own and records it as done; `s` on the entry in the TUI does the same.
+`setup` entries run once per lane, after its containers are healthy, and are recorded as done; later starts skip them. An entry with `container:` runs again at the next start after that container restarted, once it is healthy again: its Docker healthcheck passes, or for a plain container without one, its first port accepts connections. A container's `ready` check is not repeated after a restart. They run concurrently, so an entry must not depend on another one. A failure (without `ignore_errors`) stops the start and names the entry. `teardown` runs on `devlanes lane clean`, in order, and never on `stop`. Tasks can reuse entries as steps: `steps: [infra.teardown.database, infra.setup.database, migrate, seed]`. `devlanes run infra.setup.database` runs one entry again on its own and records it as done; `s` on the entry in the TUI does the same.
 
 Entries take only `run`, written out in full (`docker compose exec ...`, `curl ...`), so the command in the config is the command that runs. A script from `package.json` or a justfile belongs in a task, which can call setup entries as steps.
 
@@ -125,6 +125,7 @@ Creating the namespace is `setup` (once); migrating it is a task with `when: lan
 - `devlanes stop` stops processes only; containers keep running.
 - `devlanes infra down` stops the shared containers (data kept); per-lane containers are untouched. `infra up` and `infra status` are the counterparts.
 - `devlanes start` and `devlanes infra up` leave a Compose service alone when its containers already run healthy with the config Compose resolves now. `docker compose pull` does not change that config, so a running container keeps its old image after a pull. To switch it to the pulled image, remove the container and start again: `docker compose -p acme rm -sf postgres` for a shared service (the project is `project_name`, or Compose's default name when that is unset), `docker compose -p acme-lane2 rm -sf mailpit` for a per-lane service of lane 2, then `devlanes start` or `devlanes infra up`. These commands need only the project name, so they work from any directory. Named volumes keep their data; data the image keeps in an anonymous volume does not carry over to the new container.
+- When a container restarts (a crash, `docker restart`, Docker restarting), devlanes reads its published ports again. `devlanes status` shows the new ports, and services whose env uses them show as changed until `devlanes restart` or `devlanes reload` applies them; nothing restarts on its own. The next `start` or `restart` waits for a restarted container that runs to be healthy before it reruns setup entries or starts services.
 - A frozen lane's per-lane containers are paused until the lane thaws ([idle lanes](lifecycle.md#idle-lanes)). When the daemon starts, it unpauses every lane's own paused containers, including ones paused by hand with `docker pause`.
 - `devlanes lane clean <lane> --yes` runs `lane.clean` tasks and `teardown`, then removes the lane's Compose project with its volumes and the lane's plain containers and named volumes. Shared containers and their data survive.
 - A profile with `infra: false` skips containers and setup; services that reference `infra.*` then fail to resolve, so keep those references out of the profile's services or point them elsewhere in the profile's `env`.
@@ -255,7 +256,7 @@ global_env:
   AMQP_URL: amqp://acme:acme@127.0.0.1:${{ infra.rabbitmq.port }}/${{ lane.vhost }}
 ```
 
-`container: rabbitmq` reruns the entry when the container was recreated, since vhosts live in its volume. Route the management UI through the proxy: `infra.hosts: { rabbitmq: "rabbit.${{ lane.domain }}" }` with the 15672 port published first, or with `port: "15672"`.
+`container: rabbitmq` reruns the entry once the container restarted and is healthy again, since vhosts live in its volume. Route the management UI through the proxy: `infra.hosts: { rabbitmq: "rabbit.${{ lane.domain }}" }` with the 15672 port published first, or with `port: "15672"`.
 
 ### MinIO or another S3, one bucket per lane
 
@@ -331,9 +332,12 @@ Anything with an image and a port fits this shape when a Compose file would be o
 devlanes infra status          # containers, health and ports
 devlanes infra up              # start infra without the services
 devlanes infra logs db -f      # a container's Docker logs, also across restarts
-devlanes env show --explain    # what infra.* resolved to, through global_env
+devlanes env show              # the lane's variables, infra.* values through global_env included
 docker compose -p acme ps      # the shared project by name
-docker ps --filter label=dev.devlanes.project=acme
+docker ps --filter label=com.docker.compose.project=acme   # the shared Compose project: infra.project_name, or Compose's default name
+docker ps --filter label=dev.devlanes.project=acme         # plain containers and per-lane Compose services: the devlanes project
 ```
+
+devlanes runs the shared Compose project from your Compose files as written, so its containers carry only Compose's labels, under the Compose project name (`infra.project_name`, or the name Compose derives when it is unset). That name can differ from the devlanes project name. Per-lane Compose services and plain containers carry `dev.devlanes.*` labels with the devlanes project name.
 
 In the TUI, selecting a container under `infra` shows the same Docker logs in the pane, with the scrollback and copy keys a service has. devlanes does not store them; older lines stay with Docker.

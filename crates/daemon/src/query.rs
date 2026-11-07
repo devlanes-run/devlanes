@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use crate::{
     Session,
     engine::{Inner, LanePair, params, required},
-    model::{ConfigState, is_mine, lane_summary},
+    model::{ConfigState, Kind, is_mine, lane_summary},
     registry::internal,
     stream::LaneEvents,
     units::{UnitHost, UnitState, now_ms, query_log_dir},
@@ -72,6 +72,9 @@ struct EnvParams {
     explain: bool,
     #[serde(default)]
     lane_env: bool,
+    /// The lane env under these profiles instead of the lane's (`with`).
+    #[serde(default)]
+    profiles: Vec<String>,
 }
 
 /// `subscribe` parameters.
@@ -112,6 +115,60 @@ fn layer_word(layer: EnvLayer) -> &'static str {
         EnvLayer::Profile => "profile",
         EnvLayer::Override => "override",
     }
+}
+
+/// `logs` selectors with each task that has only `steps` (it never runs a
+/// unit of its own) replaced by the units of its steps among `candidates`:
+/// `infra.setup.X` is `setup.X`, `infra.teardown.X` is `teardown.X`, and a
+/// nested steps task its own steps. A selector with none of them stays, so
+/// it still fails as not found.
+fn step_units(
+    selectors: Vec<String>,
+    candidates: &[(String, Vec<String>)],
+    config: Option<&devlanes_config::ProjectConfig>,
+) -> Vec<String> {
+    let Some(config) = config else {
+        return selectors;
+    };
+    let known = |name: &str| candidates.iter().any(|(candidate, _)| candidate == name);
+    let mut out: Vec<String> = Vec::new();
+    for selector in selectors {
+        if known(&selector) {
+            out.push(selector);
+            continue;
+        }
+        let mut units = Vec::new();
+        let mut visited = BTreeSet::new();
+        let mut pending = vec![selector.clone()];
+        while let Some(name) = pending.pop() {
+            // Steps may name each other in a cycle, which `run` refuses.
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            if let Some(entry) = name.strip_prefix("infra.setup.") {
+                units.push(format!("setup.{entry}"));
+            } else if let Some(entry) = name.strip_prefix("infra.teardown.") {
+                units.push(format!("teardown.{entry}"));
+            } else {
+                match config.tasks.get(&name) {
+                    Some(task) if task.run.is_none() && task.run_script.is_none() => {
+                        pending.extend(task.steps.iter().flatten().rev().cloned());
+                    }
+                    _ => units.push(name),
+                }
+            }
+        }
+        units.retain(|unit| known(unit));
+        if units.is_empty() {
+            out.push(selector);
+        }
+        for unit in units {
+            if !out.contains(&unit) {
+                out.push(unit);
+            }
+        }
+    }
+    out
 }
 
 /// The program name of `pid`, read off the executor; `None` when it is gone or hidden.
@@ -321,8 +378,14 @@ impl Inner {
             let started = lane.st().started_at_ms.unwrap_or(0);
             query.since = Some(started.to_string());
         }
-        let candidates: Vec<(String, Vec<String>)> = {
+        let (candidates, selectors) = {
             let st = lane.st();
+            let services = st.view.iter().flat_map(|view| {
+                view.services
+                    .iter()
+                    .map(|s| (s.name.as_str(), s.unit.as_str()))
+            });
+            let selectors = crate::engine::expand_replicas(&selectors, services);
             let mut names: Vec<(String, Vec<String>)> = st
                 .units
                 .iter()
@@ -338,7 +401,7 @@ impl Inner {
                     }
                 }
             }
-            names
+            (names, selectors)
         };
         let units = if args.all || selectors.is_empty() {
             if !args.all && selectors.is_empty() {
@@ -350,6 +413,8 @@ impl Inner {
             }
             candidates.iter().map(|(name, _)| name.clone()).collect()
         } else {
+            let config = lane.st().config.loaded().cloned();
+            let selectors = step_units(selectors, &candidates, config.as_deref());
             crate::engine::match_units(&selectors, &candidates, &reference)?
         };
         query.units = Vec::new();
@@ -457,7 +522,10 @@ impl Inner {
         }
     }
 
-    /// `wait`: returns once a unit or lane is ready or failed; `timeout` (exit 124) otherwise.
+    /// `wait`: returns once a unit or lane is ready or failed; `timeout` (exit 124)
+    /// otherwise. A task or exec unit is waited on until its command exits, and
+    /// exiting 0 on its own answers `exited` with `ready: true`; a timeout while
+    /// it still runs carries `state: running` and `timeout_ms`.
     pub(crate) async fn wait_method(
         self: &Arc<Self>,
         value: Value,
@@ -465,10 +533,11 @@ impl Inner {
         session: &Session,
     ) -> Result<Value, RpcError> {
         let args: WaitParams = required(value)?;
-        let deadline = Instant::now()
-            + args
-                .timeout_ms
-                .map_or(self.opts.start_timeout, Duration::from_millis);
+        let timeout = args
+            .timeout_ms
+            .map_or(self.opts.start_timeout, Duration::from_millis);
+        let deadline = Instant::now() + timeout;
+        let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
         let as_unit = self
             .lane_for_units(std::slice::from_ref(&args.target), context)
             .await;
@@ -505,22 +574,27 @@ impl Inner {
         let disconnected = session.disconnected();
         let wait = async {
             loop {
-                let (hosts, busy): (Vec<(String, UnitHost)>, bool) = {
+                // A task or exec unit is waited on until its command exits.
+                let (hosts, busy, runs_to_exit): (Vec<(String, UnitHost)>, bool, bool) = {
                     let st = lane.st();
+                    let mut runs_to_exit = false;
                     let hosts = match &unit {
                         Some(unit) => st
                             .units
                             .get(unit)
-                            .map(|rec| vec![(unit.clone(), rec.host.clone())])
+                            .map(|rec| {
+                                runs_to_exit = matches!(rec.kind, Kind::Task | Kind::Exec);
+                                vec![(unit.clone(), rec.host.clone())]
+                            })
                             .unwrap_or_default(),
                         None => st
                             .units
                             .iter()
-                            .filter(|(_, rec)| rec.kind == crate::model::Kind::Service)
+                            .filter(|(_, rec)| rec.kind == Kind::Service)
                             .map(|(name, rec)| (name.clone(), rec.host.clone()))
                             .collect(),
                     };
-                    (hosts, st.busy.is_some())
+                    (hosts, st.busy.is_some(), runs_to_exit)
                 };
                 let states: Vec<UnitState> = hosts.iter().map(|(_, host)| host.state()).collect();
                 let failed: Vec<usize> = states
@@ -544,7 +618,7 @@ impl Inner {
                 }
                 let all_ready =
                     !states.is_empty() && states.iter().all(|s| matches!(s, UnitState::Ready));
-                if all_ready && !busy {
+                if all_ready && !busy && !runs_to_exit {
                     return Ok(
                         json!({"lane": reference, "unit": unit, "state": "ready", "ready": true}),
                     );
@@ -559,16 +633,25 @@ impl Inner {
                     .find(|(_, h)| matches!(h.state(), UnitState::Exited(_)))
                     .filter(|_| unit.is_some())
                 {
+                    let code = host.exit_outcome().and_then(|o| o.code);
+                    // Exited on its own with 0: the command the wait was for succeeded.
+                    if runs_to_exit && code == Some(0) && !host.stop_was_requested() {
+                        return Ok(
+                            json!({"lane": reference, "unit": name, "state": "exited", "ready": true, "exit_code": 0}),
+                        );
+                    }
                     return Ok(
-                        json!({"lane": reference, "unit": name, "state": host.state().word(), "ready": false, "exit_code": host.exit_outcome().and_then(|o| o.code)}),
+                        json!({"lane": reference, "unit": name, "state": host.state().word(), "ready": false, "exit_code": code}),
                     );
                 }
                 if Instant::now() >= deadline {
-                    return Err(RpcError::new(
-                        "timeout",
-                        json!({"lane": reference, "unit": unit}),
-                        124,
-                    ));
+                    let mut data = json!({"lane": reference, "unit": unit});
+                    // Still running is not a readiness problem: the CLI says so.
+                    if runs_to_exit && hosts.iter().any(|(_, host)| host.is_alive()) {
+                        data["state"] = json!("running");
+                        data["timeout_ms"] = json!(timeout_ms);
+                    }
+                    return Err(RpcError::new("timeout", data, 124));
                 }
                 // Nobody is left to tell; polling on would only hold the lane's state.
                 tokio::select! {
@@ -715,9 +798,15 @@ impl Inner {
         let push = |reasons: &mut Vec<Value>, code: &str, data: Value| {
             reasons.push(json!({"code": code, "data": data}))
         };
-        let (host, service, st_reason, needs_env, config, busy, unassigned, orphan) = {
+        let (host, service, st_reason, needs_env, config, busy, unassigned, orphan, saved) = {
             let st = lane.st();
             let orphan = st.orphan_error(&project.name(), &name);
+            // A start by name adds to these, and a plain start brings them back.
+            let saved: Vec<String> = st
+                .record
+                .as_ref()
+                .map(|record| record.services.clone())
+                .unwrap_or_default();
             let host = st.units.get(&name).map(|rec| rec.host.clone());
             let service = st
                 .view
@@ -732,6 +821,7 @@ impl Inner {
                 st.busy,
                 st.unassigned.clone(),
                 orphan,
+                saved,
             )
         };
         // Left running by a previous daemon at `started_at_ms`, found at
@@ -784,6 +874,7 @@ impl Inner {
             }
             if let Some((profiles, selected)) = Inner::profile_services(&lane)
                 && !selected.contains(&service.name)
+                && !saved.contains(&service.name)
             {
                 if !service.autostart {
                     push(&mut reasons, "autostart_off", json!({}));
@@ -801,6 +892,15 @@ impl Inner {
                     &mut reasons,
                     "port_in_use",
                     json!({"port": service.port, "pid": pid}),
+                );
+            }
+        }
+        if alive && host.as_ref().is_some_and(|h| h.state() == UnitState::Ready) {
+            for (port, listening) in self.closed_ports(&lane, &name).await {
+                push(
+                    &mut reasons,
+                    "not_listening",
+                    json!({"port": port, "listening": listening}),
                 );
             }
         }
@@ -836,6 +936,57 @@ impl Inner {
         Ok(result)
     }
 
+    /// The ports of running unit `name` that should accept connections and do
+    /// not, each with the ports its processes listen on: the ports its hosts
+    /// route to, or its main port when a `tcp` or `http` ready check looked at
+    /// it. A unit without either (a worker) is not checked.
+    async fn closed_ports(&self, lane: &crate::model::LaneRt, name: &str) -> Vec<(u16, Vec<u16>)> {
+        let (mut ports, managed) = {
+            let st = lane.st();
+            let Some(rec) = st.units.get(name) else {
+                return Vec::new();
+            };
+            // A live unit keeps the ports it was spawned with, as the proxy does.
+            let mut ports: Vec<u16> = st
+                .view
+                .iter()
+                .flat_map(|view| view.routes.iter())
+                .filter(|route| route.unit == name)
+                .map(|route| {
+                    rec.ports
+                        .get(&route.port_name)
+                        .copied()
+                        .unwrap_or(route.port)
+                })
+                .collect();
+            if ports.is_empty() && matches!(rec.ready_check, Some("tcp" | "http")) {
+                ports.extend(rec.ports.get("default").copied());
+            }
+            (ports, rec.managed.clone())
+        };
+        ports.retain(|port| *port != 0);
+        ports.sort_unstable();
+        ports.dedup();
+        // Concurrent, since a closed port costs up to a second on Windows.
+        let open =
+            futures_util::future::join_all(ports.iter().map(|port| crate::ready::tcp_open(*port)))
+                .await;
+        let closed: Vec<u16> = ports
+            .into_iter()
+            .zip(open)
+            .filter(|(_, open)| !open)
+            .map(|(port, _)| port)
+            .collect();
+        if closed.is_empty() {
+            return Vec::new();
+        }
+        let listening = managed.listening_ports().await;
+        closed
+            .into_iter()
+            .map(|port| (port, listening.clone()))
+            .collect()
+    }
+
     /// `env`: lane env (`lane_env: true` or no unit) or one unit's env, optionally
     /// with provenance.
     pub(crate) async fn env_method(
@@ -846,24 +997,25 @@ impl Inner {
         let args: EnvParams = params(value)?;
         if args.lane_env || args.unit.is_none() {
             let (project, lane) = self.target_lane(context).await?;
-            if lane.st().view.is_none() {
-                self.refresh_views(&project).await;
+            let (resolved, layers) = self
+                .resolve_lane_env(
+                    &project,
+                    &lane,
+                    crate::engine::carries_env(context).unwrap_or_default(),
+                    (!args.profiles.is_empty()).then_some(args.profiles.as_slice()),
+                )
+                .await?;
+            let env = devlanes_core::env::assemble([
+                (EnvLayer::Devlanes, resolved.lane_env().clone()),
+                (EnvLayer::Global, layers.global),
+                (EnvLayer::Profile, layers.profile),
+            ]);
+            let reference = lane.st().reference(&project.name());
+            let mut result = json!({"lane": reference, "env": env.values});
+            if !layers.unset.is_empty() {
+                result["left_out"] = crate::resolve::left_out(&layers.unset);
             }
-            let st = lane.st();
-            let env = st
-                .view
-                .as_ref()
-                .map(|view| view.lane_env.clone())
-                .ok_or_else(|| {
-                    st.last_error.clone().unwrap_or_else(|| {
-                        RpcError::new(
-                            "unassigned",
-                            json!({"lane": st.reference(&project.name())}),
-                            1,
-                        )
-                    })
-                })?;
-            return Ok(json!({"lane": st.reference(&project.name()), "env": env}));
+            return Ok(result);
         }
         let unit = args.unit.unwrap_or_default();
         let ((project, lane), selectors) = self
@@ -876,9 +1028,13 @@ impl Inner {
             .units
             .get(&name)
             .filter(|rec| rec.host.is_alive())
-            .map(|rec| rec.env.clone());
+            .map(|rec| (rec.env.clone(), rec.left_out.clone()));
+        let mut left_out = std::collections::BTreeMap::new();
         let env = match live {
-            Some(env) => env,
+            Some((env, unset)) => {
+                left_out = unset;
+                env
+            }
             None => {
                 let resolved = self
                     .resolve_with(&project, &lane, crate::engine::carries_env(context))
@@ -915,7 +1071,7 @@ impl Inner {
                 Arc::new(crate::lifecycle::copy_env(&launch.env))
             }
         };
-        if args.explain {
+        let mut result = if args.explain {
             let items: Vec<Value> = env
                 .values
                 .iter()
@@ -924,11 +1080,14 @@ impl Inner {
                     json!({"key": key, "value": value, "layer": layer_word(layer)})
                 })
                 .collect();
-            return Ok(
-                json!({"lane": reference, "unit": name, "items": items, "truncated": false, "next_cursor": null}),
-            );
+            json!({"lane": reference, "unit": name, "items": items, "truncated": false, "next_cursor": null})
+        } else {
+            json!({"lane": reference, "unit": name, "env": env.values})
+        };
+        if !left_out.is_empty() {
+            result["left_out"] = crate::resolve::left_out(&left_out);
         }
-        Ok(json!({"lane": reference, "unit": name, "env": env.values}))
+        Ok(result)
     }
 
     /// `url`: the public URL of a service or `infra.external` entry (internal URL

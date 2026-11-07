@@ -514,6 +514,8 @@ struct FakeDriver {
     result: Value,
     /// The lane env carries `DEVLANES_CA_CERT` and `DEVLANES_CA_BUNDLE`.
     ca: bool,
+    /// Tasks the start runs, each with a log.
+    tasks: Vec<&'static str>,
 }
 
 impl Default for FakeDriver {
@@ -531,6 +533,7 @@ impl Default for FakeDriver {
             missing_command: false,
             result: Value::Null,
             ca: true,
+            tasks: Vec::new(),
         }
     }
 }
@@ -545,6 +548,13 @@ impl WithDriver for FakeDriver {
     ) -> Result<WithStart, RpcError> {
         self.calls.push("start".into());
         assert_eq!(request.method, Method::Start);
+        for task in &self.tasks {
+            sink(Event {
+                seq: 1,
+                event: events::TASK.into(),
+                data: json!({"lane": "acme@0", "task": task, "state": "done"}),
+            });
+        }
         sink(Event {
             seq: 1,
             event: events::PHASE.into(),
@@ -556,6 +566,11 @@ impl WithDriver for FakeDriver {
         if let Some(error) = self.start_failure.clone() {
             return Err(error);
         }
+        sink(Event {
+            seq: 1,
+            event: events::PHASE.into(),
+            data: json!({"lane":"acme@0", "phase":"services", "state":"done"}),
+        });
         Ok(WithStart {
             ready: self.ready,
             failures: if self.ready {
@@ -605,7 +620,8 @@ impl WithDriver for FakeDriver {
         assert_eq!(query.query.tail, None);
         assert_eq!(query.query.max_bytes, None);
         self.calls.push("logs".into());
-        // `worker` and `db` ran before this invocation; only `api` is its own.
+        // `worker` and `db` ran before this invocation; only `api` and the
+        // start's tasks are its own.
         let unit = |name: &str, text: &str| UnitLogs {
             unit: name.into(),
             lines: vec![LogLine {
@@ -617,11 +633,13 @@ impl WithDriver for FakeDriver {
                 styled: None,
             }],
         };
-        Ok(vec![
+        let mut logs = vec![
             unit("api", "\x1b[31mmissing config\x1b[0m"),
             unit("worker", "waiting for queue"),
             unit("db", "ready to accept connections"),
-        ])
+        ];
+        logs.extend(self.tasks.iter().map(|task| unit(task, "migrated")));
+        Ok(logs)
     }
     /// Peak fixtures differ from instantaneous resource usage by contract. A
     /// failed `api` ran 3 seconds; a running one has no start time, so the
@@ -825,6 +843,62 @@ async fn with_sets_runtime_ca_variables_only_with_a_ca() {
     }
 }
 
+/// `with` rewrites its start's phase lines as `start` does: on a terminal the
+/// `… services` line is erased when the phase ends, and piped human output
+/// never prints it.
+#[tokio::test]
+async fn with_replaces_its_phase_lines() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (plan, _) = plan(temp.path(), false);
+    for (runtime, erased) in [
+        (crate::progress::runtime(&["devlanes"], true, false), true),
+        (
+            crate::progress::runtime(&["devlanes", "--output", "human"], false, false),
+            false,
+        ),
+    ] {
+        let mut output = String::new();
+        run_with(
+            &plan,
+            &runtime,
+            &mut FakeDriver::default(),
+            &mut |rendered| output.push_str(&rendered.stdout),
+        )
+        .await;
+        assert_eq!(
+            output.contains("\u{2026} services\n\x1b[1A\x1b[2K"),
+            erased,
+            "{output:?}"
+        );
+        assert_eq!(output.contains('\u{2026}'), erased, "{output:?}");
+    }
+}
+
+/// Tasks the start ran are part of the run, so their logs land in --logs-dir;
+/// units that ran before `with` still do not.
+#[tokio::test]
+async fn with_writes_the_logs_of_its_start_tasks() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (plan, runtime) = plan(temp.path(), false);
+    let mut driver = FakeDriver {
+        tasks: vec!["migrate"],
+        ..FakeDriver::default()
+    };
+    let outcome = run_with(&plan, &runtime, &mut driver, &mut |_| {}).await;
+    let mut names: Vec<String> = outcome
+        .log_files
+        .iter()
+        .map(|path| {
+            path.file_name()
+                .expect("name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, ["unit-api.log", "unit-migrate.log"]);
+}
+
 #[tokio::test]
 async fn with_json_prints_no_empty_object() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -848,7 +922,9 @@ async fn with_json_prints_no_empty_object() {
             serde_json::from_str::<serde_json::Value>(line).expect("ndjson line");
         }
     }
+    // Every event streams as it came, the phase's `started` included.
     assert!(lines[0].starts_with("{\"seq\""), "{output}");
+    assert!(lines[0].contains("\"state\":\"started\""), "{output}");
 }
 
 #[tokio::test]
@@ -906,7 +982,7 @@ async fn with_start_failure_writes_logs_and_stops_without_running_command() {
 /// A ready start whose running units lack the profile's settings does not run the
 /// command, exits 1 and still stops what it started. Only the refusal shows: the
 /// start's warning would point at `status` and `reload`, which a `with` start
-/// leaves alone.
+/// leaves alone, and its result would say `nothing to start` as on success.
 #[tokio::test]
 async fn with_refuses_units_without_the_profile_settings() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -939,6 +1015,7 @@ async fn with_refuses_units_without_the_profile_settings() {
     );
     assert!(output.contains("the command did not run: web"), "{output}");
     assert!(!output.contains("the start's warning"), "{output}");
+    assert!(!output.contains("nothing to start"), "{output}");
 }
 
 #[tokio::test]
@@ -1013,6 +1090,7 @@ async fn with_timed_out_start_reports_every_unready_unit() {
     );
     insta::assert_snapshot!(output, @r"
     ::group::services
+    ::endgroup::
     acme@0 · main
     failed services  1 of 3 ready
       failed  api     exited 1   missing config
@@ -1021,7 +1099,6 @@ async fn with_timed_out_start_reports_every_unready_unit() {
     timed out before every unit was ready
 
     logs: devlanes logs acme@0:api --tail 200
-    ::endgroup::
     ::error title=api exited 1::missing config
     ::error title=worker failed::waiting for queue
     devlanes with · acme@0 · exit 1

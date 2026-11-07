@@ -637,7 +637,38 @@ impl Inner {
             }
         }
         // Transient: the stop leaves the saved profiles and services for the start.
-        self.stop_lane(project, lane, None, None, true).await?;
-        self.start_lane(project, lane, options).await
+        let stopped = self.stop_lane(project, lane, None, None, true).await?;
+        // Running an exec command again unasked would be an auto-restart; say it stopped.
+        let execs: Vec<String> = stopped
+            .into_iter()
+            .filter(|unit| unit.kind == "exec")
+            .map(|unit| unit.name)
+            .collect();
+        let mut result = match self.start_lane(project, lane, options).await {
+            Ok(result) => result,
+            // The exec units are gone either way; the error names them.
+            Err(mut error) => {
+                if !execs.is_empty()
+                    && let Some(data) = error.data.as_object_mut()
+                {
+                    data.insert("exec_stopped".into(), json!(execs));
+                }
+                return Err(error);
+            }
+        };
+        if !execs.is_empty() {
+            result.warnings.push(LaneWarning {
+                code: "exec_stopped".into(),
+                data: json!({
+                    "lane": reference,
+                    "units": execs,
+                    "message": format!(
+                        "stopped exec units {}; a whole-lane restart does not run them again",
+                        execs.join(", ")
+                    ),
+                }),
+            });
+        }
+        Ok(result)
     }
 }

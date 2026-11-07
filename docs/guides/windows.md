@@ -91,7 +91,7 @@ devlanes completions powershell | Out-String | Invoke-Expression
 
 ## Terminals in units
 
-Services default to `pty: true`. On Windows that runs the service in a ConPTY pseudo console, which re-renders the program's output the way a console window would: it rewrites line endings, cursor movement and colour sequences, and repaints its whole window when it is resized. `devlanes logs` and the log files hold the lines as that console showed them, each once, however often it repainted; `ready.log` patterns see its rendering as it arrives, not the bytes the program wrote. Set `pty: false` on a unit whose logs must hold exactly what it wrote.
+Services default to `pty: true`. On Windows that runs the service in a ConPTY pseudo console, which re-renders the program's output the way a console window would: it rewrites line endings, cursor movement and colour sequences, and repaints its whole window when it is resized. `devlanes logs` and the log files hold the lines as that console showed them, each once, however often it repainted; `ready.log` patterns match those lines, as `devlanes logs` shows them, not the bytes the program wrote. Set `pty: false` on a unit whose logs must hold exactly what it wrote.
 
 `pty: true` units stop about 5 seconds after the daemon dies, because their pseudo console closes with it. `pty: false` units keep running, and the next daemon finds them as orphans, as on macOS and Linux.
 
@@ -103,11 +103,14 @@ Windows has no POSIX signals. Console programs see Ctrl-C and Ctrl-Break, so `st
 
 | `stop.signal` | On Windows |
 | --- | --- |
-| `SIGINT` | Ctrl-C; Ctrl-Break for a `run:` string, because programs that Git's `sh` starts ignore Ctrl-C |
-| `SIGTERM` (default), `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2` | Ctrl-Break |
+| `SIGTERM` (default) | Ctrl-C; Ctrl-Break for a `run:` string or a unit where Git's `sh`, `bash` or `dash`, or MSYS2's `zsh` or `fish`, runs (a `[sh, -c, ...]` list, a just recipe), because programs those shells start ignore Ctrl-C |
+| `SIGINT` | Ctrl-C; Ctrl-Break for a `run:` string |
+| `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2` | Ctrl-Break |
 | `SIGKILL` | the unit's processes are ended at once |
 
-A unit whose signal is sent as something else gets a launch note that says so. A stop also asks the unit's visible windows to close (`WM_CLOSE`), for desktop apps that do not watch their console. Whatever still runs when `stop.timeout` ends is terminated. A process ended by a console event reports `interrupted by Ctrl-C or Ctrl-Break`, because Windows gives both the same exit code.
+Node runs its `SIGINT` handlers on Ctrl-C but ends at once on Ctrl-Break, so start programs that must clean up on stop with `run_script` or a `run` list rather than a `run:` string. `wrangler dev` is one: otherwise its dev registry entry stays behind and sibling workers' bindings fail. Wrangler also removes the entry only with the default `pty: true`. A program that ignores Ctrl-C runs until `stop.timeout` and is then terminated, as a Unix program that ignores SIGTERM is.
+
+A unit whose signal is sent as something else gets a launch note that says so. A stop also asks the unit's visible windows to close (`WM_CLOSE`), for desktop apps that do not watch their console. Whatever still runs when `stop.timeout` ends is terminated. A unit that a stop ends reports `interrupted by Ctrl-C or Ctrl-Break`, because Windows gives both the same exit code. That includes a `pty: true` unit started through a `.cmd` shim such as `npm.cmd`, and a unit where Git's `sh` or `bash` ran (a `run:` string, a `[sh, -c, ...]` list or a just recipe), whose own codes (255 and 512) only say that the event reached them. With `pty: false` a `.cmd` shim passes on its program's code, and npm exits 1 after any stop, so every stop of a `pty: false` unit started through `npm run`, the default stop included, reports `exit=1` even when the program shut down cleanly. Keep the default `pty: true`, or run the program directly (`run: [node, server.js]`), to avoid it.
 
 ## Idle lanes
 

@@ -541,6 +541,56 @@ async fn multi_profile_env_and_infra() {
 }
 
 #[tokio::test]
+/// The lane-level env (`exec`, `with`, `env show`) leaves out entries that read
+/// `self` or `replica`, applies profile env, keeps values out of `Debug`, and
+/// fails with the entry's path when one does not evaluate.
+async fn lane_layers_leave_out_per_unit_entries() {
+    let yaml = r#"project: demo
+global_env:
+  A: secret-a
+  B: "${{ lane.name }}"
+  C: "${{ self.port }}"
+  D: "${{ replica.index }}"
+services:
+  api: { run: serve }
+profiles:
+  p:
+    env: { P: "${{ lane.index }}", Q: "${{ self.name }}" }
+"#;
+    let resolve = |yaml: String| async move {
+        let config = parse(&yaml);
+        let facts = facts("demo", 1, Some("x"));
+        let (block, offsets) = allocation(&config, 21_000, &[]);
+        let client = client_env();
+        let profiles = vec!["p".to_owned()];
+        let only = BTreeSet::new();
+        let mut input = ResolveInput::new(&config, &facts, block, &offsets);
+        input.client_env = &client;
+        input.profiles = &profiles;
+        input.only = Some(&only);
+        resolve_lane(input).await.expect("resolves")
+    };
+    let lane = resolve(yaml.to_owned()).await;
+    let layers = lane.lane_layers().expect("evaluates");
+    assert_eq!(
+        layers.global,
+        BTreeMap::from([
+            ("A".into(), "secret-a".into()),
+            ("B".into(), "lane1".into())
+        ])
+    );
+    assert_eq!(layers.profile, BTreeMap::from([("P".into(), "1".into())]));
+    assert!(lane.services.is_empty());
+    assert!(!format!("{lane:?}").contains("secret-a"));
+
+    let broken = resolve(yaml.replace("A: secret-a", "A: \"${{ env.MISSING }}\"")).await;
+    match broken.lane_layers() {
+        Err(ResolveError::Expression { path, .. }) => assert_eq!(path, "global_env.A"),
+        other => panic!("expected an expression error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 /// `run_scripts` remaps merge in order; later profiles win per script name.
 async fn multi_profile_run_scripts() {
     let ab = with_profiles(None, &["a", "b"]).await;
@@ -983,6 +1033,37 @@ services:
     assert_eq!(calls.len(), 2);
     assert!(calls[0].2.is_empty());
     assert_eq!(calls[1].2, ["--port".to_owned(), port("script")]);
+}
+
+#[tokio::test]
+/// A `run` list item that is one expression giving a number or boolean
+/// becomes its text; a list result is still a wrong-type error.
+async fn run_list_items_become_text() {
+    let config = parse(
+        r#"
+project: demo
+services:
+  api: { run: [server, --port, "${{ self.port }}", --main, "${{ lane.index == 1 }}"] }
+  bad: { run: [server, "${{ [lane.index] }}"] }
+"#,
+    );
+    let facts = facts("demo", 1, None);
+    let (block, offsets) = allocation(&config, 21_000, &[]);
+    let lane = resolve_lane(ResolveInput::new(&config, &facts, block, &offsets))
+        .await
+        .expect("resolves");
+    let api = &lane.services["api"];
+    assert_eq!(
+        api.launch.args,
+        [
+            "--port".to_owned(),
+            api.port.to_string(),
+            "--main".into(),
+            "true".into()
+        ]
+    );
+    let error = lane.errors.get("services.bad").expect("bad fails");
+    assert!(error.to_string().contains("wrong type"), "{error}");
 }
 
 #[tokio::test]

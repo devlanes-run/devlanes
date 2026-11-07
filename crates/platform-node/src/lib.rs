@@ -140,7 +140,7 @@ impl Contributor for CloudflareContributor {
     /// the shell. Wrangler and Miniflare create the folder when they register a worker,
     /// so nothing touches the disk here.
     async fn apply(&self, draft: &mut LaunchDraft, cx: &ContribCx<'_>) -> Result<(), Error> {
-        let registry = registry_path(cx.lane_data_path).display().to_string();
+        let registry = devlanes_core::paths::forward_slashes(&registry_path(cx.lane_data_path));
         for name in REGISTRY_ENVS {
             draft.env.insert(name.to_owned(), registry.clone());
         }
