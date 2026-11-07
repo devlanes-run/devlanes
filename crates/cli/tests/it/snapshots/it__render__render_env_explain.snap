@@ -7,13 +7,16 @@ KEY        VALUE        LAYER
 PORT       20101        devlanes
 API_TOKEN  [redacted]   global
 NODE_ENV   development  service
+note: npm: pnpm 10.4.1 (packageManager in package.json)
 --- plain (exit 0)
 KEY        VALUE        LAYER
 PORT       20101        devlanes
 API_TOKEN  [redacted]   global
 NODE_ENV   development  service
+note: npm: pnpm 10.4.1 (packageManager in package.json)
 --- agent (exit 0)
 KEY        VALUE        LAYER
 PORT       20101        devlanes
 API_TOKEN  [redacted]   global
 NODE_ENV   development  service
+note: npm: pnpm 10.4.1 (packageManager in package.json)

@@ -290,7 +290,7 @@ without the daemon.",
         #[arg(value_name = "SHELL")]
         shell: clap_complete::Shell,
     },
-    /// Serve a client's SSH connection on a box (started by remote connect)
+    /// Serve a connecting client over stdin and stdout (run by remote connect over SSH, or by a remote.<box>.command)
     #[command(hide = true)]
     Tunnel {
         /// Speak the mux protocol on stdin and stdout
@@ -534,7 +534,8 @@ pub enum EnvCommand {
         /// Unit whose environment to print ([lane:]unit) [default: the lane's variables]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
-        /// Show where each variable comes from; secret-looking values are hidden
+        /// Show where each variable comes from; secret-looking values are hidden. With a unit,
+        /// also prints the unit's launch notes
         #[arg(long)]
         explain: bool,
     },
@@ -650,7 +651,7 @@ pub struct UpdateArgs {
     /// Only check: show the install method, the running and latest versions and what changed
     #[arg(long, conflicts_with = "finish")]
     pub check: bool,
-    /// Restart the daemon into this binary after an update (run by devlanes update)
+    /// Restart the daemon into this binary after an update (run by devlanes update and the install scripts)
     #[arg(long, hide = true)]
     pub finish: bool,
 }

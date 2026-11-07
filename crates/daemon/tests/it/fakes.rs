@@ -99,6 +99,26 @@ impl devlanes_core::contrib::Contributor for PlanJournal {
     }
 }
 
+/// Contributor that adds the launch note `note for <name>` to every unit.
+pub struct NoteContributor;
+
+#[async_trait]
+impl devlanes_core::contrib::Contributor for NoteContributor {
+    fn id(&self) -> &'static str {
+        "note"
+    }
+
+    /// Adds the note; the rest of the draft is left as it is.
+    async fn apply(
+        &self,
+        draft: &mut devlanes_core::contrib::LaunchDraft,
+        cx: &devlanes_core::contrib::ContribCx<'_>,
+    ) -> Result<(), Error> {
+        draft.notes.push(format!("note for {}", cx.name));
+        Ok(())
+    }
+}
+
 /// Records every spawned script in order.
 #[derive(Default, Clone)]
 pub struct Journal(pub Arc<Mutex<Vec<String>>>);
