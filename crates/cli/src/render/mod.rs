@@ -250,6 +250,7 @@ pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> 
             &text(&event.data, "code"),
             &event.data,
         ))],
+        events::LANE_CHANGED if method == Method::Status => vec![other::watch_line(event)],
         _ => vec![other::event_line(event)],
     }
 }

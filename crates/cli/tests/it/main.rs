@@ -801,7 +801,7 @@ fn defaults_follow_guards_and_interrupt_policy() {
     let cli = Cli::parse_from(["devlanes"]);
     assert!(matches!(
         action(&cli, &runtime(&cli, OutputMode::Human)),
-        Action::Ui
+        Action::Ui(_)
     ));
     assert_eq!(
         request(action(&cli, &runtime(&cli, OutputMode::Agent))).method,

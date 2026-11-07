@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     Session,
-    engine::{Inner, LanePair, carries_env, confirmation, params, required},
+    engine::{Inner, LanePair, MainLane, carries_env, confirmation, params, required},
     lifecycle::{SpawnRequest, StartOptions, TaskOutcome},
     model::{EnvMap, Kind, LaneRt, ProjectRt, is_mine, lane_summary, lock, unit_summary},
     registry::{internal, store_error},
@@ -167,7 +167,20 @@ impl Inner {
         units: &[String],
         context: &Context,
     ) -> Result<(LanePair, Vec<String>), RpcError> {
-        if let Some(project) = self.project_for(context).await? {
+        // A named lane resolves by its reference, so the cwd's project may fail to
+        // resolve (a folder shared by several projects) without failing the start.
+        let named = context.lane.is_some()
+            || units.iter().any(|unit| {
+                unit.parse::<devlanes_core::refs::UnitRef>()
+                    .is_ok_and(|parsed| parsed.lane.is_some())
+            });
+        if named {
+            for id in self.reference_scope(context).await.unwrap_or_default() {
+                if let Some(project) = self.project(id) {
+                    let _ = self.relist(&project).await;
+                }
+            }
+        } else if let Some(project) = self.project_for(context).await? {
             let _ = self.relist(&project).await;
         }
         self.lane_for_units(units, context).await
@@ -211,22 +224,28 @@ impl Inner {
             },
         );
         let mut result = self.with_lane_events(session, stream, start).await?;
-        // Only this lane came back; the shell's env may not suit the others, so
-        // they are named for `lane resume` instead of started too.
+        // Only this lane came back; the shell's env may not suit the others, so this
+        // project's other lanes are named for `lane resume` instead of started too.
+        // `others` counts the other projects' lanes, which `lane resume` also starts;
+        // naming them on every start in any project would only be noise.
         if selection.units.is_empty() && selection.profile_names().is_empty() {
-            let waiting: Vec<String> = self
-                .all_lanes()
-                .into_iter()
-                .filter(|(_, other)| !Arc::ptr_eq(other, &lane))
-                .filter_map(|(project, other)| {
-                    let st = other.st();
-                    (st.present && st.needs_env()).then(|| st.reference(&project.name()))
-                })
-                .collect();
+            let mut waiting: Vec<String> = Vec::new();
+            let mut others = 0;
+            for (other_project, other) in self.all_lanes() {
+                let st = other.st();
+                if Arc::ptr_eq(&other, &lane) || !st.present || !st.needs_env() {
+                    continue;
+                }
+                if other_project.id == project.id {
+                    waiting.push(st.reference(&other_project.name()));
+                } else {
+                    others += 1;
+                }
+            }
             if !waiting.is_empty() {
                 result.warnings.push(devlanes_proto::LaneWarning {
                     code: "lanes_to_resume".into(),
-                    data: json!({"lanes": waiting}),
+                    data: json!({"lanes": waiting, "others": others}),
                 });
             }
         }
@@ -516,11 +535,19 @@ impl Inner {
                 2,
             ));
         }
-        let Some(project) = self.project_for(context).await? else {
-            return Err(crate::engine::no_config(&context.cwd).await);
+        // The folder the new lane shares: `--lane`'s (an extra lane stands for its
+        // folder's first lane), else the cwd's, never a guessed one.
+        let (project, base) = match &context.lane {
+            Some(reference) => {
+                let (project, lane) = self.resolve_lane_ref(reference, context).await?;
+                let path = lane.st().path.clone();
+                let base = Self::lane_at(&project, &path).unwrap_or(lane);
+                (project, base)
+            }
+            None => self.cwd_lane(context, MainLane::Refused).await?,
         };
         let (lane, extra) = self
-            .extra_lane(&project, context, args.name.as_deref())
+            .extra_lane(&project, &base, args.name.as_deref())
             .await?;
         let name = project.name();
         let summary = lane_summary(&name, &lane.st());
@@ -556,18 +583,16 @@ impl Inner {
         Ok(result)
     }
 
-    /// Another lane for the cwd's folder (`lane new`): its own
+    /// Another lane for `base`'s folder (`lane new`): its own
     /// worktree row, `<base identity>#lane=<name>`, so it gets its own index,
     /// ports and domain while the folder's first lane stays the default.
     async fn extra_lane(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
-        context: &Context,
+        base: &Arc<crate::model::LaneRt>,
         name: Option<&str>,
     ) -> Result<(Arc<crate::model::LaneRt>, String), RpcError> {
-        let base = Self::lane_at(project, &context.cwd)
-            .ok_or_else(|| RpcError::new("not_found", json!({"reference": context.cwd}), 3))?;
-        self.claim_lane(project, &base).await;
+        self.claim_lane(project, base).await;
         let (identity, path, branch, reason) = {
             let st = base.st();
             let reason = st.unassigned.clone().or_else(|| match &st.config {
@@ -680,7 +705,8 @@ impl Inner {
         let reference = args.lane.or_else(|| context.lane.clone());
         let (project, lane) = match &reference {
             Some(reference) => self.resolve_lane_ref(reference, context).await?,
-            None => self.cwd_lane(context).await?,
+            // Never the main lane by guess: with `--yes` there is no prompt to stop it.
+            None => self.cwd_lane(context, MainLane::Refused).await?,
         };
         let name = lane.st().reference(&project.name());
         if !context.yes {
@@ -700,8 +726,14 @@ impl Inner {
     /// and drops port offsets no config uses any more. Needs `yes` only when there are
     /// lanes to clean; the confirmation lists them under `lanes`.
     pub(crate) async fn lane_gc(self: &Arc<Self>, context: &Context) -> Result<Value, RpcError> {
-        if let Some(project) = self.project_for(context).await? {
-            let _ = self.relist_only(&project).await;
+        // At a folder shared by several projects, each of them is re-listed.
+        let projects = if context.project.is_some() || context.file.is_some() {
+            self.project_for(context).await?.into_iter().collect()
+        } else {
+            self.projects_here(context).await?
+        };
+        for project in &projects {
+            let _ = self.relist_only(project).await;
         }
         if !context.yes {
             let lanes: Vec<String> = self
@@ -844,7 +876,7 @@ impl Inner {
                 2,
             ));
         }
-        let (project, lane) = self.target_lane(context).await?;
+        let (project, lane) = self.explicit_or_cwd_lane(context).await?;
         // An exec unit under a configured name would take that unit's place: its
         // logs, its stop and the next start of the real one.
         let taken = {
@@ -951,7 +983,7 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let args: RunArgs = required(value)?;
         let run = args.run;
-        let (project, lane) = self.target_lane(context).await?;
+        let (project, lane) = self.explicit_or_cwd_lane(context).await?;
         self.fresh_config(&project, &lane).await;
         let reference = lane.st().reference(&project.name());
         if let Some(env) = carries_env(context) {

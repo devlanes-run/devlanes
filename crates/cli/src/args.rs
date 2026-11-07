@@ -468,7 +468,7 @@ pub enum DebugCommand {
         #[arg(short, long)]
         follow: bool,
     },
-    /// Show CPU and memory per lane and unit
+    /// Show CPU and memory per lane and unit of the current project, or of every project outside one
     Top,
     /// Freeze this lane's processes and own containers now, as if it had been idle for `lanes.freeze_after`
     Freeze {
@@ -571,7 +571,7 @@ pub enum UrlCommand {
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
     },
-    /// List routed hostnames with their lane, unit, port and state
+    /// List the current project's routed hostnames with their lane, unit, port and state; outside a project, every project's
     Ls,
 }
 
@@ -785,7 +785,8 @@ pub enum LaneCommand {
     #[command(
         long_about = "Add another lane for the current folder. It has its own index, ports\n\
 and domain, and `--lane <name>` or `--lane <index>` addresses it. Commands run in the\n\
-folder keep using the folder's first lane.\n\n\
+folder keep using the folder's first lane. With --lane, adds the lane on that lane's\n\
+folder.\n\n\
 For a lane on another branch, create a worktree with `git worktree add <path> <branch>`\n\
 and run `devlanes start` in it.\n\n\
 Without --start, a terminal asks whether to start the new lane right away."
@@ -951,7 +952,8 @@ pub enum Action {
         shell: ExportShell,
     },
     Shell(Request),
-    Ui,
+    /// The TUI; its cwd, `-p`, `--file` and `--lane` pick the lane it opens on.
+    Ui(Context),
     /// `devlanes setup`: runs in the terminal, never in the daemon.
     Setup(SetupAction),
     /// `devlanes update`: installs in the terminal, then restarts the daemon.
@@ -1084,10 +1086,10 @@ impl Cli {
                 && runtime.stdout_tty
                 && runtime.ci.is_none() =>
             {
-                return Ok(Action::Ui);
+                return Ok(Action::Ui(context));
             }
             None => (Method::Status, json!({"mine": false})),
-            Some(Command::Ui) => return Ok(Action::Ui),
+            Some(Command::Ui) => return Ok(Action::Ui(context)),
             Some(Command::With(args)) => {
                 context.env = Some(environment());
                 let params = serde_json::to_value(Selection {

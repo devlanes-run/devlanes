@@ -150,11 +150,12 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             let paths = paths()?;
             // Before the request: switching to an installed update restarts the daemon.
             crate::update::startup(runtime, &paths).await;
+            let context = request.context.clone();
             let code = rpc(cli, runtime, request).await?;
             if code != 0 {
                 return Ok(code);
             }
-            crate::wiring::open_ui(runtime, &paths).await
+            crate::wiring::open_ui(runtime, &paths, Some(context)).await
         }
         Action::RpcThenOfferStart(request) => {
             let data = match call(request.clone()).await {
@@ -190,7 +191,7 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             let action = cli.action(runtime).map_err(|error| usage(&error))?;
             Box::pin(run(&cli, runtime, action)).await
         }
-        Action::Ui => ui(runtime).await,
+        Action::Ui(context) => ui(runtime, context).await,
         Action::StartUi { request, forced } => {
             let paths = paths()?;
             if !forced && !crate::start_ui::open_on_start(&paths) {
@@ -1032,6 +1033,14 @@ fn more_hint(method: Method, request: &Request) -> Option<Hint> {
         }
         // The config has no cursor; a bigger budget prints all of it.
         Method::ConfigShow => Some(scoped(request, &["debug", "config", "--budget", "1048576"])),
+        Method::Hosts => Some(scoped(
+            request,
+            &["url", "ls", "--output", "json", "--budget", "1048576"],
+        )),
+        Method::Metrics => Some(scoped(
+            request,
+            &["debug", "top", "--output", "json", "--budget", "1048576"],
+        )),
         _ => None,
     }
 }
@@ -1199,8 +1208,8 @@ async fn daemon_logs(follow: bool, tail: usize) -> Result<u8, RpcError> {
 }
 
 /// Opens the TUI; it is just another client of the same daemon.
-async fn ui(runtime: &Runtime) -> Result<u8, RpcError> {
-    crate::wiring::ui(runtime, &paths()?).await
+async fn ui(runtime: &Runtime, context: devlanes_proto::Context) -> Result<u8, RpcError> {
+    crate::wiring::ui(runtime, &paths()?, context).await
 }
 
 #[cfg(test)]

@@ -293,7 +293,8 @@ devlanes lane ls [OPTIONS]
 
 Add another lane for the current folder. It has its own index, ports
 and domain, and `--lane <name>` or `--lane <index>` addresses it. Commands run in the
-folder keep using the folder's first lane.
+folder keep using the folder's first lane. With --lane, adds the lane on that lane's
+folder.
 
 For a lane on another branch, create a worktree with `git worktree add <path> <branch>`
 and run `devlanes start` in it.
@@ -382,7 +383,7 @@ devlanes debug events [OPTIONS]
 
 ### devlanes debug top
 
-Show CPU and memory per lane and unit
+Show CPU and memory per lane and unit of the current project, or of every project outside one
 
 ```text
 devlanes debug top [OPTIONS]
@@ -522,7 +523,7 @@ devlanes url open [OPTIONS] [UNIT]
 
 ### devlanes url ls
 
-List routed hostnames with their lane, unit, port and state
+List the current project's routed hostnames with their lane, unit, port and state; outside a project, every project's
 
 ```text
 devlanes url ls [OPTIONS]

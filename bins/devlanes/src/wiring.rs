@@ -79,6 +79,7 @@ pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
         env: None,
         time_zone: None,
         cwd: None,
+        scope: None,
         reopen: crate::relaunch::reopen(),
         setup_check: Some(setup_check(paths.clone())),
         whats_new: Some(crate::notes::for_tui(
@@ -109,15 +110,28 @@ pub fn tui_error(error: devlanes_tui::Error) -> RpcError {
 /// Opens the TUI, after applying an installed update; closing it never stops
 /// anything. A TUI that closed to update, reload or set up opens again once
 /// that is done.
-pub async fn ui(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
+pub async fn ui(
+    runtime: &Runtime,
+    paths: &Paths,
+    context: devlanes_proto::Context,
+) -> Result<u8, RpcError> {
     crate::update::startup(runtime, paths).await;
-    open_ui(runtime, paths).await
+    open_ui(runtime, paths, Some(context)).await
 }
 
 /// [`ui`] for a caller that ran [`crate::update::startup`] itself, before a
-/// request of its own.
-pub async fn open_ui(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
-    let relaunch = devlanes_tui::run_with(paths.clone(), tui_options(paths).await)
+/// request of its own. `scope` is the command's context, which picks the lane
+/// the TUI opens on.
+pub async fn open_ui(
+    runtime: &Runtime,
+    paths: &Paths,
+    scope: Option<devlanes_proto::Context>,
+) -> Result<u8, RpcError> {
+    let options = devlanes_tui::Options {
+        scope,
+        ..tui_options(paths).await
+    };
+    let relaunch = devlanes_tui::run_with(paths.clone(), options)
         .await
         .map_err(tui_error)?;
     match relaunch {
@@ -1729,6 +1743,26 @@ impl ContainerInfra {
         }
     }
 
+    /// The plain containers `infra status` of `lane` lists: shared ones and the
+    /// lane's own. Per-lane Compose containers carry the project label too, but
+    /// `status` reports them under `lane`. A container without a scope label (an
+    /// older label set) counts as shared so it does not vanish from the list.
+    fn lane_containers(
+        managed: Vec<devlanes_infra_docker::ManagedContainer>,
+        lane: u32,
+    ) -> Vec<devlanes_infra_docker::ManagedContainer> {
+        managed
+            .into_iter()
+            .filter(|container| {
+                container.key.is_some()
+                    && match container.scope {
+                        None | Some(devlanes_infra_docker::Scope::Shared) => true,
+                        Some(devlanes_infra_docker::Scope::Lane(n)) => n == lane,
+                    }
+            })
+            .collect()
+    }
+
     /// Stats targets for plain containers. Their names are deterministic, so no
     /// engine call is needed; a container that is not running yields no sample.
     /// `state` is what the caller knows, such as `running` right after `ensure`.
@@ -2064,7 +2098,10 @@ impl InfraProvider for ContainerInfra {
                         "list containers of {}",
                         spec.project
                     )))?;
-            report.insert("containers".into(), json!(managed));
+            report.insert(
+                "containers".into(),
+                json!(Self::lane_containers(managed, spec.lane)),
+            );
         }
         Ok(Value::Object(report))
     }

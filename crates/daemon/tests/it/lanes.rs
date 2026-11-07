@@ -350,6 +350,223 @@ async fn a_lane_project_gives_way_to_the_cwds_own() {
     .expect("timeout");
 }
 
+/// The lane `Env {}` resolves for `context`, or the error's code and candidates.
+async fn env_lane(h: &crate::Harness, context: Context) -> Result<String, (String, Value)> {
+    h.call(Method::Env, json!({}), context)
+        .await
+        .map(|value| value["lane"].as_str().unwrap_or_default().to_owned())
+        .map_err(|error| (error.code, error.data["candidates"].clone()))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A repository folder without `devlanes.yaml` that holds several registered
+/// projects, such as the root, picks none of them: commands that need one project
+/// fail with `project_ambiguous`, `status` lists them all, full lane references
+/// work, and short ones resolve among those projects only.
+async fn a_folder_of_several_projects_names_none() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let root = tmp.path.join("r");
+        for (dir, name) in [
+            ("apps/a", "alpha"),
+            ("apps/b", "beta"),
+            ("tools/c", "gamma"),
+        ] {
+            let folder = root.join(dir);
+            std::fs::create_dir_all(&folder).expect("mkdir");
+            std::fs::write(
+                folder.join("devlanes.yaml"),
+                format!("project: {name}\nservices:\n  web: {{ run: sleep, ready: started }}\n"),
+            )
+            .expect("project file");
+        }
+        // A `--file` project at the root holds every folder but never beats the
+        // `devlanes.yaml` projects.
+        std::fs::write(
+            root.join("devlanes.e2e.yaml"),
+            "project: alpha-e2e\nservices:\n  web: { run: sleep, ready: started }\n",
+        )
+        .expect("e2e file");
+        git(&root, &["init", "-q", "-b", "main"]);
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "init"]);
+        // Another repository's project with a lane 1, which short references at
+        // the root must not reach.
+        let other = repo(
+            &tmp.path,
+            "o",
+            "project: other\nservices:\n  web: { run: sleep, ready: started }\n",
+        );
+        let other_wt = tmp.path.join("o-wt");
+        worktree(&other, &other_wt, "feat/o");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        for cwd in [
+            root.join("apps/a"),
+            root.join("apps/b"),
+            other.clone(),
+            other_wt,
+        ] {
+            h.call(Method::Start, json!({}), cx(&cwd))
+                .await
+                .expect("start");
+        }
+        let e2e = Context {
+            file: Some(root.join("devlanes.e2e.yaml")),
+            ..cx(&root)
+        };
+        h.call(Method::Status, json!({}), e2e)
+            .await
+            .expect("registers alpha-e2e");
+
+        for (method, params) in [
+            (Method::LaneNew, json!({"name": "zz"})),
+            (Method::Stop, json!({})),
+            (Method::LaneClean, json!({})),
+            (Method::Env, json!({})),
+        ] {
+            let error = h
+                .call(
+                    method,
+                    params,
+                    Context {
+                        yes: true,
+                        ..cx(&root)
+                    },
+                )
+                .await
+                .expect_err("ambiguous");
+            assert_eq!(error.code, "project_ambiguous", "{method:?}");
+            assert_eq!(
+                error.data["candidates"],
+                json!(["alpha", "beta"]),
+                "{method:?}"
+            );
+        }
+        let listed: Vec<String> = lanes(&h, &root)
+            .await
+            .into_iter()
+            .map(|lane| lane.reference)
+            .collect();
+        assert_eq!(listed, ["alpha@0", "beta@0"]);
+        h.call(Method::Stop, json!({"units": ["beta@0:web"]}), cx(&root))
+            .await
+            .expect("a full unit reference");
+        h.call(Method::Start, json!({}), on_lane(&root, "beta@0"))
+            .await
+            .expect("a full lane reference");
+
+        let in_beta = Context {
+            project: Some("beta".into()),
+            ..cx(&root)
+        };
+        let created = h
+            .call(Method::LaneNew, json!({"name": "zz"}), in_beta)
+            .await
+            .expect("lane new with -p");
+        assert_eq!(created["lane"]["reference"], "beta@1");
+        assert_eq!(env_lane(&h, on_lane(&root, "1")).await, Ok("beta@1".into()));
+        assert_eq!(
+            env_lane(&h, on_lane(&root, "0")).await,
+            Err(("ambiguous".into(), json!(["alpha@0", "beta@0"])))
+        );
+        assert_eq!(
+            env_lane(&h, inheriting(&root, "alpha")).await,
+            Ok("alpha@0".into())
+        );
+
+        // From `apps`, `tools/c` is neither above nor below the cwd.
+        h.call(Method::Status, json!({}), cx(&root.join("tools/c")))
+            .await
+            .expect("registers gamma");
+        assert_eq!(
+            env_lane(&h, cx(&root.join("apps"))).await,
+            Err(("project_ambiguous".into(), json!(["alpha", "beta"])))
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `-p` from outside the project's worktrees acts on its main lane for commands
+/// that read or start and stop it, and asks for `--lane` before deleting a lane's
+/// data or running a command in it.
+async fn a_project_named_outside_its_folders_uses_its_main_lane() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(
+            &tmp.path,
+            "r",
+            "project: demo\nservices:\n  web: { run: sleep, ready: started }\ntasks:\n  seed: { run: echo seeded }\n",
+        );
+        let wt = tmp.path.join("wt");
+        worktree(&main, &wt, "feat/wt");
+        let elsewhere = tmp.path.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).expect("mkdir");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        for cwd in [&main, &wt] {
+            h.call(Method::Start, json!({}), cx(cwd))
+                .await
+                .expect("start");
+        }
+        let named = Context {
+            project: Some("demo".into()),
+            yes: true,
+            ..cx(&elsewhere)
+        };
+        let stopped = h
+            .call(Method::Stop, json!({}), named.clone())
+            .await
+            .expect("stop with -p");
+        assert_eq!(stopped["items"][0]["lane"], "demo@0");
+        let running: Vec<String> = lanes(&h, &main)
+            .await
+            .into_iter()
+            .filter(|lane| lane.units.iter().any(|unit| unit.state == "ready"))
+            .map(|lane| lane.reference)
+            .collect();
+        assert_eq!(running, ["demo@1"]);
+
+        for (method, params) in [
+            (Method::LaneClean, json!({})),
+            (Method::Run, json!({"task": "seed"})),
+            (Method::Exec, json!({"name": "job", "command": ["sleep"]})),
+            (Method::LaneNew, json!({"name": "x"})),
+        ] {
+            let error = h
+                .call(method, params, named.clone())
+                .await
+                .expect_err("needs --lane");
+            assert_eq!(error.code, "lane_required", "{method:?}");
+            assert_eq!(
+                error.data["candidates"],
+                json!(["demo@0", "demo@1"]),
+                "{method:?}"
+            );
+        }
+        assert_eq!(lanes(&h, &main).await.len(), 2, "nothing cleaned");
+        let created = h
+            .call(
+                Method::LaneNew,
+                json!({"name": "x"}),
+                Context {
+                    lane: Some("demo@0".into()),
+                    ..named.clone()
+                },
+            )
+            .await
+            .expect("lane new on demo@0's folder");
+        assert_eq!(
+            created["lane"]["path"],
+            json!(lane_at(&h, &main, &main).await.path)
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// A worktree whose file sets the project-wide `lanes.max` or a shared container
 /// differently from the primary's says so: the primary's `lanes.max` applies, and the

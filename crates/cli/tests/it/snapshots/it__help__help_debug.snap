@@ -10,7 +10,7 @@ Commands:
   why     Explain why a unit is not running or not ready, with a fix for each reason
   errors  List failed units, crash counts, recent error lines and port conflicts
   events  Print the daemon's event stream: lane, unit, task and port events
-  top     Show CPU and memory per lane and unit
+  top     Show CPU and memory per lane and unit of the current project, or of every project outside one
   freeze  Freeze this lane's processes and own containers now, as if it had been idle for `lanes.freeze_after`
   thaw    Resume a throttled or frozen lane
   config  Print the lane's project config as YAML after merging its files and templates; expressions stay unevaluated
