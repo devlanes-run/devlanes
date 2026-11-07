@@ -2294,6 +2294,7 @@ impl Inner {
                     stop: rec.stop,
                     literal_port: rec.literal_port,
                     env: rec.env,
+                    left_out: BTreeMap::new(),
                     failure_tail: vec![rec.note],
                     failure_tail_styled: Vec::new(),
                     preset: rec.preset,
@@ -4347,6 +4348,7 @@ impl Inner {
             None => Value::Null,
         };
         let record = lane.st().record.clone();
+        let mut data_left = None;
         if let Some(record) = &record {
             // Every run must be finished before the lane's records may be released;
             // none is alive by now, so each row records a real exit.
@@ -4372,7 +4374,7 @@ impl Inner {
                 .await
                 .map_err(store_error)?;
             // Last, so a clean that fails earlier keeps the data its teardown may need.
-            self.remove_lane_data(&project.name(), record.id).await;
+            data_left = self.remove_lane_data(&project.name(), record.id).await;
             // Every unit stopped and closed its log above.
             if let (Logs::Delete, Some(index)) = (logs, index) {
                 self.remove_lane_logs(&project.name(), index).await;
@@ -4402,13 +4404,18 @@ impl Inner {
         }
         self.forget_if_empty(project).await;
         self.publish_routes();
-        Ok(json!({
+        let mut result = json!({
             "lane": reference,
             "stopped": stopped.iter().map(|u| u.name.clone()).collect::<Vec<_>>(),
             "tasks": tasks,
             "teardown": teardown,
             "infra": infra,
-        }))
+        });
+        // A file held open (Windows) keeps the folder; only the user can close it.
+        if let Some(path) = data_left {
+            result["data_left"] = json!(path);
+        }
+        Ok(result)
     }
 
     /// Forgets a project whose every lane was cleaned: its rows go (the store

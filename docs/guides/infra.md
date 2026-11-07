@@ -132,7 +132,7 @@ Creating the namespace is `setup` (once); migrating it is a task with `when: lan
 
 ## Recipes
 
-Each recipe shows the Compose service, the devlanes side, and how a process gets the address. `lane.name` is `main` for lane 0 and `lane<N>` otherwise.
+Each recipe shows the Compose service, the devlanes side, and how a process gets the address. `lane.name` is `main` for lane 0 and `lane<N>` otherwise. A lane added with `lane new --name` still gets `lane<N>`.
 
 ### Postgres, shared, one database per lane
 

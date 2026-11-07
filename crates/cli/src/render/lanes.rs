@@ -1121,12 +1121,18 @@ pub(super) fn lane_new(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     if let Some(branch) = &lane.branch {
         line.push_str(&format!(" ({})", clean(branch)));
     }
-    line.push_str(&format!(" at {}", clean(&lane.path.display().to_string())));
+    // The project's folder; daemons before it existed send only the worktree root.
+    let folder = data
+        .get("folder")
+        .and_then(Value::as_str)
+        .map_or_else(|| lane.path.display().to_string(), str::to_owned);
+    line.push_str(&format!(" at {}", clean(&folder)));
     let mut lines = vec![line];
     for note in lane_notes(&lane) {
         lines.push(format!("  {note}"));
     }
     lines.extend(lane_warning_lines(&lane, cx));
+    lines.extend(data_left_line(data));
     match data.get("start") {
         Some(start) => lines.extend(start_like(start, cx)),
         None => lines.push(format!(
@@ -1183,7 +1189,18 @@ pub(super) fn lane_clean(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     if let Some(error) = data.get("infra").and_then(|infra| infra.get("error")) {
         lines.push(format!("  infra: {}", text(error, "message")));
     }
+    lines.extend(data_left_line(data));
     lines
+}
+
+/// The note for a lane data folder `lane clean` or `lane new` could not delete.
+fn data_left_line(data: &Value) -> Option<String> {
+    let path = text(data, "data_left");
+    (!path.is_empty()).then(|| {
+        format!(
+            "  could not delete the old lane data folder {path}; delete it by hand once no program has a file in it open"
+        )
+    })
 }
 
 /// `debug freeze`: `frozen acme@2`, and what thaws it.

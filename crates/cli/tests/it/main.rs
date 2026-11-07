@@ -688,7 +688,8 @@ fn environment_is_captured_only_for_relevant_methods() {
         (vec!["run", "--list"], false),
         (vec!["env", "show"], false),
         (vec!["status"], false),
-        (vec!["lane", "new", "--start"], false),
+        (vec!["lane", "new", "--start"], true),
+        (vec!["lane", "new"], false),
     ] {
         let cli = Cli::parse_from(std::iter::once("devlanes").chain(args));
         let called = std::cell::Cell::new(false);
