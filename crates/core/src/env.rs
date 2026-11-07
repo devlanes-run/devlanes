@@ -97,15 +97,22 @@ pub fn secret_name(name: &str) -> bool {
     SECRET_WORDS.iter().any(|word| upper.contains(word))
 }
 
-/// Values of the secret-named variables in `vars`, longest first so a value
-/// containing another is replaced whole. Values under 6 characters ("1", "yes")
-/// are left out: they would blank out unrelated text.
+/// Values of the secret-named variables in `vars` that look like credentials,
+/// longest first so a value containing another is replaced whole. A credential
+/// here has 8 characters or more, no whitespace and something other than ASCII
+/// letters: words such as `Console` (`SESSIONNAME`), `database`
+/// (`SESSION_DRIVER`) or a name (`GIT_AUTHOR_NAME`) would blank out unrelated text.
 pub fn secret_values<K: AsRef<str>, V: AsRef<str>>(
     vars: impl IntoIterator<Item = (K, V)>,
 ) -> Vec<String> {
+    let credential = |value: &str| {
+        value.len() >= 8
+            && !value.chars().any(char::is_whitespace)
+            && !value.chars().all(|c| c.is_ascii_alphabetic())
+    };
     let mut values: Vec<String> = vars
         .into_iter()
-        .filter(|(name, value)| secret_name(name.as_ref()) && value.as_ref().len() >= 6)
+        .filter(|(name, value)| secret_name(name.as_ref()) && credential(value.as_ref()))
         .map(|(_, value)| value.as_ref().to_owned())
         .collect();
     values.sort_by_key(|value| std::cmp::Reverse(value.len()));
@@ -165,13 +172,22 @@ mod tests {
 
     #[test]
     /// Secret names, copies of their values under other names and URL passwords
-    /// are hidden; short secret values are not hunted down elsewhere.
+    /// are hidden; short or word-like values of secret names (`ubuntu`, `Console`,
+    /// `database`, a person's name) are not hunted down elsewhere.
     fn redacts_secret_looking_values() {
         let vars = [
             ("ACME_API_TOKEN", "tok-4711-very-secret"),
             ("ALIAS", "Bearer tok-4711-very-secret"),
             ("SHORT_KEY", "abc"),
             ("NOTE", "abc"),
+            ("XDG_SESSION_DESKTOP", "ubuntu"),
+            ("SESSIONNAME", "Console"),
+            ("SESSION_DRIVER", "database"),
+            ("GIT_AUTHOR_NAME", "Jane Doe"),
+            ("XDG_DATA_DIRS", "/usr/share/ubuntu:/usr/share"),
+            ("TERMINAL", "Console"),
+            ("DB_CONNECTION", "database"),
+            ("COMMITTER", "Jane Doe"),
             ("DATABASE_URL", "postgres://u:hunter22@127.0.0.1:5432/app"),
             ("SITE", "https://web.acme.localhost"),
             ("PORT", "3000"),
@@ -185,6 +201,15 @@ mod tests {
         assert_eq!(shown["ALIAS"], format!("Bearer {REDACTED}"));
         assert_eq!(shown["SHORT_KEY"], REDACTED);
         assert_eq!(shown["NOTE"], "abc");
+        assert_eq!(shown["SESSION_DRIVER"], REDACTED);
+        for (name, value) in [
+            ("XDG_DATA_DIRS", "/usr/share/ubuntu:/usr/share"),
+            ("TERMINAL", "Console"),
+            ("DB_CONNECTION", "database"),
+            ("COMMITTER", "Jane Doe"),
+        ] {
+            assert_eq!(shown[name], value);
+        }
         assert_eq!(
             shown["DATABASE_URL"],
             format!("postgres://u:{REDACTED}@127.0.0.1:5432/app")

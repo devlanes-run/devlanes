@@ -1695,7 +1695,7 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
                 .map(|project| Hint::command(["-p", &display_value(project), "stop", "--mine"]).0)
                 .collect();
             format!(
-                "units this session started also run in {}; {} {}",
+                "your units also run in {}; {} {}",
                 lanes.join(", "),
                 commands.join(", "),
                 if commands.len() == 1 {

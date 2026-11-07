@@ -4,10 +4,10 @@ expression: text
 ---
 --- human (exit 0)
 stopped acme@2:api
-! units this session started also run in shop@0; devlanes -p shop stop --mine stops them
+! your units also run in shop@0; devlanes -p shop stop --mine stops them
 --- plain (exit 0)
 stopped acme@2:api
-warn units this session started also run in shop@0; devlanes -p shop stop --mine stops them
+warn your units also run in shop@0; devlanes -p shop stop --mine stops them
 --- agent (exit 0)
 stopped acme@2:api
-warn units this session started also run in shop@0; devlanes -p shop stop --mine stops them
+warn your units also run in shop@0; devlanes -p shop stop --mine stops them

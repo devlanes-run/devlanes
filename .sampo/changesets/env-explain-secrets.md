@@ -1,5 +1,6 @@
 ---
 cargo/devlanes: patch
+cargo/devlanes-cli: patch
 cargo/devlanes-daemon: patch
 cargo/devlanes-core: patch
 ---
