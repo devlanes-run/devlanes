@@ -32,7 +32,7 @@ HTTP paths return the request path, headers and PID as JSON. `/ws` echoes text/b
 - `--port <port>` overrides `PORT` (default 3000); zero selects an ephemeral port.
 - `--bind-other-port <port>` replaces the configured port; `--bind-ipv6-only` binds `[::1]` only.
 - `--log-line <text>` prints a startup line and is repeatable; `--print-env` prints the entire environment as an `ENV` JSON line.
-- `--ignore-sigterm` consumes SIGTERM; SIGINT still exits. On Windows, Ctrl-Break and Ctrl-C both exit after printing `STOPPING ctrl-break` or `STOPPING ctrl-c`, and this flag consumes both.
+- `--ignore-sigterm` consumes SIGTERM; SIGINT still exits. On Windows, Ctrl-Break and Ctrl-C both exit after printing `STOPPING ctrl-break` or `STOPPING ctrl-c`, and this flag consumes both. `--default-ctrl-handler` (Windows only) registers no handler, so either event ends the process with `STATUS_CONTROL_C_EXIT`.
 - `--spawn-grandchild` creates a child and grandchild; `--setsid-grandchild` creates that tree with the grandchild in its own session (Unix only; Windows refuses it).
 - `--exit-after <duration>` accepts values such as `500ms` or `10s` and is inherited by descendants.
 
