@@ -46,7 +46,7 @@ Global options:
           Print nothing on success; errors still go to stderr
 
       --env <KEY=VALUE>
-          Set a variable for started processes (start, restart, run TASK, exec); repeatable
+          Set a variable for started processes (start, restart, run TASK, exec, lane new --start); repeatable
 
       --timeout <DURATION>
           Limit waits and streams, such as 30s, 5m or 1h [default for start and wait: 180s]

@@ -254,6 +254,11 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                     "; a project from a file other than devlanes.yaml is known once a command names it with --file",
                 );
             }
+            // A unit selector that is a lane's number or name (`stop 1`).
+            let lane = text(data, "names_lane");
+            if !lane.is_empty() {
+                message.push_str(&format!("; {name} is lane {lane}"));
+            }
             (message, Some(Hint::command(["lane", "ls"])))
         }
         "ambiguous" => (
@@ -267,10 +272,15 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 .and_then(Value::as_str)
                 .map(|first| Hint::command(["status", first])),
         ),
-        "invalid_reference" => (
-            format!("invalid reference {}", reference()),
-            Some(Hint::command(["lane", "ls"])),
-        ),
+        "invalid_reference" => {
+            let mut message = format!("invalid reference {}", reference());
+            // Why it is refused, such as a `lane new --name` of main or lane<N>.
+            let why = text(data, "message");
+            if !why.is_empty() {
+                message.push_str(&format!(": {why}"));
+            }
+            (message, Some(Hint::command(["lane", "ls"])))
+        }
         "confirmation_required" => {
             let flag = data
                 .get("flag")
@@ -653,6 +663,14 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 Some(Hint::command(["url", "print", &format!("{lane}:{name}")])),
             )
         }
+        "name_taken" if text(data, "kind") == "lane" => (
+            format!(
+                "{} already names {}; give lane new another --name",
+                text(data, "name"),
+                text(data, "lane")
+            ),
+            Some(Hint::command(["lane", "ls"])),
+        ),
         "name_taken" if text(data, "kind") == devlanes_proto::EXTERNAL_KIND => (
             format!(
                 "{} is already an infra.external port of {}, so give exec another --name",

@@ -68,6 +68,12 @@ hint: devlanes start acme@2:api
 error: seed is a configured task of acme@2; give exec another --name, or run the configured task
 hint: devlanes run seed --lane acme@2
 error: pgadmin is already an infra.external port of acme@2, so give exec another --name
+error: review already names acme@2; give lane new another --name
+hint: devlanes lane ls
+error: invalid reference main: a lane name uses letters, digits, `-`, `_` and `.`, is not a number, and is not main or lane<N>
+hint: devlanes lane ls
+error: 1 not found; options: acme@0:web; 1 is lane acme@1
+hint: devlanes lane ls
 error: acme@2:pgadmin is an infra.external port that devlanes does not run
 hint: devlanes url print acme@2:pgadmin
 error: the answer is larger than the 16 MiB message limit; ask for less: a smaller --tail or --budget, or one unit at a time
