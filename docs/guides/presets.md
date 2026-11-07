@@ -74,6 +74,8 @@ services:
       NEXT_DIST_DIR: .next/lane${{ lane.index }}
 ```
 
+Unless `tsconfig.json` uses `extends`, Next adds each folder's `types` path to its `include` the first time it runs there.
+
 The preset adds `--port <self.port> --hostname 127.0.0.1`, then `next.args`. Nothing else. By hand:
 
 ```yaml

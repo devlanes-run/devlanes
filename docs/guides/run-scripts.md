@@ -28,7 +28,7 @@ services:
       ./scripts/gen-certs.sh .devlanes/certs
 ```
 
-`run` starts in the project file's directory, the worktree root unless the file sits in a subdirectory, or in `cwd` when set, which is relative to that directory. Expressions work in both forms: `run: uvicorn app:main --port ${{ self.port }}`.
+`run` starts in the project file's directory (the worktree root unless the file sits in a subdirectory), or in `cwd` when set, relative to that directory. Expressions work in both forms: `run: uvicorn app:main --port ${{ self.port }}`.
 
 devlanes never edits a `run` command, so it cannot be combined with `preset`: `devlanes config check` refuses the pair. To keep a hand-written command, drop the preset and add its flags yourself; [presets](presets.md) lists what each one adds.
 

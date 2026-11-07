@@ -130,7 +130,7 @@ Read `PORT` and `HOST` in `main` (`std::env::var("PORT")`). The first start comp
 
 Both run before anything else and only when the lane's root has their file.
 
-- mise: with a `mise.toml`, `.mise.toml`, `.config/mise.toml`, `.tool-versions` or similar in the worktree root, devlanes runs `mise env --json` there and applies the result, so the pinned node, python or rust are on `PATH` for every unit. An untrusted config adds a note telling you to run `mise trust` in that folder.
+- mise: with a `mise.toml`, `.mise.toml`, `.config/mise.toml`, `.tool-versions` or similar in the worktree root, devlanes runs `mise env --json` there and applies the result, so the pinned node, python or rust are on `PATH` for every unit. An untrusted config is skipped with a note telling you to run `mise trust` in that folder.
 - direnv: with an `.envrc` in the worktree root, `direnv export json` is applied, including variables it unsets. A blocked `.envrc` is skipped with a note telling you to run `direnv allow`.
 
-Only the worktree root is checked, not the unit's `cwd`. Both tools are optional; when the binary is missing the note says so and the start goes on. `devlanes env show <unit> --explain` prints a unit's notes under its variables. Their output sits below devlanes' own variables, so they cannot change `PORT` or `HOST`.
+Only the worktree root is checked, not the unit's `cwd`. Both tools are optional; when the binary is missing the note says so and the start goes on. Their output sits below devlanes' own variables, so they cannot change `PORT` or `HOST`. `devlanes env show <unit> --explain` prints a unit's notes under its variables.

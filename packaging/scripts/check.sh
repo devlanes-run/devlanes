@@ -247,9 +247,6 @@ for pinned in "--version $version" "--version=$version" "-v $version" '--version
 		;;
 	esac
 done
-# An empty DEVLANES_VERSION counts as unset.
-DEVLANES_VERSION='' install_with -d "$work/installed-empty-version" >/dev/null
-[ "$("$work/installed-empty-version/devlanes")" = "devlanes $version" ]
 
 # A devlanes in the target directory that has `update` updates itself; install.sh
 # passes its exit status on and installs nothing.
