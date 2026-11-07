@@ -1404,11 +1404,23 @@ impl Cli {
             Some(Command::Askpass { prompt }) => return Ok(Action::Askpass(prompt.clone())),
         };
         // `reload` is absent: it applies the project file, and the lane keeps the env
-        // its last start stored, as when the TUI reloads.
-        if matches!(
-            method,
-            Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume
-        ) {
+        // its last start stored, as when the TUI reloads. `env` for one unit sends it
+        // so a lane that never started plans the unit as a start from this shell
+        // would; the daemon does not keep it.
+        let unit_env = matches!(
+            &self.command,
+            Some(Command::Env {
+                command: EnvCommand::Show { unit: Some(_), .. }
+                    | EnvCommand::Export { unit: Some(_), .. }
+                    | EnvCommand::Shell { unit: Some(_) }
+            })
+        );
+        if unit_env
+            || matches!(
+                method,
+                Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume
+            )
+        {
             context.env = Some(environment());
         }
         let request = Request {

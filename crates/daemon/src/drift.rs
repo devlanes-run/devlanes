@@ -76,7 +76,7 @@ impl Fingerprint {
     }
 
     /// What differs from `now`, by name: `run` for the command, `env KEY` per variable.
-    fn changes(&self, now: &Self) -> Vec<String> {
+    pub(crate) fn changes(&self, now: &Self) -> Vec<String> {
         let mut fields = Vec::new();
         if self.program != now.program || self.args != now.args {
             fields.push("run".to_owned());
@@ -164,9 +164,22 @@ impl StartedWith {
                 .iter()
                 .flat_map(|service| units_of(config, service))
                 .collect(),
-            infra: serde_json::to_value(&config.infra).unwrap_or(Value::Null),
+            infra: started_infra(config),
         }
     }
+}
+
+/// The infra settings a whole-lane start brings up. Routes (`external`, `hosts`),
+/// `hidden` and `teardown` apply without one, so editing them is no drift.
+fn started_infra(config: &devlanes_config::ProjectConfig) -> Value {
+    let infra = devlanes_config::InfraConfig {
+        external: Default::default(),
+        hosts: Default::default(),
+        hidden: None,
+        teardown: Default::default(),
+        ..config.infra.clone()
+    };
+    serde_json::to_value(&infra).unwrap_or(Value::Null)
 }
 
 /// The unit names of `service` in `config`: the service name, or `<service>.<N>` for
@@ -204,11 +217,44 @@ impl Inner {
     /// Recomputes the lane's drift against its current config. Nothing running, or
     /// no loaded config, leaves no drift: the error a broken file gives is the lane's
     /// reason instead. A lane whose plan fails keeps no per-unit drift either.
+    ///
+    /// A computation dropped because a stop or start bumped the generation runs
+    /// again once no other one is under way or applied since: those bumps do not
+    /// replan, so the drift from before the edit would otherwise stay.
     pub(crate) async fn update_drift(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
     ) {
+        /// Lowers `drift_updates` on drop, so a request future dropped mid-plan
+        /// does not leave the count raised.
+        struct Underway<'a>(&'a LaneRt);
+        impl Drop for Underway<'_> {
+            fn drop(&mut self) {
+                let mut st = self.0.st();
+                st.drift_updates = st.drift_updates.saturating_sub(1);
+            }
+        }
+        lane.st().drift_updates += 1;
+        let underway = Underway(lane);
+        let (applied, generation) = self.update_drift_once(project, lane).await;
+        drop(underway);
+        let rerun = {
+            let st = lane.st();
+            !applied && st.drift_updates == 0 && st.drift_applied < generation
+        };
+        if rerun {
+            self.spawn_drift(project, lane);
+        }
+    }
+
+    /// One drift computation: whether it applied its result, and the generation it
+    /// took.
+    async fn update_drift_once(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+    ) -> (bool, u64) {
         let (config, running, orphans, started, profiles, in_flight, generation) = {
             let mut st = lane.st();
             // Taken now: a later update, start or stop bumps it, and this one's
@@ -226,6 +272,7 @@ impl Inner {
         };
         if running.is_empty() {
             let mut st = lane.st();
+            st.forget_dropped_units();
             st.drift.clear();
             st.drift_error = None;
             st.infra_changed = false;
@@ -233,7 +280,8 @@ impl Inner {
             if !in_flight {
                 st.config_changed = false;
             }
-            return;
+            st.drift_applied = generation;
+            return (true, generation);
         }
         let Some(config) = config else {
             // A file that does not load still changed what the running units came from.
@@ -241,7 +289,8 @@ impl Inner {
             st.drift.clear();
             st.drift_error = None;
             st.config_changed = true;
-            return;
+            st.drift_applied = generation;
+            return (true, generation);
         };
         let mut drift = BTreeMap::new();
         // Only the running services the file still has are planned: each plan can
@@ -315,30 +364,34 @@ impl Inner {
                 }
             }
         }
-        let infra_changed = started.is_some_and(|started| {
-            serde_json::to_value(&config.infra).unwrap_or(Value::Null) != started.infra
-        });
+        let infra_changed = started.is_some_and(|started| started_infra(&config) != started.infra);
         let mut st = lane.st();
+        // Whether a unit is gone does not depend on this plan, so it holds even when
+        // the plan's result is dropped below.
+        st.forget_dropped_units();
         if st.drift_generation != generation {
-            return;
+            return (false, generation);
         }
         // A plan that fails also means the file no longer matches what runs.
         st.config_changed = !drift.is_empty() || infra_changed || plan_error.is_some();
         st.drift = drift;
         st.drift_error = plan_error;
         st.infra_changed = infra_changed;
+        st.drift_applied = generation;
+        (true, generation)
     }
 
     /// After a start: the units it spawned match the file when the start used the
     /// lane's current config, so only their drift goes, without a new plan. A start
-    /// that planned from a config edited meanwhile gets a full recomputation.
+    /// that planned from a config edited meanwhile gets a full recomputation, and
+    /// this returns true.
     pub(crate) fn settle_drift(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
         used: &Arc<devlanes_config::ProjectConfig>,
         spawned: &[String],
-    ) {
+    ) -> bool {
         // A unit a reload added counts as started: stopping it later is on purpose.
         if let Some(started) = &mut lane.st().started_with {
             started.units.extend(spawned.iter().cloned());
@@ -351,19 +404,22 @@ impl Inner {
         });
         if !same {
             self.spawn_drift(project, lane);
-            return;
+            return true;
         }
         let mut st = lane.st();
         st.drift_generation += 1;
         st.drift.retain(|unit, _| !spawned.contains(unit));
         st.config_changed = !st.drift.is_empty() || st.infra_changed;
+        false
     }
 
     /// After a stop: drift of units that no longer run goes, except `added`, which
-    /// is about units that do not run.
+    /// is about units that do not run. Units the config dropped and that no longer
+    /// run leave the last whole start too, so adding them back makes them `added`.
     pub(crate) fn prune_drift(&self, lane: &LaneRt) {
         let mut st = lane.st();
         st.drift_generation += 1;
+        st.forget_dropped_units();
         let alive: BTreeSet<String> = running_services(&st)
             .into_iter()
             .map(|(unit, _)| unit)

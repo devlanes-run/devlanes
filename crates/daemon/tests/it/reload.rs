@@ -91,8 +91,10 @@ async fn reload_applies_only_what_the_file_changed() {
         let reloaded = lane(&h, &main).await;
         assert!(!reloaded.config_changed, "{reloaded:?}");
         assert!(drift(&reloaded).is_empty());
-        let api = reloaded.units.iter().find(|unit| unit.name == "api");
-        assert!(api.is_none_or(|api| api.state != "ready"), "{api:?}");
+        assert!(
+            reloaded.units.iter().all(|unit| unit.name != "api"),
+            "{reloaded:?}"
+        );
 
         let again: StartResult = serde_json::from_value(
             h.call(Method::Reload, json!({}), cx(&main))
@@ -102,6 +104,23 @@ async fn reload_applies_only_what_the_file_changed() {
         .expect("result");
         assert!(again.started.is_empty());
         assert!(again.warnings.iter().any(|w| w.code == "nothing_to_reload"));
+
+        // A service removed and stopped, then put back, is added again.
+        std::fs::write(main.join("devlanes.yaml"), BEFORE).expect("put api back");
+        let restored = drift(&lane(&h, &main).await);
+        assert!(
+            restored
+                .iter()
+                .any(|(unit, drift)| unit == "api" && drift.kind == "added"),
+            "{restored:?}"
+        );
+        let back: StartResult = serde_json::from_value(
+            h.call(Method::Reload, json!({}), cx(&main))
+                .await
+                .expect("reload api back"),
+        )
+        .expect("result");
+        assert!(back.started.contains(&"demo@0:api".to_owned()), "{back:?}");
         h.close().await;
     })
     .await
@@ -204,6 +223,91 @@ async fn another_shells_environment_is_not_drift() {
         let edited = lane(&h, &main).await;
         assert!(drift(&edited).is_empty(), "{:?}", drift(&edited));
         assert!(!edited.config_changed);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// An `infra.external` entry added in `devlanes.local.yaml` is routed at once, so
+/// it is no drift and `reload` does not restart the whole lane for it.
+async fn an_added_external_entry_is_not_drift() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BEFORE);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        std::fs::write(
+            main.join("devlanes.local.yaml"),
+            "infra:\n  external:\n    docs: { address: '127.0.0.1:8000' }\n",
+        )
+        .expect("local file");
+        let edited = lane(&h, &main).await;
+        assert!(
+            edited.units.iter().any(|unit| unit.name == "docs"),
+            "{edited:?}"
+        );
+        assert!(
+            !edited.infra_changed && !edited.config_changed,
+            "{edited:?}"
+        );
+        let result: StartResult = serde_json::from_value(
+            h.call(Method::Reload, json!({}), cx(&main))
+                .await
+                .expect("reload"),
+        )
+        .expect("result");
+        assert!(!result.whole_lane, "{result:?}");
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.code == "nothing_to_reload"),
+            "{result:?}"
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `restart <unit>` from a shell uses only its own `--env` values; a request
+/// without a shell environment (the TUI's restart) keeps the lane's.
+async fn restart_from_a_shell_drops_an_earlier_env_override() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BEFORE);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(
+            Method::Start,
+            json!({"units": ["web"], "env": {"EXTRA": "one"}}),
+            cx(&main),
+        )
+        .await
+        .expect("start");
+        let extra = || async {
+            let value = h
+                .call(Method::Env, json!({"unit": "web"}), cx(&main))
+                .await
+                .expect("env");
+            value["env"]["EXTRA"].as_str().map(str::to_owned)
+        };
+        let no_shell = devlanes_proto::Context {
+            env: None,
+            ..cx(&main)
+        };
+        h.call(Method::Restart, json!({"units": ["web"]}), no_shell)
+            .await
+            .expect("restart without a shell environment");
+        assert_eq!(extra().await.as_deref(), Some("one"));
+        h.call(Method::Restart, json!({"units": ["web"]}), cx(&main))
+            .await
+            .expect("restart from a shell");
+        assert_eq!(extra().await, None);
         h.close().await;
     })
     .await

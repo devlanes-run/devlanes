@@ -903,6 +903,39 @@ async fn with_start_failure_writes_logs_and_stops_without_running_command() {
     "#);
 }
 
+/// A ready start whose running units lack the profile's settings does not run the
+/// command, exits 1 and still stops what it started.
+#[tokio::test]
+async fn with_refuses_units_without_the_profile_settings() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (plan, runtime) = plan(temp.path(), false);
+    let mut driver = FakeDriver {
+        result: json!({"lane": "acme@0", "ready": true, "units": [], "warnings": [{
+            "code": "profile_not_applied",
+            "data": {"lane": "acme@0", "profiles": ["e2e"],
+                     "units": [{"unit": "web", "fields": ["env MODE"]}], "message": "m"},
+        }]}),
+        ..FakeDriver::default()
+    };
+    let mut stderr = String::new();
+    let outcome = run_with(&plan, &runtime, &mut driver, &mut |rendered| {
+        stderr.push_str(&rendered.stderr)
+    })
+    .await;
+    assert_eq!(outcome.exit_code, 1);
+    assert!(
+        !driver.calls.contains(&"command".to_owned()),
+        "{:?}",
+        driver.calls
+    );
+    assert!(
+        driver.calls.contains(&"stop".to_owned()),
+        "{:?}",
+        driver.calls
+    );
+    assert!(stderr.contains("the command did not run: web"), "{stderr}");
+}
+
 #[tokio::test]
 async fn with_keep_existing_daemon_signals_and_cleanup_errors() {
     for (keep, spawned, start_error, stop_error, code) in [

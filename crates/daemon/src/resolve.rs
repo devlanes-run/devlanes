@@ -115,7 +115,7 @@ impl Inner {
         lane: &Arc<LaneRt>,
         fallback: Option<Arc<EnvMap>>,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
-        self.resolve_planned(project, lane, fallback, None, None, None)
+        self.resolve_planned(project, lane, fallback, None, None, None, None)
             .await
     }
 
@@ -137,7 +137,7 @@ impl Inner {
             .config
             .loaded()
             .and_then(|config| task_units(config, task));
-        self.resolve_planned(project, lane, None, None, Some(extra), only.as_ref())
+        self.resolve_planned(project, lane, None, None, Some(extra), only.as_ref(), None)
             .await
     }
 
@@ -151,12 +151,36 @@ impl Inner {
         config: Arc<devlanes_config::ProjectConfig>,
         only: Option<&BTreeSet<String>>,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
-        self.resolve_planned(project, lane, None, Some(config), None, only)
+        self.resolve_planned(project, lane, None, Some(config), None, only, None)
             .await
     }
 
+    /// Like [`Self::resolve_config`], with the start's own profiles instead of the
+    /// lane's: a transient start on a running lane does not store them on it.
+    pub(crate) async fn resolve_start(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+        config: Arc<devlanes_config::ProjectConfig>,
+        only: Option<&BTreeSet<String>>,
+        profiles: &[String],
+    ) -> Result<Arc<ResolvedLane>, RpcError> {
+        self.resolve_planned(
+            project,
+            lane,
+            None,
+            Some(config),
+            None,
+            only,
+            Some(profiles),
+        )
+        .await
+    }
+
     /// Shared body of the resolve methods; `config` overrides the lane's, `extra`
-    /// is layered over the lane's overrides, `only` limits the planned units.
+    /// is layered over the lane's overrides, `only` limits the planned units and
+    /// `profiles` replaces the lane's.
+    #[allow(clippy::too_many_arguments)]
     async fn resolve_planned(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -165,6 +189,7 @@ impl Inner {
         config: Option<Arc<devlanes_config::ProjectConfig>>,
         extra: Option<&EnvMap>,
         only: Option<&BTreeSet<String>>,
+        profiles: Option<&[String]>,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
         let reference = lane.st().reference(&project.name());
         let (config, allocation, env, mut overrides, profiles, infra_ns, index) = {
@@ -197,7 +222,7 @@ impl Inner {
                 allocation,
                 env,
                 st.overrides.clone(),
-                st.profiles.clone(),
+                profiles.map_or_else(|| st.profiles.clone(), <[String]>::to_vec),
                 st.infra_ns.clone().unwrap_or(Value::Null),
                 st.index(),
             )
