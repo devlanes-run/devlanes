@@ -23,6 +23,31 @@ pub const CA_CERT_ENV: &str = "DEVLANES_CA_CERT";
 /// root. Runtimes that replace their roots, such as Python's `SSL_CERT_FILE`, point here.
 pub const CA_BUNDLE_ENV: &str = "DEVLANES_CA_BUNDLE";
 
+/// Variables runtimes read for their roots, with the devlanes CA variable each
+/// points at: the certificate where a runtime adds roots, the bundle where it
+/// replaces them.
+pub const RUNTIME_CA_ENV: [(&str, &str); 4] = [
+    ("NODE_EXTRA_CA_CERTS", CA_CERT_ENV),
+    ("DENO_CERT", CA_CERT_ENV),
+    ("SSL_CERT_FILE", CA_BUNDLE_ENV),
+    ("REQUESTS_CA_BUNDLE", CA_BUNDLE_ENV),
+];
+
+/// Points the [`RUNTIME_CA_ENV`] variables at the devlanes CA paths in `ca`, for
+/// commands no platform contributor plans (`devlanes exec`, `devlanes with`).
+/// Names `is_set` reports are skipped: a value the shell set may name a CA the
+/// command needs as well.
+pub fn runtime_ca_env(
+    ca: &BTreeMap<String, String>,
+    is_set: impl Fn(&str) -> bool,
+) -> BTreeMap<String, String> {
+    RUNTIME_CA_ENV
+        .iter()
+        .filter(|(name, _)| !is_set(name))
+        .filter_map(|(name, source)| Some(((*name).to_owned(), ca.get(*source)?.clone())))
+        .collect()
+}
+
 /// Static service facts available before any expression is evaluated.
 #[derive(Debug, Clone, Copy)]
 pub struct ServiceView<'a> {

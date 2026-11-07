@@ -81,16 +81,13 @@ async fn a_start_streams_its_events_before_the_response() {
         assert_eq!(
             phases(&streamed),
             [
-                "infra:started",
                 "infra:skipped",
-                "setup:started",
                 "setup:skipped",
                 "tasks:started",
                 "tasks:progress",
                 "tasks:done",
                 "services:started",
                 "services:done",
-                "after-services:started",
                 "after-services:skipped",
             ]
         );

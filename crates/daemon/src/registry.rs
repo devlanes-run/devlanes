@@ -2144,7 +2144,9 @@ impl Inner {
         input.lanes_main = lanes_main;
         input.contributors = &self.integ.contributors;
         input.ca_env = &self.integ.ca_env;
-        input.public_https_port = self.integ.routes.https_port();
+        // Each call builds the proxy's status, so read it once per view.
+        let https_port = self.integ.routes.https_port();
+        input.public_https_port = https_port;
         let layout = devlanes_resolve::lane_layout(&input)
             .map_err(|error| crate::resolve::resolve_error(&error))?;
         let services = layout
@@ -2171,7 +2173,7 @@ impl Inner {
             &infra,
             &client_env,
             &dotenv,
-            self.integ.routes.https_port(),
+            https_port,
         );
         let reference = lane.st().reference(&project.name());
         let own = crate::external::lane_ports(
@@ -2196,9 +2198,12 @@ impl Inner {
                 &client_env,
                 &dotenv,
             ),
-            self.integ.routes.https_port(),
+            https_port,
         );
         Ok(LaneView {
+            // A lane that routes nothing has no URL worth a link.
+            url: (!layout.routes.is_empty())
+                .then(|| devlanes_resolve::https_url(&layout.domain, https_port)),
             domain: layout.domain.clone(),
             port: layout.port,
             vars: layout.vars.clone(),
@@ -2207,7 +2212,6 @@ impl Inner {
             routes: layout.routes.clone(),
             infra_routes,
             externals,
-            lane_env: layout.lane_env().clone(),
             services_namespace: layout.services_namespace(),
         })
     }
@@ -2521,6 +2525,7 @@ pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
         desired: tokio::sync::Mutex::new(()),
         decide: tokio::sync::Mutex::new(()),
         setup: tokio::sync::Mutex::new(()),
+        infra_refresh: tokio::sync::Mutex::new(()),
     })
 }
 

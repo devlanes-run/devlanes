@@ -142,10 +142,11 @@ impl CommandTitle {
     }
 
     /// The notification at the end of a start that ran at least
-    /// [`LONG_START`]: `(title, body)`, as `acme@0 is up` / `8 of 8 ready` or
-    /// `start of acme@0 failed` / `2 failed`. `None` for commands that follow
-    /// no start (`logs -f`, `attach`) and for quick starts.
-    pub fn finished(&self, ok: bool, elapsed: Duration) -> Option<(String, String)> {
+    /// [`LONG_START`]: `(title, body)` for the command's exit `code`, as
+    /// `acme@0 is up` / `8 of 8 ready`, `start of acme@0 timed out` /
+    /// `6 of 8 ready` or `start of acme@0 failed` / `2 failed`. `None` for
+    /// commands that follow no start (`logs -f`, `attach`) and for quick starts.
+    pub fn finished(&self, code: u8, elapsed: Duration) -> Option<(String, String)> {
         let tracker = self.tracker.as_ref().filter(|_| elapsed >= LONG_START)?;
         let counts = tracker.counts();
         let words = self.subject_words(Some(&counts.lanes));
@@ -154,13 +155,17 @@ impl CommandTitle {
         } else {
             words.join(" ")
         };
-        Some(if ok {
-            let body = if counts.total > 0 {
-                format!("{} of {} ready", counts.ready, counts.total)
-            } else {
-                String::new()
-            };
-            (format!("{subject} is up"), body)
+        let ready = if counts.total > 0 {
+            format!("{} of {} ready", counts.ready, counts.total)
+        } else {
+            String::new()
+        };
+        Some(if code == crate::exit::OK {
+            (format!("{subject} is up"), ready)
+        } else if code == crate::exit::TIMEOUT && counts.failed == 0 {
+            // A start that timed out with failed units exits 124 too; those
+            // read as failed below.
+            (format!("{} of {subject} timed out", self.verb), ready)
         } else {
             let body = if counts.failed > 0 {
                 format!("{} failed", counts.failed)

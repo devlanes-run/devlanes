@@ -322,7 +322,10 @@ fn one_line(value: &str) -> String {
 }
 
 /// `env`: `KEY=VALUE` lines, or with `--explain` a `KEY VALUE LAYER` table.
+/// Variables left out until infra is up follow, as `#` comments after `KEY=VALUE`
+/// lines so the output still reads as shell assignments.
 pub(super) fn env(data: &Value) -> Vec<String> {
+    let left_out = words::left_out(data);
     if let Some(items) = data.get("items").and_then(Value::as_array) {
         let mut rows = vec![["KEY", "VALUE", "LAYER"].map(str::to_owned).to_vec()];
         for item in items {
@@ -338,7 +341,9 @@ pub(super) fn env(data: &Value) -> Vec<String> {
                 text(item, "layer"),
             ]);
         }
-        return table(&rows, "");
+        let mut lines = table(&rows, "");
+        lines.extend(left_out);
+        return lines;
     }
     let Some(env) = data.get("env").and_then(Value::as_object) else {
         return tree(data);
@@ -356,6 +361,7 @@ pub(super) fn env(data: &Value) -> Vec<String> {
                     .unwrap_or_else(|| display_value(value))
             )
         })
+        .chain(left_out.into_iter().map(|note| format!("# {note}")))
         .collect()
 }
 
@@ -644,6 +650,21 @@ pub(super) fn phase_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
     }
 }
 
+/// `✓ services ready` on the first step of the `after-services` phase. The
+/// daemon sends that step only once every unit of the start is ready (it skips
+/// the phase on a timeout or a failed unit), and the result's services line
+/// comes after the stream, so without this the phase's task lines read as if
+/// they ran before the services were up.
+pub(super) fn services_ready_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
+    let step = data
+        .get("step")
+        .and_then(|step| serde_json::from_value::<devlanes_proto::PhaseStep>(step.clone()).ok())?;
+    (text(data, "phase") == "after-services"
+        && text(data, "state") == "progress"
+        && step.index == 1)
+        .then(|| format!("{} services ready", cx.mark(Outcome::Ok)))
+}
+
 /// A finished task during a start: `✓ migrate` or `✗ migrate exit=1`.
 pub(super) fn task_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
     let task = text(data, "task");
@@ -704,9 +725,19 @@ pub(super) fn infra(method: Method, data: &Value) -> Vec<String> {
             lines
         }
         _ => {
-            let mut lines = vec!["infra down; container data is kept".to_owned()];
-            lines.extend(tree(data).into_iter().map(|line| format!("  {line}")));
-            lines
+            let stopped: Vec<String> = data
+                .get("containers")
+                .and_then(Value::as_array)
+                .map(|names| names.iter().filter_map(Value::as_str).map(clean).collect())
+                .unwrap_or_default();
+            vec![
+                "infra down; container data is kept".to_owned(),
+                if stopped.is_empty() {
+                    "  no container was running".to_owned()
+                } else {
+                    format!("  stopped {}", stopped.join(", "))
+                },
+            ]
         }
     }
 }

@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex, TryLockError,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -24,10 +24,28 @@ use crate::{
 /// a time rebuilds it from the current state and hands it to the sinks until no
 /// change arrived meanwhile, so the last snapshot published is never older than
 /// the last change, and a burst of changes costs one rebuild per pass.
-#[derive(Default)]
+/// A caller that hands off to another caller's pass returns before the sinks
+/// have its change; [`Inner::routes_published`] waits for them.
 pub(crate) struct RoutePublisher {
     dirty: AtomicBool,
     running: Mutex<()>,
+    /// Tickets handed out by [`Inner::routes_published`].
+    requested: AtomicU64,
+    /// The highest ticket a finished pass covered: the pass read the state
+    /// after that ticket was taken.
+    covered: tokio::sync::watch::Sender<u64>,
+}
+
+impl Default for RoutePublisher {
+    /// Clean, with no ticket handed out.
+    fn default() -> Self {
+        Self {
+            dirty: AtomicBool::new(false),
+            running: Mutex::new(()),
+            requested: AtomicU64::new(0),
+            covered: tokio::sync::watch::channel(0).0,
+        }
+    }
 }
 
 /// This machine's routes plus what the snapshot left out.
@@ -266,7 +284,15 @@ impl Inner {
                     Err(TryLockError::WouldBlock) => return,
                 };
                 while publisher.dirty.swap(false, Ordering::SeqCst) {
+                    // Read before the snapshot: every ticket up to here was
+                    // taken after its change, which the snapshot then sees.
+                    let tickets = publisher.requested.load(Ordering::SeqCst);
                     self.publish_snapshot();
+                    publisher.covered.send_if_modified(|covered| {
+                        let newer = tickets > *covered;
+                        *covered = (*covered).max(tickets);
+                        newer
+                    });
                 }
             }
             // A change marked after the last pass, while this caller still held
@@ -275,6 +301,20 @@ impl Inner {
                 return;
             }
         }
+    }
+
+    /// Publishes the routes and returns once the sinks hold a snapshot built
+    /// from the state as it is now, even when another caller's pass publishes
+    /// it. A reply that promises the proxy routes a change already (`remote
+    /// use`) waits for this.
+    pub(crate) async fn routes_published(&self) {
+        let publisher = &self.route_publisher;
+        let mut covered = publisher.covered.subscribe();
+        // Before marking dirty, so the pass that picks the mark up reads it.
+        let ticket = publisher.requested.fetch_add(1, Ordering::SeqCst) + 1;
+        self.publish_routes();
+        // The sender lives as long as the engine, so this only ends covered.
+        let _ = covered.wait_for(|done| *done >= ticket).await;
     }
 
     /// Rebuilds the snapshot from current state, records each lane's host

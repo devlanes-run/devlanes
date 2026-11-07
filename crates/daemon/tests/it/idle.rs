@@ -125,15 +125,16 @@ async fn debug_freeze_and_thaw_round_trip() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// A running `keep_awake` service keeps the whole lane awake; a lane without
-/// running services has nothing to freeze.
+/// A running `keep_awake` service keeps the whole lane awake, and the refusal
+/// names its config entry once for all replicas; a running exec unit is named
+/// as the cause; a lane without running services has nothing to freeze.
 async fn keep_awake_and_idle_lanes_refuse_a_freeze() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(
             &tmp.path,
             "main",
-            "project: awake\nservices:\n  api: { run: sleep }\n  worker: { run: sleep, keep_awake: true }\n",
+            "project: awake\nservices:\n  api: { run: sleep }\n  worker: { run: sleep, keep_awake: true, replicas: 2 }\n",
         );
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
         let idle = h
@@ -149,7 +150,23 @@ async fn keep_awake_and_idle_lanes_refuse_a_freeze() {
             .await
             .expect_err("keep_awake");
         assert_eq!(refused.code, "lane_keep_awake");
-        assert_eq!(refused.data["units"], json!(["worker"]));
+        assert_eq!(refused.data["units"], json!(["worker.1", "worker.2"]));
+        assert_eq!(refused.data["services"], json!(["worker"]));
+
+        h.call(
+            Method::Exec,
+            json!({"name": "job", "command": ["hold"]}),
+            cx(&main),
+        )
+        .await
+        .expect("exec");
+        let busy = h
+            .call(Method::DebugFreeze, json!({}), cx(&main))
+            .await
+            .expect_err("exec runs");
+        assert_eq!(busy.code, "lane_runs_task");
+        assert_eq!(busy.data["units"], json!(["job"]));
+        h.runner.release();
         assert!(powers(&h).is_empty());
         h.close().await;
     })

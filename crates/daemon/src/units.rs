@@ -266,18 +266,59 @@ impl UnitHost {
         unit: Arc<dyn Unit>,
         identity: Option<ProcessIdentity>,
     ) -> Result<Self, RpcError> {
+        let host = Self::open(info, unit, identity, UnitState::Starting, None).await?;
+        host.spawn_pump();
+        host.spawn_waiter();
+        Ok(host)
+    }
+
+    /// A run that ended before its process existed: it fails with `reason`, its
+    /// exit is already published and its log closed, so it never reads as alive.
+    /// `note_seq`, the sequence of the `[devlanes]` note written for it, starts
+    /// the run so failure tails include the note. `unit` is never waited on.
+    pub async fn start_failed(
+        info: UnitInfo,
+        unit: Arc<dyn Unit>,
+        reason: RpcError,
+        note_seq: Option<u64>,
+    ) -> Result<Self, RpcError> {
+        let host = Self::open(info, unit, None, UnitState::Failed(Some(reason)), note_seq).await?;
+        let inner = &host.inner;
+        inner.exit_claimed.store(true, Ordering::SeqCst);
+        inner.pump_done.send_replace(true);
+        inner.ended_at_ms.store(now_ms(), Ordering::SeqCst);
+        inner.exit.send_replace(Some(ExitOutcome {
+            code: None,
+            signal: None,
+        }));
+        inner.log_signals.finish.store(true, Ordering::SeqCst);
+        let _ = inner.log_tx.send(LogCommand::Finish);
+        Ok(host)
+    }
+
+    /// Opens the log off the executor and builds the host in `state`, without
+    /// watching the unit. The run starts at `first_seq`, or at the log's next
+    /// sequence when `None`.
+    async fn open(
+        info: UnitInfo,
+        unit: Arc<dyn Unit>,
+        identity: Option<ProcessIdentity>,
+        state: UnitState,
+        first_seq: Option<u64>,
+    ) -> Result<Self, RpcError> {
         let log = open_log(
             info.log_dir.clone(),
             info.name.replace('#', "_"),
             info.retention.options(),
         )
         .await?;
-        let first_seq = log.next_sequence();
+        let next_seq = log.next_sequence();
+        let first_seq = first_seq.unwrap_or(next_seq);
         let log = Arc::new(StdMutex::new(log));
         let (log_tx, log_rx) = std::sync::mpsc::channel();
         let log_signals = Arc::new(LogSignals::default());
         let log_done = watch::channel(false).0;
-        let model = Model::for_unit(unit.as_ref(), first_seq);
+        let model = Model::for_unit(unit.as_ref(), next_seq);
         spawn_log_thread(
             log.clone(),
             log_rx,
@@ -290,7 +331,7 @@ impl UnitHost {
                 info,
                 unit,
                 identity,
-                state: watch::channel(UnitState::Starting).0,
+                state: watch::channel(state).0,
                 exit: watch::channel(None).0,
                 rendered: matches!(model, Model::Rendered(_)),
                 screen: StdMutex::new(model),
@@ -306,8 +347,6 @@ impl UnitHost {
                 ended_at_ms: AtomicU64::new(0),
             }),
         };
-        host.spawn_pump();
-        host.spawn_waiter();
         Ok(host)
     }
 
@@ -967,19 +1006,23 @@ pub async fn query_log_dir(
 }
 
 /// Appends `line` (a devlanes note such as a spawn failure) to the log of a unit
-/// that has no running writer, so `logs` and failure tails show it. Fails while
-/// another writer keeps the directory past the usual close delay.
+/// that has no running writer, so `logs` and failure tails show it, and returns
+/// the line's sequence. Fails while another writer keeps the directory past the
+/// usual close delay.
 pub async fn append_note(
     dir: PathBuf,
     unit: &str,
     line: &str,
     retention: LogRetention,
-) -> Result<(), RpcError> {
+) -> Result<u64, RpcError> {
     let mut log = open_log(dir, unit.replace('#', "_"), retention.options()).await?;
     let bytes = format!("{line}\n").into_bytes();
     tokio::task::spawn_blocking(move || {
         let now = now_ms();
-        log.ingest(&bytes, now).and_then(|()| log.finish(now))
+        let seq = log.next_sequence();
+        log.ingest(&bytes, now)
+            .and_then(|()| log.finish(now))
+            .map(|()| seq)
     })
     .await
     .map_err(|error| internal("log_task_failed", error))?

@@ -1262,11 +1262,20 @@ async fn held_start(slot: Duration) -> HeldStart {
             devlanes_daemon::Handler::handle(&engine, request, session).await
         })
     };
+    // A unit reads `queued` from the moment the request arrives, before the
+    // start holds the lane and has resolved; only a place in the gate's line
+    // (`position` in its reason) says the start planned on the current block.
     eventually(Duration::from_secs(5), || async {
         let lane = lane_at(&h, &main, &main).await;
         lane.units
             .iter()
-            .any(|unit| unit.state == "queued")
+            .any(|unit| {
+                unit.state == "queued"
+                    && unit
+                        .reason
+                        .as_ref()
+                        .is_some_and(|reason| reason.data.get("position").is_some())
+            })
             .then_some(())
     })
     .await

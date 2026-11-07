@@ -948,8 +948,39 @@ pub(crate) async fn no_config(cwd: &Path) -> RpcError {
     )
 }
 
+/// Replaces each selector that is the plain name of a configured service with
+/// replicas by its replica units, from `(service name, unit)` pairs of the lane
+/// view, so `worker` selects `worker.1` and `worker.2`. Globs, `+tag`s, unit
+/// names and names of other units (an exec unit `job` never has replicas) pass
+/// through unchanged.
+pub(crate) fn expand_replicas<'a>(
+    selectors: &[String],
+    services: impl Iterator<Item = (&'a str, &'a str)> + Clone,
+) -> Vec<String> {
+    let mut expanded = Vec::new();
+    for selector in selectors {
+        let plain = !selector.starts_with('+') && !selector.contains(['*', '?', '[', '{']);
+        let replicas: Vec<String> = if plain {
+            services
+                .clone()
+                .filter(|(name, unit)| name == selector && unit != selector)
+                .map(|(_, unit)| unit.to_owned())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if replicas.is_empty() {
+            expanded.push(selector.clone());
+        } else {
+            expanded.extend(replicas);
+        }
+    }
+    expanded
+}
+
 /// Matches name, glob or `+tag` selectors against `(name, tags)` candidates.
-/// Every selector must match something; results keep candidate order.
+/// Every selector must match something; results keep candidate order. Callers
+/// expand service names with [`expand_replicas`] first.
 pub(crate) fn match_units(
     selectors: &[String],
     candidates: &[(String, Vec<String>)],
@@ -1078,4 +1109,33 @@ mod tests {
 /// Sets the daemon-wide flag once; true for the first caller.
 pub(crate) fn once(flag: &AtomicBool) -> bool {
     !flag.swap(true, Ordering::SeqCst)
+}
+
+#[cfg(test)]
+mod selector_tests {
+    use super::*;
+
+    /// Only a configured service's plain name expands, and only when it has replicas.
+    #[test]
+    fn service_names_expand_to_their_replicas() {
+        let services = [
+            ("worker", "worker.1"),
+            ("worker", "worker.2"),
+            ("api", "api"),
+        ];
+        let cases: &[(&str, &[&str])] = &[
+            ("worker", &["worker.1", "worker.2"]),
+            ("api", &["api"]),
+            // Exec units `job.1` and `job.2` are not in the view.
+            ("job", &["job"]),
+            ("worker.*", &["worker.*"]),
+            ("+worker", &["+worker"]),
+            ("worker.2", &["worker.2"]),
+            ("missing", &["missing"]),
+        ];
+        for (selector, expected) in cases {
+            let expanded = expand_replicas(&[(*selector).to_owned()], services.iter().copied());
+            assert_eq!(expanded, *expected, "selector {selector}");
+        }
+    }
 }

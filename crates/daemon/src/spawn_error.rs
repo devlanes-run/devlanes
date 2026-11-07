@@ -109,14 +109,15 @@ pub(crate) fn classify(attempt: &Attempt, error: &devlanes_core::Error) -> RpcEr
 
 impl crate::engine::Inner {
     /// Classifies a failed spawn of `attempt`, writes the `[devlanes]` line to the
-    /// unit's log in `log_dir` and returns the error with `lane` set.
+    /// unit's log in `log_dir` and returns the error with `lane` set, plus the
+    /// line's log sequence when it was written.
     pub(crate) async fn spawn_failed(
         &self,
         attempt: Attempt,
         error: devlanes_core::Error,
         log_dir: PathBuf,
         lane: &str,
-    ) -> RpcError {
+    ) -> (RpcError, Option<u64>) {
         let unit = attempt.unit.clone();
         let mut failure = tokio::task::spawn_blocking(move || classify(&attempt, &error))
             .await
@@ -132,15 +133,95 @@ impl crate::engine::Inner {
             "could not start: {}",
             describe(&failure.data, false)
         );
+        let seq = self.write_note(log_dir, &unit, &line).await;
+        (failure, seq)
+    }
+
+    /// Appends a `[devlanes]` note to the log of `unit` in `log_dir` and returns
+    /// its sequence; a failure to write is logged only.
+    pub(crate) async fn write_note(&self, log_dir: PathBuf, unit: &str, line: &str) -> Option<u64> {
         let retention = crate::units::LogRetention::from_config(&self.opts.user.logs.retention);
-        if let Err(error) = crate::units::append_note(log_dir, &unit, &line, retention).await {
-            tracing::warn!(
-                unit = %unit,
-                code = %error.code,
-                "spawn failure not written to the unit log"
-            );
+        match crate::units::append_note(log_dir, unit, line, retention).await {
+            Ok(seq) => Some(seq),
+            Err(error) => {
+                tracing::warn!(
+                    unit = %unit,
+                    code = %error.code,
+                    "note not written to the unit log"
+                );
+                None
+            }
         }
-        failure
+    }
+}
+
+/// The `[devlanes] could not start: <path>: <message>` line for a service whose
+/// config did not resolve.
+pub(crate) fn resolve_note(error: &RpcError) -> String {
+    let text = |key: &str| error.data.get(key).and_then(Value::as_str);
+    let detail = match (text("path"), text("message")) {
+        (Some(path), Some(message)) => format!("{path}: {message}"),
+        (None, Some(message)) => message.to_owned(),
+        _ => error.code.clone(),
+    };
+    format!("{LOG_PREFIX} could not start: {detail}")
+}
+
+/// The unit of a run whose spawn failed: there is no process, so it has no
+/// output, nothing to stop and an unknown exit. Only held by its record.
+pub(crate) struct NotStarted;
+
+#[async_trait::async_trait]
+impl devlanes_core::Unit for NotStarted {
+    /// There is no terminal to write to.
+    async fn input(&self, _bytes: bytes::Bytes) -> Result<(), devlanes_core::Error> {
+        Err(devlanes_core::Error::Exited)
+    }
+
+    /// There is no terminal to resize.
+    async fn resize(&self, _size: devlanes_core::TerminalSize) -> Result<(), devlanes_core::Error> {
+        Err(devlanes_core::Error::Exited)
+    }
+
+    /// Nothing runs, so there is nothing to stop.
+    async fn stop(&self, _policy: devlanes_core::StopPolicy) -> Result<(), devlanes_core::Error> {
+        Ok(())
+    }
+
+    /// The process never existed, so its exit is unknown.
+    async fn wait(&self) -> Result<devlanes_core::ExitOutcome, devlanes_core::Error> {
+        Ok(devlanes_core::ExitOutcome {
+            code: None,
+            signal: None,
+        })
+    }
+
+    /// A receiver that is closed at once.
+    fn output(&self) -> tokio::sync::broadcast::Receiver<devlanes_core::OutputChunk> {
+        tokio::sync::broadcast::channel(1).1
+    }
+
+    /// No processes.
+    async fn subjects(&self) -> Result<Vec<devlanes_core::ProcessIdentity>, devlanes_core::Error> {
+        Ok(Vec::new())
+    }
+
+    /// Nothing runs to change.
+    async fn set_power(&self, _power: devlanes_core::Power) -> Result<(), devlanes_core::Error> {
+        Err(devlanes_core::Error::Exited)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::integrations::ManagedUnit for NotStarted {
+    /// No process, so no identity.
+    fn identity(&self) -> Option<devlanes_core::ProcessIdentity> {
+        None
+    }
+
+    /// No process listens.
+    async fn listening_ports(&self) -> Vec<u16> {
+        Vec::new()
     }
 }
 
