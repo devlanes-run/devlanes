@@ -424,6 +424,17 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             config_invalid(data),
             Some(Hint::command(["config", "check"])),
         ),
+        // A lane-level value of a file that loads did not evaluate (`exec`, `env
+        // show`), such as `${{ env.X }}` the shell does not set: not an invalid file.
+        "lane_env_unresolved" => (
+            format!(
+                "{} has no value in {}: {}",
+                field(data, "path"),
+                or_this_lane(&text(data, "lane")),
+                text(data, "message")
+            ),
+            None,
+        ),
         // `config get|set|unset` with a key the user config does not have.
         "unknown_setting" => (
             text(data, "message"),
@@ -1607,6 +1618,22 @@ fn memory(data: &Value, key: &str) -> String {
     data.get(key)
         .and_then(Value::as_u64)
         .map_or_else(|| "?".into(), super::bytes)
+}
+
+/// The `left_out` entries of an `exec` or `env` answer, one line each:
+/// `DATABASE_URL left out: infra postgres is not up; devlanes infra up`.
+pub(crate) fn left_out(data: &Value) -> Vec<String> {
+    list(data, "left_out")
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} left out: infra {} is not up; {}",
+                text(entry, "key"),
+                text(entry, "infra"),
+                Hint::command(["infra", "up"]).0
+            )
+        })
+        .collect()
 }
 
 /// A lane warning (`StartResult.warnings`, `lane.warning`, doctor's `ca_warnings`)

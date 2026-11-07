@@ -254,7 +254,8 @@ Run an ad-hoc command as a unit of the lane instead of backgrounding it with &.
 The daemon owns the process: logs, stop, attach and status work on it by its
 --name. It gets the shell's environment, then the lane's: devlanes variables,
 DEVLANES_PUBLIC_URL_<SERVICE>, and the global_env and profile env entries that
-read neither self nor replica. NODE_EXTRA_CA_CERTS, DENO_CERT, SSL_CERT_FILE and
+read neither self nor replica; one that reads infra the lane has not started
+is left out and named. NODE_EXTRA_CA_CERTS, DENO_CERT, SSL_CERT_FILE and
 REQUESTS_CA_BUNDLE point at the devlanes CA unless the shell sets them, and
 --env wins over all of these.
 

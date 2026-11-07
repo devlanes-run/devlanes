@@ -125,7 +125,13 @@ async fn plan_lane<E: Extensions>(
         let _span = tracing::debug_span!("evaluate global_env").entered();
         shared_globals(&config.global_env, &lane_context)
     };
-    let lane_layers = lane_layers(&config.global_env, &global, &profile_envs, &lane_context);
+    let lane_layers = lane_layers(
+        &config.global_env,
+        &global,
+        &profile_envs,
+        &lane_context,
+        input.infra,
+    );
 
     let mut planner = Planner {
         input: &input,
@@ -911,15 +917,46 @@ fn reads_unit(value: &Templated<Scalar>) -> Option<bool> {
     }
 }
 
+/// The first `infra.<container>` that `value` reads and `infra` (the lane's infra
+/// namespace) does not have yet, because the lane's infra is not up.
+fn missing_infra(value: &Templated<Scalar>, infra: &Value) -> Option<String> {
+    let Templated::Expression(text) = value else {
+        return None;
+    };
+    devlanes_config::references(text)
+        .ok()?
+        .iter()
+        .find_map(|reference| {
+            let mut parts = reference.split('.');
+            let container = parts
+                .next()
+                .filter(|root| *root == "infra")
+                .and(parts.next())?;
+            infra.get(container).is_none().then(|| container.to_owned())
+        })
+}
+
 /// [`ResolvedLane::lane_layers`] from the [`shared_globals`] values and each
 /// profile's `env`. Entries whose references cannot be read are evaluated here
-/// too, so their error surfaces instead of the entry going missing.
+/// too, so their error surfaces instead of the entry going missing. An entry that
+/// fails while it reads a container `infra` lacks is left out and named in
+/// [`LaneLayers::unset`]: a command outside a unit runs before infra too.
 fn lane_layers(
     global_env: &Env,
     shared: &[Option<Result<String, ResolveError>>],
     profile_envs: &[(String, &Env)],
     lane: &PreparedContext,
+    infra: &Value,
 ) -> Result<LaneLayers, ResolveError> {
+    // `Ok(Err(container))`: left out until that container is up.
+    let settle = |value: &Templated<Scalar>, result: Result<String, ResolveError>| match (
+        result,
+        missing_infra(value, infra),
+    ) {
+        (Ok(value), _) => Ok(Ok(value)),
+        (Err(_), Some(container)) => Ok(Err(container)),
+        (Err(error), None) => Err(error),
+    };
     let evaluate = |path: String, value: &Templated<Scalar>| {
         value
             .evaluate(lane)
@@ -927,23 +964,44 @@ fn lane_layers(
             .map_err(|e| ResolveError::expression(path, e))
     };
     let mut global = BTreeMap::new();
+    let mut unset = BTreeMap::new();
     for ((key, value), shared) in global_env.iter().zip(shared) {
-        let value = match shared {
-            Some(shared) => shared.clone()?,
+        let result = match shared {
+            Some(shared) => shared.clone(),
             None if reads_unit(value) == Some(true) => continue,
-            None => evaluate(format!("global_env.{key}"), value)?,
+            None => evaluate(format!("global_env.{key}"), value),
         };
-        global.insert(key.clone(), value);
+        match settle(value, result)? {
+            Ok(value) => global.insert(key.clone(), value),
+            Err(container) => unset.insert(key.clone(), container),
+        };
     }
     let mut profile = BTreeMap::new();
     for (path, env) in profile_envs {
         for (key, value) in env.iter() {
-            if reads_unit(value) != Some(true) {
-                profile.insert(key.clone(), evaluate(format!("{path}.{key}"), value)?);
+            if reads_unit(value) == Some(true) {
+                continue;
+            }
+            match settle(value, evaluate(format!("{path}.{key}"), value))? {
+                // It replaces whatever a lower layer had or left out.
+                Ok(value) => {
+                    unset.remove(key);
+                    profile.insert(key.clone(), value);
+                }
+                // A lower layer's value must not show through where the profile replaces it.
+                Err(container) => {
+                    global.remove(key);
+                    profile.remove(key);
+                    unset.insert(key.clone(), container);
+                }
             }
         }
     }
-    Ok(LaneLayers { global, profile })
+    Ok(LaneLayers {
+        global,
+        profile,
+        unset,
+    })
 }
 
 /// Evaluates an optional boolean with a default.

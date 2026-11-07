@@ -842,12 +842,11 @@ impl Inner {
             lane.st().env = Some(env.clone());
             project.st().last_env = Some(env);
         }
-        let resolved = self
+        let (resolved, layers) = self
             .resolve_lane_env(&project, &lane, Arc::default())
             .await?;
-        let layers = resolved
-            .lane_layers()
-            .map_err(crate::resolve::resolve_error)?;
+        let mut left_out = layers.unset.clone();
+        left_out.retain(|key, _| !args.env.contains_key(key));
         let (client, reference) = {
             let st = lane.st();
             (
@@ -868,8 +867,8 @@ impl Inner {
             (EnvLayer::Client, client),
             (EnvLayer::Contributor, runtime_ca),
             (EnvLayer::Devlanes, lane_env.clone()),
-            (EnvLayer::Global, layers.global.clone()),
-            (EnvLayer::Profile, layers.profile.clone()),
+            (EnvLayer::Global, layers.global),
+            (EnvLayer::Profile, layers.profile),
             (EnvLayer::Override, args.env.clone()),
         ]);
         let request = SpawnRequest {
@@ -909,13 +908,20 @@ impl Inner {
         let (host, _) = self.spawn_unit(&project, &lane, request).await?;
         drop(adhoc);
         host.set_state(crate::units::UnitState::Ready);
-        let st = lane.st();
-        let summary = st
-            .units
-            .get(&args.name)
-            .map(|rec| unit_summary(&reference, &args.name, rec))
-            .unwrap_or_default();
-        serde_json::to_value(summary).map_err(|e| internal("encode", e))
+        let mut st = lane.st();
+        let summary = match st.units.get_mut(&args.name) {
+            Some(rec) => {
+                rec.left_out = left_out.clone();
+                unit_summary(&reference, &args.name, rec)
+            }
+            None => UnitSummary::default(),
+        };
+        drop(st);
+        let mut result = serde_json::to_value(summary).map_err(|e| internal("encode", e))?;
+        if !left_out.is_empty() {
+            result["left_out"] = crate::resolve::left_out(&left_out);
+        }
+        Ok(result)
     }
 
     /// `run`: one task, streamed as `log` events unless detached.

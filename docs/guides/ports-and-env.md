@@ -99,7 +99,7 @@ On Windows, variable names are uppercased in every layer, since Windows treats `
 
 Tasks and infra commands get layers 1 to 7 as well, minus the service-only variables, plus Compose variables (`COMPOSE_PROJECT_NAME`, `COMPOSE_FILE`, `COMPOSE_PROFILES`, `DEVLANES_COMPOSE_LANE_PROJECT`) that let `docker compose exec` reach the project's containers without flags.
 
-Commands run with `devlanes exec` and `devlanes with` get layer 1, layer 3 without the service-only variables, and the entries of layers 4 and 6 that read neither `self` nor `replica` (those have no value outside a unit); `exec` also gets layer 7. Both add `NODE_EXTRA_CA_CERTS`, `DENO_CERT`, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` pointing at the devlanes CA, but keep a value the shell already sets, while Node and Bun services replace it.
+Commands run with `devlanes exec` and `devlanes with` get layer 1, layer 3 without the service-only variables, and the entries of layers 4 and 6 that read neither `self` nor `replica` (those have no value outside a unit); `exec` also gets layer 7. Until the lane's infra is up, an entry that reads `infra.*` is left out, and `exec` and `env show` name it. Both add `NODE_EXTRA_CA_CERTS`, `DENO_CERT`, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` pointing at the devlanes CA, but keep a value the shell already sets, while Node and Bun services replace it.
 
 ### devlanes variables
 

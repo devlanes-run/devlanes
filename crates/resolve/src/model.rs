@@ -446,6 +446,9 @@ pub struct ResolvedLane {
 pub struct LaneLayers {
     pub global: BTreeMap<String, String>,
     pub profile: BTreeMap<String, String>,
+    /// Entries left out because they read an `infra.<container>` value and the
+    /// lane's infra is not up, keyed by variable, with that container's name.
+    pub unset: BTreeMap<String, String>,
 }
 
 impl fmt::Debug for LaneLayers {
@@ -454,6 +457,7 @@ impl fmt::Debug for LaneLayers {
         f.debug_struct("LaneLayers")
             .field("global", &self.global.keys().collect::<Vec<_>>())
             .field("profile", &self.profile.keys().collect::<Vec<_>>())
+            .field("unset", &self.unset)
             .finish()
     }
 }
@@ -466,9 +470,10 @@ impl ResolvedLane {
 
     /// The `global_env` and profile `env` entries that read neither `self` nor
     /// `replica`, evaluated once for the lane, for commands outside a unit. Entries
-    /// that read them have no value without a unit and are left out. Profiles apply
-    /// in order, later ones winning. The first failing entry in declaration order
-    /// is the error, the same one every unit of the lane fails with.
+    /// that read them have no value without a unit and are left out, as are those
+    /// that read infra the lane has not started ([`LaneLayers::unset`]). Profiles
+    /// apply in order, later ones winning. Otherwise the first failing entry in
+    /// declaration order is the error, the same one every unit of the lane fails with.
     pub fn lane_layers(&self) -> Result<&LaneLayers, &ResolveError> {
         self.lane_layers.as_ref()
     }

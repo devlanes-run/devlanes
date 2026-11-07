@@ -439,6 +439,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             exec["ready_check"] = json!("started");
             exec["urls"] = json!([]);
             exec["ports"] = json!({});
+            exec["left_out"] = json!([{"key": "DATABASE_URL", "infra": "postgres"}]);
             exec
         }),
         (
@@ -514,6 +515,13 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             {"key": "API_TOKEN", "value": "tok_test", "layer": "global"},
             {"key": "NODE_ENV", "value": "development", "layer": "service"},
         ], "truncated": false, "next_cursor": null}),
+        ),
+        // The lane's env before its infra is up: a value that reads it waits.
+        (
+            "env_left_out",
+            Method::Env,
+            json!({"lane": "acme@2", "env": {"DEVLANES": "1", "GREETING": "hi"},
+                   "left_out": [{"key": "DATABASE_URL", "infra": "postgres"}]}),
         ),
         (
             "url",
@@ -2199,6 +2207,11 @@ fn daemon_errors_are_worded_with_hints() {
             1,
         ),
         RpcError::new("needs_env", json!({"lane": "acme@2"}), 1),
+        RpcError::new(
+            "lane_env_unresolved",
+            json!({"lane": "acme@2", "path": "global_env.API_TOKEN", "message": "undefined value (devlanes.yaml:4:14)"}),
+            1,
+        ),
         RpcError::new(
             "protocol_mismatch",
             json!({"protocol": 7, "client_protocol": 8, "version": "0.2.0", "build_id": "a1b2c3", "managed_processes": 6}),

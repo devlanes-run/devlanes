@@ -1164,6 +1164,57 @@ async fn exec_keeps_the_last_good_config_while_the_lane_runs() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// Before the lane's infra is up, exec and `env show` leave out the lane values
+/// that read it and name them; a value that fails for another reason still
+/// refuses, without calling the valid file invalid.
+async fn exec_leaves_out_values_that_wait_on_infra() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = BASIC.replace(
+            "services:\n",
+            "infra:\n  containers:\n    postgres: { image: \"postgres:16\", ports: { \"5432\": 5432 } }\nglobal_env:\n  GREETING: hi\n  DATABASE_URL: \"postgres://127.0.0.1:${{ infra.postgres.port }}/app\"\nservices:\n",
+        );
+        let main = repo(&tmp.path, "r", &config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let unit = h
+            .call(
+                Method::Exec,
+                json!({"name": "tool", "command": ["sleep"]}),
+                cx(&main),
+            )
+            .await
+            .expect("exec runs before infra is up");
+        let waits = json!([{"key": "DATABASE_URL", "infra": "postgres"}]);
+        assert_eq!(unit["left_out"], waits);
+        let env = explained(&h, "tool", cx(&main)).await;
+        assert_eq!(env.get("GREETING").map(|(v, _)| v.as_str()), Some("hi"));
+        assert!(!env.contains_key("DATABASE_URL"));
+        let lane = h
+            .call(Method::Env, json!({}), cx(&main))
+            .await
+            .expect("env show");
+        assert_eq!(lane["env"]["GREETING"], "hi");
+        assert_eq!(lane["left_out"], waits);
+
+        let missing = config.replace("  GREETING: hi\n", "  GREETING: \"${{ env.MISSING }}\"\n");
+        std::fs::write(main.join("devlanes.yaml"), missing).expect("edit");
+        let refused = h
+            .call(
+                Method::Exec,
+                json!({"name": "again", "command": ["sleep"]}),
+                cx(&main),
+            )
+            .await
+            .expect_err("env.MISSING has no value");
+        assert_eq!(refused.code, "lane_env_unresolved", "{refused:?}");
+        assert_eq!(refused.data["path"], "global_env.GREETING");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// `wait` on an exec unit waits for its command to exit: a stopped one answers
 /// `stopped`, a running one times out as `running`, a failure answers `failed`
 /// only after the exit, and exit 0 answers `exited` with `ready: true`.

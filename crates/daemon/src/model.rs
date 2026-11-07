@@ -178,6 +178,9 @@ pub(crate) struct UnitRec {
     pub literal_port: Option<u16>,
     /// Effective environment with provenance for `env --explain`.
     pub env: Arc<Environment>,
+    /// An exec run's lane variables left out because the infra container they
+    /// read was not up (variable to container), for `env show` to name.
+    pub left_out: BTreeMap<String, String>,
     /// Last log lines captured when the unit failed, for proxy pages and errors.
     pub failure_tail: Vec<String>,
     /// `failure_tail` with colors; empty when it had none.

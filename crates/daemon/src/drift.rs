@@ -588,7 +588,18 @@ impl Inner {
             .filter(|unit| unit.kind == "exec")
             .map(|unit| unit.name)
             .collect();
-        let mut result = self.start_lane(project, lane, options).await?;
+        let mut result = match self.start_lane(project, lane, options).await {
+            Ok(result) => result,
+            // The exec units are gone either way; the error names them.
+            Err(mut error) => {
+                if !execs.is_empty()
+                    && let Some(data) = error.data.as_object_mut()
+                {
+                    data.insert("exec_stopped".into(), json!(execs));
+                }
+                return Err(error);
+            }
+        };
         if !execs.is_empty() {
             result.warnings.push(LaneWarning {
                 code: "exec_stopped".into(),

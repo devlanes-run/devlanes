@@ -207,7 +207,8 @@ need --yes when no terminal can prompt."
 The daemon owns the process: logs, stop, attach and status work on it by its\n\
 --name. It gets the shell's environment, then the lane's: devlanes variables,\n\
 DEVLANES_PUBLIC_URL_<SERVICE>, and the global_env and profile env entries that\n\
-read neither self nor replica. NODE_EXTRA_CA_CERTS, DENO_CERT, SSL_CERT_FILE and\n\
+read neither self nor replica; one that reads infra the lane has not started\n\
+is left out and named. NODE_EXTRA_CA_CERTS, DENO_CERT, SSL_CERT_FILE and\n\
 REQUESTS_CA_BUNDLE point at the devlanes CA unless the shell sets them, and\n\
 --env wins over all of these."
     )]

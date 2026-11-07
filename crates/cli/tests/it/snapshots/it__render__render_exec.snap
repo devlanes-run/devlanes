@@ -4,13 +4,16 @@ expression: text
 ---
 --- human (exit 0)
 running acme@2:probe pid=4100
+  DATABASE_URL left out: infra postgres is not up; devlanes infra up
   logs: devlanes logs acme@2:probe -f
   stop: devlanes stop acme@2:probe
 --- plain (exit 0)
 running acme@2:probe pid=4100
+  DATABASE_URL left out: infra postgres is not up; devlanes infra up
   logs: devlanes logs acme@2:probe -f
   stop: devlanes stop acme@2:probe
 --- agent (exit 0)
 running acme@2:probe pid=4100
+  DATABASE_URL left out: infra postgres is not up; devlanes infra up
   logs: devlanes logs acme@2:probe -f
   stop: devlanes stop acme@2:probe

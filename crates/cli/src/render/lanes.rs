@@ -1216,7 +1216,8 @@ pub(super) fn lane_gc(data: &Value) -> Vec<String> {
     lines
 }
 
-/// `exec`: the adopted unit and how to follow or stop it.
+/// `exec`: the adopted unit, the lane variables it went without, and how to
+/// follow or stop it.
 pub(super) fn exec(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let Ok(unit) = serde_json::from_value::<UnitSummary>(data.clone()) else {
         return tree(data);
@@ -1226,14 +1227,21 @@ pub(super) fn exec(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         line.push_str(&format!(" pid={pid}"));
     }
     let target = format!("{}:{}", unit.lane, unit.name);
-    vec![
-        line,
-        format!(
-            "  logs: {}",
-            Hint::command(["logs", target.as_str(), "-f"]).0
-        ),
-        format!("  stop: {}", Hint::command(["stop", target.as_str()]).0),
-    ]
+    let mut lines = vec![line];
+    lines.extend(
+        words::left_out(data)
+            .into_iter()
+            .map(|note| format!("  {note}")),
+    );
+    lines.push(format!(
+        "  logs: {}",
+        Hint::command(["logs", target.as_str(), "-f"]).0
+    ));
+    lines.push(format!(
+        "  stop: {}",
+        Hint::command(["stop", target.as_str()]).0
+    ));
+    lines
 }
 
 /// `wait`: the target's final state, with the failure tail when it failed.

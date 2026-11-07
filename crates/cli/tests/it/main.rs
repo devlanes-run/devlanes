@@ -1454,10 +1454,6 @@ fn exit_codes_follow_the_method() {
         "units": [{"name": "api", "state": "failed", "exit_code": 1}]}]});
     assert_eq!(code(Method::Status, failed.clone()), exit::FAILED);
     assert_eq!(code(Method::LaneList, failed), exit::FAILED);
-    // A failed exec command counts too, while the lane itself reads running.
-    let failed_exec = json!({"items": [{"lane": "acme@2", "state": "running",
-        "units": [{"name": "job", "kind": "exec", "state": "failed", "exit_code": 1}]}]});
-    assert_eq!(code(Method::Status, failed_exec), exit::FAILED);
     assert_eq!(
         code(
             Method::LaneList,

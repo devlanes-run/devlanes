@@ -864,23 +864,24 @@ impl Inner {
         let args: EnvParams = params(value)?;
         if args.lane_env || args.unit.is_none() {
             let (project, lane) = self.target_lane(context).await?;
-            let resolved = self
+            let (resolved, layers) = self
                 .resolve_lane_env(
                     &project,
                     &lane,
                     crate::engine::carries_env(context).unwrap_or_default(),
                 )
                 .await?;
-            let layers = resolved
-                .lane_layers()
-                .map_err(crate::resolve::resolve_error)?;
             let env = devlanes_core::env::assemble([
                 (EnvLayer::Devlanes, resolved.lane_env().clone()),
-                (EnvLayer::Global, layers.global.clone()),
-                (EnvLayer::Profile, layers.profile.clone()),
+                (EnvLayer::Global, layers.global),
+                (EnvLayer::Profile, layers.profile),
             ]);
             let reference = lane.st().reference(&project.name());
-            return Ok(json!({"lane": reference, "env": env.values}));
+            let mut result = json!({"lane": reference, "env": env.values});
+            if !layers.unset.is_empty() {
+                result["left_out"] = crate::resolve::left_out(&layers.unset);
+            }
+            return Ok(result);
         }
         let unit = args.unit.unwrap_or_default();
         let ((project, lane), selectors) = self
@@ -893,9 +894,13 @@ impl Inner {
             .units
             .get(&name)
             .filter(|rec| rec.host.is_alive())
-            .map(|rec| rec.env.clone());
+            .map(|rec| (rec.env.clone(), rec.left_out.clone()));
+        let mut left_out = std::collections::BTreeMap::new();
         let env = match live {
-            Some(env) => env,
+            Some((env, unset)) => {
+                left_out = unset;
+                env
+            }
             None => {
                 let resolved = self
                     .resolve_with(&project, &lane, crate::engine::carries_env(context))
@@ -932,7 +937,7 @@ impl Inner {
                 Arc::new(crate::lifecycle::copy_env(&launch.env))
             }
         };
-        if args.explain {
+        let mut result = if args.explain {
             let items: Vec<Value> = env
                 .values
                 .iter()
@@ -941,11 +946,14 @@ impl Inner {
                     json!({"key": key, "value": value, "layer": layer_word(layer)})
                 })
                 .collect();
-            return Ok(
-                json!({"lane": reference, "unit": name, "items": items, "truncated": false, "next_cursor": null}),
-            );
+            json!({"lane": reference, "unit": name, "items": items, "truncated": false, "next_cursor": null})
+        } else {
+            json!({"lane": reference, "unit": name, "env": env.values})
+        };
+        if !left_out.is_empty() {
+            result["left_out"] = crate::resolve::left_out(&left_out);
         }
-        Ok(json!({"lane": reference, "unit": name, "env": env.values}))
+        Ok(result)
     }
 
     /// `url`: the public URL of a service or `infra.external` entry (internal URL
