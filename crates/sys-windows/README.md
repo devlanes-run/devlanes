@@ -56,6 +56,7 @@ Every call blocks. Async callers use `spawn_blocking`, except for the `pipe` mod
 - `conpty`, `usage`, `registry` (HKCU values; typed reads and subkey lists of HKLM too; the user `Path` read and written with its type, and the `WM_SETTINGCHANGE` broadcast after it changes), `shell_execute::open_url`, `shell_execute::run_elevated` (UAC prompt, waits for the exit code), `file` (identity, retrying rename and removal, `system_directory`).
 - `cert`: `CertStore` over the user's certificate stores (logical view read-only, changes through the user's registry store), `interactive_desktop`; the `test-support` feature adds `ScratchStore`, a throwaway store deleted on drop.
 - `net`: `set_exclusive_address_use` and `exclusive_address_use` (`SO_EXCLUSIVEADDRUSE`).
+- `system`: `computer_name`, the DNS host name `hostname.exe` prints, independent of the environment.
 
 ## Behaviour
 

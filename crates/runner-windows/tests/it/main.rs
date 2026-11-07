@@ -545,16 +545,19 @@ async fn pty_shell_units_stop_on_ctrl_break() {
             .await
             .expect("stop");
         assert_stopped(&report, StopSignal::Terminate, false);
+        // MSYS reports the shell's SIGINT death as 512.
+        assert_eq!(report.outcome.code, Some(CONTROL_C_EXIT), "{report:?}");
         assert!(!any_alive(&members), "{members:?}");
     })
     .await;
 }
 
 /// A `.cmd` shim in a pseudo console asks "Terminate batch job (Y/N)?" once
-/// its program stopped on Ctrl-Break; the runner answers it, and the stop
-/// does not escalate.
+/// its program stopped on Ctrl-C; the runner answers it, and the stop does
+/// not escalate.
 #[tokio::test]
 async fn pty_batch_prompts_are_answered() {
+    devlanes_sys_windows::console::set_ctrl_c_ignored(false).expect("accept Ctrl-C");
     bounded(async {
         let dir = tempfile::tempdir().expect("tempdir");
         let fixture = fixture();
@@ -576,6 +579,8 @@ async fn pty_batch_prompts_are_answered() {
             .await
             .expect("stop");
         assert_stopped(&report, StopSignal::Terminate, false);
+        // `cmd.exe` exits 255 after the answer, which is not the program's code.
+        assert_eq!(report.outcome.code, Some(CONTROL_C_EXIT), "{report:?}");
         let rest = text(&rest.await.expect("join"), OutputStream::Terminal);
         assert!(plain(&rest).contains("Terminate batch job"), "{rest:?}");
     })
@@ -769,10 +774,12 @@ exit 4"#;
     .await;
 }
 
-/// SIGTERM is Ctrl-Break to the unit's console; the fixture shuts down on it
-/// without escalation, and its port is reported while it runs.
+/// SIGTERM is Ctrl-C to the console of a unit with no MSYS shell, which
+/// Node and most servers handle as a graceful stop; the fixture shuts down on
+/// it without escalation, and its port is reported while it runs.
 #[tokio::test]
-async fn sigterm_sends_ctrl_break() {
+async fn sigterm_sends_ctrl_c() {
+    devlanes_sys_windows::console::set_ctrl_c_ignored(false).expect("accept Ctrl-C");
     bounded(async {
         let dir = tempfile::tempdir().expect("tempdir");
         let unit = runner()
@@ -789,12 +796,61 @@ async fn sigterm_sends_ctrl_break() {
                 .iter()
                 .any(|socket| socket.addr.port() == port)
         );
+        let rest = tokio::spawn(drain(output));
         let report = unit
             .stop_with_report(policy(StopSignal::Terminate, GRACE))
             .await
             .expect("stop");
         assert_stopped(&report, StopSignal::Terminate, false);
+        assert_eq!(report.outcome.code, Some(0), "{report:?}");
+        let rest = text(&rest.await.expect("join"), OutputStream::Stdout);
+        assert!(rest.contains("STOPPING ctrl-c"), "{rest:?}");
         assert!(!any_alive(&[unit.identity()]));
+    })
+    .await;
+}
+
+/// SIGTERM stays Ctrl-Break while Git's MSYS `sh` runs in the unit, as in an
+/// explicit `[sh, -c, ...]` list or a just recipe: the programs it starts
+/// ignore a Ctrl-C event and would only stop at the timeout.
+#[tokio::test]
+async fn sigterm_under_a_posix_shell_sends_ctrl_break() {
+    bounded(async {
+        let shell = devlanes_shell_windows::windows_shell()
+            .await
+            .expect("Git for Windows' sh.exe");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fixture = fixture().to_string_lossy().replace('\\', "/");
+        // A shell path, not `/bin/sh`, so the runner does not know it is a shell.
+        let script = format!("'{fixture}' --port 0; echo done");
+        let unit = runner()
+            .spawn_unit(spec(
+                &shell.to_string_lossy(),
+                &["-c", &script],
+                dir.path(),
+                env(&[]),
+            ))
+            .await
+            .expect("spawn");
+        let _cleanup = Cleanup(unit.clone());
+        let mut output = unit.output();
+        read_until(&mut output, "LISTENING").await;
+        let members: Vec<ProcessIdentity> = unit
+            .processes()
+            .await
+            .expect("processes")
+            .iter()
+            .map(devlanes_sys::ProcessInfo::identity)
+            .collect();
+        let rest = tokio::spawn(drain(output));
+        let report = unit
+            .stop_with_report(policy(StopSignal::Terminate, GRACE))
+            .await
+            .expect("stop");
+        assert_stopped(&report, StopSignal::Terminate, false);
+        let rest = text(&rest.await.expect("join"), OutputStream::Stdout);
+        assert!(rest.contains("STOPPING ctrl-break"), "{rest:?}");
+        assert!(!any_alive(&members), "{members:?}");
     })
     .await;
 }
@@ -1211,6 +1267,8 @@ async fn ctrl_c_stops_a_frozen_unit() {
 /// throttling back.
 #[tokio::test]
 async fn throttling_is_efficiency_mode_until_normal() {
+    // The stop at the end is SIGTERM, which is Ctrl-C here.
+    devlanes_sys_windows::console::set_ctrl_c_ignored(false).expect("accept Ctrl-C");
     bounded(async {
         let dir = tempfile::tempdir().expect("tempdir");
         let (unit, tree) = fixture_tree(&runner(), &[], dir.path()).await;

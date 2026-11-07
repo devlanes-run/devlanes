@@ -30,6 +30,9 @@ pub(crate) struct Command {
     pub application: PathBuf,
     /// The whole command line (`lpCommandLine`), argv0 included.
     pub command_line: OsString,
+    /// The program is a batch file that `cmd.exe` runs. An explicit
+    /// `[cmd, /c, ...]` is not one.
+    pub batch: bool,
 }
 
 /// How arguments are quoted on the command line.
@@ -97,7 +100,8 @@ fn build_with(
         }
     }
     let application = resolve(program, env, cwd, exists)?;
-    let (application, argv0, arguments) = if is_batch_file(&application) {
+    let batch = is_batch_file(&application);
+    let (application, argv0, arguments) = if batch {
         let script = application.to_string_lossy();
         (
             system.join("cmd.exe"),
@@ -125,6 +129,7 @@ fn build_with(
     Ok(Command {
         application,
         command_line: command_line.into(),
+        batch,
     })
 }
 
