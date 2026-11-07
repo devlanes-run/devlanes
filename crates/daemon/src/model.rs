@@ -160,7 +160,6 @@ pub(crate) struct LaneView {
     pub infra_routes: Vec<InfraRoute>,
     /// `infra.external` entries, in declaration order.
     pub externals: Vec<ExternalInfo>,
-    pub lane_env: EnvMap,
     /// The lane's `services` expression namespace.
     pub services_namespace: Value,
 }

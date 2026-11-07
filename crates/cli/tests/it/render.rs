@@ -222,7 +222,9 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "already_running": [], "whole_lane": true, "ready": true, "timed_out": false,
                 "failures": [], "skipped_tasks": [],
                 "units": [unit("api", "ready"), unit("web", "ready")],
-                "warnings": [{"code": "reload_restarted_lane", "data": {"lane": "acme@2",
+                "warnings": [{"code": "exec_stopped", "data": {"lane": "acme@2", "units": ["docs"],
+                    "message": "stopped exec units docs; a whole-lane restart does not run them again"}},
+                    {"code": "reload_restarted_lane", "data": {"lane": "acme@2",
                     "message": "infra or ports changed, so the whole lane restarted"}}],
             }),
         ),
@@ -310,6 +312,20 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "feat/billing",
                 "running",
                 vec![unit("api", "ready"), pgadmin],
+            )])
+        }),
+        // An exec command in progress reads `running` in every text mode.
+        ("status_exec", Method::Status, {
+            let mut docs = unit("docs", "ready");
+            docs["kind"] = json!("exec");
+            docs["ready_check"] = json!("started");
+            docs["urls"] = json!([]);
+            docs["ports"] = json!({});
+            page(vec![lane(
+                Some(2),
+                "feat/billing",
+                "running",
+                vec![unit("api", "ready"), docs],
             )])
         }),
         // An idle lane keeps `state`; `power` adds the level and since when.
@@ -420,6 +436,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
         ("exec", Method::Exec, {
             let mut exec = unit("probe", "ready");
             exec["kind"] = json!("exec");
+            exec["ready_check"] = json!("started");
             exec["urls"] = json!([]);
             exec["ports"] = json!({});
             exec
@@ -428,6 +445,12 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             "wait_ready",
             Method::Wait,
             json!({"lane": "acme@2", "unit": "api", "state": "ready", "ready": true}),
+        ),
+        // A task or exec command that exited 0 on its own.
+        (
+            "wait_exited",
+            Method::Wait,
+            json!({"lane": "acme@2", "unit": "job", "state": "exited", "ready": true, "exit_code": 0}),
         ),
         (
             "wait_failed",
@@ -2164,6 +2187,11 @@ fn daemon_errors_are_worded_with_hints() {
             1,
         ),
         RpcError::new("timeout", json!({"lane": "acme@2", "unit": "api"}), 124),
+        RpcError::new(
+            "timeout",
+            json!({"lane": "acme@2", "unit": "job", "state": "running", "timeout_ms": 5000}),
+            124,
+        ),
         RpcError::new("not_supported_yet", json!({"feature": "remote unlock"}), 1),
         RpcError::new(
             "config_error",

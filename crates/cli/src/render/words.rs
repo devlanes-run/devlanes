@@ -390,6 +390,15 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 "set systemd=true under [boot] in /etc/wsl.conf, {WSL_RESTART}"
             ))),
         ),
+        // A task or exec command still running at the deadline: no readiness problem.
+        "timeout" if text(data, "state") == "running" && !text(data, "unit").is_empty() => (
+            format!(
+                "{} is still running after {}",
+                target(data),
+                super::duration(data.get("timeout_ms").and_then(Value::as_u64).unwrap_or(0))
+            ),
+            logs_hint(data),
+        ),
         "timeout" => (
             match target(data) {
                 found if !found.is_empty() => format!("timed out waiting for {found}"),
@@ -1633,6 +1642,19 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
             format!(
                 "stopped {}, which the project file no longer has",
                 units.join(", ")
+            )
+        }
+        "exec_stopped" => {
+            let units: Vec<String> = list(data, "units").iter().map(display_value).collect();
+            let (noun, pronoun) = if units.len() == 1 {
+                ("exec unit", "it")
+            } else {
+                ("exec units", "them")
+            };
+            format!(
+                "stopped {noun} {}; run {pronoun} again with {}",
+                units.join(", "),
+                Hint::command(["exec"]).0
             )
         }
         // A result rather than advice: the start summary prints it as an ok line.

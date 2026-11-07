@@ -125,9 +125,11 @@ impl LaneLayout {
         services_namespace(self.services.values())
     }
 
-    /// Variables for `devlanes with` and `devlanes env show`: `DEVLANES`,
-    /// `DEVLANES_LANE_PROJECT`, `DEVLANES_LANE`, `DEVLANES_LANE_NAME`,
+    /// Variables devlanes sets for commands outside a unit (`devlanes exec`,
+    /// `devlanes with`, `devlanes env show`): `DEVLANES`, `DEVLANES_LANE_PROJECT`,
+    /// `DEVLANES_LANE`, `DEVLANES_LANE_NAME`, `DEVLANES_LANE_DATA`,
     /// `DEVLANES_PUBLIC_URL_<SERVICE>` for every service and the CA variables.
+    /// `global_env` and profile `env` are not here: see [`ResolvedLane::lane_layers`].
     pub fn lane_env(&self) -> &BTreeMap<String, String> {
         &self.lane_env
     }
@@ -434,13 +436,41 @@ pub struct ResolvedLane {
     pub errors: IndexMap<String, ResolveError>,
     pub warnings: Vec<String>,
     pub(crate) lane_env: BTreeMap<String, String>,
+    pub(crate) lane_layers: Result<LaneLayers, ResolveError>,
     pub(crate) services_namespace: Value,
+}
+
+/// The `global_env` and profile `env` values of a lane outside any unit. `Debug`
+/// prints keys only, since values can carry secrets.
+#[derive(Clone)]
+pub struct LaneLayers {
+    pub global: BTreeMap<String, String>,
+    pub profile: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for LaneLayers {
+    /// Prints only the keys.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LaneLayers")
+            .field("global", &self.global.keys().collect::<Vec<_>>())
+            .field("profile", &self.profile.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl ResolvedLane {
     /// See [`LaneLayout::lane_env`].
     pub fn lane_env(&self) -> &BTreeMap<String, String> {
         &self.lane_env
+    }
+
+    /// The `global_env` and profile `env` entries that read neither `self` nor
+    /// `replica`, evaluated once for the lane, for commands outside a unit. Entries
+    /// that read them have no value without a unit and are left out. Profiles apply
+    /// in order, later ones winning. The first failing entry in declaration order
+    /// is the error, the same one every unit of the lane fails with.
+    pub fn lane_layers(&self) -> Result<&LaneLayers, &ResolveError> {
+        self.lane_layers.as_ref()
     }
 
     /// See [`LaneLayout::services_namespace`].

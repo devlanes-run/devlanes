@@ -9,7 +9,12 @@ use std::{
 };
 
 use devlanes_config::OpaqueExtensions;
-use devlanes_core::{LaunchSpec, TerminalSize, ports::PortName};
+use devlanes_core::{
+    LaunchSpec, TerminalSize,
+    contrib::runtime_ca_env,
+    env::{EnvLayer, assemble},
+    ports::PortName,
+};
 use devlanes_proto::{
     Context, ExecParams, Page, ResumePlan, RpcError, RunParams, Selection, UnitSummary, events,
 };
@@ -805,6 +810,7 @@ impl Inner {
             ));
         }
         let (project, lane) = self.target_lane(context).await?;
+        self.fresh_config(&project, &lane).await;
         // An exec unit under a configured name would take that unit's place: its
         // logs, its stop and the next start of the real one.
         let taken = {
@@ -836,26 +842,36 @@ impl Inner {
             lane.st().env = Some(env.clone());
             project.st().last_env = Some(env);
         }
-        let (mut env, lane_env, reference) = {
+        let resolved = self
+            .resolve_lane_env(&project, &lane, Arc::default())
+            .await?;
+        let layers = resolved
+            .lane_layers()
+            .map_err(crate::resolve::resolve_error)?;
+        let (client, reference) = {
             let st = lane.st();
             (
                 st.env.as_deref().cloned().unwrap_or_default(),
-                st.view
-                    .as_ref()
-                    .map(|view| view.lane_env.clone())
-                    .unwrap_or_default(),
                 st.reference(&project.name()),
             )
         };
-        env.extend(lane_env);
-        env.extend(args.env.clone());
+        let lane_env = resolved.lane_env();
+        let runtime_ca = runtime_ca_env(lane_env, |name| {
+            client.contains_key(name) || args.env.contains_key(name)
+        });
         let cwd = if context.cwd.as_os_str().is_empty() {
             lane.st().path.clone()
         } else {
             context.cwd.clone()
         };
-        let environment =
-            devlanes_core::env::assemble([(devlanes_core::env::EnvLayer::Client, env.clone())]);
+        let environment = assemble([
+            (EnvLayer::Client, client),
+            (EnvLayer::Contributor, runtime_ca),
+            (EnvLayer::Devlanes, lane_env.clone()),
+            (EnvLayer::Global, layers.global.clone()),
+            (EnvLayer::Profile, layers.profile.clone()),
+            (EnvLayer::Override, args.env.clone()),
+        ]);
         let request = SpawnRequest {
             name: args.name.clone(),
             kind: Kind::Exec,
@@ -863,7 +879,7 @@ impl Inner {
                 program: program.clone(),
                 args: rest.to_vec(),
                 cwd,
-                env,
+                env: environment.values.clone(),
                 pty: args.pty,
                 size: TerminalSize::default(),
             },

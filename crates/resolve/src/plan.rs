@@ -7,8 +7,8 @@ use std::{
 
 use devlanes_config::{
     Env, ExpressionContext, Extensions, InfraCommand, PreparedContext, ProfileConfig,
-    ProfileOptions, ReadyConfig, Run, ServiceConfig, StopConfig, SyncConfig, TaskAfter, TaskConfig,
-    TcpReady, Templated,
+    ProfileOptions, ReadyConfig, Run, Scalar, ServiceConfig, StopConfig, SyncConfig, TaskAfter,
+    TaskConfig, TcpReady, Templated,
 };
 use devlanes_core::{
     StopPolicy, StopSignal,
@@ -24,8 +24,8 @@ use serde_json::{Value, json};
 use tracing::Instrument as _;
 
 use crate::{
-    DEFAULT_READY_TIMEOUT, Launch, Ready, ReadySpec, ResolveError, ResolveInput, ResolvedCommand,
-    ResolvedLane, ResolvedService, ResolvedTask, ServiceLayout, SyncSpec,
+    DEFAULT_READY_TIMEOUT, LaneLayers, Launch, Ready, ReadySpec, ResolveError, ResolveInput,
+    ResolvedCommand, ResolvedLane, ResolvedService, ResolvedTask, ServiceLayout, SyncSpec,
     layout::{self, Namespaces, env_namespace, replica_value},
     select::{active_profiles, merge_options},
     util::shell_quote,
@@ -56,6 +56,9 @@ pub async fn resolve_lane<E: Extensions>(
         .await
         .map_err(|error| error.locate(config))?;
     for error in lane.errors.values_mut() {
+        *error = error.clone().locate(config);
+    }
+    if let Err(error) = &mut lane.lane_layers {
         *error = error.clone().locate(config);
     }
     Ok(lane)
@@ -122,6 +125,7 @@ async fn plan_lane<E: Extensions>(
         let _span = tracing::debug_span!("evaluate global_env").entered();
         shared_globals(&config.global_env, &lane_context)
     };
+    let lane_layers = lane_layers(&config.global_env, &global, &profile_envs, &lane_context);
 
     let mut planner = Planner {
         input: &input,
@@ -223,6 +227,7 @@ async fn plan_lane<E: Extensions>(
         errors,
         warnings: layout.warnings,
         lane_env: layout.lane_env,
+        lane_layers,
         services_namespace,
     })
 }
@@ -884,17 +889,7 @@ fn shared_globals(
     values
         .iter()
         .map(|(key, value)| {
-            let per_unit = match value {
-                Templated::Literal(_) => false,
-                Templated::Expression(text) => {
-                    devlanes_config::references(text).map_or(true, |references| {
-                        references
-                            .iter()
-                            .any(|r| matches!(r.split('.').next(), Some("self" | "replica")))
-                    })
-                }
-            };
-            (!per_unit).then(|| {
+            (reads_unit(value) == Some(false)).then(|| {
                 value
                     .evaluate(lane)
                     .map(|value| value.to_string())
@@ -902,6 +897,53 @@ fn shared_globals(
             })
         })
         .collect()
+}
+
+/// Whether `value` reads `self` or `replica`; `None` when its references cannot be read.
+fn reads_unit(value: &Templated<Scalar>) -> Option<bool> {
+    match value {
+        Templated::Literal(_) => Some(false),
+        Templated::Expression(text) => devlanes_config::references(text).ok().map(|references| {
+            references
+                .iter()
+                .any(|r| matches!(r.split('.').next(), Some("self" | "replica")))
+        }),
+    }
+}
+
+/// [`ResolvedLane::lane_layers`] from the [`shared_globals`] values and each
+/// profile's `env`. Entries whose references cannot be read are evaluated here
+/// too, so their error surfaces instead of the entry going missing.
+fn lane_layers(
+    global_env: &Env,
+    shared: &[Option<Result<String, ResolveError>>],
+    profile_envs: &[(String, &Env)],
+    lane: &PreparedContext,
+) -> Result<LaneLayers, ResolveError> {
+    let evaluate = |path: String, value: &Templated<Scalar>| {
+        value
+            .evaluate(lane)
+            .map(|value| value.to_string())
+            .map_err(|e| ResolveError::expression(path, e))
+    };
+    let mut global = BTreeMap::new();
+    for ((key, value), shared) in global_env.iter().zip(shared) {
+        let value = match shared {
+            Some(shared) => shared.clone()?,
+            None if reads_unit(value) == Some(true) => continue,
+            None => evaluate(format!("global_env.{key}"), value)?,
+        };
+        global.insert(key.clone(), value);
+    }
+    let mut profile = BTreeMap::new();
+    for (path, env) in profile_envs {
+        for (key, value) in env.iter() {
+            if reads_unit(value) != Some(true) {
+                profile.insert(key.clone(), evaluate(format!("{path}.{key}"), value)?);
+            }
+        }
+    }
+    Ok(LaneLayers { global, profile })
 }
 
 /// Evaluates an optional boolean with a default.

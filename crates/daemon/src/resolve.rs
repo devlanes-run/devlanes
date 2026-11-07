@@ -141,6 +141,50 @@ impl Inner {
             .await
     }
 
+    /// Resolves the lane without planning a unit, for its lane-level env
+    /// ([`ResolvedLane::lane_env`] and [`ResolvedLane::lane_layers`]) that
+    /// `exec`, `with` and `env show` use. The stored client env wins over
+    /// `fallback`. While the lane runs something, a project file that does not
+    /// load leaves the last good config in use, as for the lane's view.
+    pub(crate) async fn resolve_lane_env(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+        fallback: Arc<EnvMap>,
+    ) -> Result<Arc<ResolvedLane>, RpcError> {
+        let config = {
+            let st = lane.st();
+            if st.record.is_none() {
+                let reference = st.reference(&project.name());
+                let mut error = st
+                    .unassigned
+                    .clone()
+                    .or_else(|| st.last_error.clone())
+                    .unwrap_or_else(|| RpcError::new("unassigned", json!({}), 1));
+                if error.data.is_null() {
+                    error.data = json!({});
+                }
+                if let Some(data) = error.data.as_object_mut() {
+                    data.entry("lane").or_insert(json!(reference));
+                }
+                return Err(error);
+            }
+            match &st.config {
+                ConfigState::Loaded(_) => None,
+                _ => st.last_good.clone().filter(|_| st.any_running()),
+            }
+        };
+        self.resolve_planned(
+            project,
+            lane,
+            Some(fallback),
+            config,
+            None,
+            Some(&BTreeSet::new()),
+        )
+        .await
+    }
+
     /// Like [`Self::resolve_full`], against `config` instead of the lane's current
     /// one: a start keeps planning what it selected even if the file reloads.
     /// `only` limits the planned units as in [`devlanes_resolve::ResolveInput::only`].

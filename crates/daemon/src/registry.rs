@@ -2125,7 +2125,6 @@ impl Inner {
             routes: layout.routes.clone(),
             infra_routes,
             externals,
-            lane_env: layout.lane_env().clone(),
             services_namespace: layout.services_namespace(),
         })
     }
