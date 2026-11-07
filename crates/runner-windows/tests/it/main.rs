@@ -545,8 +545,14 @@ async fn pty_shell_units_stop_on_ctrl_break() {
             .await
             .expect("stop");
         assert_stopped(&report, StopSignal::Terminate, false);
-        // MSYS reports the shell's SIGINT death as 512.
-        assert_eq!(report.outcome.code, Some(CONTROL_C_EXIT), "{report:?}");
+        // `sh -c` execs the fixture, and MSYS's exec stub either reports a
+        // SIGINT death (512, reported as CONTROL_C_EXIT) or passes on the
+        // fixture's own 0. Which one is a race inside the MSYS runtime: on
+        // GitHub's Windows Server 2025 runners 0 is the common case.
+        assert!(
+            [Some(0), Some(CONTROL_C_EXIT)].contains(&report.outcome.code),
+            "{report:?}"
+        );
         assert!(!any_alive(&members), "{members:?}");
     })
     .await;
