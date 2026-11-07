@@ -516,6 +516,14 @@ pub(crate) struct StartCx {
     pub arrival: Option<devlanes_core::gate::Arrival>,
     /// Saved profiles and services the config no longer has, reported as warnings.
     pub dropped: Dropped,
+    /// The start names profiles other than the ones the lane had before it.
+    pub profiles_changed: bool,
+    /// Recompute drift once the start ends: it changed a running lane's profiles,
+    /// which the units it left alone may not have.
+    pub recheck_drift: bool,
+    /// Running units the start left alone whose settings differ from what its
+    /// profiles plan, with the differing fields.
+    pub profile_stale: Vec<(String, Vec<String>)>,
 }
 
 /// One ordered step of the lane pipeline (plan 5.5).
@@ -765,7 +773,13 @@ impl LanePhase for ResolvePhase {
                 .collect()
         });
         match engine
-            .resolve_config(&cx.project, &cx.lane, cx.config.clone(), only.as_ref())
+            .resolve_start(
+                &cx.project,
+                &cx.lane,
+                cx.config.clone(),
+                only.as_ref(),
+                &cx.profiles,
+            )
             .await
         {
             Ok(resolved) => {
@@ -1199,13 +1213,22 @@ impl LanePhase for ServicesPhase {
                     });
                     continue;
                 }
-                let alive = cx
+                let (alive, fingerprint) = cx
                     .lane
                     .st()
                     .units
                     .get(&service.unit)
-                    .is_some_and(|rec| rec.host.is_alive());
+                    .filter(|rec| rec.host.is_alive())
+                    .map_or((false, None), |rec| (true, rec.fingerprint.clone()));
                 if alive {
+                    if cx.profiles_changed
+                        && let Some(fingerprint) = fingerprint
+                    {
+                        let fields = fingerprint.changes(&crate::drift::Fingerprint::of(service));
+                        if !fields.is_empty() {
+                            cx.profile_stale.push((service.unit.clone(), fields));
+                        }
+                    }
                     cx.already_running.push(service.unit.clone());
                     continue;
                 }
@@ -1365,6 +1388,50 @@ impl Dropped {
             });
         }
         warnings
+    }
+}
+
+/// `profile_not_applied`: a start changed a running lane's profiles, and `stale`
+/// units it left running differ from what those profiles plan, in these fields.
+/// `stored` says the start made them the lane's profiles; only then do `status`
+/// and `reload` see the difference.
+fn profile_not_applied(
+    lane: &str,
+    profiles: &[String],
+    stale: &[(String, Vec<String>)],
+    stored: bool,
+) -> devlanes_proto::LaneWarning {
+    let names: Vec<&str> = stale.iter().map(|(unit, _)| unit.as_str()).collect();
+    let fields: Vec<String> = stale
+        .iter()
+        .map(|(unit, fields)| format!("{unit}: {}", fields.join(", ")))
+        .collect();
+    let profile = if profiles.len() == 1 {
+        format!("profile {}", profiles[0])
+    } else {
+        format!("profiles {}", profiles.join(", "))
+    };
+    let mut message = format!(
+        "{} run with other settings than {profile} gives them ({})",
+        names.join(", "),
+        fields.join("; "),
+    );
+    if stored {
+        message.push_str(&format!(
+            "; devlanes status lists every unit devlanes reload --lane {lane} restarts"
+        ));
+    }
+    devlanes_proto::LaneWarning {
+        code: "profile_not_applied".into(),
+        data: json!({
+            "lane": lane,
+            "profiles": profiles,
+            "units": stale
+                .iter()
+                .map(|(unit, fields)| json!({"unit": unit, "fields": fields}))
+                .collect::<Vec<_>>(),
+            "message": message,
+        }),
     }
 }
 
@@ -2831,7 +2898,11 @@ impl Inner {
                     1,
                 )));
             }
-            st.overrides = options.overrides.clone();
+            // A request without a shell environment (the TUI's restart, `reload`)
+            // keeps the `--env` values stored with the lane's environment (decision 7).
+            if options.env.is_some() || !options.overrides.is_empty() {
+                st.overrides = options.overrides.clone();
+            }
         }
         if let Some(env) = options.env.clone() {
             project.st().last_env = Some(env);
@@ -2866,8 +2937,14 @@ impl Inner {
             whole_lane,
         )
         .map_err(|error| fail(crate::resolve::resolve_error(&error)))?;
-        // Kept only once valid, so a typo does not stick to the lane.
-        lane.st().profiles = selection.profiles.clone();
+        let profiles_changed = !options.profiles.is_empty() && selection.profiles != lane_profiles;
+        // Kept only once valid, so a typo does not stick to the lane. A transient
+        // start that only adds units (`with`) plans with its profiles without making
+        // them the lane's: restoring them afterwards would race a concurrent
+        // `start --profile`.
+        if !options.transient || whole_lane {
+            lane.st().profiles = selection.profiles.clone();
+        }
         // From here the lane counts as running for box lanes that clash with
         // it, whatever it starts, so it takes their hostnames and ports and a
         // choice of a box for them is cleared. Not before: a start its checks
@@ -2937,6 +3014,9 @@ impl Inner {
             config: config.clone(),
             arrival: options.arrival,
             dropped,
+            profiles_changed,
+            recheck_drift: profiles_changed && !whole_lane && !options.transient,
+            profile_stale: Vec::new(),
         };
         tracing::debug!(
             lane = %reference,
@@ -3147,6 +3227,16 @@ impl Inner {
         warnings.extend(self.ca_warnings(&cx.reference, &cx.lane.st()));
         let path = cx.lane.st().path.clone();
         warnings.extend(self.windows_drive_warning(&cx.reference, &path).await);
+        cx.profile_stale
+            .retain(|(unit, _)| !withdrawn.contains_key(unit));
+        if !cx.profile_stale.is_empty() {
+            warnings.push(profile_not_applied(
+                &cx.reference,
+                &cx.profiles,
+                &cx.profile_stale,
+                cx.recheck_drift,
+            ));
+        }
         for warning in &warnings {
             self.bus.emit(
                 events::LANE_WARNING,
@@ -3154,7 +3244,11 @@ impl Inner {
             );
         }
         // What it spawned matches the file, unless the file changed during the start.
-        self.settle_drift(&cx.project, &cx.lane, &cx.config, &cx.started);
+        let spawned = self.settle_drift(&cx.project, &cx.lane, &cx.config, &cx.started);
+        // The units it left alone may lack the new profiles' settings.
+        if cx.recheck_drift && !spawned {
+            self.spawn_drift(&cx.project, &cx.lane);
+        }
         StartResult {
             warnings,
             started: cx
@@ -3675,7 +3769,9 @@ impl Inner {
             lane.st().env = Some(env.clone());
             project.st().last_env = Some(env);
         }
-        if !options.overrides.is_empty() {
+        // A request without a shell environment (the TUI's restart, `reload`) keeps
+        // the `--env` values stored with the lane's environment (decision 7).
+        if options.env.is_some() || !options.overrides.is_empty() {
             lane.st().overrides = options.overrides.clone();
         }
         if !options.profiles.is_empty() {
@@ -3814,6 +3910,9 @@ impl Inner {
             config,
             arrival: options.arrival,
             dropped: Dropped::default(),
+            profiles_changed: false,
+            recheck_drift: false,
+            profile_stale: Vec::new(),
         };
         // A restart is a services phase alone; its events carry the plan as a start's do.
         let phase = ServicesPhase.name();
@@ -4362,7 +4461,7 @@ impl Inner {
             st.store_containers(up.containers);
             st.setup_env = up.setup_env;
         }
-        self.resolve_config(&cx.project, &cx.lane, cx.config.clone(), None)
+        self.resolve_start(&cx.project, &cx.lane, cx.config.clone(), None, &cx.profiles)
             .await
             .ok()
             .is_none_or(|resolved| resolved.infra_enabled)

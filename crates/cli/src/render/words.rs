@@ -511,6 +511,14 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 _ => ("the lane is already running".into(), None),
             }
         }
+        // `with --profile` on a lane whose running services lack the profile's settings.
+        "profile_not_applied" => {
+            let lane = text(data, "lane");
+            (
+                super::clean(&text(data, "message")),
+                (!lane.is_empty()).then(|| Hint::command(["stop", "--lane", lane.as_str()])),
+            )
+        }
         // `debug freeze` refusals, each `{lane}`; keep_awake and orphans add `units`.
         "lane_not_running" => {
             let lane = text(data, "lane");
@@ -1700,14 +1708,16 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
     }
 }
 
-/// How the project file changed one unit: `run, env API_URL changed in the
-/// project file`, `removed from the project file` or `added to the project file`.
+/// How one unit differs from what its config would start now: `run, env API_URL
+/// changed since it started`, `removed from the project file` or `added to the
+/// project file`. A change can come from `.env`, an overlay or a profile, so it
+/// names no file.
 pub(crate) fn unit_drift(drift: &UnitDrift) -> String {
     match drift.kind.as_str() {
-        "changed" if drift.fields.is_empty() => "changed in the project file".into(),
+        "changed" if drift.fields.is_empty() => "changed since it started".into(),
         "changed" => {
             let fields: Vec<String> = drift.fields.iter().map(|f| super::clean(f)).collect();
-            format!("{} changed in the project file", fields.join(", "))
+            format!("{} changed since it started", fields.join(", "))
         }
         "removed" => "removed from the project file".into(),
         "added" => "added to the project file".into(),
