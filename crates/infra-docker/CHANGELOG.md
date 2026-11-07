@@ -1,5 +1,12 @@
 # devlanes-infra-docker
 
+## 0.5.0 — 2026-11-07
+
+### Patch changes
+
+- [5db5cde](https://github.com/devlanes-run/devlanes/commit/5db5cdec69bc61915e31237b81abf0456a061bfc) Added `devlanes lane clean --dry-run`, which lists what a clean would stop, run and delete, with sizes.
+- [2e0091c](https://github.com/devlanes-run/devlanes/commit/2e0091c226381bb1794d99f52d6db471ee498efc) Fixed services, routes and `devlanes status` keeping an infra container's old port after it restarted.
+
 ## 0.4.0 — 2026-10-26
 
 ### Minor changes

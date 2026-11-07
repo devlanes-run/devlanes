@@ -1,6 +1,6 @@
 # devlanes-preset-vite
 
-## 0.4.0 ... 0.5.0 — 2026-10-26
+## 0.4.0 ... 0.6.0 — 2026-11-07
 
 Version bump only, to follow other packages.
 

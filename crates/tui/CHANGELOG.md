@@ -1,5 +1,14 @@
 # devlanes-tui
 
+## 0.12.0 — 2026-11-07
+
+### Patch changes
+
+- [00d1870](https://github.com/devlanes-run/devlanes/commit/00d1870829ef88ec951452efd6d0fbde4af9069b) Fixed the TUI opening on another project's lane in a folder shared by several projects.
+  
+  It also opens on the project `-p` names.
+- [8c98423](https://github.com/devlanes-run/devlanes/commit/8c98423b5737190e5c480826fac0d0d4bc4b84a3) Fixed the TUI top bar cutting its message short on wide terminals when the project tabs do not fit.
+
 ## 0.11.3 — 2026-11-06
 
 Version bump only, to follow other packages.

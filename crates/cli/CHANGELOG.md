@@ -1,5 +1,84 @@
 # devlanes-cli
 
+## 0.12.0 — 2026-11-07
+
+### Minor changes
+
+- [a0aca99](https://github.com/devlanes-run/devlanes/commit/a0aca991de5bac6b10fff605302f1df06858055e) Changed `devlanes stop --mine` without units to stop only your units in the current project.
+  
+  Use `-p PROJECT` for another project, or run it outside any project to cover every project. The output names the command when your units still run elsewhere, and `status --mine` lists the same units.
+- [00d1870](https://github.com/devlanes-run/devlanes/commit/00d1870829ef88ec951452efd6d0fbde4af9069b) Changed commands run in a folder shared by several projects, such as the repository root, to ask for `-p`.
+  
+  They used to act on the first registered project. Pass `-p <project>` or run them in a project's folder; `status` and `lane ls` there list every project, and a full lane reference such as `--lane acme@1` still works.
+- [5c084ba](https://github.com/devlanes-run/devlanes/commit/5c084baa01ace68db168c7a85a8dc594b55b0dd3) Changed `devlanes with --profile` to exit 1 when the lane's running services lack the profile's settings.
+  
+  Stop the lane first, or run `with` in another worktree. `devlanes start --profile` on such a lane now warns about those services, and `devlanes status` shows them as changed until `devlanes reload`.
+
+### Patch changes
+
+- [a0aca99](https://github.com/devlanes-run/devlanes/commit/a0aca991de5bac6b10fff605302f1df06858055e) Fixed `devlanes stop --mine` and `status --mine` treating every OpenCode session as the same session.
+- [a0aca99](https://github.com/devlanes-run/devlanes/commit/a0aca991de5bac6b10fff605302f1df06858055e) Fixed `devlanes env show --explain` printing the values of secret-looking variables in full.
+- [5db5cde](https://github.com/devlanes-run/devlanes/commit/5db5cdec69bc61915e31237b81abf0456a061bfc) Added `devlanes lane clean --dry-run`, which lists what a clean would stop, run and delete, with sizes.
+- [64657fc](https://github.com/devlanes-run/devlanes/commit/64657fc4cd1d67da95bcb9065962d3eff5870931) Changed agent and plain output to show a running exec unit as `running`, as human output does.
+- [1c7b3d9](https://github.com/devlanes-run/devlanes/commit/1c7b3d986454893e4f6a4d96fb423645e1f5c4f6) Changed `devlanes stop`, `start` and `restart` to suggest `--lane` when given a lane number or `lane new` name.
+- [6090b6e](https://github.com/devlanes-run/devlanes/commit/6090b6e6e954c332aab772ac7bf9383226ab9971) Fixed `devlanes stop`, `restart` and `logs` rejecting the name of a service with `replicas` instead of selecting every replica.
+- [077b5b0](https://github.com/devlanes-run/devlanes/commit/077b5b0ed890510e4b3417c26d621fc41a97a5cc) Fixed stopped units on Windows showing exit codes such as 255 or 512 instead of reading as interrupted.
+- [8c98423](https://github.com/devlanes-run/devlanes/commit/8c98423b5737190e5c480826fac0d0d4bc4b84a3) Fixed `devlanes start` printing the results of `after: services` tasks before saying the services were ready.
+- [6090b6e](https://github.com/devlanes-run/devlanes/commit/6090b6e6e954c332aab772ac7bf9383226ab9971) Fixed `devlanes debug why` blaming the profile for a service started by name and missing a service on the wrong port.
+- [5db5cde](https://github.com/devlanes-run/devlanes/commit/5db5cdec69bc61915e31237b81abf0456a061bfc) Added `devlanes mcp`, an MCP server that lets AI agents run devlanes commands as tools.
+  
+  Register it with your agent, such as `claude mcp add devlanes -- devlanes mcp` for Claude Code. See [coding agents](https://github.com/devlanes-run/devlanes/blob/main/docs/guides/mcp.md) for Codex, OpenCode, Cursor, VS Code, Claude Desktop and Goose.
+  
+  <!-- highlight
+  title: Use devlanes from your agent over MCP
+  body: Run `claude mcp add devlanes -- devlanes mcp` (or see `devlanes mcp --help` for other agents) and the agent starts dev servers with `exec`, reads logs and stops what it started, asking you before it deletes lane data.
+  -->
+- [8c98423](https://github.com/devlanes-run/devlanes/commit/8c98423b5737190e5c480826fac0d0d4bc4b84a3) Fixed `devlanes with --logs-dir` leaving out the logs of the tasks its start ran.
+- [00d1870](https://github.com/devlanes-run/devlanes/commit/00d1870829ef88ec951452efd6d0fbde4af9069b) Fixed `-p` commands such as `devlanes -p acme logs web` failing outside that project's folders.
+  
+  Outside them, `start`, `stop`, `restart`, `logs` and other one-lane commands act on the project's main lane (lane 0). `lane clean`, `lane new`, `run` and `exec` ask for `--lane`, which `lane new` now takes as the lane whose folder it adds to.
+- [5c084ba](https://github.com/devlanes-run/devlanes/commit/5c084baa01ace68db168c7a85a8dc594b55b0dd3) Fixed `devlanes env show <unit>` failing on a lane that has not started yet.
+- [64657fc](https://github.com/devlanes-run/devlanes/commit/64657fc4cd1d67da95bcb9065962d3eff5870931) Fixed a whole-lane `devlanes reload` or `devlanes restart` stopping exec units without saying so.
+- [5db5cde](https://github.com/devlanes-run/devlanes/commit/5db5cdec69bc61915e31237b81abf0456a061bfc) Added `devlanes status --statusline`, one line for the current lane to show in Claude Code's status line.
+- [2e0091c](https://github.com/devlanes-run/devlanes/commit/2e0091c226381bb1794d99f52d6db471ee498efc) Fixed `devlanes start` rerunning a `container:` setup entry before its restarted container is healthy.
+  
+  The start result now lists the setup entries and tasks it ran instead of saying nothing started.
+- [5c084ba](https://github.com/devlanes-run/devlanes/commit/5c084baa01ace68db168c7a85a8dc594b55b0dd3) Fixed `devlanes reload` not starting services that were removed from the project file and added back.
+  
+  `reload` no longer restarts the whole lane for an `infra.external`, `infra.hosts` or `infra.hidden` edit. `devlanes status` drops removed services once they stop, says a unit `changed since it started` instead of naming the project file, and no longer keeps a stale `config changed` note on a lane where nothing runs.
+- [00d1870](https://github.com/devlanes-run/devlanes/commit/00d1870829ef88ec951452efd6d0fbde4af9069b) Changed a plain `devlanes start` to name only its own project's lanes waiting for `lane resume`.
+  
+  It counts the other projects' waiting lanes, which `lane resume` also starts.
+- [8c98423](https://github.com/devlanes-run/devlanes/commit/8c98423b5737190e5c480826fac0d0d4bc4b84a3) Fixed `devlanes status --mine` showing lane URLs without `https://` and the proxy port.
+  
+  `status --json` lanes now carry that URL as `url`.
+- [1c7b3d9](https://github.com/devlanes-run/devlanes/commit/1c7b3d986454893e4f6a4d96fb423645e1f5c4f6) Fixed `devlanes lane new --start` ignoring this shell's environment, and allowed `--env` with it.
+- [f750a6c](https://github.com/devlanes-run/devlanes/commit/f750a6c559639fc6725f44e7e39aa0ba8c8a608e) Fixed `devlanes env show --explain` not printing launch notes, such as the detected package manager.
+- [8c98423](https://github.com/devlanes-run/devlanes/commit/8c98423b5737190e5c480826fac0d0d4bc4b84a3) Fixed `devlanes start` reporting `failed` when `--timeout` ends the wait while services are still starting.
+- [6090b6e](https://github.com/devlanes-run/devlanes/commit/6090b6e6e954c332aab772ac7bf9383226ab9971) Changed `devlanes stop <name>` to clear the failed state of a service or `exec` command.
+- [8c98423](https://github.com/devlanes-run/devlanes/commit/8c98423b5737190e5c480826fac0d0d4bc4b84a3) Fixed `devlanes start` and `devlanes with` leaving `… tasks: <task>` lines above finished tasks in a terminal.
+- [64657fc](https://github.com/devlanes-run/devlanes/commit/64657fc4cd1d67da95bcb9065962d3eff5870931) Changed `devlanes wait` on an exec unit to wait until its command exits.
+  
+  A server started with `devlanes exec` never exits, so `wait` on it now times out with exit 124; read `devlanes logs NAME` or open its URL instead.
+  `wait` on a task or exec unit that exited 0 now exits 0 instead of 1, and a timeout while it still runs says so.
+- [8c98423](https://github.com/devlanes-run/devlanes/commit/8c98423b5737190e5c480826fac0d0d4bc4b84a3) Fixed `devlanes logs --grep` and `--level` printing three extra lines around each match.
+  
+  `-C N` adds N lines around each match.
+- [00d1870](https://github.com/devlanes-run/devlanes/commit/00d1870829ef88ec951452efd6d0fbde4af9069b) Changed `devlanes url ls`, `debug top` and `status --watch` to cover only the current project, or the one `-p` names.
+  
+  Outside every project they cover all of them. `status --watch` lines count each lane's units by state, and agent output prints them.
+- [1c7b3d9](https://github.com/devlanes-run/devlanes/commit/1c7b3d986454893e4f6a4d96fb423645e1f5c4f6) Fixed `devlanes lane new --name` refusing a cleaned lane's name.
+  
+  The name now gives a new lane with empty data. A taken name gets its own error, `main` and `lane<N>` are refused,
+  and `lane new` prints the project folder instead of the repository root. `lane new` and `lane clean` name a lane data
+  folder they could not delete.
+- [2e0091c](https://github.com/devlanes-run/devlanes/commit/2e0091c226381bb1794d99f52d6db471ee498efc) Fixed `devlanes infra down` printing `containers: -` while it stops the shared Compose containers.
+- [6090b6e](https://github.com/devlanes-run/devlanes/commit/6090b6e6e954c332aab772ac7bf9383226ab9971) Fixed `devlanes debug freeze` refusals naming the wrong cause for a running exec unit and wrong keys for replicas.
+- [64657fc](https://github.com/devlanes-run/devlanes/commit/64657fc4cd1d67da95bcb9065962d3eff5870931) Fixed `devlanes exec` commands missing `global_env` and CA variables such as `NODE_EXTRA_CA_CERTS`.
+  
+  `devlanes env show` without a unit and the command `devlanes with` runs now include `global_env` and the profile's `env` too, except entries that read `self` or `replica`. Until the lane's infra is up, entries that read `infra.*` are left out and named.
+  `devlanes exec` now refuses while another of those values does not evaluate (a `${{ env.X }}` the shell does not set, for example), or while the project file does not load and nothing in the lane runs.
+
 ## 0.11.3 — 2026-11-06
 
 ### Patch changes
