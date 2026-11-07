@@ -421,6 +421,18 @@ fn name_taken(name: &str, other: &Path) -> RpcError {
     )
 }
 
+/// `project_ambiguous` (exit 3): `cwd` is in a folder, such as a repository root,
+/// shared by several registered projects and the request named none.
+fn project_ambiguous(cwd: &Path, projects: &[Arc<ProjectRt>]) -> RpcError {
+    let mut names: Vec<String> = projects.iter().map(|project| project.name()).collect();
+    names.sort();
+    RpcError::new(
+        "project_ambiguous",
+        json!({"path": cwd, "candidates": names}),
+        3,
+    )
+}
+
 /// Evaluates a literal-or-expression without lane context (block size, max).
 fn literal<T: Clone + serde::de::DeserializeOwned>(value: &Option<Templated<T>>) -> Option<T> {
     value
@@ -444,12 +456,20 @@ impl Inner {
         self.project_here(context).await
     }
 
-    /// The first of [`Self::projects_here`].
+    /// The one project of [`Self::projects_here`]; when several share the folder, the
+    /// request's `lane_project` among them, else `project_ambiguous`.
     pub(crate) async fn project_here(
         self: &Arc<Self>,
         context: &devlanes_proto::Context,
     ) -> Result<Option<Arc<ProjectRt>>, RpcError> {
-        Ok(self.projects_here(context).await?.into_iter().next())
+        let projects = self.projects_here(context).await?;
+        if projects.len() > 1
+            && let Some(name) = &context.lane_project
+            && let Some(project) = projects.iter().find(|project| project.name() == *name)
+        {
+            return Ok(Some(project.clone()));
+        }
+        Self::one_project(&context.cwd, projects)
     }
 
     /// The cwd's projects ([`Self::projects_for_cwd`]), or the request's `lane_project`
@@ -573,13 +593,17 @@ impl Inner {
     }
 
     /// The projects of the deepest present lanes whose worktree holds `cwd`, preferring
-    /// projects loaded from `devlanes.yaml`, in lane order. Several projects tie at a
-    /// repository root that holds their files in subfolders.
+    /// projects loaded from `devlanes.yaml`, sorted by name. Several projects tie at a
+    /// repository root that holds their files in subfolders. Among them, those whose
+    /// project folder holds `cwd` win (the deepest; a worktree whose file was deleted),
+    /// else those whose folder lies below `cwd` (a subfolder project seen from above),
+    /// so `repo/apps` does not count `repo/tools/c` next to `apps/a` and `apps/b`.
     pub(crate) fn projects_holding(&self, cwd: &Path) -> Vec<Arc<ProjectRt>> {
         let mut best: Option<(usize, bool)> = None;
-        let mut projects: Vec<Arc<ProjectRt>> = Vec::new();
+        let mut tied: Vec<(Arc<ProjectRt>, PathBuf)> = Vec::new();
         for (project, lane) in self.all_lanes() {
-            let default = project.config_path().1 == devlanes_config::DEFAULT_PROJECT_FILE;
+            let (config_dir, config_file) = project.config_path();
+            let default = config_file == devlanes_config::DEFAULT_PROJECT_FILE;
             let st = lane.st();
             // Any config state: a worktree whose file was deleted still has its lane.
             if !st.present || !path_starts_with(cwd, &st.path) {
@@ -588,13 +612,58 @@ impl Inner {
             let key = (st.path.components().count(), default);
             if best.is_none_or(|best| key > best) {
                 best = Some(key);
-                projects.clear();
+                tied.clear();
             }
-            if best == Some(key) && !projects.iter().any(|p| p.id == project.id) {
-                projects.push(project.clone());
+            if best == Some(key) && !tied.iter().any(|(p, _)| p.id == project.id) {
+                let folder = if config_dir.as_os_str().is_empty() {
+                    st.path.clone()
+                } else {
+                    st.path.join(&config_dir)
+                };
+                tied.push((project.clone(), folder));
             }
         }
+        let holding: Vec<&(Arc<ProjectRt>, PathBuf)> = tied
+            .iter()
+            .filter(|(_, folder)| path_starts_with(cwd, folder))
+            .collect();
+        let mut projects: Vec<Arc<ProjectRt>> = match holding
+            .iter()
+            .map(|(_, folder)| folder.components().count())
+            .max()
+        {
+            Some(deepest) => holding
+                .into_iter()
+                .filter(|(_, folder)| folder.components().count() == deepest)
+                .map(|(project, _)| project.clone())
+                .collect(),
+            None => {
+                let below: Vec<Arc<ProjectRt>> = tied
+                    .iter()
+                    .filter(|(_, folder)| path_starts_with(folder, cwd))
+                    .map(|(project, _)| project.clone())
+                    .collect();
+                if below.is_empty() {
+                    tied.into_iter().map(|(project, _)| project).collect()
+                } else {
+                    below
+                }
+            }
+        };
+        projects.sort_by_key(|project| project.name());
         projects
+    }
+
+    /// At most one of `projects`, the cwd's ([`Self::projects_here`]); several, at a
+    /// folder shared by several projects, are `project_ambiguous` rather than a pick.
+    fn one_project(
+        cwd: &Path,
+        mut projects: Vec<Arc<ProjectRt>>,
+    ) -> Result<Option<Arc<ProjectRt>>, RpcError> {
+        match projects.len() {
+            0 | 1 => Ok(projects.pop()),
+            _ => Err(project_ambiguous(cwd, &projects)),
+        }
     }
 
     /// Registers the project a project file names, or returns it when known. Projects

@@ -251,19 +251,25 @@ async fn plain_start_restores_what_ran_before_the_daemon_stopped() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// After a restart only the lane a plain start runs in comes back; the result
-/// names the other lanes that ran for `lane resume`, which brings them back too.
+/// names the project's other lanes that ran for `lane resume`, which brings them
+/// back too, and only counts another project's.
 async fn plain_start_names_other_lanes_to_resume() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
         let other = tmp.path.join("wt");
         worktree(&main, &other, "feat/other");
+        let elsewhere = repo(
+            &tmp.path,
+            "o",
+            &CONFIG.replace("project: demo", "project: other"),
+        );
         let home = tmp.path.join("home");
         let h = with_infra(&home).await;
         h.call(Method::LaneList, json!({}), cx(&main))
             .await
             .expect("lane list");
-        for cwd in [&main, &other] {
+        for cwd in [&main, &other, &elsewhere] {
             h.call(Method::Start, json!({"units": ["web"]}), cx(cwd))
                 .await
                 .expect("start");
@@ -283,6 +289,7 @@ async fn plain_start_names_other_lanes_to_resume() {
             .cloned()
             .expect("lanes_to_resume");
         assert_eq!(warning["data"]["lanes"], json!(["demo@1"]));
+        assert_eq!(warning["data"]["others"], json!(1));
         let second = || async {
             let value = again
                 .call(Method::LaneList, json!({}), cx(&main))
@@ -300,7 +307,7 @@ async fn plain_start_names_other_lanes_to_resume() {
             .await
             .expect("resume");
         assert_eq!(running(&second().await), ["web"]);
-        for cwd in [&main, &other] {
+        for cwd in [&main, &other, &elsewhere] {
             again
                 .call(Method::Stop, json!({}), cx(cwd))
                 .await

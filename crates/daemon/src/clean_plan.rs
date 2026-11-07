@@ -30,7 +30,11 @@ impl Inner {
         let args: PlanParams = params(value)?;
         let (project, lane) = match args.lane.or_else(|| context.lane.clone()) {
             Some(reference) => self.resolve_lane_ref(&reference, context).await?,
-            None => self.cwd_lane_with(context, false).await?,
+            // As `lane clean` resolves it: never the main lane by guess.
+            None => {
+                self.cwd_lane_with(context, crate::engine::MainLane::Refused, false)
+                    .await?
+            }
         };
         let name = project.name();
         let (mut plan, record, index, runnable, config) = {

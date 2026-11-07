@@ -272,6 +272,27 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 .and_then(Value::as_str)
                 .map(|first| Hint::command(["status", first])),
         ),
+        // `-p` from outside the project, for a command that never guesses its lane.
+        "lane_required" => {
+            let project = text(data, "project");
+            let mut message = format!("{project} has no lane at this directory; name one with --lane");
+            if !list(data, "candidates").is_empty() {
+                message.push_str(&format!(" ({})", candidates(data)));
+            }
+            (
+                message,
+                Some(Hint::command(["lane", "ls", "-p", project.as_str()])),
+            )
+        }
+        // No rerun with `-p <first>`: following it would repeat the arbitrary pick.
+        "project_ambiguous" => (
+            format!(
+                "{} holds several projects registered here ({}); run the command in a project's folder or name one with -p",
+                field(data, "path"),
+                candidates(data)
+            ),
+            Some(Hint::command(["lane", "ls"])),
+        ),
         "invalid_reference" => {
             let mut message = format!("invalid reference {}", reference());
             // Why it is refused, such as a `lane new --name` of main or lane<N>.
@@ -1761,18 +1782,25 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
             memory(data, "available_memory_bytes")
         ),
         // A plain start restored only its own lane; these ran before the daemon stopped.
+        // `others` counts other projects' lanes that `lane resume` starts too.
         "lanes_to_resume" => {
             let lanes: Vec<String> = data
                 .get("lanes")
                 .and_then(Value::as_array)
                 .map(|lanes| lanes.iter().map(display_value).collect())
                 .unwrap_or_default();
-            format!(
+            let mut line = format!(
                 "{} also ran before the daemon stopped; {} starts {}",
                 lanes.join(", "),
                 Hint::command(["lane", "resume"]).0,
                 if lanes.len() == 1 { "it" } else { "them" }
-            )
+            );
+            match data.get("others").and_then(Value::as_u64).unwrap_or(0) {
+                0 => {}
+                1 => line.push_str(" and 1 lane of other projects"),
+                others => line.push_str(&format!(" and {others} lanes of other projects")),
+            }
+            line
         }
         // A unit-less `stop --mine` covers the current project; these lanes are outside it.
         "mine_elsewhere" => {

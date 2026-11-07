@@ -324,7 +324,7 @@ domain and data folder. Its name is a lane reference: `--lane <name>`, `<name>:<
 and `lane clean <name>` reach it, as its index does. A cleaned lane's name can be used
 again and gives a new lane with empty data. Inside the lane, `lane.name` and
 DEVLANES_LANE_NAME stay `lane<N>`. Commands run in the folder keep using the folder's
-first lane.
+first lane. With --lane, adds the lane on that lane's folder.
 
 For a lane on another branch, create a worktree with `git worktree add <path> <branch>`
 and run `devlanes start` in it.
@@ -420,7 +420,7 @@ devlanes debug events [OPTIONS]
 
 ### devlanes debug top
 
-Show CPU and memory of the running units and containers of every lane
+Show CPU and memory of the running units and containers of the current project, or of every project outside one
 
 ```text
 devlanes debug top [OPTIONS]
@@ -560,7 +560,7 @@ devlanes url open [OPTIONS] [UNIT]
 
 ### devlanes url ls
 
-List the routed hostnames of every lane with their lane, unit, port and state
+List the current project's routed hostnames with their lane, unit, port and state; outside a project, every project's
 
 ```text
 devlanes url ls [OPTIONS]

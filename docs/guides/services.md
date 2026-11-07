@@ -218,6 +218,8 @@ services:
 
 A worktree can hold a lane of each project whose file it has, so one worktree of this repository can run a lane of `acme` and a lane of `billing` side by side.
 
+From a folder of the repository that holds no `devlanes.yaml`, such as its root, commands that need one project ask for `-p` when it holds several projects devlanes knows; `status` and `lane ls` list them all, and a full lane reference such as `--lane billing@1` works there too. A project counts once a devlanes command ran in its folder.
+
 ## Several projects in one directory
 
 A second project file next to `devlanes.yaml` runs the same apps another way, such as a production build next to the dev servers. It extends `devlanes.yaml` and sets its own `project`:
@@ -247,6 +249,8 @@ devlanes --file devlanes.prod.yaml start
 devlanes -p acme-prod status
 devlanes -p acme-prod logs api --tail 50
 ```
+
+Outside the project's worktrees, commands that act on one lane use its main lane (lane 0), except `lane clean`, `lane new`, `run` and `exec`, which need `--lane`.
 
 `--project` also reads `DEVLANES_PROJECT` when you export it. Every process a lane starts gets `DEVLANES_LANE_PROJECT` instead, which devlanes commands use when they run in one of that project's lanes or outside every project, so a script run by an `acme-prod` task or service stays in `acme-prod`. The file may have any name except one ending in `.local.yaml`, and its local file is `devlanes.prod.local.yaml` ([extending another project file](ports-and-env.md#extending-another-project-file) has the merge order). [examples/devlanes.prod.yaml](../examples/devlanes.prod.yaml) is a commented version.
 

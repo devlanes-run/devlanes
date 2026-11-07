@@ -22,7 +22,9 @@ Recent output:
 {% for known in v.known -%}
 - `{{ known.host }}`{% if let Some(owner) = known.owner %} ({{ owner }}){% endif %}
 {% endfor -%}
-{% if v.hidden > 0 %}- {{ v.hidden }} more in `devlanes url ls`
+{% if v.hidden > 0 %}- {{ v.hidden }} more in `{{ v.url_ls }}`
+{% endif -%}
+{% if v.others > 0 %}- {{ v.others }} more in other projects; `devlanes url ls` outside a project lists them
 {% endif -%}
 {% endif %}
 ## Diagnose

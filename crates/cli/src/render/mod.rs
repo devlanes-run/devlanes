@@ -15,7 +15,7 @@ use serde_json::Value;
 
 pub(crate) use lanes::display_url;
 pub(crate) use other::doctor_failed;
-pub use other::{DoctorCheck, DoctorState, doctor_checks_of};
+pub use other::{DoctorCheck, DoctorState, doctor_checks_of, watch_line};
 pub use statusline::{StatuslineInput, statusline, statusline_lane};
 pub use words::status_hint;
 pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording, lane_drift, unit_drift};
@@ -256,6 +256,7 @@ pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> 
             &text(&event.data, "code"),
             &event.data,
         ))],
+        events::LANE_CHANGED if method == Method::Status => vec![other::watch_line(event)],
         _ => vec![other::event_line(event)],
     }
 }

@@ -512,6 +512,12 @@ pub struct ConnectSession {
 pub trait DaemonApi: Send + Sync {
     /// Lanes and units; the daemon picks the scope from the context (no lane or project).
     async fn status(&self) -> Result<Vec<LaneSummary>, ApiError>;
+    /// The lanes the daemon resolved for the TUI's directory and the CLI's `-p`,
+    /// `--file` or `--lane`, known after the first [`DaemonApi::status`]; empty
+    /// when it could not tell.
+    fn home_lanes(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// Opens the event subscription.
     async fn subscribe(&self) -> Result<EventStream, ApiError>;
     /// Opens a terminal stream on `params.unit`.
@@ -875,26 +881,41 @@ pub struct ClientApi {
     /// Whether the cwd's project was looked up, which registers it with the daemon.
     cwd_seen: AtomicBool,
     setup_check: Option<SetupCheck>,
+    /// The CLI's `-p`, `--file`, `--lane` and `DEVLANES_LANE_PROJECT`, sent with
+    /// the first scoped `status` only.
+    scope: Context,
+    /// References that scoped `status` answered, for [`DaemonApi::home_lanes`].
+    home: std::sync::Mutex<Vec<String>>,
 }
 
 impl ClientApi {
     /// Connects once, spawning the daemon if needed, so startup errors surface
     /// before the terminal switches to the alternate screen. `setup_check`
-    /// answers [`DaemonApi::setup_missing`].
+    /// answers [`DaemonApi::setup_missing`]; `scope` is the CLI's context, whose
+    /// cwd replaces the process's.
     pub async fn connect(
         paths: Paths,
         setup_check: Option<SetupCheck>,
+        scope: Option<Context>,
     ) -> Result<Arc<Self>, devlanes_client::Error> {
         let client = Client::connect_or_spawn(&paths).await?;
+        let scope = scope.unwrap_or_default();
+        let cwd = if scope.cwd.as_os_str().is_empty() {
+            std::env::current_dir().unwrap_or_default()
+        } else {
+            scope.cwd.clone()
+        };
         Ok(Arc::new(Self {
             paths,
-            cwd: std::env::current_dir().unwrap_or_default(),
+            cwd,
             // Captured once: start/run from the TUI use this shell's env as the lane
             // base env.
             env: lane_env(std::env::vars()),
             shared: Mutex::new(Some(client)),
             cwd_seen: AtomicBool::new(false),
             setup_check,
+            scope,
+            home: std::sync::Mutex::new(Vec::new()),
         }))
     }
 
@@ -986,13 +1007,29 @@ impl DaemonApi for ClientApi {
         // registers it, as a plain `devlanes status` there does. Its errors (no
         // or an invalid devlanes.yaml) leave the TUI as it was; only a lost
         // connection asks again.
+        // Its lanes are the ones the daemon resolves for this directory and the
+        // CLI's `-p`, `--file` or `--lane`, which pick the lane the TUI opens on.
         if !self.cwd_seen.load(Ordering::Relaxed) {
+            let context = Context {
+                project: self.scope.project.clone(),
+                lane_project: self.scope.lane_project.clone(),
+                file: self.scope.file.clone(),
+                lane: self.scope.lane.clone(),
+                ..self.context(None, false)
+            };
             let scoped = self
-                .shared_request(Method::Status, json!({}), self.context(None, false))
+                .shared_request(Method::Status, json!({}), context)
                 .await;
             match scoped {
                 Err(error) if error.is_disconnect() => return Err(error),
-                _ => self.cwd_seen.store(true, Ordering::Relaxed),
+                Ok(value) => {
+                    if let Ok(page) = from_value::<Page<LaneSummary>>(value) {
+                        let home = page.items.into_iter().map(|lane| lane.reference).collect();
+                        *self.home.lock().unwrap_or_else(|e| e.into_inner()) = home;
+                    }
+                    self.cwd_seen.store(true, Ordering::Relaxed);
+                }
+                Err(_) => self.cwd_seen.store(true, Ordering::Relaxed),
             }
         }
         let value = self
@@ -1005,6 +1042,10 @@ impl DaemonApi for ClientApi {
             .await?;
         let page: Page<LaneSummary> = from_value(value)?;
         Ok(page.items)
+    }
+
+    fn home_lanes(&self) -> Vec<String> {
+        self.home.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Calls `subscribe` on a dedicated connection and pumps its events.
@@ -1183,6 +1224,8 @@ impl DaemonApi for ClientApi {
             "range_ms": query.range_ms,
             "points": query.points,
             "windows": true,
+            // The monitor shows every project, not the cwd's.
+            "all": true,
         });
         let value = self
             .shared_request(Method::Metrics, params, self.context(None, false))

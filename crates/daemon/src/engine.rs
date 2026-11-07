@@ -570,7 +570,7 @@ impl Inner {
             Method::InfraDown => self.infra_down_method(&context).await,
             Method::InfraStatus => self.infra_status_method(&context).await,
             Method::InfraLogs => self.infra_logs_method(params, &context, &session).await,
-            Method::Hosts => Ok(self.hosts()),
+            Method::Hosts => self.hosts_method(&context).await,
             Method::Env => self.env_method(params, &context).await,
             Method::Errors => self.errors_method(params, &context).await,
             Method::Why => self.why_method(params, &context).await,
@@ -637,6 +637,34 @@ impl Inner {
         (candidates, map)
     }
 
+    /// The projects a lane reference without a project resolves in: `-p`'s, the
+    /// `--file`'s, the cwd's, or every project sharing the cwd's folder; empty means
+    /// every project. Errors other than an unknown `-p` or `--file` widen to every
+    /// project, so a broken file at the cwd does not block `--lane acme@1`.
+    pub(crate) async fn reference_scope(
+        self: &Arc<Self>,
+        context: &Context,
+    ) -> Result<Vec<ProjectId>, RpcError> {
+        if let Some(name) = &context.project {
+            return Ok(vec![self.project_by_name(name)?.id]);
+        }
+        if context.file.is_some() {
+            return Ok(self
+                .project_for(context)
+                .await?
+                .map(|p| p.id)
+                .into_iter()
+                .collect());
+        }
+        let projects = self.projects_here(context).await.unwrap_or_default();
+        if let Some(name) = &context.lane_project
+            && let Some(project) = projects.iter().find(|project| project.name() == *name)
+        {
+            return Ok(vec![project.id]);
+        }
+        Ok(projects.iter().map(|project| project.id).collect())
+    }
+
     /// Resolves `[project@]lane` relative to the request (cwd project first).
     pub(crate) async fn resolve_lane_ref(
         self: &Arc<Self>,
@@ -644,14 +672,22 @@ impl Inner {
         context: &Context,
     ) -> Result<LanePair, RpcError> {
         let parsed: LaneRef = reference.parse().map_err(reference_error)?;
-        let scope = match (&parsed.project, &context.project) {
-            (None, Some(name)) => Some(self.project_by_name(name)?.id),
-            (None, None) => self.project_for(context).await.ok().flatten().map(|p| p.id),
-            _ => None,
+        // A reference naming its project never looks at the cwd.
+        let scope = match &parsed.project {
+            Some(_) => Vec::new(),
+            None => self.reference_scope(context).await?,
         };
-        let (candidates, map) = self.candidates();
+        let (mut candidates, map) = self.candidates();
+        // `ResolveContext` holds one project; at a folder shared by several, the
+        // candidates are narrowed to theirs instead.
+        if scope.len() > 1 {
+            candidates.retain(|candidate| scope.contains(&candidate.project_id));
+        }
         let resolve = ResolveContext {
-            project: scope,
+            project: match scope.as_slice() {
+                [one] => Some(*one),
+                _ => None,
+            },
             lane: None,
             cwd: context.cwd.clone(),
             home: context
@@ -665,7 +701,7 @@ impl Inner {
             Err(error) => {
                 // `project@<dir>` names a worktree without a lane (as older output
                 // listed them); stop and clean still reach it.
-                if let Some(pair) = self.unassigned_by_dir(&parsed, scope) {
+                if let Some(pair) = self.unassigned_by_dir(&parsed, &scope) {
                     return Ok(pair);
                 }
                 return Err(reference_error(error));
@@ -680,17 +716,13 @@ impl Inner {
     }
 
     /// The one worktree without a lane whose directory name is the reference's
-    /// selector, in its project (or the cwd's).
-    fn unassigned_by_dir(
-        &self,
-        parsed: &LaneRef,
-        scope: Option<devlanes_core::ProjectId>,
-    ) -> Option<LanePair> {
+    /// selector, in its project (or the cwd's projects; every project when empty).
+    fn unassigned_by_dir(&self, parsed: &LaneRef, scope: &[ProjectId]) -> Option<LanePair> {
         let mut found = self.all_lanes().into_iter().filter(|(project, lane)| {
             let st = lane.st();
             let in_scope = match &parsed.project {
                 Some(name) => project.name() == *name,
-                None => scope.is_none_or(|id| project.id == id),
+                None => scope.is_empty() || scope.contains(&project.id),
             };
             in_scope
                 && st.record.is_none()
@@ -701,7 +733,8 @@ impl Inner {
         found.next().is_none().then_some(first)
     }
 
-    /// The request's lane: `context.lane`, else the lane whose worktree holds the cwd.
+    /// The request's lane: `context.lane`, else the lane whose worktree holds the cwd,
+    /// else, for a project named by `-p` or `--file`, its main lane.
     pub(crate) async fn target_lane(
         self: &Arc<Self>,
         context: &Context,
@@ -709,25 +742,67 @@ impl Inner {
         if let Some(reference) = &context.lane {
             return self.resolve_lane_ref(reference, context).await;
         }
-        self.cwd_lane(context).await
+        self.cwd_lane(context, MainLane::Allowed).await
     }
 
-    /// The lane containing the cwd, including unassigned and no-config lanes.
+    /// `context.lane`, else the lane whose worktree holds the cwd, never a guessed
+    /// one: for commands that delete a lane's data or run arbitrary commands in it.
+    pub(crate) async fn explicit_or_cwd_lane(
+        self: &Arc<Self>,
+        context: &Context,
+    ) -> Result<LanePair, RpcError> {
+        match &context.lane {
+            Some(reference) => self.resolve_lane_ref(reference, context).await,
+            None => self.cwd_lane(context, MainLane::Refused).await,
+        }
+    }
+
+    /// The lane containing the cwd, including unassigned and no-config lanes. With
+    /// `-p` or `--file` and the cwd outside the project's worktrees: the lane holding
+    /// the `--file`, else `fallback` decides between the main lane and `lane_required`.
     pub(crate) async fn cwd_lane(
         self: &Arc<Self>,
         context: &Context,
+        fallback: MainLane,
     ) -> Result<LanePair, RpcError> {
-        self.cwd_lane_with(context, true).await
+        self.cwd_lane_with(context, fallback, true).await
     }
 
     /// [`Self::cwd_lane`]; without `claim` a worktree that is no lane yet stays
-    /// one without a lane, for requests that must change nothing.
+    /// one without a lane and no worktree is relisted, for requests that must
+    /// change nothing.
     pub(crate) async fn cwd_lane_with(
         self: &Arc<Self>,
         context: &Context,
+        fallback: MainLane,
         claim: bool,
     ) -> Result<LanePair, RpcError> {
-        if let Some(project) = self.project_for(context).await? {
+        let Some(project) = self.project_for(context).await? else {
+            if !context.cwd.as_os_str().is_empty() {
+                return Err(no_config(&context.cwd).await);
+            }
+            let (candidates, _) = self.candidates();
+            let mut names: Vec<String> = candidates
+                .iter()
+                .map(|c| format!("{}@{}", c.project, c.index))
+                .collect();
+            names.sort();
+            return Err(RpcError::new(
+                "not_found",
+                json!({"reference": context.cwd, "candidates": names}),
+                3,
+            ));
+        };
+        let named = context.project.is_some() || context.file.is_some();
+        // A worktree added since the last listing is no lane yet; with `-p` or
+        // `--file` the main lane fallback below would take its place.
+        for relisted in [false, true] {
+            if relisted {
+                if !named || !claim {
+                    break;
+                }
+                let _ = self.relist(&project).await;
+            }
             if let Some(lane) = Self::lane_at(&project, &context.cwd) {
                 // Running devlanes in a worktree is what makes it a lane.
                 if claim {
@@ -735,18 +810,57 @@ impl Inner {
                 }
                 return Ok((project, lane));
             }
-        } else if !context.cwd.as_os_str().is_empty() {
-            return Err(no_config(&context.cwd).await);
+            if let Some(lane) = context
+                .file
+                .as_deref()
+                .and_then(Path::parent)
+                .and_then(|dir| Self::lane_at(&project, dir))
+            {
+                return Ok((project, lane));
+            }
         }
-        let (candidates, _) = self.candidates();
-        let mut names: Vec<String> = candidates
-            .iter()
-            .map(|c| format!("{}@{}", c.project, c.index))
-            .collect();
-        names.sort();
+        // `DEVLANES_LANE_PROJECT` alone gets no fallback: a lane 2 process running
+        // devlanes from `/tmp` must not land on lane 0.
+        if named {
+            return match fallback {
+                MainLane::Allowed => Self::main_lane(&project),
+                MainLane::Refused => Err(lane_required(&project)),
+            };
+        }
         Err(RpcError::new(
             "not_found",
-            json!({"reference": context.cwd, "candidates": names}),
+            json!({"reference": context.cwd, "candidates": lane_refs(&project)}),
+            3,
+        ))
+    }
+
+    /// `project`'s main lane (index 0), else its only assigned lane; `ambiguous`
+    /// between several others and `not_found` without any.
+    fn main_lane(project: &Arc<ProjectRt>) -> Result<LanePair, RpcError> {
+        let lanes: Vec<(u32, Arc<LaneRt>)> = project
+            .lanes()
+            .into_iter()
+            .filter_map(|lane| {
+                let st = lane.st();
+                let index = st.record.as_ref().filter(|_| st.present)?.index;
+                drop(st);
+                Some((index, lane))
+            })
+            .collect();
+        if let Some((_, lane)) = lanes.iter().find(|(index, _)| *index == 0) {
+            return Ok((project.clone(), lane.clone()));
+        }
+        if let [(_, lane)] = lanes.as_slice() {
+            return Ok((project.clone(), lane.clone()));
+        }
+        let code = if lanes.is_empty() {
+            "not_found"
+        } else {
+            "ambiguous"
+        };
+        Err(RpcError::new(
+            code,
+            json!({"reference": project.name(), "candidates": lane_refs(project)}),
             3,
         ))
     }
@@ -794,6 +908,41 @@ impl Inner {
         );
         Ok((pair, selectors))
     }
+}
+
+/// Whether [`Inner::cwd_lane`] may answer with a project's main lane when `-p` or
+/// `--file` names a project and the cwd is in none of its worktrees.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MainLane {
+    /// Commands whose effect on a guessed lane is a read, or undone by a start.
+    Allowed,
+    /// `lane clean`, `lane new`, `run` and `exec`, which need the lane named.
+    Refused,
+}
+
+/// `lane_required` (exit 2): `-p` named `project` from outside its worktrees and the
+/// command needs `--lane`; `candidates` are the project's lanes.
+pub(crate) fn lane_required(project: &ProjectRt) -> RpcError {
+    RpcError::new(
+        "lane_required",
+        json!({"project": project.name(), "candidates": lane_refs(project)}),
+        2,
+    )
+}
+
+/// References of `project`'s present, assigned lanes, sorted.
+fn lane_refs(project: &ProjectRt) -> Vec<String> {
+    let name = project.name();
+    let mut refs: Vec<String> = project
+        .lanes()
+        .iter()
+        .filter_map(|lane| {
+            let st = lane.st();
+            (st.present && st.record.is_some()).then(|| st.reference(&name))
+        })
+        .collect();
+    refs.sort();
+    refs
 }
 
 /// `no_config` (exit 3) for a cwd with no `devlanes.yaml` up to its repository

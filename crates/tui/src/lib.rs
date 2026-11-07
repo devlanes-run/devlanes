@@ -142,6 +142,9 @@ pub struct Options {
     pub time_zone: Option<jiff::tz::TimeZone>,
     /// The directory whose lane opens first; `None` is the process's.
     pub cwd: Option<std::path::PathBuf>,
+    /// The CLI's request context; its cwd, `-p`, `--file` and `--lane` pick the
+    /// lane the TUI opens on. `None` is the process's directory alone.
+    pub scope: Option<devlanes_proto::Context>,
     /// The lane and view of the TUI this one replaces, from [`REOPEN_ENV`];
     /// the lane wins over `cwd`'s.
     pub reopen: Option<Reopen>,
@@ -227,7 +230,8 @@ async fn open(
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return Err(Error::NotATerminal);
     }
-    let api: Arc<dyn DaemonApi> = ClientApi::connect(paths, options.setup_check.clone()).await?;
+    let api: Arc<dyn DaemonApi> =
+        ClientApi::connect(paths, options.setup_check.clone(), options.scope.clone()).await?;
     let guard = TerminalGuard::enter()?;
     let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
     let mut terminal = ratatui::Terminal::new(backend)?;

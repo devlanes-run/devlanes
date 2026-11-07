@@ -21,7 +21,7 @@ pub use output::*;
 pub use progress::*;
 pub use render::{
     DoctorCheck, DoctorState, StatuslineInput, bytes, doctor_checks_of, endpoint_label,
-    status_hint, statusline, statusline_lane,
+    status_hint, statusline, statusline_lane, watch_line,
 };
 pub use runtime::*;
 pub use terminal::*;

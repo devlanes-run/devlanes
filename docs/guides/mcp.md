@@ -102,7 +102,7 @@ Flags go after `mcp`, as in `claude mcp add devlanes -- devlanes mcp --read-only
 - `--path DIR` runs calls that name no `cwd` in DIR, which picks that worktree's lane. No shell reads a JSON config, so `~` does not expand there; give an absolute path.
 - `--lane REF` adds `--lane REF` to calls that name neither a `cwd` nor a lane. With `--path` it does nothing.
 
-A call runs in the `cwd` it names (relative to the server's directory), else in `--path`, else in `$CLAUDE_PROJECT_DIR` when the host sets it, else in the directory the host started the server in. Claude Desktop has no project directory, so give it `--path` or `--lane REF` with a `project@` reference, or let the agent pass a `cwd`.
+A call runs in the `cwd` it names (relative to the server's directory), else in `--path`, else in `$CLAUDE_PROJECT_DIR` when the host sets it, else in the directory the host started the server in. Claude Desktop has no project directory, so give it `--path` or `--lane REF` with a `project@` reference, or let the agent pass a `cwd`. When that directory holds several projects, such as the root of a monorepo with a `devlanes.yaml` per app, calls that need one project fail with `project_ambiguous` and `status` lists them all; a `cwd` inside one project or a `project@` lane reference picks it.
 
 ## Tools
 

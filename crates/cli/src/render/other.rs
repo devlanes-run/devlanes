@@ -483,6 +483,32 @@ pub(super) fn metrics(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
+/// A `status --watch` lane change: [`event_line`] plus the lane's units counted by
+/// state, so queued and failed units show without printing every unit each time.
+pub fn watch_line(event: &Event) -> String {
+    const ORDER: [&str; 5] = ["failed", "queued", "starting", "stopping", "ready"];
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for unit in event.data["lane"]["units"].as_array().into_iter().flatten() {
+        let state = clean(&text(unit, "state"));
+        if !state.is_empty() && state != "idle" {
+            *counts.entry(state).or_default() += 1;
+        }
+    }
+    let rank = |state: &str| {
+        ORDER
+            .iter()
+            .position(|s| *s == state)
+            .unwrap_or(ORDER.len())
+    };
+    let mut states: Vec<(String, usize)> = counts.into_iter().collect();
+    states.sort_by_key(|(state, _)| rank(state));
+    let mut line = event_line(event);
+    for (state, count) in states {
+        line.push_str(&format!(" {state}={count}"));
+    }
+    line
+}
+
 /// One event as `name subject state`, for `events` and streams without progress lines.
 pub(crate) fn event_line(event: &Event) -> String {
     let data = &event.data;
