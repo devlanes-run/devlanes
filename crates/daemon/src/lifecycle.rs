@@ -170,6 +170,69 @@ impl SpawnRequest {
     }
 }
 
+/// A service run that failed before its process existed, kept on the lane so
+/// it reads failed (see [`Inner::record_not_started`]).
+pub(crate) struct NotStartedRec {
+    pub name: String,
+    pub actor: Actor,
+    pub log_dir: std::path::PathBuf,
+    /// The `[devlanes]` note written to the unit's log, and its sequence once written.
+    pub note: String,
+    pub note_seq: Option<u64>,
+    pub ports: BTreeMap<String, u16>,
+    pub urls: Vec<String>,
+    pub tags: Vec<String>,
+    pub hidden: bool,
+    pub autostart: bool,
+    pub stop: StopPolicy,
+    pub literal_port: Option<u16>,
+    pub env: Arc<Environment>,
+    pub preset: Option<String>,
+    pub files: Vec<PreparedFile>,
+    pub color: Option<String>,
+    pub display_name: Option<String>,
+    pub ready_check: Option<&'static str>,
+    pub keep_awake: bool,
+    pub fingerprint: Option<crate::drift::Fingerprint>,
+}
+
+impl NotStartedRec {
+    /// From a service's lane layout, for a service whose config did not resolve.
+    fn from_view(
+        service: &crate::model::ServiceInfo,
+        actor: &Actor,
+        log_dir: std::path::PathBuf,
+        note: String,
+    ) -> Self {
+        let mut ports = service.ports.clone();
+        ports.insert("default".into(), service.port);
+        let mut urls = vec![service.url.clone()];
+        urls.extend(service.public_url.clone());
+        Self {
+            name: service.unit.clone(),
+            actor: actor.clone(),
+            log_dir,
+            note,
+            note_seq: None,
+            ports,
+            urls,
+            tags: service.tags.clone(),
+            hidden: service.hidden,
+            autostart: service.autostart,
+            stop: StopPolicy::default(),
+            literal_port: None,
+            env: Arc::new(Environment::default()),
+            preset: None,
+            files: Vec::new(),
+            color: Some(service.color.clone()),
+            display_name: service.display_name.clone(),
+            ready_check: None,
+            keep_awake: false,
+            fingerprint: None,
+        }
+    }
+}
+
 /// `UnitSummary.ready_check` for a resolved check.
 fn ready_word(spec: &ReadySpec) -> &'static str {
     match spec {
@@ -1175,10 +1238,12 @@ impl LanePhase for ServicesPhase {
         let selected = cx.services.clone();
         for name in &selected {
             if let Some(error) = resolved.errors.get(&format!("services.{name}")) {
+                let error = crate::resolve::resolve_error(error);
+                engine.record_unresolved(cx, name, &error).await;
                 cx.failures.push(UnitFailureData {
                     lane: cx.reference.clone(),
                     unit: name.clone(),
-                    reason: Some(crate::resolve::resolve_error(error)),
+                    reason: Some(error),
                     ..UnitFailureData::default()
                 });
                 continue;
@@ -1885,7 +1950,38 @@ impl Inner {
         let managed = match spawned {
             Ok(managed) => managed,
             Err(error) => {
-                return Err(self.spawn_failed(attempt, error, log_dir, &reference).await);
+                let (failure, note_seq) = self
+                    .spawn_failed(attempt, error, log_dir.clone(), &reference)
+                    .await;
+                // A service stays failed on the lane; tasks and exec units
+                // report the failure to their caller.
+                if request.kind == Kind::Service {
+                    let rec = NotStartedRec {
+                        name: request.name,
+                        actor: request.actor,
+                        log_dir,
+                        note: crate::spawn_error::log_line(&failure),
+                        note_seq,
+                        ports: request.ports,
+                        urls: request.urls,
+                        tags: request.tags,
+                        hidden: request.hidden,
+                        autostart: request.autostart,
+                        stop: request.stop,
+                        literal_port: request.literal_port,
+                        env: request.env,
+                        preset: request.preset,
+                        files: request.files,
+                        color: Some(color),
+                        display_name: request.display_name,
+                        ready_check: request.ready_check,
+                        keep_awake: request.keep_awake,
+                        fingerprint: request.fingerprint,
+                    };
+                    self.record_not_started(project, lane, rec, failure.clone())
+                        .await;
+                }
+                return Err(failure);
             }
         };
         let identity = managed.identity();
@@ -1997,6 +2093,128 @@ impl Inner {
         Ok((host, managed))
     }
 
+    /// Keeps a service run that failed before its process existed on the lane,
+    /// failed with `reason`, so status, `wait`, `debug why`, `debug errors` and
+    /// the proxy show it until a start, restart or stop replaces or clears it.
+    /// A unit that runs or is an orphan keeps its record; returns whether the
+    /// failure was recorded.
+    pub(crate) async fn record_not_started(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+        rec: NotStartedRec,
+        reason: RpcError,
+    ) -> bool {
+        let occupied = |st: &crate::model::LaneSt| {
+            st.orphans.contains_key(&rec.name)
+                || st
+                    .units
+                    .get(&rec.name)
+                    .is_some_and(|unit| unit.host.is_alive())
+        };
+        let reference = {
+            let st = lane.st();
+            if occupied(&st) {
+                return false;
+            }
+            st.reference(&project.name())
+        };
+        let info = UnitInfo {
+            name: rec.name.clone(),
+            lane: reference,
+            kind: Kind::Service.word(),
+            actor: rec.actor.clone(),
+            started_at_ms: now_ms(),
+            log_dir: rec.log_dir.clone(),
+            retention: crate::units::LogRetention::from_config(&self.opts.user.logs.retention),
+            pty: false,
+        };
+        let managed: Arc<dyn ManagedUnit> = Arc::new(crate::spawn_error::NotStarted);
+        let unit: Arc<dyn Unit> = managed.clone();
+        let host = match UnitHost::start_failed(info, unit, reason, rec.note_seq).await {
+            Ok(host) => host,
+            Err(error) => {
+                tracing::warn!(unit = %rec.name, code = %error.code, "failed start not recorded");
+                return false;
+            }
+        };
+        let name = rec.name.clone();
+        {
+            // Checked again with the insert: a start may have spawned it meanwhile.
+            let mut st = lane.st();
+            if occupied(&st) {
+                return false;
+            }
+            st.units.insert(
+                rec.name,
+                UnitRec {
+                    host: host.clone(),
+                    kind: Kind::Service,
+                    run_id: None,
+                    ports: rec.ports,
+                    urls: rec.urls,
+                    tags: rec.tags,
+                    hidden: rec.hidden,
+                    autostart: rec.autostart,
+                    stop: rec.stop,
+                    literal_port: rec.literal_port,
+                    env: rec.env,
+                    failure_tail: vec![rec.note],
+                    failure_tail_styled: Vec::new(),
+                    preset: rec.preset,
+                    files: rec.files,
+                    color: rec.color,
+                    managed,
+                    syncs: Vec::new(),
+                    display_name: rec.display_name,
+                    ready_check: rec.ready_check,
+                    role: "service",
+                    keep_awake: rec.keep_awake,
+                    fingerprint: rec.fingerprint.map(Arc::new),
+                },
+            );
+        }
+        // The host has ended already, so the watcher publishes it once and ends.
+        self.watch_unit(project.clone(), lane.clone(), name, host, None);
+        true
+    }
+
+    /// Records `error`, why service `name`'s config did not resolve, on the
+    /// units of it this start would have spawned: not withdrawn, running or
+    /// orphaned. A running unit's log gets no note.
+    async fn record_unresolved(self: &Arc<Self>, cx: &StartCx, name: &str, error: &RpcError) {
+        let (index, pending) = {
+            let st = cx.lane.st();
+            let Some(index) = st.index() else {
+                return;
+            };
+            let pending: Vec<crate::model::ServiceInfo> = st
+                .view
+                .iter()
+                .flat_map(|view| view.services.iter())
+                .filter(|s| {
+                    s.name == name
+                        && cx.ctl.withdrawn_by(&s.unit).is_none()
+                        && !st.orphans.contains_key(&s.unit)
+                        && !st.units.get(&s.unit).is_some_and(|rec| rec.host.is_alive())
+                })
+                .cloned()
+                .collect();
+            (index, pending)
+        };
+        let note = crate::spawn_error::resolve_note(error);
+        for service in pending {
+            let log_dir = unit_log_dir(&self.opts.logs, &cx.project.name(), index, &service.unit);
+            let note_seq = self.write_note(log_dir.clone(), &service.unit, &note).await;
+            let rec = NotStartedRec {
+                note_seq,
+                ..NotStartedRec::from_view(&service, &cx.actor, log_dir, note.clone())
+            };
+            self.record_not_started(&cx.project, &cx.lane, rec, error.clone())
+                .await;
+        }
+    }
+
     /// Publishes every state transition and records the exit.
     fn watch_unit(
         self: &Arc<Self>,
@@ -2028,8 +2246,11 @@ impl Inner {
                 if matches!(state, UnitState::Exited(_)) || !host.is_alive() {
                     break;
                 }
-                if watch.changed().await.is_err() {
-                    break;
+                // A run that failed its ready check keeps that state when it
+                // exits, so the exit sends no state change of its own.
+                tokio::select! {
+                    changed = watch.changed() => if changed.is_err() { break },
+                    _ = host.wait_exit() => {}
                 }
             }
             let outcome = host.wait_exit().await;
@@ -2090,6 +2311,13 @@ impl Inner {
                     view.services
                         .iter()
                         .filter(|service| cx.services.contains(&service.name))
+                        // A unit that failed on its own keeps that reason;
+                        // resolve failures name the service, spawn failures the unit.
+                        .filter(|service| {
+                            !cx.failures
+                                .iter()
+                                .any(|f| f.unit == service.unit || f.unit == service.name)
+                        })
                         .map(|service| service.unit.clone())
                         .filter(|unit| {
                             !cx.started.contains(unit)
@@ -3328,9 +3556,10 @@ impl Inner {
         // A spawn past its last withdrawal check is recorded before the targets
         // are picked; every later one sees the withdrawal.
         lane.spawns_settled().await;
+        let named = selectors.as_ref().is_some_and(|s| !s.is_empty());
         let mut stopped = self
             .stop_named(
-                project, lane, &reference, &names, mine, false, transient, false,
+                project, lane, &reference, &names, mine, false, named, transient, false,
             )
             .await;
         // Units the start had not spawned yet are stopped too, as far as it goes.
@@ -3394,9 +3623,10 @@ impl Inner {
                 .await;
         }
         let names = Self::matching_units(lane, &reference, selectors.as_deref(), &BTreeSet::new())?;
+        let named = selectors.as_ref().is_some_and(|s| !s.is_empty());
         Ok(self
             .stop_named(
-                project, lane, &reference, &names, mine, whole, transient, true,
+                project, lane, &reference, &names, mine, whole, named, transient, true,
             )
             .await)
     }
@@ -3433,17 +3663,27 @@ impl Inner {
             }
         }
         match selectors.filter(|s| !s.is_empty()) {
-            Some(selectors) => crate::engine::match_units(selectors, &candidates, reference),
+            Some(selectors) => {
+                let services = st.view.iter().flat_map(|view| {
+                    view.services
+                        .iter()
+                        .map(|s| (s.name.as_str(), s.unit.as_str()))
+                });
+                let selectors = crate::engine::expand_replicas(selectors, services);
+                crate::engine::match_units(&selectors, &candidates, reference)
+            }
             None => Ok(candidates.into_iter().map(|(name, _)| name).collect()),
         }
     }
 
     /// Stops the live units and orphans among `names` (for `mine`, the caller's
-    /// only) and returns them. `whole` settles crashed services and records the
-    /// lane as stopped, forgetting what a plain start would bring back; otherwise
-    /// the stopped services leave that set. `transient` saves nothing.
-    /// `owns_lane` (the caller holds `op`) shows the lane `stopping` meanwhile,
-    /// which a running start's `starting` must not be replaced by.
+    /// only) and returns them. `whole` and `named` (the caller named units)
+    /// settle the failed services and exec units among `names`; `named` also
+    /// returns them. `whole` records the lane as stopped, forgetting what a
+    /// plain start would bring back; otherwise the stopped services leave that
+    /// set. `transient` saves nothing. `owns_lane` (the caller holds `op`) shows
+    /// the lane `stopping` meanwhile, which a running start's `starting` must
+    /// not be replaced by.
     #[allow(clippy::too_many_arguments)]
     async fn stop_named(
         self: &Arc<Self>,
@@ -3453,6 +3693,7 @@ impl Inner {
         names: &[String],
         mine: Option<&Actor>,
         whole: bool,
+        named: bool,
         transient: bool,
         owns_lane: bool,
     ) -> Vec<UnitSummary> {
@@ -3506,12 +3747,23 @@ impl Inner {
         }));
         let (_, terminated) =
             tokio::join!(supervised, self.terminate_orphans(project, lane, &orphans));
-        if whole {
-            // An explicit full stop settles crashed services: the lane reads idle.
-            // Failed tasks keep their state, since a stop hook may just have failed.
+        // An explicit stop settles the failed services and exec units it covers,
+        // so they read stopped. Failed tasks keep their state, since a stop hook
+        // may just have failed.
+        let mut cleared: Vec<String> = Vec::new();
+        if whole || named {
             let st = lane.st();
-            for rec in st.units.values().filter(|rec| rec.kind == Kind::Service) {
-                rec.host.acknowledge_failure();
+            for name in names {
+                let Some(rec) = st.units.get(name) else {
+                    continue;
+                };
+                if matches!(rec.kind, Kind::Service | Kind::Exec)
+                    && !targets.contains(name)
+                    && mine.is_none_or(|caller| is_mine(&rec.host.info().actor, caller))
+                    && rec.host.acknowledge_failure()
+                {
+                    cleared.push(name.clone());
+                }
             }
         }
         let desired = lane.desired.lock().await;
@@ -3555,8 +3807,10 @@ impl Inner {
         }
         self.emit_lane(project, lane);
         let st = lane.st();
-        let mut stopped: Vec<UnitSummary> = targets
-            .iter()
+        // A whole-lane stop lists only what it stopped; a named one also lists
+        // the failures it cleared.
+        let listed = targets.iter().chain(cleared.iter().filter(|_| named));
+        let mut stopped: Vec<UnitSummary> = listed
             .filter_map(|name| {
                 st.units
                     .get(name)
@@ -3700,19 +3954,21 @@ impl Inner {
                 }
             }
         }
-        let candidates: Vec<(String, Vec<String>)> = {
+        let (candidates, selectors): (Vec<(String, Vec<String>)>, Vec<String>) = {
             let st = lane.st();
-            st.view
-                .as_ref()
-                .map(|view| {
-                    view.services
-                        .iter()
-                        .map(|s| (s.unit.clone(), s.tags.clone()))
-                        .collect()
-                })
-                .unwrap_or_default()
+            let services = st.view.iter().flat_map(|view| view.services.iter());
+            (
+                services
+                    .clone()
+                    .map(|s| (s.unit.clone(), s.tags.clone()))
+                    .collect(),
+                crate::engine::expand_replicas(
+                    selectors,
+                    services.map(|s| (s.name.as_str(), s.unit.as_str())),
+                ),
+            )
         };
-        let units = crate::engine::match_units(selectors, &candidates, &reference)?;
+        let units = crate::engine::match_units(&selectors, &candidates, &reference)?;
         let config = lane
             .st()
             .config

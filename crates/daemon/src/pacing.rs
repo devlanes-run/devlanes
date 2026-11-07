@@ -644,6 +644,15 @@ impl Inner {
                     .iter()
                     .map(|(unit, _)| (unit.clone(), tags(unit)))
                     .collect();
+                let selectors = {
+                    let st = lane.st();
+                    let services = st.view.iter().flat_map(|view| {
+                        view.services
+                            .iter()
+                            .map(|s| (s.name.as_str(), s.unit.as_str()))
+                    });
+                    crate::engine::expand_replicas(selectors, services)
+                };
                 // Selectors that match no queued unit still stop running ones.
                 selectors
                     .iter()

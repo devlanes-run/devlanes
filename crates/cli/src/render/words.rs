@@ -511,7 +511,8 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 _ => ("the lane is already running".into(), None),
             }
         }
-        // `debug freeze` refusals, each `{lane}`; keep_awake and orphans add `units`.
+        // `debug freeze` refusals, each `{lane}`; keep_awake, running tasks and
+        // orphans add `units`.
         "lane_not_running" => {
             let lane = text(data, "lane");
             (
@@ -526,11 +527,30 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             ),
             Some(lane_command(["status"], &text(data, "lane"))),
         ),
+        "lane_runs_task" => {
+            let lane = text(data, "lane");
+            let units: Vec<String> = list(data, "units").iter().map(display_value).collect();
+            (
+                format!(
+                    "{} runs {}; a running task or exec unit keeps a lane awake",
+                    or_this_lane(&lane),
+                    if units.is_empty() {
+                        "a task".to_owned()
+                    } else {
+                        units.join(", ")
+                    }
+                ),
+                Some(lane_command(["status"], &lane)),
+            )
+        }
         "lane_keep_awake" => {
             let units: Vec<String> = list(data, "units").iter().map(display_value).collect();
-            let keys: Vec<String> = units
+            // `services` names the config entries behind replicas; older
+            // daemons send only `units`.
+            let services: Vec<String> = list(data, "services").iter().map(display_value).collect();
+            let keys: Vec<String> = if services.is_empty() { &units } else { &services }
                 .iter()
-                .map(|unit| format!("services.{unit}.keep_awake"))
+                .map(|name| format!("services.{name}.keep_awake"))
                 .collect();
             let lane = or_this_lane(&text(data, "lane"));
             (
@@ -1794,6 +1814,22 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
             ),
             Some(Hint::command(["stop", &target(data)])),
         ),
+        "not_listening" => {
+            let listening: Vec<String> =
+                list(data, "listening").iter().map(display_value).collect();
+            (
+                format!(
+                    "nothing accepts connections on port {}{}",
+                    field(data, "port"),
+                    if listening.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; it listens on {}", listening.join(", "))
+                    }
+                ),
+                Some(Hint::command(["env", "show", &format!("{lane}:{unit}")])),
+            )
+        }
         "waiting_after_services" => (
             "waiting for the lane's services to be ready (after: services)".into(),
             Some(Hint::command(["wait", lane])),
