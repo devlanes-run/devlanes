@@ -444,24 +444,33 @@ impl Inner {
         self.project_here(context).await
     }
 
-    /// The cwd's project ([`Self::project_for_cwd`]), or the request's `lane_project`
-    /// when the cwd is in one of that project's lane folders or in no project. A
-    /// `devlanes.prod.yaml` project's services run where `devlanes.yaml` names another
-    /// project, so there the cwd alone would pick the wrong one.
+    /// The first of [`Self::projects_here`].
     pub(crate) async fn project_here(
         self: &Arc<Self>,
         context: &devlanes_proto::Context,
     ) -> Result<Option<Arc<ProjectRt>>, RpcError> {
+        Ok(self.projects_here(context).await?.into_iter().next())
+    }
+
+    /// The cwd's projects ([`Self::projects_for_cwd`]), or the request's `lane_project`
+    /// when the cwd is in one of that project's lane folders or in no project. A
+    /// `devlanes.prod.yaml` project's services run where `devlanes.yaml` names another
+    /// project, so there the cwd alone would pick the wrong one.
+    pub(crate) async fn projects_here(
+        self: &Arc<Self>,
+        context: &devlanes_proto::Context,
+    ) -> Result<Vec<Arc<ProjectRt>>, RpcError> {
         let Some(name) = &context.lane_project else {
-            return self.project_for_cwd(&context.cwd).await;
+            return self.projects_for_cwd(&context.cwd).await;
         };
         if let Some(project) = self.lane_folder_project(name, &context.cwd).await {
-            return Ok(Some(project));
+            return Ok(vec![project]);
         }
-        match self.project_for_cwd(&context.cwd).await? {
-            Some(project) => Ok(Some(project)),
-            None => self.project_by_name(name).map(Some),
+        let projects = self.projects_for_cwd(&context.cwd).await?;
+        if projects.is_empty() {
+            return Ok(vec![self.project_by_name(name)?]);
         }
+        Ok(projects)
     }
 
     /// The project named `name` when `cwd` is in the folder of one of its lanes, unless
@@ -516,14 +525,15 @@ impl Inner {
     }
 
     /// The project of the nearest `devlanes.yaml` above `cwd` (registered on first
-    /// use). Without one, the project of the deepest lane holding `cwd`: a project file
-    /// below the worktree root seen from above it, or a worktree whose file is gone.
-    pub(crate) async fn project_for_cwd(
+    /// use). Without one, the projects of the deepest lanes holding `cwd`
+    /// ([`Self::projects_holding`]): a project file below the worktree root seen from
+    /// above it, or a worktree whose file is gone.
+    async fn projects_for_cwd(
         self: &Arc<Self>,
         cwd: &Path,
-    ) -> Result<Option<Arc<ProjectRt>>, RpcError> {
+    ) -> Result<Vec<Arc<ProjectRt>>, RpcError> {
         if cwd.as_os_str().is_empty() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         let search = {
             let cwd = cwd.to_path_buf();
@@ -535,7 +545,7 @@ impl Inner {
         let file = match search {
             devlanes_config::ConfigSearch::Found(file) => file,
             devlanes_config::ConfigSearch::Missing { .. } => {
-                return Ok(self.project_holding(cwd));
+                return Ok(self.projects_holding(cwd));
             }
         };
         // A lane read from this file answers without parsing it again, once its stamp
@@ -556,16 +566,18 @@ impl Inner {
             }
             self.fresh_config(&project, &lane).await;
             if !matches!(lane.st().config, ConfigState::Elsewhere(_)) {
-                return Ok(Some(project));
+                return Ok(vec![project]);
             }
         }
-        self.load_project(&file).await.map(Some)
+        Ok(vec![self.load_project(&file).await?])
     }
 
-    /// The project of the deepest present lane whose worktree holds `cwd`, preferring a
-    /// project loaded from `devlanes.yaml`.
-    fn project_holding(&self, cwd: &Path) -> Option<Arc<ProjectRt>> {
-        let mut best: Option<(usize, bool, Arc<ProjectRt>)> = None;
+    /// The projects of the deepest present lanes whose worktree holds `cwd`, preferring
+    /// projects loaded from `devlanes.yaml`, in lane order. Several projects tie at a
+    /// repository root that holds their files in subfolders.
+    pub(crate) fn projects_holding(&self, cwd: &Path) -> Vec<Arc<ProjectRt>> {
+        let mut best: Option<(usize, bool)> = None;
+        let mut projects: Vec<Arc<ProjectRt>> = Vec::new();
         for (project, lane) in self.all_lanes() {
             let default = project.config_path().1 == devlanes_config::DEFAULT_PROJECT_FILE;
             let st = lane.st();
@@ -573,15 +585,16 @@ impl Inner {
             if !st.present || !path_starts_with(cwd, &st.path) {
                 continue;
             }
-            let depth = st.path.components().count();
-            if best
-                .as_ref()
-                .is_none_or(|(d, def, _)| (depth, default) > (*d, *def))
-            {
-                best = Some((depth, default, project.clone()));
+            let key = (st.path.components().count(), default);
+            if best.is_none_or(|best| key > best) {
+                best = Some(key);
+                projects.clear();
+            }
+            if best == Some(key) && !projects.iter().any(|p| p.id == project.id) {
+                projects.push(project.clone());
             }
         }
-        best.map(|(_, _, project)| project)
+        projects
     }
 
     /// Registers the project a project file names, or returns it when known. Projects

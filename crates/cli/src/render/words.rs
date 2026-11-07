@@ -1687,6 +1687,24 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
                 if lanes.len() == 1 { "it" } else { "them" }
             )
         }
+        // A unit-less `stop --mine` covers the current project; these lanes are outside it.
+        "mine_elsewhere" => {
+            let lanes: Vec<String> = list(data, "lanes").iter().map(display_value).collect();
+            let commands: Vec<String> = list(data, "projects")
+                .iter()
+                .map(|project| Hint::command(["-p", &display_value(project), "stop", "--mine"]).0)
+                .collect();
+            format!(
+                "your units also run in {}; {} {}",
+                lanes.join(", "),
+                commands.join(", "),
+                if commands.len() == 1 {
+                    "stops them"
+                } else {
+                    "stop them"
+                }
+            )
+        }
         // Inside WSL, `/mnt/<letter>` is the Windows drive `drive`.
         "windows_drive" => format!(
             "{} is on the Windows drive {}: {WINDOWS_DRIVE_COST}; move the repository to the Linux filesystem, for example ~/src",

@@ -21,7 +21,8 @@ This page covers daily use. Read a reference first when the task is about the co
 - Read logs with `--tail`, `--head` (the first lines, such as how a start began), `--grep` or `--since`. Output is capped at 16 KiB per command, and truncated output ends with the command that fetches the rest. Follow logs (`-f`) only together with `--timeout`.
 - A command that needs confirmation exits 2 and names the flag. Rerun it with `--yes` only when the user asked for that action.
 - A command run without the unit, task or lane it needs (`devlanes url open`, `devlanes run`, `devlanes logs`) exits 2 and lists the options with a command to run; with `--json` they are in `error.data.options`. Pick one from that list. Exit 3 there means nothing can be chosen, such as no devlanes.yaml in this directory or its parents.
-- Clean up with `devlanes stop --mine`. It stops only what your session started. Stopping or restarting a unit a human started works, and the result says so; do it only when the task requires it.
+- Clean up with `devlanes stop --mine`. It stops only what your session started in the current project, and its output names the command for other projects where your units still run. Stopping or restarting a unit a human started works, and the result says so; do it only when the task requires it.
+- As a subagent, stop the units you started by name (`devlanes stop LANE:UNIT`) before you return. Your parent may run in another session that `stop --mine` does not reach, or in the same session, where your `stop --mine` would stop the parent's units too.
 - Interrupting a command (Ctrl-C or a tool timeout) detaches from it. Services keep running.
 
 ## Lanes and units
