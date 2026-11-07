@@ -112,7 +112,7 @@ Every process devlanes starts (services, tasks, infra commands) and every comman
 | `DEVLANES` | `1` |
 | `DEVLANES_LANE_PROJECT` | `project` from the project file, such as `acme`. devlanes commands run by the process use this project when the current directory is in one of its lanes or in no project, so a script run by a `devlanes.prod.yaml` service stays in that project. In another project's folder or checkout that folder's project applies. To pin the project everywhere, set `DEVLANES_PROJECT` yourself, which works like `--project` |
 | `DEVLANES_LANE` | the lane index: `0` for the primary worktree, then `1`, `2`, … A lane whose branch becomes the primary one takes index 0, so key lasting state on `DEVLANES_LANE_DATA` instead |
-| `DEVLANES_LANE_NAME` | `main` for lane 0, `lane<N>` for the others |
+| `DEVLANES_LANE_NAME` | `main` for lane 0, `lane<N>` for the others, including a lane added with `devlanes lane new --name`, whose name only addresses it in commands |
 | `DEVLANES_LANE_DATA` | the [lane data folder](#lane-data-folder), `~/.devlanes/data/<project>/<lane id>`. The lane id is not the index |
 | `DEVLANES_CA_CERT` | the root certificate (PEM) the HTTPS proxy signs with: `~/.devlanes/ca/ca.pem`, or mkcert's `rootCA.pem` with `tls.ca: mkcert` |
 | `DEVLANES_CA_BUNDLE` | `~/.devlanes/ca/bundle.pem`, the system roots plus that certificate, for tools that replace their trust store instead of adding to it |

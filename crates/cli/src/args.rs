@@ -95,7 +95,7 @@ pub struct Cli {
     /// Print nothing on success; errors still go to stderr
     #[arg(long, global = true, help_heading = GLOBAL)]
     pub quiet: bool,
-    /// Set a variable for started processes (start, restart, run TASK, exec); repeatable
+    /// Set a variable for started processes (start, restart, run TASK, exec, lane new --start); repeatable
     #[arg(long = "env", global = true, value_parser = parse_env, value_name = "KEY=VALUE", help_heading = GLOBAL)]
     pub env: Vec<(String, String)>,
     /// Limit waits and streams, such as 30s, 5m or 1h [default for start and wait: 180s]
@@ -133,7 +133,8 @@ Stopped services are left out of what a plain devlanes start brings back. A\n\
 whole-lane stop also forgets the lane's profiles, so its next plain start uses\n\
 the default profile.\n\n\
 A failed service or exec command you name, or every one when the whole lane\n\
-stops, reads stopped afterwards; failed tasks keep their state.")]
+stops, reads stopped afterwards; failed tasks keep their state.\n\n\
+To stop another lane, name it with --lane: devlanes stop --lane 2.")]
     Stop(StopArgs),
     /// Stop and start units again with a fresh environment, or the whole lane when none are named
     #[command(
@@ -800,15 +801,19 @@ pub enum LaneCommand {
     Ls,
     /// Add another lane for this folder
     #[command(
-        long_about = "Add another lane for the current folder. It has its own index, ports\n\
-and domain, and `--lane <name>` or `--lane <index>` addresses it. Commands run in the\n\
-folder keep using the folder's first lane.\n\n\
+        long_about = "Add another lane for the current folder. It has its own index, ports,\n\
+domain and data folder. Its name is a lane reference: `--lane <name>`, `<name>:<unit>`\n\
+and `lane clean <name>` reach it, as its index does. A cleaned lane's name can be used\n\
+again and gives a new lane with empty data. Inside the lane, `lane.name` and\n\
+DEVLANES_LANE_NAME stay `lane<N>`. Commands run in the folder keep using the folder's\n\
+first lane.\n\n\
 For a lane on another branch, create a worktree with `git worktree add <path> <branch>`\n\
 and run `devlanes start` in it.\n\n\
-Without --start, a terminal asks whether to start the new lane right away."
+Without --start, a terminal asks whether to start the new lane right away. --start uses\n\
+this shell's environment and --env, as start does."
     )]
     New {
-        /// Name of the extra lane for this folder, used by `--lane` [default: <folder>-<n>]
+        /// Name of the extra lane, a lane reference for --lane and <name>:unit; not a number, main or lane<N> [default: <folder>-<n>]
         #[arg(long)]
         name: Option<String>,
         /// Start the new lane right away
@@ -819,6 +824,13 @@ Without --start, a terminal asks whether to start the new lane right away."
         no_ui: bool,
     },
     /// Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes)
+    #[command(
+        long_about = "Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes).\n\n\
+The worktree gets a lane again, with an empty data folder and possibly other ports,\n\
+the next time a devlanes command runs in it. The primary worktree's lane comes back on\n\
+the next command for its project. A lane added with `lane new` does not come back;\n\
+`lane new --name <name>` creates it again."
+    )]
     Clean {
         // Own id: `lane` would collide with the global `--lane`.
         /// Lane to clean ([project@]lane) [default: pick from a list]
@@ -1047,14 +1059,22 @@ impl Cli {
         cwd: PathBuf,
         environment: impl FnOnce() -> BTreeMap<String, String>,
     ) -> Result<Action, Error> {
+        let lane_new_start = matches!(
+            &self.command,
+            Some(Command::Lane {
+                command: LaneCommand::New { start: true, .. }
+            })
+        );
         if !self.env.is_empty()
             && !(matches!(
                 &self.command,
                 Some(Command::Start(_) | Command::Restart(_) | Command::Exec(_))
-            ) || matches!(&self.command, Some(Command::Run(args)) if !args.list))
+            ) || matches!(&self.command, Some(Command::Run(args)) if !args.list)
+                || lane_new_start)
         {
             return Err(Error::Usage(
-                "--env is supported only by start, restart, run TASK, and exec".into(),
+                "--env is supported only by start, restart, run TASK, exec and lane new --start"
+                    .into(),
             ));
         }
         // The daemon resolves the file, so a relative one names a path below the cwd.
@@ -1298,7 +1318,12 @@ impl Cli {
                 LaneCommand::Ls => (Method::LaneList, json!({})),
                 LaneCommand::New { name, start, .. } => (
                     Method::LaneNew,
-                    json!({"name": name, "start": start, "events": *start && start_events}),
+                    json!({
+                        "name": name,
+                        "start": start,
+                        "events": *start && start_events,
+                        "env": self.env.iter().cloned().collect::<BTreeMap<_, _>>(),
+                    }),
                 ),
                 LaneCommand::Clean { lane } => {
                     context.lane.clone_from(lane);
@@ -1430,10 +1455,12 @@ impl Cli {
         };
         // `reload` is absent: it applies the project file, and the lane keeps the env
         // its last start stored, as when the TUI reloads.
-        if matches!(
-            method,
-            Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume
-        ) {
+        if lane_new_start
+            || matches!(
+                method,
+                Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume
+            )
+        {
             context.env = Some(environment());
         }
         let request = Request {
