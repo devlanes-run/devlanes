@@ -1364,6 +1364,8 @@ struct ContainerInfra {
     compose: devlanes_infra_compose::Compose,
     docker: Option<devlanes_infra_docker::DockerInfra>,
     events: broadcast::Sender<InfraEvent>,
+    /// Set once container events are forwarded, from the first infra use on.
+    watching: std::sync::OnceLock<()>,
 }
 
 /// The daemon variables the `docker` CLI needs: where to find binaries and its
@@ -1539,20 +1541,28 @@ impl ContainerInfra {
                 Some((name.into_string().ok()?, value.into_string().ok()?))
             }),
         ));
-        let events = broadcast::channel(256).0;
-        if let Some(docker) = &docker {
-            Self::forward_events(docker, events.clone());
-        }
         Self {
             compose: devlanes_infra_compose::Compose::new(cli),
             docker,
-            events,
+            events: broadcast::channel(256).0,
+            watching: std::sync::OnceLock::new(),
         }
     }
 
-    /// Forwards the lifecycle events of every container on the engine. The
-    /// daemon matches them to lanes by Docker name, so shared Compose
-    /// containers, which carry no `dev.devlanes.*` labels, are seen too.
+    /// Forwards the lifecycle events of every container on the engine, from
+    /// the first call on. Called by `up` and `namespace`, which every lane with
+    /// infra goes through before it stores containers, so a daemon whose
+    /// projects declare no infra opens no event stream. The daemon matches
+    /// events to lanes by Docker name, so shared Compose containers, which
+    /// carry no `dev.devlanes.*` labels, are seen too.
+    fn watch_events(&self) {
+        let Some(docker) = &self.docker else { return };
+        self.watching
+            .get_or_init(|| Self::forward_events(docker, self.events.clone()));
+    }
+
+    /// Spawns the task that sends [`devlanes_infra_docker::DockerInfra::watch`]
+    /// to `sender`.
     fn forward_events(
         docker: &devlanes_infra_docker::DockerInfra,
         sender: broadcast::Sender<InfraEvent>,
@@ -1867,6 +1877,9 @@ impl InfraProvider for ContainerInfra {
     /// `up` only for services that do not already run healthy with their current
     /// config, and every `config` comes from the cache while its inputs are unchanged.
     async fn up(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
+        if !spec.is_empty() {
+            self.watch_events();
+        }
         let mut namespace = serde_json::Map::new();
         let mut report = serde_json::Map::new();
         let mut targets = Vec::new();
@@ -1962,6 +1975,9 @@ impl InfraProvider for ContainerInfra {
     /// lane projects are listed concurrently; their models come from the `config`
     /// cache.
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
+        if !spec.is_empty() {
+            self.watch_events();
+        }
         let mut namespace = serde_json::Map::new();
         let mut targets = Vec::new();
         let (shared, lane) = tokio::join!(

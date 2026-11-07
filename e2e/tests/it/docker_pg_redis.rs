@@ -267,17 +267,15 @@ fn docker_setup_entries_run_by_hand_stay_done() -> Result<()> {
     Ok(())
 }
 
-/// A setup entry backed by the shared Redis that appends Redis's health to
-/// `{runs}`, and a service that reads Redis's published port.
+/// A setup entry backed by the shared Redis, and a service that reads Redis's
+/// published port.
 const RESTARTED: &str = r#"project: fixture-pg-redis
 infra:
   compose: compose.yaml
   project_name: devlanes-fixture-pg-redis
   per_lane: [postgres]
   setup:
-    cache:
-      run: "docker inspect -f '{{.State.Health.Status}}' devlanes-fixture-pg-redis-redis-1 >> '{runs}'"
-      container: redis
+    cache: { run: "echo cache", container: redis }
 services:
   api:
     run: [fixture-server, --log-line, api-ready]
@@ -302,8 +300,11 @@ fn status_redis_port(lab: &Lab) -> Result<Option<u64>> {
 
 /// After `docker restart` of the shared Redis, which gets a new ephemeral port,
 /// the daemon hears of it from the engine and `status` shows the new port; the
-/// next start reruns the Redis-backed setup entry once Redis is healthy, says
-/// so in `ran`, and a restarted service reads the new port.
+/// next start reruns the Redis-backed setup entry and says so in `ran`, and a
+/// restarted service reads the new port. This proves the event wiring against
+/// a real engine; the wait for health is proven by the daemon test
+/// `setup_entry_reruns_only_after_its_container_restarted`, since Redis's 1 s
+/// healthcheck passes before this test's next start.
 #[test]
 #[ignore = "needs docker"]
 fn docker_restarted_shared_redis_is_settled_and_gets_its_new_port() -> Result<()> {
@@ -312,22 +313,8 @@ fn docker_restarted_shared_redis_is_settled_and_gets_its_new_port() -> Result<()
         &[SHARED, LANE_ZERO],
         Duration::from_secs(600),
     )?;
-    let runs = lab.home().join("setup-runs");
-    // Forward slashes, since a Windows path's backslashes are escapes in a
-    // double-quoted YAML string.
-    lab.write(
-        "devlanes.yaml",
-        &RESTARTED.replace("{runs}", &runs.to_string_lossy().replace('\\', "/")),
-    )?;
-    let last_run = || {
-        std::fs::read_to_string(&runs)
-            .unwrap_or_default()
-            .lines()
-            .last()
-            .map(str::to_owned)
-    };
+    lab.write("devlanes.yaml", RESTARTED)?;
     start(&lab, lab.repo())?;
-    assert_eq!(last_run().as_deref(), Some("healthy"));
 
     let redis = "devlanes-fixture-pg-redis-redis-1";
     docker(&lab, &["restart", redis])?;
@@ -357,7 +344,6 @@ fn docker_restarted_shared_redis_is_settled_and_gets_its_new_port() -> Result<()
         serde_json::json!(["fixture-pg-redis@0:setup.cache"]),
         "{output}"
     );
-    assert_eq!(last_run().as_deref(), Some("healthy"));
 
     // `env show` of a running unit is the env it runs with, so `api` gets the
     // new port only from its restart.

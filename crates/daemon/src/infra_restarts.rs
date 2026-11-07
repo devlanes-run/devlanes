@@ -122,7 +122,7 @@ impl Inner {
         spec: &InfraSpec,
         deadline: Instant,
     ) -> Result<bool, RpcError> {
-        let (restarted, containers): (BTreeMap<String, u64>, Vec<InfraContainer>) = {
+        let marked = |lane: &LaneRt| -> (BTreeMap<String, u64>, Vec<InfraContainer>) {
             let st = lane.st();
             let containers = st
                 .infra_containers
@@ -132,8 +132,21 @@ impl Inner {
                 .collect();
             (st.infra_restarted.clone(), containers)
         };
+        let (mut restarted, mut containers) = marked(lane);
         if restarted.is_empty() {
             return Ok(false);
+        }
+        // A container the lane never stored (down when a restarted daemon
+        // learned the lane's containers) has no Docker name to wait for until
+        // it is read once.
+        let unstored: BTreeSet<String> = restarted
+            .keys()
+            .filter(|name| !containers.iter().any(|c| &c.name == *name))
+            .cloned()
+            .collect();
+        if !unstored.is_empty() {
+            self.refresh_restarted_infra(lane, spec, &unstored).await?;
+            (restarted, containers) = marked(lane);
         }
         let timeout = HEALTH_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
         let skipped = self
@@ -161,8 +174,10 @@ impl Inner {
         {
             let mut st = lane.st();
             for (name, count) in &restarted {
-                // A restart counted during the wait needs another look.
-                if !down.contains(name) && st.infra_restarted.get(name) == Some(count) {
+                // A restart counted during the wait needs another look, and so
+                // does a container still not stored, which was not waited for.
+                let waited = containers.iter().any(|c| &c.name == name);
+                if waited && !down.contains(name) && st.infra_restarted.get(name) == Some(count) {
                     st.infra_restarted.remove(name);
                 }
             }

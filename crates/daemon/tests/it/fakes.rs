@@ -639,6 +639,9 @@ pub struct FakeInfra {
     pub cache_down: Arc<Mutex<bool>>,
     /// When set, `wait_healthy` waits for a notification before it answers.
     pub wait_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
+    /// `up` leaves the lane's `db` out of its containers, as for a lane whose
+    /// containers a restarted daemon learned while `db` was down.
+    pub up_omits_db: Arc<Mutex<bool>>,
 }
 
 impl FakeInfra {
@@ -747,7 +750,13 @@ impl InfraProvider for FakeInfra {
             namespace: self.namespace(spec),
             setup_env: BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())]),
             report: json!({"services": ["db"]}),
-            containers: self.containers(spec, "healthy"),
+            containers: {
+                let mut containers = self.containers(spec, "healthy");
+                if self.up_omits_db.lock().is_ok_and(|omits| *omits) {
+                    containers.retain(|c| c.name != "db");
+                }
+                containers
+            },
         })
     }
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {

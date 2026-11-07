@@ -293,7 +293,21 @@ impl Inner {
                                 engine.bus.emit("infra.changed", json!(event));
                             }
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        // Events of other containers can push out a lane's
+                        // own, so the lanes read their containers again.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                            tracing::debug!(
+                                missed,
+                                "container events lost; reading lane infra again"
+                            );
+                            engine.apply_container_event(&crate::integrations::InfraEvent {
+                                project: String::new(),
+                                lane: None,
+                                container: String::new(),
+                                state: "reconnected".into(),
+                                exit_code: None,
+                            });
+                        }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                     }
                 }

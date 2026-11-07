@@ -590,75 +590,83 @@ services:
 /// restarted, and only once the container is healthy again: a `run` of the
 /// entry records the container's start time like a start does, so a later
 /// start into the running lane leaves it alone. The result lists the entry.
+/// The wait covers a container the lane never stored, too.
 async fn setup_entry_reruns_only_after_its_container_restarted() {
     tokio::time::timeout(LIMIT, async {
-        let tmp = temp();
-        let main = repo(&tmp.path, "r", BACKED);
-        let h = harness(
-            &tmp.path.join("home"),
-            Setup {
-                infra: true,
-                ..Setup::default()
-            },
-        )
-        .await;
-        let started_at = |at: &str| {
-            *h.infra.started_at.lock().expect("lock") = Some(at.to_owned());
-        };
-        started_at("2026-01-01T00:00:00Z");
-        assert!(start(&h, cx(&main), json!({"units": ["api"]})).await.ready);
-        assert_eq!(h.runner.journal.entries(), ["echo setup-db", "sleep"]);
-
-        h.call(
-            Method::Run,
-            json!({"task": "infra.setup.database"}),
-            cx(&main),
-        )
-        .await
-        .expect("run setup entry");
-        let web = start(&h, cx(&main), json!({"units": ["web"]})).await;
-        assert!(
-            web.ready && !web.whole_lane && web.ran.is_empty(),
-            "{web:?}"
-        );
-        assert_eq!(
-            h.runner.journal.entries(),
-            ["echo setup-db", "sleep", "echo setup-db", "sleep"],
-            "the run recorded the container's start time"
-        );
-
-        h.call(Method::Stop, json!({"units": ["web"]}), cx(&main))
-            .await
-            .expect("stop web");
-        started_at("2026-01-01T01:00:00Z");
-        let gate = std::sync::Arc::new(tokio::sync::Notify::new());
-        *h.infra.wait_gate.lock().expect("lock") = Some(gate.clone());
-        let driver = async {
-            let waited = eventually(Duration::from_secs(5), || async {
-                h.infra
-                    .calls
-                    .entries()
-                    .contains(&"wait backed-lane0-db-1".to_owned())
-                    .then_some(())
-            })
+        for stored in [true, false] {
+            let tmp = temp();
+            let main = repo(&tmp.path, "r", BACKED);
+            let h = harness(
+                &tmp.path.join("home"),
+                Setup {
+                    infra: true,
+                    ..Setup::default()
+                },
+            )
             .await;
-            assert!(waited.is_some(), "{:?}", h.infra.calls.entries());
-            assert_eq!(
-                h.runner.journal.entries().len(),
-                4,
-                "the entry waits for its container to be healthy"
+            *h.infra.up_omits_db.lock().expect("lock") = !stored;
+            let started_at = |at: &str| {
+                *h.infra.started_at.lock().expect("lock") = Some(at.to_owned());
+            };
+            started_at("2026-01-01T00:00:00Z");
+            assert!(start(&h, cx(&main), json!({"units": ["api"]})).await.ready);
+            assert_eq!(h.runner.journal.entries(), ["echo setup-db", "sleep"]);
+
+            h.call(
+                Method::Run,
+                json!({"task": "infra.setup.database"}),
+                cx(&main),
+            )
+            .await
+            .expect("run setup entry");
+            let web = start(&h, cx(&main), json!({"units": ["web"]})).await;
+            assert!(
+                web.ready && !web.whole_lane && web.ran.is_empty(),
+                "{web:?}"
             );
-            gate.notify_one();
-        };
-        let (web, ()) = tokio::join!(start(&h, cx(&main), json!({"units": ["web"]})), driver);
-        assert!(web.ready && !web.whole_lane, "{web:?}");
-        assert_eq!(web.ran, ["backed@0:setup.database"]);
-        assert_eq!(
-            &h.runner.journal.entries()[4..],
-            ["echo setup-db", "sleep"],
-            "the restarted container lost the entry's effect"
-        );
-        h.close().await;
+            assert_eq!(
+                h.runner.journal.entries(),
+                ["echo setup-db", "sleep", "echo setup-db", "sleep"],
+                "the run recorded the container's start time"
+            );
+
+            h.call(Method::Stop, json!({"units": ["web"]}), cx(&main))
+                .await
+                .expect("stop web");
+            started_at("2026-01-01T01:00:00Z");
+            let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+            *h.infra.wait_gate.lock().expect("lock") = Some(gate.clone());
+            let driver = async {
+                let waited = eventually(Duration::from_secs(5), || async {
+                    h.infra
+                        .calls
+                        .entries()
+                        .contains(&"wait backed-lane0-db-1".to_owned())
+                        .then_some(())
+                })
+                .await;
+                assert!(
+                    waited.is_some(),
+                    "stored {stored}: {:?}",
+                    h.infra.calls.entries()
+                );
+                assert_eq!(
+                    h.runner.journal.entries().len(),
+                    4,
+                    "stored {stored}: the entry waits for its container to be healthy"
+                );
+                gate.notify_one();
+            };
+            let (web, ()) = tokio::join!(start(&h, cx(&main), json!({"units": ["web"]})), driver);
+            assert!(web.ready && !web.whole_lane, "{web:?}");
+            assert_eq!(web.ran, ["backed@0:setup.database"]);
+            assert_eq!(
+                &h.runner.journal.entries()[4..],
+                ["echo setup-db", "sleep"],
+                "the restarted container lost the entry's effect"
+            );
+            h.close().await;
+        }
     })
     .await
     .expect("timeout");
