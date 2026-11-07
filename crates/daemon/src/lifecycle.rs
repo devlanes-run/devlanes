@@ -2294,6 +2294,7 @@ impl Inner {
                     stop: rec.stop,
                     literal_port: rec.literal_port,
                     env: rec.env,
+                    left_out: BTreeMap::new(),
                     failure_tail: vec![rec.note],
                     failure_tail_styled: Vec::new(),
                     preset: rec.preset,
