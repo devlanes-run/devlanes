@@ -611,7 +611,7 @@ expression: tools(&harness).await
         },
         "explain": {
           "type": "boolean",
-          "description": "Show where each variable comes from; secret-looking values are hidden"
+          "description": "Show where each variable comes from; secret-looking values are hidden. With a unit, also prints the unit's launch notes"
         },
         "lane": {
           "type": "string",

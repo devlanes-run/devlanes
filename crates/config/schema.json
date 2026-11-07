@@ -179,7 +179,7 @@
           "markdownDescription": "Extra check the start waits for once the container is up (the image's healthcheck, else its first port accepting TCP), before setup, tasks and services run. Write `started` or one of `tcp`, `http`, `log` (matched against the container's logs) or `cmd` (run on the host). If it does not pass within its timeout (default 60s), the start fails."
         },
         "volumes": {
-          "description": "Mounts as `source:destination[:mode]`. `./relative` and `/absolute` sources are bind mounts, relative ones from the owning worktree; a bare name is a named volume kept per project or per lane.",
+          "description": "Mounts as `source:destination[:mode]`. `./relative` and `/absolute` sources are bind mounts; relative ones start at the project file's directory, in the lane's worktree for a `per_lane` container and in the primary worktree for a shared one. A bare name is a named volume kept per project or per lane.",
           "examples": [
             [
               "./infra/cerbos:/policies:ro"
@@ -187,13 +187,13 @@
           ],
           "items": {
             "$ref": "#/$defs/Templated_string",
-            "description": "Mounts as `source:destination[:mode]`. `./relative` and `/absolute` sources are bind mounts, relative ones from the owning worktree; a bare name is a named volume kept per project or per lane.",
+            "description": "Mounts as `source:destination[:mode]`. `./relative` and `/absolute` sources are bind mounts; relative ones start at the project file's directory, in the lane's worktree for a `per_lane` container and in the primary worktree for a shared one. A bare name is a named volume kept per project or per lane.",
             "examples": [
               "./infra/cerbos:/policies:ro"
             ],
-            "markdownDescription": "Mounts as `source:destination[:mode]`. `./relative` and `/absolute` sources are bind mounts, relative ones from the owning worktree; a bare name is a named volume kept per project or per lane."
+            "markdownDescription": "Mounts as `source:destination[:mode]`. `./relative` and `/absolute` sources are bind mounts; relative ones start at the project file's directory, in the lane's worktree for a `per_lane` container and in the primary worktree for a shared one. A bare name is a named volume kept per project or per lane."
           },
-          "markdownDescription": "Mounts as `source:destination[:mode]`. `./relative` and `/absolute` sources are bind mounts, relative ones from the owning worktree; a bare name is a named volume kept per project or per lane.",
+          "markdownDescription": "Mounts as `source:destination[:mode]`. `./relative` and `/absolute` sources are bind mounts; relative ones start at the project file's directory, in the lane's worktree for a `per_lane` container and in the primary worktree for a shared one. A bare name is a named volume kept per project or per lane.",
           "type": [
             "array",
             "null"
@@ -852,7 +852,7 @@
               "type": "null"
             }
           ],
-          "description": "Compose file, or a list of files merged like repeated `-f`, relative to the project. Its services are shared by every lane unless listed in `per_lane`; the shared project runs from the primary worktree with that worktree's `.env` as `--env-file`.",
+          "description": "Compose file, or a list of files merged like repeated `-f`, relative to the project. Its services are shared by every lane unless listed in `per_lane`; the shared project runs from the primary worktree with the `.env` next to the project file there as `--env-file`.",
           "examples": [
             "docker-compose.yml",
             [
@@ -860,7 +860,7 @@
               "docker-compose.dev.yml"
             ]
           ],
-          "markdownDescription": "Compose file, or a list of files merged like repeated `-f`, relative to the project. Its services are shared by every lane unless listed in `per_lane`; the shared project runs from the primary worktree with that worktree's `.env` as `--env-file`."
+          "markdownDescription": "Compose file, or a list of files merged like repeated `-f`, relative to the project. Its services are shared by every lane unless listed in `per_lane`; the shared project runs from the primary worktree with the `.env` next to the project file there as `--env-file`."
         },
         "containers": {
           "additionalProperties": {
@@ -1606,20 +1606,20 @@
         "env": {
           "additionalProperties": {
             "$ref": "#/$defs/Templated_Scalar",
-            "description": "Variables for the services this profile starts, above their own `env`.",
+            "description": "Variables for the services, tasks and `infra.setup` and `infra.teardown` commands of a lane while this profile is active, and for `devlanes exec` and `devlanes with` when they read neither `self` nor `replica`. They sit above each unit's own `env`, which cannot override them, so put a variable that some task must not get, such as `NODE_ENV: production` next to an install task that needs devDependencies, in `global_env` instead.",
             "examples": [
-              "production"
+              "warn"
             ],
-            "markdownDescription": "Variables for the services this profile starts, above their own `env`."
+            "markdownDescription": "Variables for the services, tasks and `infra.setup` and `infra.teardown` commands of a lane while this profile is active, and for `devlanes exec` and `devlanes with` when they read neither `self` nor `replica`. They sit above each unit's own `env`, which cannot override them, so put a variable that some task must not get, such as `NODE_ENV: production` next to an install task that needs devDependencies, in `global_env` instead."
           },
           "default": {},
-          "description": "Variables for the services this profile starts, above their own `env`.",
+          "description": "Variables for the services, tasks and `infra.setup` and `infra.teardown` commands of a lane while this profile is active, and for `devlanes exec` and `devlanes with` when they read neither `self` nor `replica`. They sit above each unit's own `env`, which cannot override them, so put a variable that some task must not get, such as `NODE_ENV: production` next to an install task that needs devDependencies, in `global_env` instead.",
           "examples": [
             {
-              "NODE_ENV": "production"
+              "LOG_LEVEL": "warn"
             }
           ],
-          "markdownDescription": "Variables for the services this profile starts, above their own `env`.",
+          "markdownDescription": "Variables for the services, tasks and `infra.setup` and `infra.teardown` commands of a lane while this profile is active, and for `devlanes exec` and `devlanes with` when they read neither `self` nor `replica`. They sit above each unit's own `env`, which cannot override them, so put a variable that some task must not get, such as `NODE_ENV: production` next to an install task that needs devDependencies, in `global_env` instead.",
           "type": "object"
         },
         "exclude": {
@@ -2372,7 +2372,7 @@
               "type": "null"
             }
           ],
-          "description": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the lane's worktree root unless `cwd` is set. devlanes runs it exactly as written, so it cannot be combined with `preset`; prefer `run_script` when the command is a script in a project file. Exactly one of `run` and `run_script` is required after templates are applied. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`.",
+          "description": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the project file's directory unless `cwd` is set. devlanes runs it exactly as written, so it cannot be combined with `preset`; prefer `run_script` when the command is a script in a project file. Exactly one of `run` and `run_script` is required after templates are applied. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`.",
           "examples": [
             "pnpm dev",
             [
@@ -2382,7 +2382,7 @@
               "${{ self.port }}"
             ]
           ],
-          "markdownDescription": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the lane's worktree root unless `cwd` is set. devlanes runs it exactly as written, so it cannot be combined with `preset`; prefer `run_script` when the command is a script in a project file. Exactly one of `run` and `run_script` is required after templates are applied. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`."
+          "markdownDescription": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the project file's directory unless `cwd` is set. devlanes runs it exactly as written, so it cannot be combined with `preset`; prefer `run_script` when the command is a script in a project file. Exactly one of `run` and `run_script` is required after templates are applied. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`."
         },
         "run_script": {
           "anyOf": [

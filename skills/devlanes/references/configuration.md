@@ -27,12 +27,12 @@ A second file next to `devlanes.yaml` runs the same apps another way. It extends
 # devlanes.prod.yaml
 extends: devlanes.yaml                  # a path or a list, relative to this file
 project: acme-prod
+global_env:
+  NODE_ENV: production                  # not in the profile's env, which tasks cannot override
 profiles:
   default:
     run_scripts:
       dev: start
-    env:
-      NODE_ENV: production
 ```
 
 The extended files merge first, each followed by its own local file (`devlanes.local.yaml`), then this file and `devlanes.prod.local.yaml`; later files win with the local-override rules below. An extended file may be partial and its `project` is ignored. Run it with `devlanes --file devlanes.prod.yaml start` the first time and `devlanes -p acme-prod ...` after that. Both projects run side by side (`acme.localhost` and `acme-prod.localhost`), but they share the shared Compose project (`devlanes infra down` from one stops both), any value built only from `lane.name` such as a database name (put `${{ project.name }}` in it to keep data apart), a `lanes.vars.domain` that spells out the name, and build output in the worktree such as `.next`.

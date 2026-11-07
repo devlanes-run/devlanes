@@ -1069,6 +1069,7 @@ impl Inner {
             role: "exec",
             keep_awake: false,
             fingerprint: None,
+            notes: Vec::new(),
         };
         // Held until the unit is recorded, so a clean or reset that begins meanwhile
         // waits and then stops it, or refuses it once the lane is released.

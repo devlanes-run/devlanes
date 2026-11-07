@@ -577,7 +577,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             {"key": "PORT", "value": "20101", "layer": "devlanes"},
             {"key": "API_TOKEN", "value": "[redacted]", "layer": "global"},
             {"key": "NODE_ENV", "value": "development", "layer": "service"},
-        ], "truncated": false, "next_cursor": null}),
+        ], "notes": ["npm: pnpm 10.4.1 (packageManager in package.json)"], "truncated": false, "next_cursor": null}),
         ),
         // The lane's env before its infra is up: a value that reads it waits.
         (

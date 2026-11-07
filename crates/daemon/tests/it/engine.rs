@@ -1692,6 +1692,48 @@ async fn lane_env_and_explain() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// `env --explain` returns the launch notes before the unit starts (from a fresh
+/// resolution) and while it runs (from the unit's record); plain `env` has none.
+async fn explain_shows_launch_notes() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BASIC);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                contributors: vec![std::sync::Arc::new(crate::NoteContributor)],
+                ..Setup::default()
+            },
+        )
+        .await;
+        let explain = || {
+            h.call(
+                Method::Env,
+                json!({"unit": "web", "explain": true}),
+                cx(&main),
+            )
+        };
+        assert_eq!(
+            explain().await.expect("explain")["notes"],
+            json!(["note for web"])
+        );
+        assert!(start(&h, cx(&main), json!({"units": ["web"]})).await.ready);
+        assert_eq!(
+            explain().await.expect("explain")["notes"],
+            json!(["note for web"])
+        );
+        let plain = h
+            .call(Method::Env, json!({"unit": "web"}), cx(&main))
+            .await
+            .expect("env");
+        assert!(plain.get("notes").is_none() && plain["env"].get("PORT").is_some());
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// `status` covers the cwd's project; `all: true` covers everything.
 async fn status_scope() {
     tokio::time::timeout(LIMIT, async {

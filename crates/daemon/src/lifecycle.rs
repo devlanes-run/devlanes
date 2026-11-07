@@ -90,6 +90,8 @@ pub(crate) struct SpawnRequest {
     pub keep_awake: bool,
     /// A service run's [`crate::drift::Fingerprint`]; `None` for one-shot units.
     pub fingerprint: Option<crate::drift::Fingerprint>,
+    /// Launch notes, for `env --explain`.
+    pub notes: Vec<String>,
 }
 
 /// Copies an environment with its provenance (the type is deliberately not `Clone`).
@@ -129,6 +131,7 @@ impl SpawnRequest {
             role: "service",
             keep_awake: service.keep_awake,
             fingerprint: Some(crate::drift::Fingerprint::of(service)),
+            notes: service.launch.notes.clone(),
         }
     }
 
@@ -166,6 +169,7 @@ impl SpawnRequest {
             role: kind.word(),
             keep_awake: false,
             fingerprint: None,
+            notes: launch.notes.clone(),
         }
     }
 }
@@ -2186,6 +2190,7 @@ impl Inner {
                 stop: request.stop,
                 literal_port: request.literal_port,
                 env: request.env,
+                notes: request.notes,
                 left_out: BTreeMap::new(),
                 failure_tail: Vec::new(),
                 failure_tail_styled: Vec::new(),
@@ -2294,6 +2299,8 @@ impl Inner {
                     stop: rec.stop,
                     literal_port: rec.literal_port,
                     env: rec.env,
+                    // Never alive, so `env --explain` resolves afresh and reads neither.
+                    notes: Vec::new(),
                     left_out: BTreeMap::new(),
                     failure_tail: vec![rec.note],
                     failure_tail_styled: Vec::new(),

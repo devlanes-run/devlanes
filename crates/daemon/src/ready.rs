@@ -271,9 +271,10 @@ async fn probe_until_ready(
 /// Waits for a line of this run's log that `regex` matches, for a unit whose
 /// output renders its screen (ConPTY): rows are placed with cursor moves, so
 /// the raw stream has no line starts, while the screen model logs whole rows,
-/// the lines `devlanes logs` shows. The log is read at most once per [`POLL`],
-/// only after output arrived, and once more after a quiet [`POLL`], since the
-/// screen model logs a row it stopped on after a pause.
+/// the lines `devlanes logs` shows. The log is read from where the last read
+/// stopped once per [`POLL`], also while output is quiet: the screen model logs
+/// the row output stopped on after a pause, and under load that row can reach
+/// the log well after the last output.
 async fn logged_line_matches(
     host: &UnitHost,
     regex: &regex::Regex,
@@ -282,47 +283,36 @@ async fn logged_line_matches(
     use tokio::sync::broadcast::error::RecvError;
     let mut output = host.subscribe_output();
     let mut cursor = host.run_cursor();
-    // The first read covers what was logged before the subscription.
-    let mut stale = true;
-    let mut settle = false;
     loop {
-        if stale || settle {
-            let mut read = true;
-            loop {
-                let query = devlanes_proto::LogQuery {
-                    cursor: cursor.clone(),
-                    max_bytes: Some(64 * 1024),
-                    ..devlanes_proto::LogQuery::default()
-                };
-                let page = match host.logs(query).await {
-                    Ok(page) => page,
-                    // Read again on the next tick; only the deadline fails the check.
-                    Err(error) => {
-                        tracing::debug!(unit = %host.info().name, code = %error.code, "ready.log read failed");
-                        read = false;
-                        break;
-                    }
-                };
-                if page.items.iter().any(|line| regex.is_match(&line.text)) {
-                    return Ok(());
-                }
-                if let Some(line) = page.items.last() {
-                    cursor = Some(format!("{}#{}", line.unit, line.seq));
-                }
-                if !page.truncated || page.items.is_empty() {
+        loop {
+            let query = devlanes_proto::LogQuery {
+                cursor: cursor.clone(),
+                max_bytes: Some(64 * 1024),
+                ..devlanes_proto::LogQuery::default()
+            };
+            let page = match host.logs(query).await {
+                Ok(page) => page,
+                // Read again on the next tick; only the deadline fails the check.
+                Err(error) => {
+                    tracing::debug!(unit = %host.info().name, code = %error.code, "ready.log read failed");
                     break;
                 }
+            };
+            if page.items.iter().any(|line| regex.is_match(&line.text)) {
+                return Ok(());
             }
-            if read {
-                settle = stale;
-                stale = false;
+            if let Some(line) = page.items.last() {
+                cursor = Some(format!("{}#{}", line.unit, line.seq));
+            }
+            if !page.truncated || page.items.is_empty() {
+                break;
             }
         }
         let tick = (Instant::now() + POLL).min(deadline);
         loop {
             match tokio::time::timeout_at(tick, output.recv()).await {
                 Err(_) => break,
-                Ok(Ok(_) | Err(RecvError::Lagged(_))) => stale = true,
+                Ok(Ok(_) | Err(RecvError::Lagged(_))) => {}
                 Ok(Err(RecvError::Closed)) => return Err(()),
             }
         }

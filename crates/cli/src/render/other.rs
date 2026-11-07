@@ -323,7 +323,8 @@ fn one_line(value: &str) -> String {
 
 /// `env`: `KEY=VALUE` lines, or with `--explain` a `KEY VALUE LAYER` table.
 /// Variables left out until infra is up follow, as `#` comments after `KEY=VALUE`
-/// lines so the output still reads as shell assignments.
+/// lines so the output still reads as shell assignments. The table ends with
+/// the launch's notes.
 pub(super) fn env(data: &Value) -> Vec<String> {
     let left_out = words::left_out(data);
     if let Some(items) = data.get("items").and_then(Value::as_array) {
@@ -343,6 +344,9 @@ pub(super) fn env(data: &Value) -> Vec<String> {
         }
         let mut lines = table(&rows, "");
         lines.extend(left_out);
+        for note in list(data, "notes").iter().filter_map(Value::as_str) {
+            lines.push(format!("note: {}", one_line(note)));
+        }
         return lines;
     }
     let Some(env) = data.get("env").and_then(Value::as_object) else {

@@ -17,6 +17,11 @@ lanes:
     # database apart. The vhost, bucket and Redis DB are still shared.
     db_name: acme_prod_${{ lane.name }}
 
+global_env:
+  # For the services and tasks of this project; a task that needs devDependencies sets
+  # NODE_ENV in its own env.
+  NODE_ENV: production
+
 tasks:
   build:
     run: pnpm build
@@ -30,5 +35,3 @@ profiles:
     # Services whose run_script names dev run start instead.
     run_scripts:
       dev: start
-    env:
-      NODE_ENV: production
