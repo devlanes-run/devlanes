@@ -395,7 +395,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
         (
             "lane_new",
             Method::LaneNew,
-            json!({"lane": lane(Some(6), "feat/checkout", "idle", vec![])}),
+            json!({"lane": lane(Some(6), "feat/checkout", "idle", vec![]), "folder": "/src/acme/web"}),
         ),
         (
             "lane_clean",
@@ -2258,6 +2258,17 @@ fn daemon_errors_are_worded_with_hints() {
             "name_taken",
             json!({"name": "pgadmin", "kind": "external", "lane": "acme@2"}),
             2,
+        ),
+        RpcError::new(
+            "name_taken",
+            json!({"name": "review", "project": "acme", "kind": "lane", "lane": "acme@2"}),
+            1,
+        ),
+        // A unit selector that is a lane's number: `stop 1`.
+        RpcError::new(
+            "not_found",
+            json!({"reference": "1", "candidates": ["acme@0:web"], "names_lane": "acme@1"}),
+            3,
         ),
         RpcError::new(
             "external_unit",

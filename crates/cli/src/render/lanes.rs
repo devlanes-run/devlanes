@@ -1086,7 +1086,12 @@ pub(super) fn lane_new(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     if let Some(branch) = &lane.branch {
         line.push_str(&format!(" ({})", clean(branch)));
     }
-    line.push_str(&format!(" at {}", clean(&lane.path.display().to_string())));
+    // The project's folder; daemons before it existed send only the worktree root.
+    let folder = data
+        .get("folder")
+        .and_then(Value::as_str)
+        .map_or_else(|| lane.path.display().to_string(), str::to_owned);
+    line.push_str(&format!(" at {}", clean(&folder)));
     let mut lines = vec![line];
     for note in lane_notes(&lane) {
         lines.push(format!("  {note}"));

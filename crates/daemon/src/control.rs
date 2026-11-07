@@ -58,6 +58,9 @@ struct LaneNewParams {
     /// Stream the start's lane events on the request.
     #[serde(default)]
     events: bool,
+    /// `--env` overrides for the start.
+    #[serde(default)]
+    env: EnvMap,
 }
 
 /// `lane.clean` parameters.
@@ -173,6 +176,41 @@ impl Inner {
         self.lane_for_units(units, context).await
     }
 
+    /// A lone unit selector that matched nothing but is a lane number or an
+    /// extra lane's name (`stop 1`, `stop review`): the error names that lane
+    /// under `names_lane`, so the client can suggest `--lane` instead of acting
+    /// on a guess. Branch, folder and path matches are left out, since those
+    /// are often a mistyped unit.
+    async fn note_lane_selector(
+        self: &Arc<Self>,
+        mut error: RpcError,
+        units: &[String],
+        context: &Context,
+    ) -> RpcError {
+        let [unit] = units else { return error };
+        let plain = !unit.is_empty()
+            && !unit.starts_with('+')
+            && !unit.contains([':', '@', '*', '?', '[', '{']);
+        if error.code != "not_found"
+            || context.lane.is_some()
+            || !plain
+            || error.data.get("reference").and_then(Value::as_str) != Some(unit.as_str())
+        {
+            return error;
+        }
+        let Ok((project, lane)) = self.resolve_lane_ref(unit, context).await else {
+            return error;
+        };
+        let st = lane.st();
+        let names_lane = st.record.is_some()
+            && (unit.bytes().all(|b| b.is_ascii_digit())
+                || st.alias().is_some_and(|(_, name)| name == unit));
+        if names_lane && let Some(data) = error.data.as_object_mut() {
+            data.insert("names_lane".into(), json!(st.reference(&project.name())));
+        }
+        error
+    }
+
     /// `start`: the lane pipeline, then waits for ready/failed (StartResult).
     pub(crate) async fn start_method(
         self: &Arc<Self>,
@@ -210,7 +248,14 @@ impl Inner {
                 restoring: false,
             },
         );
-        let mut result = self.with_lane_events(session, stream, start).await?;
+        let mut result = match self.with_lane_events(session, stream, start).await {
+            Ok(result) => result,
+            Err(error) => {
+                return Err(self
+                    .note_lane_selector(error, &selection.units, context)
+                    .await);
+            }
+        };
         // Only this lane came back; the shell's env may not suit the others, so
         // they are named for `lane resume` instead of started too.
         if selection.units.is_empty() && selection.profile_names().is_empty() {
@@ -264,9 +309,17 @@ impl Inner {
             Self::refuse_external(&project, &lane, &selectors)?;
             let selectors = (!selectors.is_empty()).then_some(selectors);
             let mine = selection.mine.then_some(&context.actor);
-            stopped = self
+            stopped = match self
                 .stop_lane(&project, &lane, selectors, mine, selection.transient)
-                .await?;
+                .await
+            {
+                Ok(stopped) => stopped,
+                Err(error) => {
+                    return Err(self
+                        .note_lane_selector(error, &selection.units, context)
+                        .await);
+                }
+            };
             // A stopped unit has no drift left to report.
             self.prune_drift(&lane);
         }
@@ -315,7 +368,14 @@ impl Inner {
             self.with_lane_events(session, stream, restart).await?
         } else {
             let restart = self.restart_units(&project, &lane, &selectors, options);
-            self.with_lane_events(session, stream, restart).await?
+            match self.with_lane_events(session, stream, restart).await {
+                Ok(result) => result,
+                Err(error) => {
+                    return Err(self
+                        .note_lane_selector(error, &selection.units, context)
+                        .await);
+                }
+            }
         };
         serde_json::to_value(result).map_err(|e| internal("encode", e))
     }
@@ -483,9 +543,21 @@ impl Inner {
             .extra_lane(&project, context, args.name.as_deref())
             .await?;
         let name = project.name();
-        let summary = lane_summary(&name, &lane.st());
-        let mut result = json!({"lane": summary, "name": extra});
+        let (summary, path) = {
+            let st = lane.st();
+            (lane_summary(&name, &st), st.path.clone())
+        };
+        // The project's folder, which is below the worktree root when the
+        // project file is in a subfolder. `join("")` would add a separator.
+        let (config_dir, _) = project.config_path();
+        let folder = if config_dir.as_os_str().is_empty() {
+            path
+        } else {
+            path.join(config_dir)
+        };
+        let mut result = json!({"lane": summary, "name": extra, "folder": folder});
         if args.start {
+            // Older CLIs send no environment for `lane new --start`.
             let env = carries_env(context).or_else(|| project.st().last_env.clone());
             let start_id = self.new_start_id();
             let stream = args
@@ -499,7 +571,7 @@ impl Inner {
                     profiles: Vec::new(),
                     transient: false,
                     env,
-                    overrides: EnvMap::new(),
+                    overrides: args.env.clone(),
                     actor: context.actor.clone(),
                     timeout: self.opts.start_timeout,
                     session: None,
@@ -518,7 +590,9 @@ impl Inner {
 
     /// Another lane for the cwd's folder (`lane new`): its own
     /// worktree row, `<base identity>#lane=<name>`, so it gets its own index,
-    /// ports and domain while the folder's first lane stays the default.
+    /// ports and domain while the folder's first lane stays the default. A
+    /// cleaned extra lane's name is free again, and using it creates a new lane
+    /// with empty data and history.
     async fn extra_lane(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -551,33 +625,41 @@ impl Inner {
                 )
             }));
         }
-        let taken = |candidate: &str| {
-            project.lanes().iter().any(|lane| {
+        // The lane a name already reaches. A cleaned extra lane holds none, so its
+        // name can be used again; record names (`main`, `lane<N>`) are refused below.
+        let holder = |candidate: &str| {
+            project.lanes().iter().find_map(|lane| {
                 let st = lane.st();
-                st.alias().is_some_and(|(_, alias)| alias == candidate)
-                    || st.record.as_ref().is_some_and(|r| r.name == candidate)
-                    || st.branch.as_deref() == Some(candidate)
+                let holds = st.record.is_some()
+                    && st.alias().is_some_and(|(_, alias)| alias == candidate)
+                    || st.branch.as_deref() == Some(candidate);
+                holds.then(|| st.reference(&project.name()))
             })
         };
         let name = match name {
             Some(name) => {
+                let index_name = name
+                    .strip_prefix("lane")
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
                 let valid = !name.is_empty()
                     && name.len() <= 64
                     && name
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-                    && !name.bytes().all(|b| b.is_ascii_digit());
+                    && !name.bytes().all(|b| b.is_ascii_digit())
+                    && name != "main"
+                    && !index_name;
                 if !valid {
                     return Err(RpcError::new(
                         "invalid_reference",
-                        json!({"reference": name, "message": "a lane name uses letters, digits, `-`, `_` and `.`, and is not a number"}),
+                        json!({"reference": name, "message": "a lane name uses letters, digits, `-`, `_` and `.`, is not a number, and is not main or lane<N>"}),
                         2,
                     ));
                 }
-                if taken(name) {
+                if let Some(lane) = holder(name) {
                     return Err(RpcError::new(
                         "name_taken",
-                        json!({"name": name, "project": project.name()}),
+                        json!({"name": name, "project": project.name(), "kind": "lane", "lane": lane}),
                         1,
                     ));
                 }
@@ -587,7 +669,7 @@ impl Inner {
                 let dir = crate::model::dir_name(&path);
                 (2..)
                     .map(|n| format!("{dir}-{n}"))
-                    .find(|candidate| !taken(candidate))
+                    .find(|candidate| holder(candidate).is_none())
                     .unwrap_or_else(|| format!("{dir}-extra"))
             }
         };
@@ -604,6 +686,12 @@ impl Inner {
             .await
             .map_err(store_error)?;
         let existing = project.st().lanes.get(&record.id).cloned();
+        if existing
+            .as_ref()
+            .is_none_or(|lane| lane.st().record.is_none())
+        {
+            self.forget_cleaned_lane(project, record.id).await?;
+        }
         let lane = match existing {
             Some(lane) => lane,
             None => {
@@ -628,6 +716,31 @@ impl Inner {
             }));
         }
         Ok((lane, name))
+    }
+
+    /// Deletes the cleaned lane row of an extra lane's worktree before its name
+    /// is used again, with the run history, setup and task records that cascade
+    /// from it. The next claim then inserts a new row, whose new id gives a data
+    /// folder the old lane never had, even when `lane clean` could not delete
+    /// the old one (a file held open on Windows); that delete is retried here.
+    async fn forget_cleaned_lane(
+        &self,
+        project: &ProjectRt,
+        worktree: devlanes_core::WorktreeId,
+    ) -> Result<(), RpcError> {
+        let lanes = self
+            .store
+            .lanes(Some(project.id))
+            .await
+            .map_err(store_error)?;
+        let Some(old) = lanes
+            .into_iter()
+            .find(|lane| lane.worktree_id == worktree && lane.cleaned_at.is_some())
+        else {
+            return Ok(());
+        };
+        self.remove_lane_data(&project.name(), old.id).await;
+        self.store.delete_lane(old.id).await.map_err(store_error)
     }
 
     /// `lane.clean` (requires `yes`).

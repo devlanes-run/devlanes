@@ -254,6 +254,11 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                     "; a project from a file other than devlanes.yaml is known once a command names it with --file",
                 );
             }
+            // A unit selector that is a lane's number or name (`stop 1`).
+            let lane = text(data, "names_lane");
+            if !lane.is_empty() {
+                message.push_str(&format!("; {name} is lane {lane}"));
+            }
             (message, Some(Hint::command(["lane", "ls"])))
         }
         "ambiguous" => (
@@ -613,6 +618,14 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 Some(Hint::command(["url", "print", &format!("{lane}:{name}")])),
             )
         }
+        "name_taken" if text(data, "kind") == "lane" => (
+            format!(
+                "{} already names {}; give lane new another --name",
+                text(data, "name"),
+                text(data, "lane")
+            ),
+            Some(Hint::command(["lane", "ls"])),
+        ),
         "name_taken" if text(data, "kind") == devlanes_proto::EXTERNAL_KIND => (
             format!(
                 "{} is already an infra.external port of {}, so give exec another --name",
