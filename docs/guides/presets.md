@@ -31,7 +31,7 @@ services:
 
 `vite preview` takes the same flags, so an `e2e` profile with `run_scripts: { dev: preview }` serves the built app on the same hostname. `serve -s dist` does not accept them.
 
-The Cloudflare Vite plugin runs workerd inside Vite. Its inspector port is a literal in `vite.config.ts` by default; read it from an environment variable and feed it `${{ self.ports.inspector }}` so two lanes do not collide.
+The Cloudflare Vite plugin runs workerd inside Vite. Its inspector listens on 9229, or on the next free port when another lane holds 9229, so lanes do not collide but none knows which port it got. To route a hostname to it, give it the lane's port: in `vite.config.ts` pass `inspectorPort: process.env.INSPECTOR_PORT ? Number(process.env.INSPECTOR_PORT) : undefined` to `cloudflare()`, set `INSPECTOR_PORT: ${{ self.ports.inspector }}` in the service's `env`, and route it with `host_header: upstream` as for [Wrangler](#wrangler) below.
 
 The preset adds `--port <self.port> --strictPort --host 127.0.0.1`, then `vite.args`. Nothing else. By hand:
 
@@ -57,7 +57,22 @@ services:
         timeout: 120s
 ```
 
-Next 15.3 and later warn about dev requests from an origin other than the one it listens on and may block them; set `allowedDevOrigins: ["*.localhost"]` in `next.config.js` when that happens. Server-side `fetch` to other lane services trusts the CA through `NODE_EXTRA_CA_CERTS`.
+Next 16.3 and later accept dev requests from `localhost` and every subdomain of it, so lane hostnames need no config. Next 16.2 blocks a hostname with more than one label before `.localhost`, such as `web.acme2.localhost`, and 15.2.4 to 16.1 warn about it; set `allowedDevOrigins: ["**.localhost"]` in `next.config.js` on those. With a custom TLD every release needs the entry, such as `allowedDevOrigins: ["**.test"]`. Server-side `fetch` to other lane services trusts the CA through `NODE_EXTRA_CA_CERTS`.
+
+Lanes of one folder (`devlanes lane new --name`) share `.next`, and Next 16 and later run one `next dev` per build folder: the second lane exits with `Another next dev server is already running.` (16.0 and 16.1: `Unable to acquire lock`). Give each lane its own folder. Next requires `distDir` inside the app or its workspace, so it cannot go in the lane data folder:
+
+```js
+// next.config.js
+module.exports = { distDir: process.env.NEXT_DIST_DIR || ".next" };
+```
+
+```yaml devlanes
+services:
+  web:
+    preset: next
+    env:
+      NEXT_DIST_DIR: .next/lane${{ lane.index }}
+```
 
 The preset adds `--port <self.port> --hostname 127.0.0.1`, then `next.args`. Nothing else. By hand:
 
@@ -91,7 +106,7 @@ lanes:
   hosts_file: always
 ```
 
-- `inspector` is allocated automatically for every wrangler service; `--inspector-port` gets it. Route a hostname to it with `hosts: [{ host: "inspect.${{ lane.domain }}", port: inspector }]`.
+- `inspector` is allocated automatically for every wrangler service; `--inspector-port` gets it. The inspector accepts only `localhost` or `127.0.0.1` as the Host and answers anything else with `401 Disallowed Host header`, so a hostname routed to it needs `host_header: upstream`: `hosts: [{ host: "inspect.${{ lane.domain }}", port: inspector, host_header: upstream }]`. It also checks `Origin`, which Cloudflare's hosted DevTools passes.
 - `vars` become `--var KEY:VALUE`, which override the `vars` in `wrangler.toml`. Numbers and booleans are stringified.
 - Each lane gets its own dev registry, `wrangler-registry` in the [lane data folder](ports-and-env.md#lane-data-folder), so service bindings between workers of one lane resolve to that lane's workers, also when two lanes run from one folder. devlanes points `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH` at `${{ lane.data_path }}/wrangler-registry`. `wrangler dev` reads `WRANGLER_REGISTRY_PATH`, but Miniflare 5 prefers `CLOUDFLARE_DEV_REGISTRY_PATH` when it is set, and the Cloudflare Vite plugin reads `CLOUDFLARE_DEV_REGISTRY_PATH` (`MINIFLARE_REGISTRY_PATH` in releases up to 1.49.0). `isolate_registry: false` turns that off. The variables are set for every unit of every lane and replace values exported in your shell, so workers started by `wrangler dev`, the Vite plugin, a Next plugin, a script or a task such as `wrangler d1 migrations apply` all use the lane's registry. Other programs ignore them. Do not set them yourself.
 - A `dev` script that already passes `--port` or `--inspector-port` is refused with the fix in the message, and so are those flags in `args` (by `devlanes config check`). Move the default into `wrangler.toml` (`dev.port`, `dev.inspector_port`) and let the flag override it.

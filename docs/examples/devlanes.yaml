@@ -311,7 +311,7 @@ services:
   ai-gateway:
     platform: python
     run: uv run uvicorn app:main --port ${{ self.port }} --reload
-    # Working directory, relative to the lane's worktree.
+    # Working directory, relative to the project file's directory in the lane's worktree.
     cwd: services/ai-gateway
     hosts: "ai.${{ lane.domain }}"
     # When devlanes considers the service started; without ready, a port check if it has hosts, else at once.
@@ -392,7 +392,7 @@ profiles:
     include: [+web]
     # Skip containers and infra setup.
     infra: false
-    # Variables for the profile's services, above their own env.
+    # Variables for the services and tasks the lane runs under this profile, above their own env.
     env:
       ACME_USE_STAGE_APIS: "1"
   e2e:                                  # production-like run: devlanes with --profile e2e -- pnpm test:e2e

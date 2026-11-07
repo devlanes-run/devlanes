@@ -393,9 +393,13 @@ pub struct ProfileOptions {
     /// false. Defaults to true.
     #[schemars(extend("examples" = [false,true]))]
     pub infra: Option<Templated<bool>>,
-    /// Variables for the services this profile starts, above their own `env`.
+    /// Variables for the services, tasks and `infra.setup` and `infra.teardown` commands of a
+    /// lane while this profile is active. They sit above each unit's own `env`, which cannot
+    /// override them, so put a variable that some task must not get, such as
+    /// `NODE_ENV: production` next to an install task that needs devDependencies, in
+    /// `global_env` instead.
     #[serde(default)]
-    #[schemars(extend("examples" = [{"NODE_ENV":"production"}]))]
+    #[schemars(extend("examples" = [{"LOG_LEVEL":"warn"}]))]
     pub env: Env,
     /// Swap script names for services that use `run_script`: `{ dev: start }` runs the
     /// `start` script wherever a service's `run_script` names `dev`. The file stays the
@@ -689,7 +693,8 @@ impl ProjectExtends {
 pub struct InfraConfig {
     /// Compose file, or a list of files merged like repeated `-f`, relative to the project.
     /// Its services are shared by every lane unless listed in `per_lane`; the shared
-    /// project runs from the primary worktree with that worktree's `.env` as `--env-file`.
+    /// project runs from the primary worktree with the `.env` next to the project file there
+    /// as `--env-file`.
     pub compose: Option<ComposeFiles>,
     /// Name of the shared Compose project, fixed so `docker compose -p <name>` reaches the
     /// same containers outside devlanes. Defaults to the name Compose picks itself.
@@ -766,8 +771,9 @@ pub struct ContainerConfig {
     pub command: Option<Run>,
     #[schemars(extend("examples" = [["./infra/cerbos:/policies:ro"]]))]
     /// Mounts as `source:destination[:mode]`. `./relative` and `/absolute` sources are bind
-    /// mounts, relative ones from the owning worktree; a bare name is a named volume kept
-    /// per project or per lane.
+    /// mounts; relative ones start at the project file's directory, in the lane's worktree for
+    /// a `per_lane` container and in the primary worktree for a shared one. A bare name is a
+    /// named volume kept per project or per lane.
     pub volumes: Option<Vec<Templated<String>>>,
     #[serde(default)]
     #[schemars(extend("examples" = [{"http":3592,"grpc":3593}]))]

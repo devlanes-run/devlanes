@@ -226,7 +226,7 @@ service_fields! {
     extends: String,
     /// Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and
     /// multi-line scripts work; a list is an argv run directly without a shell. It starts in
-    /// the lane's worktree root unless `cwd` is set. devlanes runs it exactly as written, so
+    /// the project file's directory unless `cwd` is set. devlanes runs it exactly as written, so
     /// it cannot be combined with `preset`; prefer `run_script` when the command is a script
     /// in a project file. Exactly one of `run` and `run_script` is required after templates
     /// are applied.

@@ -2,7 +2,7 @@
 
 <!-- Generated from the clap definitions in crates/cli by crates/cli/tests/it/reference_docs.rs. Edit the help text in crates/cli, then run DEVLANES_BLESS=1 cargo nextest run -p devlanes-cli. -->
 
-Every `devlanes` command and option with its help text; `devlanes <command> --help` prints the same.
+Every `devlanes` command and option with its help text; `devlanes <command> --help` prints the same. Commands hidden from `--help` are listed at the end.
 
 Run a dev environment per git worktree, side by side.
 
@@ -917,3 +917,13 @@ devlanes completions [OPTIONS] <SHELL>
 
 - `<SHELL>`: Shell to generate completions for
   Values: `bash`, `elvish`, `fish`, `powershell`, `zsh`.
+
+## Hidden commands
+
+Hidden from `--help` because you rarely type them. A `remote.<box>.command` must end with `devlanes tunnel --stdio` ([remote boxes reached by a command](../guides/remote-command.md)); devlanes, ssh, the install scripts and the agent plugin run the others.
+
+- `devlanes update --finish`: Restart the daemon into this binary after an update (run by devlanes update and the install scripts)
+- `devlanes daemon run [OPTIONS]`: Run the daemon in this process (spawned by the client)
+- `devlanes tunnel [OPTIONS] --stdio`: Serve a connecting client over stdin and stdout (run by remote connect over SSH, or by a remote.<box>.command)
+- `devlanes askpass [OPTIONS] [PROMPT]`: Answer an ssh prompt through the connected client (SSH_ASKPASS)
+- `devlanes __agent-hook --agent <AGENT>`: Check a shell command an agent is about to run and block one that starts a dev server in the background (run by the agent plugin's hooks)

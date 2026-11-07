@@ -20,7 +20,7 @@ infra:
   hidden: [postgres]                    # not mirrored to machines connected with remote connect
 ```
 
-The shared project runs from the primary worktree with that worktree's `.env` as `--env-file`, so Compose interpolation (`${ACME_DB_PORT:-15432}`) sees your `.env` plus `infra.env`. Processes do not see `infra.env`; use `global_env` for them.
+The shared project runs from the primary worktree with the `.env` next to the project file there as `--env-file`, so Compose interpolation (`${ACME_DB_PORT:-15432}`) sees your `.env` plus `infra.env`. Processes do not see `infra.env`; use `global_env` for them.
 
 Published ports of shared services are taken as the file declares them. Two forms work well:
 
@@ -59,7 +59,7 @@ infra:
     cerbos:
       image: ghcr.io/cerbos/cerbos:0.40.0
       command: [server, --config=/policies/config.yaml]
-      volumes: ["./infra/cerbos:/policies:ro"]     # relative to the worktree
+      volumes: ["./infra/cerbos:/policies:ro"]     # relative to the project file's directory
       ports:                                       # container ports by name; host side allocated
         http: 3592
         grpc: 3593
