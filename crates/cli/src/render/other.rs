@@ -322,7 +322,10 @@ fn one_line(value: &str) -> String {
 }
 
 /// `env`: `KEY=VALUE` lines, or with `--explain` a `KEY VALUE LAYER` table.
+/// Variables left out until infra is up follow, as `#` comments after `KEY=VALUE`
+/// lines so the output still reads as shell assignments.
 pub(super) fn env(data: &Value) -> Vec<String> {
+    let left_out = words::left_out(data);
     if let Some(items) = data.get("items").and_then(Value::as_array) {
         let mut rows = vec![["KEY", "VALUE", "LAYER"].map(str::to_owned).to_vec()];
         for item in items {
@@ -338,7 +341,9 @@ pub(super) fn env(data: &Value) -> Vec<String> {
                 text(item, "layer"),
             ]);
         }
-        return table(&rows, "");
+        let mut lines = table(&rows, "");
+        lines.extend(left_out);
+        return lines;
     }
     let Some(env) = data.get("env").and_then(Value::as_object) else {
         return tree(data);
@@ -356,6 +361,7 @@ pub(super) fn env(data: &Value) -> Vec<String> {
                     .unwrap_or_else(|| display_value(value))
             )
         })
+        .chain(left_out.into_iter().map(|note| format!("# {note}")))
         .collect()
 }
 

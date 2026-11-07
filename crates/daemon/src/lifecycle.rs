@@ -2090,6 +2090,7 @@ impl Inner {
                 stop: request.stop,
                 literal_port: request.literal_port,
                 env: request.env,
+                left_out: BTreeMap::new(),
                 failure_tail: Vec::new(),
                 failure_tail_styled: Vec::new(),
                 preset: request.preset,

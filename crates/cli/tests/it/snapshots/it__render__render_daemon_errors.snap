@@ -23,11 +23,14 @@ error: Docker isn't running or can't be reached
 hint: devlanes doctor
 error: timed out waiting for acme@2:api
 hint: devlanes debug why acme@2:api
+error: acme@2:job is still running after 5s
+hint: devlanes logs acme@2:job --tail 200
 error: remote unlock is not supported yet
 error: devlanes.yaml is invalid at line 2, column 1: unknown field `serivces`
 hint: devlanes config check
 error: the daemon restarted and lost this lane's shell environment
 hint: devlanes start --lane acme@2
+error: global_env.API_TOKEN has no value in lane acme@2: undefined value (devlanes.yaml:4:14)
 error: the running daemon is devlanes 0.2.0 (protocol 7, this CLI speaks 8) and cannot serve this CLI; restarting it stops its 6 managed processes
 hint: devlanes daemon restart
 error: the running daemon is devlanes 0.2.0 (protocol 7, this CLI speaks 8) and cannot serve this CLI

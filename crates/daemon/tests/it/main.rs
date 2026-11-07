@@ -193,6 +193,8 @@ pub struct Setup {
     pub ci: bool,
     /// The OS resolver file check; none reports nothing.
     pub resolver_files: Option<Arc<dyn devlanes_daemon::integrations::ResolverFiles>>,
+    /// CA trust variables (`DEVLANES_CA_CERT`, `DEVLANES_CA_BUNDLE`); none by default.
+    pub ca_env: BTreeMap<String, String>,
 }
 
 /// A user config whose port pool is `range`, for [`Setup::user`]. A restart
@@ -227,6 +229,7 @@ pub async fn harness(home: &Path, setup: Setup) -> Harness {
     integ.system_pressure = setup.system;
     integ.contributors = setup.contributors;
     integ.resolver_files = setup.resolver_files;
+    integ.ca_env = setup.ca_env;
     if let Some(ports) = setup.ports {
         integ.ports = ports;
     }

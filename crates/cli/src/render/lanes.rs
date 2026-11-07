@@ -33,13 +33,25 @@ fn unit_label(unit: &UnitSummary, cx: &Ctx<'_>) -> String {
 }
 
 /// The state word people see ([`UnitSummary::shown_state`]: `running`, `frozen`,
-/// `throttled`); other modes keep the protocol word, which scripts match.
+/// `throttled`); other modes keep the protocol word, which scripts match, except
+/// `running` for an exec command (see [`runs_unprobed`]).
 fn state_word<'a>(unit: &'a UnitSummary, cx: &Ctx<'_>) -> &'a str {
     if cx.human() {
         unit.shown_state()
+    } else if runs_unprobed(unit, cx) {
+        "running"
     } else {
         &unit.state
     }
+}
+
+/// Whether text output shows a `ready` unit as `running`: an exec command in every
+/// text mode, since it is ready only by being alive and `wait` waits for its exit;
+/// for people also any unit whose readiness is only that its process started.
+/// JSON keeps `ready`.
+fn runs_unprobed(unit: &UnitSummary, cx: &Ctx<'_>) -> bool {
+    unit.state == "ready"
+        && (unit.kind == "exec" || (cx.human() && unit.ready_check.as_deref() == Some("started")))
 }
 
 /// The state word, with the queue place for queued units (`queued 6/40`). People
@@ -77,9 +89,15 @@ fn orphan_note(unit: &UnitSummary) -> String {
 
 /// Agent line for one unit: `state lane:unit exit=N urls ports actor=`.
 pub(crate) fn unit_line(unit: &UnitSummary, cx: &Ctx<'_>) -> String {
+    // Never the power word: the line keeps `ready` first and adds `power=` below.
+    let state = if runs_unprobed(unit, cx) {
+        "running"
+    } else {
+        &unit.state
+    };
     let mut line = format!(
         "{} {}:{}",
-        cx.state(&clean(&unit.state.to_lowercase())),
+        cx.state(&clean(&state.to_lowercase())),
         clean(&unit.lane),
         cx.unit_name(&clean(&unit.name), &unit.state, unit.color.as_deref())
     );
@@ -1210,7 +1228,8 @@ pub(super) fn lane_gc(data: &Value) -> Vec<String> {
     lines
 }
 
-/// `exec`: the adopted unit and how to follow or stop it.
+/// `exec`: the adopted unit, the lane variables it went without, and how to
+/// follow or stop it.
 pub(super) fn exec(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let Ok(unit) = serde_json::from_value::<UnitSummary>(data.clone()) else {
         return tree(data);
@@ -1220,14 +1239,21 @@ pub(super) fn exec(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         line.push_str(&format!(" pid={pid}"));
     }
     let target = format!("{}:{}", unit.lane, unit.name);
-    vec![
-        line,
-        format!(
-            "  logs: {}",
-            Hint::command(["logs", target.as_str(), "-f"]).0
-        ),
-        format!("  stop: {}", Hint::command(["stop", target.as_str()]).0),
-    ]
+    let mut lines = vec![line];
+    lines.extend(
+        words::left_out(data)
+            .into_iter()
+            .map(|note| format!("  {note}")),
+    );
+    lines.push(format!(
+        "  logs: {}",
+        Hint::command(["logs", target.as_str(), "-f"]).0
+    ));
+    lines.push(format!(
+        "  stop: {}",
+        Hint::command(["stop", target.as_str()]).0
+    ));
+    lines
 }
 
 /// `wait`: the target's final state, with the failure tail when it failed.
@@ -1241,7 +1267,7 @@ pub(super) fn wait(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     };
     let state = text(data, "state");
     let word = match state.as_str() {
-        "exited" | "stopping" => "stopped",
+        "stopping" => "stopped",
         other => other,
     };
     let mut line = format!("{} {target}", cx.state(word));
