@@ -1989,7 +1989,7 @@ fn label_warnings(label: &str) -> Vec<(&'static str, String)> {
     if label.contains("(linger off)") {
         warnings.push((
             "box_linger_off",
-            "the box stops your processes at logout. Run loginctl enable-linger or devlanes daemon install there.".to_owned(),
+            "the box stops your processes at logout. Run `sudo loginctl enable-linger \"$USER\"` there.".to_owned(),
         ));
     }
     // A Windows box whose ssh session job kept the daemon the tunnel started.
