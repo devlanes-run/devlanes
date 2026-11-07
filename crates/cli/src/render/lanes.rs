@@ -425,17 +425,19 @@ fn start_result(result: &StartResult, cx: &Ctx<'_>) -> Vec<String> {
     // A start that ran no service (its units were refused) has no services
     // line: "0 of 0 ready" says nothing.
     if !view.services.is_empty() {
-        let outcome = if view.failed.is_empty() && result.ready {
-            Outcome::Ok
-        } else {
-            Outcome::Fail
-        };
-        lines.push(format!(
-            "{} services  {} of {} ready",
-            cx.mark(outcome),
+        let line = format!(
+            "services  {} of {} ready",
             view.ready_services(),
             view.services.len()
-        ));
+        );
+        // A timeout with nothing failed leaves units starting, not failed.
+        lines.push(if view.failed.is_empty() && result.ready {
+            format!("{} {line}", cx.mark(Outcome::Ok))
+        } else if view.failed.is_empty() && result.timed_out {
+            cx.warning(&line)
+        } else {
+            format!("{} {line}", cx.mark(Outcome::Fail))
+        });
     } else if result.ready && !reload_only(result) {
         lines.push(format!("{} nothing to start", cx.mark(Outcome::Ok)));
     }
@@ -768,10 +770,13 @@ fn proxy_origin(lanes: &[LaneSummary]) -> Option<(String, String)> {
         })
 }
 
-/// The lane's base URL from its domain, with the scheme and port the proxy
-/// serves units on, such as `https://acme2.localhost:8443`. The bare domain
-/// when no unit URL shows them.
+/// The lane's base URL, such as `https://acme2.localhost:8443`: the daemon's,
+/// else from its domain with the scheme and port the proxy serves units on
+/// (older daemons), else the bare domain.
 fn lane_url(lane: &LaneSummary, origin: Option<&(String, String)>) -> String {
+    if let Some(url) = &lane.url {
+        return clean(url);
+    }
     match (&lane.domain, origin) {
         (None, _) => "–".into(),
         (Some(domain), Some((scheme, port))) => format!("{scheme}://{}{port}", clean(domain)),

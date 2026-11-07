@@ -140,6 +140,17 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
     vec![
         ("start", Method::Start, start_result()),
         ("start_queued", Method::Start, start_queued),
+        // `--timeout` hit while web still starts: nothing failed.
+        (
+            "start_timed_out",
+            Method::Start,
+            json!({
+                "lane": "acme@2", "branch": "feat/billing", "started": ["acme@2:api", "acme@2:web"],
+                "already_running": [], "whole_lane": true, "ready": false, "timed_out": true,
+                "failures": [], "skipped_tasks": [],
+                "units": [unit("api", "ready"), unit("web", "starting")],
+            }),
+        ),
         // `start bg` while bg is a previous daemon's orphan: refused, nothing ran.
         (
             "start_refused_orphan",

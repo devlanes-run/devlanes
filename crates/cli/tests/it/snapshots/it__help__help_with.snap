@@ -28,7 +28,7 @@ Options:
           Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
 
       --logs-dir <DIR>
-          Write every unit's log of the run to DIR as text files, for CI artifacts
+          Write the log of every unit and task the run started to DIR as text files, for CI artifacts; other files in DIR stay
 
       --keep
           Leave the lane running afterwards, for debugging

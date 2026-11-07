@@ -28,18 +28,24 @@ impl RouteSink for BoundAt {
 
 /// Public URLs of `web` from a lane listing.
 async fn web_urls(h: &crate::Harness, cwd: &std::path::Path) -> Vec<String> {
-    let value = h
-        .call(Method::LaneList, json!({}), cx(cwd))
+    first_lane(h, cwd)
         .await
-        .expect("lanes");
-    let page: Page<LaneSummary> = serde_json::from_value(value).expect("page");
-    page.items[0]
         .units
         .iter()
         .find(|u| u.name == "web")
         .expect("web")
         .urls
         .clone()
+}
+
+/// The first lane `lane ls` lists from `cwd`.
+async fn first_lane(h: &crate::Harness, cwd: &std::path::Path) -> LaneSummary {
+    let value = h
+        .call(Method::LaneList, json!({}), cx(cwd))
+        .await
+        .expect("lanes");
+    let page: Page<LaneSummary> = serde_json::from_value(value).expect("page");
+    page.items.into_iter().next().expect("a lane")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -59,6 +65,10 @@ async fn public_urls_use_the_bound_https_port() {
         .await;
         let public = "https://web.demo.localhost:8443";
         assert!(web_urls(&h, &main).await.iter().any(|u| u == public));
+        assert_eq!(
+            first_lane(&h, &main).await.url.as_deref(),
+            Some("https://demo.localhost:8443")
+        );
 
         h.call(Method::Start, json!({}), cx(&main))
             .await
@@ -100,6 +110,10 @@ async fn public_urls_use_the_bound_https_port() {
                 .await
                 .iter()
                 .any(|u| u == "https://web.demo.localhost")
+        );
+        assert_eq!(
+            first_lane(&standard, &main).await.url.as_deref(),
+            Some("https://demo.localhost")
         );
         standard.close().await;
     })

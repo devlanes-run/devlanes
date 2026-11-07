@@ -149,6 +149,9 @@ impl ExternalInfo {
 #[derive(Debug, Clone)]
 pub(crate) struct LaneView {
     pub domain: String,
+    /// `domain`'s HTTPS URL through the proxy, built like the services' public
+    /// URLs; `None` when the lane routes no hostname.
+    pub url: Option<String>,
     /// `lane.port`.
     pub port: u16,
     /// Evaluated `lanes.vars`, for infra expressions.
@@ -646,7 +649,10 @@ impl LaneSt {
         }
     }
 
-    /// Lifecycle word for `LaneSummary.state`.
+    /// Lifecycle word for `LaneSummary.state`: `starting` while a start runs
+    /// its phases or a service is still starting. Queued services make it
+    /// `starting` too, in [`crate::engine::Inner::fill_queued`], since the lane does not
+    /// see the gate.
     pub(crate) fn state_word(&self) -> &'static str {
         if self.record.is_none()
             && matches!(
@@ -667,6 +673,14 @@ impl LaneSt {
         });
         if failed {
             return "failed";
+        }
+        // `--all-at-once`, the end of a gated start and a start that returned on
+        // its timeout leave no start running while services still get ready.
+        let starting = self.units.values().any(|unit| {
+            unit.kind == Kind::Service && matches!(unit.host.state(), UnitState::Starting)
+        });
+        if starting {
+            return "starting";
         }
         if self.any_running() {
             "running"
@@ -1445,6 +1459,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         profiles,
         moves_to: lane.moves_to,
         domain: lane.view.as_ref().map(|view| view.domain.clone()),
+        url: lane.view.as_ref().and_then(|view| view.url.clone()),
         port_block: lane.view.as_ref().map(|view| {
             (
                 view.block.0,
