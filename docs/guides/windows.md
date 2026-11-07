@@ -107,7 +107,7 @@ Windows has no POSIX signals. Console programs see Ctrl-C and Ctrl-Break, so `st
 | `SIGTERM` (default), `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2` | Ctrl-Break |
 | `SIGKILL` | the unit's processes are ended at once |
 
-A unit whose signal is sent as something else gets a launch note that says so. A stop also asks the unit's visible windows to close (`WM_CLOSE`), for desktop apps that do not watch their console. Whatever still runs when `stop.timeout` ends is terminated. A process ended by a console event reports `interrupted by Ctrl-C or Ctrl-Break`, because Windows gives both the same exit code.
+A unit whose signal is sent as something else gets a launch note that says so, which `devlanes env show <unit> --explain` prints. A stop also asks the unit's visible windows to close (`WM_CLOSE`), for desktop apps that do not watch their console. Whatever still runs when `stop.timeout` ends is terminated. A process ended by a console event reports `interrupted by Ctrl-C or Ctrl-Break`, because Windows gives both the same exit code.
 
 ## Idle lanes
 

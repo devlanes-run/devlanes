@@ -876,9 +876,9 @@ impl Inner {
             .units
             .get(&name)
             .filter(|rec| rec.host.is_alive())
-            .map(|rec| rec.env.clone());
-        let env = match live {
-            Some(env) => env,
+            .map(|rec| (rec.env.clone(), rec.notes.clone()));
+        let (env, notes) = match live {
+            Some(live) => live,
             None => {
                 let resolved = self
                     .resolve_with(&project, &lane, crate::engine::carries_env(context))
@@ -912,7 +912,10 @@ impl Inner {
                             3,
                         )
                     })?;
-                Arc::new(crate::lifecycle::copy_env(&launch.env))
+                (
+                    Arc::new(crate::lifecycle::copy_env(&launch.env)),
+                    launch.notes.clone(),
+                )
             }
         };
         if args.explain {
@@ -925,7 +928,7 @@ impl Inner {
                 })
                 .collect();
             return Ok(
-                json!({"lane": reference, "unit": name, "items": items, "truncated": false, "next_cursor": null}),
+                json!({"lane": reference, "unit": name, "items": items, "notes": notes, "truncated": false, "next_cursor": null}),
             );
         }
         Ok(json!({"lane": reference, "unit": name, "env": env.values}))

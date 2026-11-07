@@ -39,7 +39,6 @@ Profiles. A source's "start these by default" set becomes `profiles.default` (us
 | proc name | unit key (lowercase, dashes) plus `name:` with the original label |
 | `cwd` (`<CONFIG_DIR>` prefix) | `cwd:` relative to the project |
 | `env` | `env:`; a `null` value cannot be expressed (devlanes cannot unset a variable) |
-| top-level `env` | `global_env:` |
 | `add_path` | `env: { PATH: "<dir>:${{ env.PATH }}" }`; this replaces the PATH devlanes builds with mise tools, so prefer mise or direnv |
 | `autostart: true` / `false` | a tag in `profiles.default`, or `autostart: false` |
 | `autorestart` | not mapped |
@@ -49,18 +48,18 @@ Profiles. A source's "start these by default" set becomes `profiles.default` (us
 | `deps` | not mapped; use infra and `when` tasks for order |
 | `log` | not mapped |
 | `$select: os` | the macOS or Linux value |
-| `keymap_*`, `scrollback`, `hide_keymap_window`, `proc_list_width`, `server`, `on_init`, `on_all_finished` | not mapped |
+| `keymap_*`, `scrollback`, `hide_keymap_window`, `mouse_scroll_speed`, `proc_list_width`, `proc_list_title`, `proc_log`, `server`, `on_init`, `on_all_finished` | not mapped |
 
 Procs that run once (seed, migrate, build, reset) become tasks; procs that run `docker compose up/down` become `infra`; a TUI such as `htop` becomes an `interactive: true` task or goes away (`devlanes debug top` shows CPU and memory per unit).
 
 Before:
 
 ```yaml
-env:
-  NODE_OPTIONS: --use-system-ca
 procs:
   'API Admin':
     cmd: [pnpm, --silent, -F, '@acme/admin-api', dev]
+    env:
+      NODE_OPTIONS: --use-system-ca
   'WRK Mailer':
     shell: pnpm -F @acme/mailer dev
     autostart: false
