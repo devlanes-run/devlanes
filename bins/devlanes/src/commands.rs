@@ -97,8 +97,21 @@ fn paths() -> Result<Paths, RpcError> {
     Ok(paths)
 }
 
-/// Connects, spawning the daemon unless this is a read-only probe of a stopped daemon.
+/// Connects, spawning the daemon unless this is a read-only probe of a stopped
+/// daemon, or `devlanes mcp` ran this command for its cards, which poll and
+/// must not start one ([`devlanes_proto::NO_SPAWN_ENV`]).
 async fn connect(paths: &Paths) -> Result<Client, RpcError> {
+    if std::env::var_os(devlanes_proto::NO_SPAWN_ENV).is_some_and(|value| value == "1") {
+        return match Client::connect(paths).await {
+            Ok(client) => Ok(client),
+            Err(error) if error.is_not_running() => Err(RpcError::new(
+                "daemon_not_running",
+                json!({"message": "the daemon is not running"}),
+                devlanes_cli::exit::DAEMON,
+            )),
+            Err(error) => Err(rpc_error(error)),
+        };
+    }
     Client::connect_or_spawn(paths).await.map_err(rpc_error)
 }
 

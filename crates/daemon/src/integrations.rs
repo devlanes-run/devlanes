@@ -413,6 +413,14 @@ pub trait InfraProvider: Send + Sync {
     async fn down(&self, spec: &InfraSpec) -> Result<Value, InfraError>;
     /// Removes the lane's own containers and volumes (`lane clean`).
     async fn remove_lane(&self, project: &str, lane: u32) -> Result<Value, InfraError>;
+    /// What [`InfraProvider::remove_lane`] would remove, removing nothing
+    /// (`lane clean --dry-run`): `{compose_project, containers: [{name, kind}],
+    /// volumes: [{name, bytes}]}`, with `kind` `container` or `compose` and
+    /// `bytes` null when the engine does not say. Providers without containers
+    /// answer `{}`.
+    async fn lane_resources(&self, _project: &str, _lane: u32) -> Result<Value, InfraError> {
+        Ok(Value::Object(serde_json::Map::new()))
+    }
     /// `StartedAt` of the containers backing `containers` (compose service or plain
     /// container names) as seen from this lane, by name; one that does not run is
     /// absent. One call answers every setup entry of a start, from the engine alone

@@ -28,4 +28,4 @@ Error responses carry `x-devlanes-error` with the error name and are not cached.
 
 The service's recent output on `service-failed` pages and the routed hostnames on `unknown-host` pages are shown only to clients on this machine, not to other devices when `proxy.lan` is on. The hostnames also need a request for `localhost`, an IP address or a `.localhost` name.
 
-Responses forwarded from a service carry `Via: 1.1 devlanes`; `proxy.via: false` in the user config turns the header off.
+Responses forwarded from a service carry `Via: 1.1 devlanes.run`, or `Via: 1.1 devlanes.run (remote)` for a lane on a connected box; `proxy.via: false` in the user config turns the header off.

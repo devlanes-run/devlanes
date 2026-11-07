@@ -302,6 +302,24 @@ fn reported_columns(output: &str) -> Vec<u32> {
         .collect()
 }
 
+/// How many size reports (`ESC[8;<rows>;<columns>t`) `output` holds. A plain
+/// prefix count would also match cursor moves to row 8 (`ESC[8;1H`), which
+/// the console host sends in some repaints.
+fn size_reports(output: &str) -> usize {
+    output
+        .split("\x1b[8;")
+        .skip(1)
+        .filter(|after| {
+            let rest = after.trim_start_matches(|c: char| c.is_ascii_digit());
+            rest.len() < after.len()
+                && rest.strip_prefix(';').is_some_and(|rest| {
+                    let tail = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+                    tail.len() < rest.len() && tail.starts_with('t')
+                })
+        })
+        .count()
+}
+
 /// Reads output until `done` holds for everything read; returns it.
 async fn read_while(output: &mut Receiver<OutputChunk>, done: impl Fn(&str) -> bool) -> String {
     let mut seen = String::new();
@@ -393,7 +411,7 @@ async fn pty_resizes_reach_the_console() {
         let seen = read_while(&mut output, |seen| reported_columns(seen).contains(&140)).await;
         // The repaint at the new size is marked once, and the console host's
         // own size reports are gone.
-        assert_eq!(seen.matches("\x1b[8;").count(), 1, "{seen:?}");
+        assert_eq!(size_reports(&seen), 1, "{seen:?}");
         let marker = seen.find("\x1b[8;30;140t").expect("size marker");
         assert!(
             seen[marker..].starts_with("\x1b[8;30;140t\x1b[?25l\x1b[H"),
@@ -524,7 +542,11 @@ async fn pty_shell_units_stop_on_ctrl_break() {
             .expect("Git for Windows' sh.exe");
         let dir = tempfile::tempdir().expect("tempdir");
         let fixture = fixture().to_string_lossy().replace('\\', "/");
-        let script = format!("'{fixture}' --port 0");
+        // `sh` execs the program and passes on its code when the program ends
+        // first. A program that handles the event and exits 0 makes the code
+        // 0 or 512 depending on timing; one that the event ends gives 512 in
+        // either order.
+        let script = format!("'{fixture}' --port 0 --default-ctrl-handler");
         let unit = runner()
             .with_shell(Some(shell))
             .spawn_unit(pty_spec("/bin/sh", &["-c", &script], dir.path(), env(&[])))
@@ -545,8 +567,14 @@ async fn pty_shell_units_stop_on_ctrl_break() {
             .await
             .expect("stop");
         assert_stopped(&report, StopSignal::Terminate, false);
-        // MSYS reports the shell's SIGINT death as 512.
-        assert_eq!(report.outcome.code, Some(CONTROL_C_EXIT), "{report:?}");
+        // `sh -c` execs the fixture, and MSYS's exec stub either reports a
+        // SIGINT death (512, reported as CONTROL_C_EXIT) or passes on the
+        // fixture's own 0. Which one is a race inside the MSYS runtime: on
+        // GitHub's Windows Server 2025 runners 0 is the common case.
+        assert!(
+            [Some(0), Some(CONTROL_C_EXIT)].contains(&report.outcome.code),
+            "{report:?}"
+        );
         assert!(!any_alive(&members), "{members:?}");
     })
     .await;

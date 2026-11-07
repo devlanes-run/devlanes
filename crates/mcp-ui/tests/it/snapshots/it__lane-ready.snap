@@ -1,0 +1,170 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "start",
+  "args": [
+    "start",
+    "--timeout",
+    "170s"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": "lane",
+  "data": {
+    "lane": "acme@1",
+    "branch": "feat/checkout",
+    "started": [
+      "acme@1:api",
+      "acme@1:web",
+      "acme@1:worker",
+      "acme@1:database",
+      "acme@1:migrate"
+    ],
+    "already_running": [],
+    "whole_lane": true,
+    "ready": true,
+    "timed_out": false,
+    "failures": [],
+    "skipped_tasks": [],
+    "units": [
+      {
+        "name": "api",
+        "lane": "acme@1",
+        "state": "ready",
+        "pid": 60012,
+        "exit_code": null,
+        "ports": {
+          "http": 20012
+        },
+        "urls": [
+          "http://127.0.0.1:20012",
+          "https://api.acme1.localhost"
+        ],
+        "actor": {
+          "kind": "agent",
+          "agent_id": "claude-code",
+          "session_id": "claude-code-session"
+        },
+        "reason": null,
+        "kind": "service",
+        "autostart": true,
+        "hidden": false,
+        "tags": [],
+        "started_at_ms": 1793999400000,
+        "cpu_percent": 4.0,
+        "memory_bytes": 188743680,
+        "ready_check": "http",
+        "role": "service",
+        "public_url": "https://api.acme1.localhost"
+      },
+      {
+        "name": "web",
+        "lane": "acme@1",
+        "state": "ready",
+        "pid": 60013,
+        "exit_code": null,
+        "ports": {
+          "http": 20013
+        },
+        "urls": [
+          "http://127.0.0.1:20013",
+          "https://acme1.localhost"
+        ],
+        "actor": {
+          "kind": "agent",
+          "agent_id": "claude-code",
+          "session_id": "claude-code-session"
+        },
+        "reason": null,
+        "kind": "service",
+        "autostart": true,
+        "hidden": false,
+        "tags": [],
+        "started_at_ms": 1793999400000,
+        "cpu_percent": 4.0,
+        "memory_bytes": 188743680,
+        "ready_check": "http",
+        "role": "service",
+        "public_url": "https://acme1.localhost"
+      },
+      {
+        "name": "worker",
+        "lane": "acme@1",
+        "state": "ready",
+        "pid": 60014,
+        "exit_code": null,
+        "ports": {
+          "http": 20014
+        },
+        "urls": [
+          "http://127.0.0.1:20014"
+        ],
+        "actor": {
+          "kind": "agent",
+          "agent_id": "claude-code",
+          "session_id": "claude-code-session"
+        },
+        "reason": null,
+        "kind": "service",
+        "autostart": true,
+        "hidden": false,
+        "tags": [],
+        "started_at_ms": 1793999400000,
+        "cpu_percent": 4.0,
+        "memory_bytes": 188743680,
+        "ready_check": "started",
+        "role": "service"
+      },
+      {
+        "name": "database",
+        "lane": "acme@1",
+        "state": "exited",
+        "pid": null,
+        "exit_code": 0,
+        "ports": {},
+        "urls": [],
+        "actor": {
+          "kind": "human"
+        },
+        "reason": null,
+        "kind": "task",
+        "autostart": false,
+        "hidden": false,
+        "tags": [],
+        "started_at_ms": null,
+        "cpu_percent": null,
+        "memory_bytes": null,
+        "pty": false,
+        "role": "setup"
+      },
+      {
+        "name": "migrate",
+        "lane": "acme@1",
+        "state": "exited",
+        "pid": null,
+        "exit_code": 0,
+        "ports": {},
+        "urls": [],
+        "actor": {
+          "kind": "human"
+        },
+        "reason": null,
+        "kind": "task",
+        "autostart": false,
+        "hidden": false,
+        "tags": [],
+        "started_at_ms": null,
+        "cpu_percent": null,
+        "memory_bytes": null,
+        "pty": false,
+        "role": "setup"
+      }
+    ],
+    "warnings": [],
+    "start_id": 7
+  },
+  "read_only": false,
+  "card": 1
+}

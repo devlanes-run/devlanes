@@ -1,0 +1,46 @@
+name: MCP UI
+# The MCP Apps card is built with Node and committed (crates/mcp-ui/ui/dist/lane.html),
+# so the Rust build never runs Node. This checks its source and that the committed
+# file is what `pnpm build` writes from it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - crates/mcp-ui/ui/**
+      - .github/workflows/mcp-ui.yml
+  pull_request:
+    paths:
+      - crates/mcp-ui/ui/**
+      - .github/workflows/mcp-ui.yml
+permissions:
+  contents: read
+concurrency:
+  group: mcp-ui-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+defaults:
+  run:
+    working-directory: crates/mcp-ui/ui
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Installs pnpm from packageManager and Node from devEngines.runtime, then runs pnpm install.
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        with:
+          cache: true
+          install: true
+          require-lockfile: true
+          working-directory: crates/mcp-ui/ui
+      - run: pnpm lint-ci
+      - run: pnpm test-types
+      - run: pnpm build
+      - name: Check the committed card
+        run: |
+          if ! git diff --exit-code --text --stat -- dist/lane.html; then
+            echo "::error file=crates/mcp-ui/ui/dist/lane.html::dist/lane.html is stale. Run pnpm build in crates/mcp-ui/ui and commit the file."
+            exit 1
+          fi

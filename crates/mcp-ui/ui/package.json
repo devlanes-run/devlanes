@@ -1,0 +1,37 @@
+{
+  "name": "devlanes-mcp-ui",
+  "private": true,
+  "description": "The MCP Apps card devlanes mcp serves to chat hosts, built into one HTML file",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "rsbuild build",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "lint-ci": "biome ci .",
+    "lint-fix": "biome check --write --unsafe .",
+    "test-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "preact": "^11.1.1"
+  },
+  "devDependencies": {
+    "@arthurfiorette/biomejs-config": "^2.0.1",
+    "@biomejs/biome": "^2.6.5",
+    "@rsbuild/core": "^2.3.1",
+    "@rsbuild/plugin-preact": "^2.1.0",
+    "@rsbuild/plugin-sass": "^2.0.1",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": ">=24.16"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "onFail": "error",
+      "version": ">=24.16"
+    }
+  }
+}

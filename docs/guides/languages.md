@@ -124,13 +124,13 @@ services:
 
 Read `PORT` and `HOST` in `main` (`std::env::var("PORT")`). The first start compiles, so give `ready` a long timeout. `cargo run` builds into the worktree's own `target/`, which is what you want for parallel lanes (a shared `CARGO_TARGET_DIR` would serialise builds on the target lock); sccache or kache as `RUSTC_WRAPPER` shares compiled artefacts between worktrees instead.
 
-`SSL_CERT_FILE` covers `rustls-native-certs`, `openssl` and `reqwest` with native roots. Clients built with `webpki-roots` only have no way to add a CA; the alternative is `reqwest` with the `rustls-tls-native-roots` feature.
+`SSL_CERT_FILE` covers `rustls-native-certs`, OpenSSL (`native-tls` on Linux) and reqwest 0.12 with `rustls-tls-native-roots`. reqwest 0.13 has no roots features: its default `rustls` backend verifies with `rustls-platform-verifier`, which reads `SSL_CERT_FILE` on Linux and asks the system store on macOS and Windows, where `devlanes setup` has added the devlanes CA. Without the system store, add the CA in code with `ClientBuilder::tls_certs_merge` and `Certificate::from_pem` on the file `DEVLANES_CA_CERT` names. Clients built with `webpki-roots` only cannot add a CA from the environment.
 
 ## Tool versions: mise and direnv
 
 Both run before anything else and only when the lane's root has their file.
 
-- mise: with a `mise.toml`, `.mise.toml`, `.config/mise.toml`, `.tool-versions` or similar in the worktree root, devlanes runs `mise env --json` there and applies the result, so the pinned node, python or rust are on `PATH` for every unit. An untrusted config shows a note telling you to run `mise trust` in that folder.
-- direnv: with an `.envrc` in the worktree root, `direnv export json` is applied, including variables it unsets. A blocked `.envrc` is skipped with the note `run direnv allow`.
+- mise: with a `mise.toml`, `.mise.toml`, `.config/mise.toml`, `.tool-versions` or similar in the worktree root, devlanes runs `mise env --json` there and applies the result, so the pinned node, python or rust are on `PATH` for every unit. An untrusted config is skipped with a note telling you to run `mise trust` in that folder.
+- direnv: with an `.envrc` in the worktree root, `direnv export json` is applied, including variables it unsets. A blocked `.envrc` is skipped with a note telling you to run `direnv allow`.
 
-Only the worktree root is checked, not the unit's `cwd`. Both tools are optional; when the binary is missing the note says so and the start goes on. Their output sits below devlanes' own variables, so they cannot change `PORT` or `HOST`.
+Only the worktree root is checked, not the unit's `cwd`. Both tools are optional; when the binary is missing the note says so and the start goes on. Their output sits below devlanes' own variables, so they cannot change `PORT` or `HOST`. `devlanes env show <unit> --explain` prints a unit's notes under its variables.

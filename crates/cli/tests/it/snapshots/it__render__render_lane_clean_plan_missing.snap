@@ -1,0 +1,28 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+would clean acme@4 (chore/deps):
+  delete  data /home/dev/.devlanes/data/acme/7 (size unknown)
+  delete  logs (size unknown)
+  free    ports 20040-20049
+! lane.clean tasks and teardown skipped: the worktree is gone
+! containers unknown: no Docker engine is reachable
+next: devlanes lane clean acme@4 --yes
+--- plain (exit 0)
+would clean acme@4 (chore/deps):
+  delete  data /home/dev/.devlanes/data/acme/7 (size unknown)
+  delete  logs (size unknown)
+  free    ports 20040-20049
+skipped lane.clean tasks and teardown: the worktree is gone
+warn containers unknown: no Docker engine is reachable
+next: devlanes lane clean acme@4 --yes
+--- agent (exit 0)
+would clean acme@4 (chore/deps):
+  delete data /home/dev/.devlanes/data/acme/7 (size unknown)
+  delete logs (size unknown)
+  free ports 20040-20049
+skipped lane.clean tasks and teardown: the worktree is gone
+warn containers unknown: no Docker engine is reachable
+next: devlanes lane clean acme@4 --yes

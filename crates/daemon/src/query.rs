@@ -1075,12 +1075,12 @@ impl Inner {
             .units
             .get(&name)
             .filter(|rec| rec.host.is_alive())
-            .map(|rec| (rec.env.clone(), rec.left_out.clone()));
+            .map(|rec| (rec.env.clone(), rec.notes.clone(), rec.left_out.clone()));
         let mut left_out = std::collections::BTreeMap::new();
-        let env = match live {
-            Some((env, unset)) => {
+        let (env, notes) = match live {
+            Some((env, notes, unset)) => {
                 left_out = unset;
-                env
+                (env, notes)
             }
             None => {
                 let resolved = self
@@ -1115,7 +1115,10 @@ impl Inner {
                             3,
                         )
                     })?;
-                Arc::new(crate::lifecycle::copy_env(&launch.env))
+                (
+                    Arc::new(crate::lifecycle::copy_env(&launch.env)),
+                    launch.notes.clone(),
+                )
             }
         };
         let mut result = if args.explain {
@@ -1132,7 +1135,7 @@ impl Inner {
                     json!({"key": key, "value": value, "layer": layer_word(layer)})
                 })
                 .collect();
-            json!({"lane": reference, "unit": name, "items": items, "truncated": false, "next_cursor": null})
+            json!({"lane": reference, "unit": name, "items": items, "notes": notes, "truncated": false, "next_cursor": null})
         } else {
             json!({"lane": reference, "unit": name, "env": env.values})
         };

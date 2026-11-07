@@ -23,7 +23,7 @@ Use `load_project(path)` for a project file or a directory holding `devlanes.yam
 ## API
 
 - `ProjectConfig` and `UserConfig`: separate typed project and machine settings.
-- `search_project_file(cwd)`: the nearest `devlanes.yaml` at or above `cwd`, stopping at the repository root; `find_project_file` without where the search ended. The daemon and the CLI find projects this way, and the agent hook applies the same rule.
+- `search_project_file(cwd)`: the nearest `devlanes.yaml` at or above `cwd`, stopping at the repository root; `find_project_file` without where the search ended. The daemon and the CLI find projects this way.
 - `load_project_files(entry, fallback)`: what the daemon calls. It returns a `ProjectLoad` with the result and every file it read or looked for, missing overlays included, for watching. A `LocalFallback` reads a lane's missing overlays from the primary worktree. `local_overlay_path` and `is_local_overlay` apply the naming rule.
 - `check(path)`: load and validate a project, returning warnings or a `ConfigError`. `check_compose_files` runs its `infra.compose` file check alone, for a config parsed from text.
 - `load_user_lenient`: load `config.yaml` keeping every valid key; each unknown or invalid key falls back to its default and comes back as a located error.

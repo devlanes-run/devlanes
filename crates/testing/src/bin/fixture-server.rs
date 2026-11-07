@@ -22,6 +22,10 @@ struct Args {
     port: u16,
     #[arg(long)]
     ignore_sigterm: bool,
+    /// Windows only: leaves Ctrl-C and Ctrl-Break to the default handler, as
+    /// a Node server without a `SIGBREAK` listener does.
+    #[arg(long)]
+    default_ctrl_handler: bool,
     #[arg(long)]
     spawn_grandchild: bool,
     #[arg(long)]
@@ -51,6 +55,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(windows)]
     if args.setsid_grandchild {
         return Err("--setsid-grandchild needs Unix sessions".into());
+    }
+    #[cfg(unix)]
+    if args.default_ctrl_handler {
+        return Err("--default-ctrl-handler needs Windows console events".into());
     }
     #[cfg(unix)]
     let mut terminate = signal(SignalKind::terminate())?;
@@ -139,13 +147,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Windows stops send Ctrl-C or Ctrl-Break; with `--ignore-sigterm` both
     // are swallowed, so only termination ends it. The event is printed so
     // tests can tell which one arrived.
+    // `--default-ctrl-handler` registers nothing, so either event ends the
+    // process with `STATUS_CONTROL_C_EXIT`.
     #[cfg(windows)]
-    let (mut ctrl_break, mut ctrl_c) = (
-        tokio::signal::windows::ctrl_break()?,
-        tokio::signal::windows::ctrl_c()?,
-    );
+    let mut events = if args.default_ctrl_handler {
+        None
+    } else {
+        Some((
+            tokio::signal::windows::ctrl_break()?,
+            tokio::signal::windows::ctrl_c()?,
+        ))
+    };
     #[cfg(windows)]
     let shutdown = async {
+        let Some((ctrl_break, ctrl_c)) = events.as_mut() else {
+            return std::future::pending().await;
+        };
         loop {
             let event = tokio::select! {
                 _ = ctrl_break.recv() => "ctrl-break",

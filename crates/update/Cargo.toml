@@ -23,9 +23,11 @@ thiserror.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 tokio.workspace = true
 
-# Which processes still run, for the executables they keep.
+# Which processes still run, for the executables they keep, and renames that
+# ride out another process holding the file.
 [target.'cfg(windows)'.dependencies]
 devlanes-sys = { path = "../sys" }
+devlanes-sys-windows = { path = "../sys-windows" }
 
 [dev-dependencies]
 tempfile.workspace = true

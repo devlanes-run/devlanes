@@ -358,6 +358,14 @@ pub fn resume_verified(pid: u32, start_time: u64) -> io::Result<Resumed> {
     }
 }
 
+/// Takes one suspension off every thread of the process behind `process`,
+/// which needs `PROCESS_SUSPEND_RESUME`.
+pub(crate) fn resume_handle(process: &OwnedHandle) -> io::Result<()> {
+    // SAFETY: the handle is open with PROCESS_SUSPEND_RESUME, as the caller
+    // promises.
+    nt_result(unsafe { NtResumeProcess(raw(process)) })
+}
+
 /// An error for a failed `NTSTATUS`; success and informational statuses are
 /// not negative.
 fn nt_result(status: NTSTATUS) -> io::Result<()> {

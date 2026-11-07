@@ -1,0 +1,12 @@
+---
+source: crates/mcp/tests/it/listing.rs
+expression: resources.resources
+---
+[
+  {
+    "uri": "ui://devlanes/lane.html",
+    "name": "devlanes lanes",
+    "description": "Cards for devlanes results: lanes, failures, clean plans and pairing codes",
+    "mimeType": "text/html;profile=mcp-app"
+  }
+]

@@ -7,7 +7,7 @@ Create, list, clean and resume worktree lanes
 Usage: devlanes lane [OPTIONS] <COMMAND>
 
 Commands:
-  ls      List lanes, including moved, unassigned and missing ones
+  ls      List lanes after rereading the project's Git worktrees, including moved, unassigned and missing ones
   new     Add another lane for this folder
   clean   Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes)
   gc      Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
@@ -38,7 +38,7 @@ Global options:
           Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
 
       --lane <LANE>
-          Use this lane ([project@]lane) instead of the current worktree's
+          Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's
 
       --yes
           Confirm actions that would ask first; needed when no terminal can prompt

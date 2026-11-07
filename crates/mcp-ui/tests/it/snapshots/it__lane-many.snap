@@ -1,0 +1,1278 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "status",
+  "args": [
+    "status",
+    "--lane",
+    "feat/billing-v2"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": "lane",
+  "data": {
+    "items": [
+      {
+        "reference": "acme@1",
+        "project": "acme",
+        "index": 1,
+        "branch": "feat/billing-v2",
+        "path": "/work/acme-feat-billing-v2",
+        "state": "starting",
+        "config_changed": false,
+        "units": [
+          {
+            "name": "api-admin",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20100
+            },
+            "urls": [
+              "http://127.0.0.1:20100",
+              "https://api-admin.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Admin",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-admin.acme1.localhost"
+          },
+          {
+            "name": "api-user",
+            "lane": "acme@1",
+            "state": "ready",
+            "pid": 60101,
+            "exit_code": null,
+            "ports": {
+              "http": 20101
+            },
+            "urls": [
+              "http://127.0.0.1:20101",
+              "https://api-user.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "display_name": "API User",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-user.acme1.localhost"
+          },
+          {
+            "name": "api-auth",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20102
+            },
+            "urls": [
+              "http://127.0.0.1:20102",
+              "https://api-auth.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Auth",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-auth.acme1.localhost"
+          },
+          {
+            "name": "api-billing",
+            "lane": "acme@1",
+            "state": "failed",
+            "pid": null,
+            "exit_code": 1,
+            "ports": {
+              "http": 20103
+            },
+            "urls": [
+              "http://127.0.0.1:20103",
+              "https://api-billing.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": {
+              "code": "ready_timeout",
+              "data": {
+                "check": "http /health",
+                "timeout_ms": 30000
+              },
+              "exit_code": 1
+            },
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "finished_at_ms": 1793999820000,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Billing",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-billing.acme1.localhost"
+          },
+          {
+            "name": "api-catalog",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20104
+            },
+            "urls": [
+              "http://127.0.0.1:20104",
+              "https://api-catalog.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Catalog",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-catalog.acme1.localhost"
+          },
+          {
+            "name": "api-orders",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20105
+            },
+            "urls": [
+              "http://127.0.0.1:20105",
+              "https://api-orders.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Orders",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-orders.acme1.localhost"
+          },
+          {
+            "name": "api-payments",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20106
+            },
+            "urls": [
+              "http://127.0.0.1:20106",
+              "https://api-payments.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Payments",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-payments.acme1.localhost"
+          },
+          {
+            "name": "api-search",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20107
+            },
+            "urls": [
+              "http://127.0.0.1:20107",
+              "https://api-search.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Search",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-search.acme1.localhost"
+          },
+          {
+            "name": "api-inventory",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20108
+            },
+            "urls": [
+              "http://127.0.0.1:20108",
+              "https://api-inventory.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Inventory",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-inventory.acme1.localhost"
+          },
+          {
+            "name": "api-notifications",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20109
+            },
+            "urls": [
+              "http://127.0.0.1:20109",
+              "https://api-notifications.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Notifications",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-notifications.acme1.localhost"
+          },
+          {
+            "name": "api-reports",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20110
+            },
+            "urls": [
+              "http://127.0.0.1:20110",
+              "https://api-reports.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Reports",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-reports.acme1.localhost"
+          },
+          {
+            "name": "api-gateway",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20111
+            },
+            "urls": [
+              "http://127.0.0.1:20111",
+              "https://api-gateway.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Gateway",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-gateway.acme1.localhost"
+          },
+          {
+            "name": "api-webhooks",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20112
+            },
+            "urls": [
+              "http://127.0.0.1:20112",
+              "https://api-webhooks.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Webhooks",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-webhooks.acme1.localhost"
+          },
+          {
+            "name": "api-media",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20113
+            },
+            "urls": [
+              "http://127.0.0.1:20113",
+              "https://api-media.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "API Media",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api-media.acme1.localhost"
+          },
+          {
+            "name": "web-user",
+            "lane": "acme@1",
+            "state": "starting",
+            "pid": 60114,
+            "exit_code": null,
+            "ports": {
+              "http": 20114
+            },
+            "urls": [
+              "http://127.0.0.1:20114",
+              "https://acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "display_name": "WEB User",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://acme1.localhost"
+          },
+          {
+            "name": "web-admin",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20115
+            },
+            "urls": [
+              "http://127.0.0.1:20115",
+              "https://web-admin.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Admin",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-admin.acme1.localhost"
+          },
+          {
+            "name": "web-docs",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20116
+            },
+            "urls": [
+              "http://127.0.0.1:20116",
+              "https://web-docs.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Docs",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-docs.acme1.localhost"
+          },
+          {
+            "name": "web-status",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20117
+            },
+            "urls": [
+              "http://127.0.0.1:20117",
+              "https://web-status.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Status",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-status.acme1.localhost"
+          },
+          {
+            "name": "web-partner",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20118
+            },
+            "urls": [
+              "http://127.0.0.1:20118",
+              "https://web-partner.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Partner",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-partner.acme1.localhost"
+          },
+          {
+            "name": "web-checkout",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20119
+            },
+            "urls": [
+              "http://127.0.0.1:20119",
+              "https://web-checkout.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Checkout",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-checkout.acme1.localhost"
+          },
+          {
+            "name": "web-marketing",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20120
+            },
+            "urls": [
+              "http://127.0.0.1:20120",
+              "https://web-marketing.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Marketing",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-marketing.acme1.localhost"
+          },
+          {
+            "name": "web-help",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20121
+            },
+            "urls": [
+              "http://127.0.0.1:20121",
+              "https://web-help.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Help",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-help.acme1.localhost"
+          },
+          {
+            "name": "web-studio",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20122
+            },
+            "urls": [
+              "http://127.0.0.1:20122",
+              "https://web-studio.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Studio",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-studio.acme1.localhost"
+          },
+          {
+            "name": "web-onboarding",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20123
+            },
+            "urls": [
+              "http://127.0.0.1:20123",
+              "https://web-onboarding.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Onboarding",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-onboarding.acme1.localhost"
+          },
+          {
+            "name": "web-blog",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20124
+            },
+            "urls": [
+              "http://127.0.0.1:20124",
+              "https://web-blog.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Blog",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-blog.acme1.localhost"
+          },
+          {
+            "name": "web-account",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20125
+            },
+            "urls": [
+              "http://127.0.0.1:20125",
+              "https://web-account.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WEB Account",
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://web-account.acme1.localhost"
+          },
+          {
+            "name": "wrk-atlas",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20126
+            },
+            "urls": [
+              "http://127.0.0.1:20126"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Atlas",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-mailer",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20127
+            },
+            "urls": [
+              "http://127.0.0.1:20127"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Mailer",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-indexer",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20128
+            },
+            "urls": [
+              "http://127.0.0.1:20128"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Indexer",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-reports",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20129
+            },
+            "urls": [
+              "http://127.0.0.1:20129"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Reports",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-billing",
+            "lane": "acme@1",
+            "state": "starting",
+            "pid": 60130,
+            "exit_code": null,
+            "ports": {
+              "http": 20130
+            },
+            "urls": [
+              "http://127.0.0.1:20130"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "display_name": "WRK Billing",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-thumbnails",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20131
+            },
+            "urls": [
+              "http://127.0.0.1:20131"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Thumbnails",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-exports",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20132
+            },
+            "urls": [
+              "http://127.0.0.1:20132"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Exports",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-imports",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20133
+            },
+            "urls": [
+              "http://127.0.0.1:20133"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Imports",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-scheduler",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20134
+            },
+            "urls": [
+              "http://127.0.0.1:20134"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Scheduler",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-cleanup",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20135
+            },
+            "urls": [
+              "http://127.0.0.1:20135"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Cleanup",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-sync",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20136
+            },
+            "urls": [
+              "http://127.0.0.1:20136"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Sync",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-ledger",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20137
+            },
+            "urls": [
+              "http://127.0.0.1:20137"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Ledger",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-audit",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20138
+            },
+            "urls": [
+              "http://127.0.0.1:20138"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Audit",
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "wrk-digest",
+            "lane": "acme@1",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20139
+            },
+            "urls": [
+              "http://127.0.0.1:20139"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "display_name": "WRK Digest",
+            "ready_check": "started",
+            "role": "service"
+          }
+        ],
+        "profile": null,
+        "profiles": [],
+        "moves_to": null,
+        "domain": "acme1.localhost",
+        "port_block": [
+          20100,
+          20199
+        ],
+        "reason": null,
+        "needs_env": false,
+        "containers": [
+          {
+            "name": "postgres",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          },
+          {
+            "name": "redis",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          }
+        ]
+      }
+    ],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "read_only": false,
+  "card": 1
+}

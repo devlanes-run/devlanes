@@ -226,6 +226,8 @@ A second project file next to `devlanes.yaml` runs the same apps another way, su
 # devlanes.prod.yaml
 extends: devlanes.yaml
 project: acme-prod
+global_env:
+  NODE_ENV: production
 tasks:
   build:
     run: pnpm build
@@ -234,9 +236,9 @@ profiles:
   default:
     run_scripts:
       dev: start                         # services whose run_script names dev run start
-    env:
-      NODE_ENV: production
 ```
+
+`NODE_ENV` goes in `global_env` rather than the profile's `env`: profile variables reach tasks too and win over a task's own `env`, while a task can override `global_env`, such as an install task that needs devDependencies with `env: { NODE_ENV: development }`.
 
 devlanes only finds `devlanes.yaml` by itself. Name another file the first time with the global `--file` flag; after that `--project` finds it:
 

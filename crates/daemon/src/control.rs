@@ -1004,6 +1004,12 @@ impl Inner {
             lane.st().env = Some(env.clone());
             project.st().last_env = Some(env);
         }
+        // A client that sends no env (`devlanes mcp` first tries without) gets the
+        // lane's, or `needs_env` instead of a process without PATH.
+        if lane.st().env.is_none() {
+            let reference = lane.st().reference(&project.name());
+            return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
+        }
         let (resolved, layers) = self
             .resolve_lane_env(&project, &lane, Arc::default(), None)
             .await?;
@@ -1063,6 +1069,7 @@ impl Inner {
             role: "exec",
             keep_awake: false,
             fingerprint: None,
+            notes: Vec::new(),
         };
         // Held until the unit is recorded, so a clean or reset that begins meanwhile
         // waits and then stops it, or refuses it once the lane is released.

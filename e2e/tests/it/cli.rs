@@ -188,6 +188,50 @@ fn daemon_status_never_spawns() -> Result<()> {
     Ok(())
 }
 
+/// `status --statusline` never starts a daemon: without one it prints nothing and
+/// exits 0. With one it prints one line for the lane of the directory that the
+/// status line JSON on stdin names, wherever it runs.
+#[test]
+fn status_statusline_never_spawns() -> Result<()> {
+    let lab = Lab::new("two-services", BUDGET)?;
+    let quiet = lab.devlanes(lab.repo(), &["status", "--statusline"])?;
+    quiet.expect_code(0)?;
+    assert_eq!(quiet.stdout, "", "{quiet}");
+    assert_eq!(quiet.stderr, "", "{quiet}");
+    assert!(
+        !lab.daemon_running(),
+        "status --statusline started a daemon"
+    );
+
+    lab.json(lab.repo(), &["start"])?;
+    let input = lab.home().join("statusline.json");
+    std::fs::write(
+        &input,
+        serde_json::json!({
+            "cwd": lab.repo(),
+            "workspace": {"current_dir": lab.repo()},
+            "session_id": "e2e",
+        })
+        .to_string(),
+    )?;
+    let mut command = lab.command(lab.home(), &["status", "--statusline"])?;
+    command
+        .env("NO_COLOR", "1")
+        .stdin(std::fs::File::open(&input)?);
+    let line = lab.run(command, devlanes_e2e::COMMAND_TIMEOUT)?;
+    line.expect_code(0)?;
+    assert!(
+        line.stdout.starts_with("fixture-two@0 2/2 ready · "),
+        "{line}"
+    );
+    assert_eq!(line.stdout.lines().count(), 1, "{line}");
+    assert!(
+        !line.stdout.contains('\x1b'),
+        "NO_COLOR keeps colors out\n{line}"
+    );
+    Ok(())
+}
+
 /// `daemon start` spawns a daemon when none runs and leaves a running one alone.
 #[test]
 fn daemon_start_spawns_only_when_stopped() -> Result<()> {

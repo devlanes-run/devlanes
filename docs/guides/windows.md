@@ -110,7 +110,7 @@ Windows has no POSIX signals. Console programs see Ctrl-C and Ctrl-Break, so `st
 
 Node runs its `SIGINT` handlers on Ctrl-C but ends at once on Ctrl-Break, so start programs that must clean up on stop with `run_script` or a `run` list rather than a `run:` string. `wrangler dev` is one: otherwise its dev registry entry stays behind and sibling workers' bindings fail. Wrangler also removes the entry only with the default `pty: true`. A program that ignores Ctrl-C runs until `stop.timeout` and is then terminated, as a Unix program that ignores SIGTERM is.
 
-A unit whose signal is sent as something else gets a launch note that says so. A stop also asks the unit's visible windows to close (`WM_CLOSE`), for desktop apps that do not watch their console. Whatever still runs when `stop.timeout` ends is terminated. A unit that a stop ends reports `interrupted by Ctrl-C or Ctrl-Break`, because Windows gives both the same exit code. That includes a `pty: true` unit started through a `.cmd` shim such as `npm.cmd`, and a unit where Git's `sh` or `bash` ran (a `run:` string, a `[sh, -c, ...]` list or a just recipe), whose own codes (255 and 512) only say that the event reached them. With `pty: false` a `.cmd` shim passes on its program's code, and npm exits 1 after any stop, so every stop of a `pty: false` unit started through `npm run`, the default stop included, reports `exit=1` even when the program shut down cleanly. Keep the default `pty: true`, or run the program directly (`run: [node, server.js]`), to avoid it.
+A unit whose signal is sent as something else gets a launch note that says so, which `devlanes env show <unit> --explain` prints. A stop also asks the unit's visible windows to close (`WM_CLOSE`), for desktop apps that do not watch their console. Whatever still runs when `stop.timeout` ends is terminated. A unit that a stop ends reports `interrupted by Ctrl-C or Ctrl-Break`, because Windows gives both the same exit code. That includes a `pty: true` unit started through a `.cmd` shim such as `npm.cmd`, and a unit where Git's `sh` or `bash` ran (a `run:` string, a `[sh, -c, ...]` list or a just recipe), whose own codes (255 and 512) only say that the event reached them. With `pty: false` a `.cmd` shim passes on its program's code, and npm exits 1 after any stop, so every stop of a `pty: false` unit started through `npm run`, the default stop included, reports `exit=1` even when the program shut down cleanly. Keep the default `pty: true`, or run the program directly (`run: [node, server.js]`), to avoid it.
 
 ## Idle lanes
 
@@ -201,7 +201,9 @@ cargo binstall, `cargo install` and pip installs are left to you: `devlanes upda
 
 ## Coding agents
 
-Claude Code on Windows often runs commands through its PowerShell tool, and Codex runs every shell command in PowerShell. The [agent plugin](../../agent-plugin/README.md#hook)'s hook runs `devlanes __agent-hook` and reads those commands as PowerShell, so it rejects backgrounded dev servers there too (`pnpm dev &`, `Start-Process`, `Start-Job`, `cmd /c start`). It needs `devlanes` on the agent's `PATH`; when devlanes is missing or too old, the error goes to the hook's stderr and every call passes.
+A shell inside the Codex sandbox cannot reach the daemon's pipe, even when the daemon runs, and `devlanes daemon install` does not help there. Codex starts MCP servers outside its sandbox, so register `devlanes mcp` with Codex instead ([Codex](mcp.md#codex)).
+
+Apps started from the Start menu, Claude Desktop among them, get no PowerShell profile. When a tool such as fnm adds to `PATH` only from the profile, set `DEVLANES_SHELL_ENV=pwsh` in the MCP server's `env` ([environment](mcp.md#environment)).
 
 ## Remote boxes
 

@@ -68,6 +68,34 @@ pub(crate) fn start_result() -> Value {
     })
 }
 
+/// A `lane clean --dry-run` reply in the shape the daemon sends.
+pub(crate) fn lane_clean_plan() -> Value {
+    json!({
+        "lane": "acme@4", "project": "acme", "index": 4, "branch": "chore/deps",
+        "path": "/work/acme-deps", "worktree": "present",
+        "running": [
+            {"unit": "acme@4:api", "actor": {"kind": "agent", "agent_id": "codex", "session_id": "s1"}},
+            {"unit": "acme@4:web", "actor": {"kind": "human"}},
+        ],
+        "tasks": [{"name": "drop-cache", "run": "redis-cli -n ${{ lane.index }} FLUSHDB"}],
+        "teardown": [{"name": "database", "run": "dropdb acme_4", "container": "postgres"}],
+        "hooks_skipped": null,
+        "containers": [
+            {"name": "devlanes-acme-lane4-redis", "kind": "container"},
+            {"name": "acme-lane4-postgres-1", "kind": "compose"},
+        ],
+        "compose_project": "acme-lane4",
+        "volumes": [
+            {"name": "acme-lane4_pgdata", "bytes": 1_288_490_188_u64},
+            {"name": "devlanes-acme-lane4-cache", "bytes": null},
+        ],
+        "infra_error": null,
+        "data_dir": {"path": "/home/dev/.devlanes/data/acme/7", "bytes": 325_058_560_u64},
+        "logs_bytes": 12_345,
+        "ports": {"start": 20040, "size": 10},
+    })
+}
+
 /// A lane summary.
 pub(crate) fn lane(index: Option<u32>, branch: &str, state: &str, units: Vec<Value>) -> Value {
     json!({
@@ -441,6 +469,23 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "infra": {"compose": "acme-2"},
             }),
         ),
+        ("lane_clean_plan", Method::LaneCleanPlan, lane_clean_plan()),
+        // A gone worktree runs no hooks, and Docker did not answer.
+        ("lane_clean_plan_missing", Method::LaneCleanPlan, {
+            let mut plan = lane_clean_plan();
+            plan["worktree"] = json!("missing");
+            plan["running"] = json!([]);
+            plan["tasks"] = json!([]);
+            plan["teardown"] = json!([]);
+            plan["hooks_skipped"] = json!("worktree_missing");
+            plan["containers"] = json!([]);
+            plan["compose_project"] = Value::Null;
+            plan["volumes"] = json!([]);
+            plan["infra_error"] = json!("no Docker engine is reachable");
+            plan["data_dir"]["bytes"] = Value::Null;
+            plan["logs_bytes"] = Value::Null;
+            plan
+        }),
         (
             "lane_gc",
             Method::LaneGc,
@@ -532,7 +577,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             {"key": "PORT", "value": "20101", "layer": "devlanes"},
             {"key": "API_TOKEN", "value": "[redacted]", "layer": "global"},
             {"key": "NODE_ENV", "value": "development", "layer": "service"},
-        ], "truncated": false, "next_cursor": null}),
+        ], "notes": ["npm: pnpm 10.4.1 (packageManager in package.json)"], "truncated": false, "next_cursor": null}),
         ),
         // The lane's env before its infra is up: a value that reads it waits.
         (
