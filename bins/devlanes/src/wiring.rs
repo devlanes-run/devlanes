@@ -1,7 +1,7 @@
 //! Registers concrete integrations. This is the only module that names them.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -1364,8 +1364,6 @@ struct ContainerInfra {
     compose: devlanes_infra_compose::Compose,
     docker: Option<devlanes_infra_docker::DockerInfra>,
     events: broadcast::Sender<InfraEvent>,
-    /// Projects whose container events are already forwarded.
-    watched: Mutex<BTreeSet<String>>,
 }
 
 /// The daemon variables the `docker` CLI needs: where to find binaries and its
@@ -1541,12 +1539,67 @@ impl ContainerInfra {
                 Some((name.into_string().ok()?, value.into_string().ok()?))
             }),
         ));
+        let events = broadcast::channel(256).0;
+        if let Some(docker) = &docker {
+            Self::forward_events(docker, events.clone());
+        }
         Self {
             compose: devlanes_infra_compose::Compose::new(cli),
             docker,
-            events: broadcast::channel(256).0,
-            watched: Mutex::new(BTreeSet::new()),
+            events,
         }
+    }
+
+    /// Forwards the lifecycle events of every container on the engine. The
+    /// daemon matches them to lanes by Docker name, so shared Compose
+    /// containers, which carry no `dev.devlanes.*` labels, are seen too.
+    fn forward_events(
+        docker: &devlanes_infra_docker::DockerInfra,
+        sender: broadcast::Sender<InfraEvent>,
+    ) {
+        use futures_util::StreamExt;
+        let mut stream = docker.watch();
+        tokio::spawn(async move {
+            while let Some(item) = stream.next().await {
+                let event = match item {
+                    devlanes_infra_docker::WatchEvent::Event(event) => {
+                        let lane = match event.scope() {
+                            Some(devlanes_infra_docker::Scope::Lane(lane)) => Some(lane),
+                            _ => None,
+                        };
+                        let state = serde_json::to_value(&event.kind)
+                            .ok()
+                            .and_then(|v| v.get("kind").and_then(Value::as_str).map(str::to_owned))
+                            .unwrap_or_default();
+                        let exit_code = match &event.kind {
+                            devlanes_infra_docker::EventKind::Died { exit_code } => *exit_code,
+                            _ => None,
+                        };
+                        let project = event
+                            .project()
+                            .or_else(|| event.compose_service().map(|(project, _)| project))
+                            .unwrap_or_default()
+                            .to_owned();
+                        InfraEvent {
+                            project,
+                            lane,
+                            container: event.container_name.clone(),
+                            state,
+                            exit_code,
+                        }
+                    }
+                    devlanes_infra_docker::WatchEvent::Reconnected => InfraEvent {
+                        project: String::new(),
+                        lane: None,
+                        container: String::new(),
+                        state: "reconnected".into(),
+                        exit_code: None,
+                    },
+                };
+                // No receiver yet, or none left, is fine: events are not stored.
+                let _ = sender.send(event);
+            }
+        });
     }
 
     /// The Docker client or `docker_unavailable`.
@@ -1768,46 +1821,6 @@ impl ContainerInfra {
             Err(_) => BTreeMap::new(),
         }
     }
-
-    /// Forwards a project's container events once.
-    fn watch_events(&self, project: &str) {
-        let Some(docker) = &self.docker else { return };
-        let fresh = self
-            .watched
-            .lock()
-            .is_ok_and(|mut watched| watched.insert(project.to_owned()));
-        if !fresh {
-            return;
-        }
-        let mut stream = docker.project_events(project);
-        let sender = self.events.clone();
-        let project = project.to_owned();
-        tokio::spawn(async move {
-            use futures_util::StreamExt;
-            while let Some(event) = stream.next().await {
-                let Ok(event) = event else { break };
-                let lane = match event.scope() {
-                    Some(devlanes_infra_docker::Scope::Lane(lane)) => Some(lane),
-                    _ => None,
-                };
-                let state = serde_json::to_value(&event.kind)
-                    .ok()
-                    .and_then(|v| v.get("kind").and_then(Value::as_str).map(str::to_owned))
-                    .unwrap_or_default();
-                let exit_code = match &event.kind {
-                    devlanes_infra_docker::EventKind::Died { exit_code } => *exit_code,
-                    _ => None,
-                };
-                let _ = sender.send(InfraEvent {
-                    project: project.clone(),
-                    lane,
-                    container: event.container_name.clone(),
-                    state,
-                    exit_code,
-                });
-            }
-        });
-    }
 }
 
 #[async_trait]
@@ -1876,7 +1889,6 @@ impl InfraProvider for ContainerInfra {
                 true,
             );
             report.insert("shared".into(), json!(shared));
-            self.watch_events(&shared.project);
         }
         if Self::has_lane_services(spec) {
             let lane = Self::lane(spec);
@@ -1937,7 +1949,6 @@ impl InfraProvider for ContainerInfra {
             // `ensure` returned, so each one runs; events refine it from here.
             Self::plain_targets(&mut targets, &containers, Some("running"));
             report.insert("containers".into(), json!(ensured));
-            self.watch_events(&spec.project);
         }
         Ok(InfraUp {
             namespace: Value::Object(namespace),
@@ -2070,8 +2081,10 @@ impl InfraProvider for ContainerInfra {
     }
 
     /// Stops shared compose services and shared plain containers; data stays.
+    /// `containers` names every container that ran before the stop.
     async fn down(&self, spec: &InfraSpec) -> Result<Value, InfraError> {
         let mut report = serde_json::Map::new();
+        let mut stopped = Vec::new();
         if !spec.compose_files.is_empty() {
             let (project, _) = self
                 .compose
@@ -2079,6 +2092,23 @@ impl InfraProvider for ContainerInfra {
                 .await
                 .map_err(compose_error)?;
             let name = project.name.unwrap_or_default();
+            // Listed before the stop, since afterwards none of them runs. A
+            // failed listing only leaves them out of the report.
+            let running = self.compose.cli().ps(&name).await.unwrap_or_else(|error| {
+                tracing::debug!(%error, "compose containers before infra down unknown");
+                Vec::new()
+            });
+            stopped.extend(
+                running
+                    .into_iter()
+                    .filter(|container| {
+                        matches!(
+                            container.state.as_str(),
+                            "running" | "paused" | "restarting"
+                        )
+                    })
+                    .map(|container| container.name),
+            );
             self.compose
                 .shared_stop(&name, Duration::from_secs(30))
                 .await
@@ -2086,7 +2116,7 @@ impl InfraProvider for ContainerInfra {
             report.insert("compose".into(), json!(name));
         }
         if let Some(docker) = &self.docker {
-            let stopped = docker
+            let plain = docker
                 .stop(
                     &spec.project,
                     Some(devlanes_infra_docker::Scope::Shared),
@@ -2097,8 +2127,9 @@ impl InfraProvider for ContainerInfra {
                     "stop shared containers of {}",
                     spec.project
                 )))?;
-            report.insert("containers".into(), json!(stopped));
+            stopped.extend(plain);
         }
+        report.insert("containers".into(), json!(stopped));
         Ok(Value::Object(report))
     }
 
@@ -2274,6 +2305,57 @@ impl InfraProvider for ContainerInfra {
         Ok(inspected.into_iter().flatten().collect())
     }
 
+    /// Reads each container's health once through the Engine API and waits for
+    /// the ones that run. A plain container without a Docker healthcheck is
+    /// probed on its first port, as `ensure` does; a Compose container without
+    /// one counts once it runs.
+    async fn wait_healthy(
+        &self,
+        spec: &InfraSpec,
+        containers: &[InfraContainer],
+        timeout: Duration,
+    ) -> Result<Vec<String>, InfraError> {
+        let Some(docker) = &self.docker else {
+            return Ok(Vec::new());
+        };
+        let plain = Self::containers(spec).unwrap_or_default();
+        let waits = containers.iter().map(|container| {
+            let probe = match container.compose_project {
+                Some(_) => None,
+                None => plain
+                    .iter()
+                    .find(|declared| declared.name == container.name)
+                    .and_then(|declared| devlanes_infra_docker::primary_port(&declared.ports)),
+            };
+            let name = container.docker.clone();
+            async move {
+                let operation = format!("wait for container {name}");
+                let health = docker
+                    .health(&name, probe)
+                    .await
+                    .map_err(docker_error(&operation))?;
+                // Stopped or paused by someone: nothing to wait for, and the
+                // caller leaves it as it is.
+                let waits = match &health {
+                    devlanes_infra_docker::Health::Missing
+                    | devlanes_infra_docker::Health::Exited { .. } => false,
+                    devlanes_infra_docker::Health::Other { state } => state == "restarting",
+                    _ => true,
+                };
+                if !waits {
+                    return Ok(Some(name));
+                }
+                docker
+                    .wait_healthy(&name, probe, timeout)
+                    .await
+                    .map_err(docker_error(&operation))?;
+                Ok(None)
+            }
+        });
+        let skipped = futures_util::future::try_join_all(waits).await?;
+        Ok(skipped.into_iter().flatten().collect())
+    }
+
     /// Lists labelled containers so status can show them; never stops anything.
     async fn adopt(&self, projects: &[String]) -> Result<Value, InfraError> {
         let docker = self.docker()?;
@@ -2283,9 +2365,6 @@ impl InfraProvider for ContainerInfra {
                 .list_managed(project)
                 .await
                 .map_err(docker_error(&format!("list containers of {project}")))?;
-            if !managed.is_empty() {
-                self.watch_events(project);
-            }
             adopted.insert(
                 project.clone(),
                 json!(managed.iter().map(|m| m.name.clone()).collect::<Vec<_>>()),
@@ -2313,7 +2392,7 @@ impl InfraProvider for ContainerInfra {
         json!({"docker": docker, "compose": compose})
     }
 
-    /// Container lifecycle events of watched projects.
+    /// Container lifecycle events of every container on the engine.
     fn events(&self) -> Option<broadcast::Receiver<InfraEvent>> {
         Some(self.events.subscribe())
     }

@@ -1176,6 +1176,10 @@ pub struct StartResult {
     /// Units this request spawned, as canonical `lane:unit` references.
     #[serde(default)]
     pub started: Vec<String>,
+    /// Setup entries (`setup.<name>`) and tasks this request ran to success, as
+    /// canonical `lane:unit` references, e.g. `acme@2:setup.vhost`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ran: Vec<String>,
     /// Selected units that were already running and left untouched.
     #[serde(default)]
     pub already_running: Vec<String>,

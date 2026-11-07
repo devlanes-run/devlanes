@@ -1,9 +1,14 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    future::Future,
+    time::Duration,
+};
 
 use bollard::models::{EventMessage, EventMessageTypeEnum};
+use futures_util::{Stream, StreamExt};
 use serde::Serialize;
 
-use crate::{Scope, labels};
+use crate::{Error, Scope, labels};
 
 /// Compose's project and service labels, so compose containers can be watched too.
 const COMPOSE_PROJECT: &str = "com.docker.compose.project";
@@ -112,6 +117,74 @@ pub fn map_event(event: &EventMessage) -> Option<HealthEvent> {
     })
 }
 
+/// An item of [`crate::DockerInfra::watch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatchEvent {
+    Event(HealthEvent),
+    /// The engine's event stream ended or failed and is subscribed again;
+    /// events from the time it was down are lost.
+    Reconnected,
+}
+
+/// What [`resubscribing`] keeps between items.
+struct Resubscribe<S, St, P> {
+    subscribe: S,
+    ping: P,
+    current: Option<St>,
+    delay: Duration,
+    backoff_min: Duration,
+    backoff_max: Duration,
+}
+
+/// The events of `subscribe()`, subscribed again whenever that stream ends or
+/// fails: it then retries `ping` with a delay doubling from `backoff_min` to
+/// `backoff_max` until it answers `true`, yields [`WatchEvent::Reconnected`]
+/// and subscribes again. The delay resets once an event arrives, so an engine
+/// whose stream fails right after each reconnect is not polled every second.
+pub(crate) fn resubscribing<S, St, P, F>(
+    mut subscribe: S,
+    ping: P,
+    backoff_min: Duration,
+    backoff_max: Duration,
+) -> impl Stream<Item = WatchEvent>
+where
+    S: FnMut() -> St,
+    St: Stream<Item = Result<HealthEvent, Error>> + Unpin,
+    P: FnMut() -> F,
+    F: Future<Output = bool>,
+{
+    let state = Resubscribe {
+        current: Some(subscribe()),
+        subscribe,
+        ping,
+        delay: backoff_min,
+        backoff_min,
+        backoff_max,
+    };
+    futures_util::stream::unfold(state, |mut state| async move {
+        if let Some(stream) = &mut state.current {
+            match stream.next().await {
+                Some(Ok(event)) => {
+                    state.delay = state.backoff_min;
+                    return Some((WatchEvent::Event(event), state));
+                }
+                Some(Err(error)) => tracing::debug!(%error, "docker event stream failed"),
+                None => tracing::debug!("docker event stream ended"),
+            }
+        }
+        state.current = None;
+        loop {
+            tokio::time::sleep(state.delay).await;
+            state.delay = (state.delay * 2).min(state.backoff_max);
+            if (state.ping)().await {
+                break;
+            }
+        }
+        state.current = Some((state.subscribe)());
+        Some((WatchEvent::Reconnected, state))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use bollard::models::EventActor;
@@ -205,5 +278,39 @@ mod tests {
         let mapped = map_event(&event("health_status: healthy", &attributes)).expect("mapped");
         assert_eq!(mapped.compose_service(), Some(("acme", "postgres")));
         assert_eq!(mapped.project(), None);
+    }
+
+    #[tokio::test]
+    async fn resubscribing_reports_reconnected_after_the_stream_ends() {
+        let first = map_event(&event("die", LANE)).expect("mapped");
+        let second = map_event(&event("start", LANE)).expect("mapped");
+        let mut streams = vec![second.clone(), first.clone()];
+        let mut pings = 0;
+        let watch = resubscribing(
+            move || {
+                let event = streams.pop().expect("subscribed at most twice");
+                futures_util::stream::iter([Ok(event)])
+            },
+            move || {
+                pings += 1;
+                // The engine is still down on the first try.
+                let up = pings > 1;
+                async move { up }
+            },
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        );
+        let items: Vec<WatchEvent> =
+            tokio::time::timeout(Duration::from_secs(5), watch.take(3).collect::<Vec<_>>())
+                .await
+                .expect("three items");
+        assert_eq!(
+            items,
+            [
+                WatchEvent::Event(first),
+                WatchEvent::Reconnected,
+                WatchEvent::Event(second),
+            ]
+        );
     }
 }

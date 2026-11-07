@@ -21,7 +21,7 @@ pub use docker::{
     ManagedContainer, Removed, create_body,
 };
 pub use error::Error;
-pub use events::{EventKind, HealthEvent, WATCHED_EVENTS, map_event};
+pub use events::{EventKind, HealthEvent, WATCHED_EVENTS, WatchEvent, map_event};
 pub use health::{Health, InspectHealth, health_from_inspect, health_from_summary, tcp_probe};
 pub use host::{DEFAULT_HOST, config_dir, resolve_host};
 pub use spec::{

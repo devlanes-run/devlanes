@@ -114,6 +114,60 @@ fn layer_word(layer: EnvLayer) -> &'static str {
     }
 }
 
+/// `logs` selectors with each task that has only `steps` (it never runs a
+/// unit of its own) replaced by the units of its steps among `candidates`:
+/// `infra.setup.X` is `setup.X`, `infra.teardown.X` is `teardown.X`, and a
+/// nested steps task its own steps. A selector with none of them stays, so
+/// it still fails as not found.
+fn step_units(
+    selectors: Vec<String>,
+    candidates: &[(String, Vec<String>)],
+    config: Option<&devlanes_config::ProjectConfig>,
+) -> Vec<String> {
+    let Some(config) = config else {
+        return selectors;
+    };
+    let known = |name: &str| candidates.iter().any(|(candidate, _)| candidate == name);
+    let mut out: Vec<String> = Vec::new();
+    for selector in selectors {
+        if known(&selector) {
+            out.push(selector);
+            continue;
+        }
+        let mut units = Vec::new();
+        let mut visited = BTreeSet::new();
+        let mut pending = vec![selector.clone()];
+        while let Some(name) = pending.pop() {
+            // Steps may name each other in a cycle, which `run` refuses.
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            if let Some(entry) = name.strip_prefix("infra.setup.") {
+                units.push(format!("setup.{entry}"));
+            } else if let Some(entry) = name.strip_prefix("infra.teardown.") {
+                units.push(format!("teardown.{entry}"));
+            } else {
+                match config.tasks.get(&name) {
+                    Some(task) if task.run.is_none() && task.run_script.is_none() => {
+                        pending.extend(task.steps.iter().flatten().rev().cloned());
+                    }
+                    _ => units.push(name),
+                }
+            }
+        }
+        units.retain(|unit| known(unit));
+        if units.is_empty() {
+            out.push(selector);
+        }
+        for unit in units {
+            if !out.contains(&unit) {
+                out.push(unit);
+            }
+        }
+    }
+    out
+}
+
 /// The program name of `pid`, read off the executor; `None` when it is gone or hidden.
 async fn process_name(pid: u32) -> Option<String> {
     tokio::task::spawn_blocking(move || {
@@ -350,6 +404,8 @@ impl Inner {
             }
             candidates.iter().map(|(name, _)| name.clone()).collect()
         } else {
+            let config = lane.st().config.loaded().cloned();
+            let selectors = step_units(selectors, &candidates, config.as_deref());
             crate::engine::match_units(&selectors, &candidates, &reference)?
         };
         query.units = Vec::new();

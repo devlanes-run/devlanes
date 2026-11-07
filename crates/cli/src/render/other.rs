@@ -678,9 +678,19 @@ pub(super) fn infra(method: Method, data: &Value) -> Vec<String> {
             lines
         }
         _ => {
-            let mut lines = vec!["infra down; container data is kept".to_owned()];
-            lines.extend(tree(data).into_iter().map(|line| format!("  {line}")));
-            lines
+            let stopped: Vec<String> = data
+                .get("containers")
+                .and_then(Value::as_array)
+                .map(|names| names.iter().filter_map(Value::as_str).map(clean).collect())
+                .unwrap_or_default();
+            vec![
+                "infra down; container data is kept".to_owned(),
+                if stopped.is_empty() {
+                    "  no container was running".to_owned()
+                } else {
+                    format!("  stopped {}", stopped.join(", "))
+                },
+            ]
         }
     }
 }

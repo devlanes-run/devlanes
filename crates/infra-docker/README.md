@@ -53,6 +53,7 @@ async fn start_cerbos() -> Result<(), Error> {
 ## API
 
 - `DockerInfra`: `ensure`, `health`, `wait_healthy`, `list_managed`, `stop`, `remove_lane`, `events`, `project_events`, `logs`.
+- `DockerInfra::watch`: events of every container on the engine, subscribed again after the engine restarts, with a `WatchEvent::Reconnected` item to say events may have been missed.
 - `DockerInfra::pause_lane` / `unpause_lane`: pause or unpause a frozen lane's own containers and return how many changed; shared containers are never touched.
 - `LogOptions` / `LogChunk`: a container's stdout and stderr as a stream of chunks, with optional tail, follow, since and timestamps.
 - `ContainerSpec`: an evaluated `infra.containers` entry with host ports already taken from the block.

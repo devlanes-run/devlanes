@@ -492,6 +492,11 @@ pub(crate) struct StartCx {
     pub resolved: Option<Arc<ResolvedLane>>,
     pub deadline: Instant,
     pub started: Vec<String>,
+    /// Setup entries (`setup.<name>`) and tasks this start ran to success.
+    pub ran: Vec<String>,
+    /// `StartedAt` of the setup entries' containers, when the infra phase read
+    /// them already; the setup phase takes it instead of asking again.
+    pub setup_started_at: Option<BTreeMap<String, String>>,
     pub already_running: Vec<String>,
     pub failures: Vec<UnitFailureData>,
     pub skipped_tasks: Vec<String>,
@@ -526,6 +531,12 @@ pub(crate) trait LanePhase: Send + Sync {
     /// Internal steps (resolution) emit no events.
     fn visible(&self) -> bool {
         true
+    }
+    /// Why the phase would skip, when the config alone tells before it runs.
+    /// The phase then sends only its `skipped` event, so clients print no
+    /// step for it.
+    fn nothing_to_do(&self, _cx: &StartCx) -> Option<RpcError> {
+        None
     }
     /// Runs the phase.
     async fn run(&self, engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult;
@@ -619,13 +630,19 @@ impl LanePhase for InfraPhase {
         "infra"
     }
 
+    fn nothing_to_do(&self, cx: &StartCx) -> Option<RpcError> {
+        let infra = &cx.config.infra;
+        (infra.compose.is_none() && infra.containers.is_empty())
+            .then(|| reason("no_infra", json!({})))
+    }
+
     async fn run(&self, engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult {
         use tracing::Instrument as _;
-        // Adding units to a lane that is up needs nothing from Docker here: the
-        // bring-up stored the containers' namespace, and the setup phase checks
-        // its entries against the containers on its own.
+        // Adding units to a lane that is up brings nothing up: the bring-up
+        // stored the containers' namespace. Only containers that restarted since
+        // are waited for and read again.
         if !cx.whole_lane && !cx.setup_only && cx.lane.st().infra_ns.is_some() {
-            return PhaseResult::Skipped(reason("lane_running", json!({})));
+            return settle_running_lane(engine, cx).await;
         }
         let empty_spec = match engine
             .infra_spec(&cx.project, &cx.lane, &[])
@@ -701,6 +718,7 @@ impl LanePhase for InfraPhase {
                     st.refresh_pending = true;
                 }
                 st.infra_ns = Some(up.namespace);
+                st.infra_replaced();
                 st.store_containers(up.containers);
                 st.setup_env = up.setup_env;
             }
@@ -728,6 +746,85 @@ impl LanePhase for InfraPhase {
             Some(reason) => PhaseResult::Skipped(reason),
             None => PhaseResult::Done,
         }
+    }
+}
+
+/// The infra phase of a start into a running lane. Containers that restarted
+/// since the lane stored them (container events, or a setup entry's container
+/// with a newer `StartedAt` than the entry's record) are waited for until
+/// healthy and their ports read again, so setup entries and services that
+/// resolve next see the new ones. With none, Docker is not asked beyond the
+/// `StartedAt` lookup the setup phase would make anyway.
+async fn settle_running_lane(engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult {
+    let skip = || PhaseResult::Skipped(reason("lane_running", json!({})));
+    if !cx.infra_enabled {
+        return skip();
+    }
+    let config = cx.config.clone();
+    let entries: Vec<(&String, &String)> = config
+        .infra
+        .setup
+        .iter()
+        .filter_map(|(name, command)| match command {
+            devlanes_config::InfraCommand::Object(options) => options
+                .container
+                .as_ref()
+                .map(|container| (name, container)),
+            devlanes_config::InfraCommand::Command(_) => None,
+        })
+        .collect();
+    let lane_id = cx.lane.st().record.as_ref().map(|r| r.id);
+    // Read outside `lane.setup`; the setup phase compares these times with the
+    // records again under it.
+    if !entries.is_empty()
+        && let Some(lane_id) = lane_id
+        && let Ok(records) = engine.store.setup_records(lane_id).await
+    {
+        let containers = entries.iter().map(|(_, c)| (*c).clone()).collect();
+        let started = engine
+            .containers_started_at(&cx.project, &cx.lane, &cx.infra_needs, containers)
+            .await;
+        {
+            let mut st = cx.lane.st();
+            for (name, container) in &entries {
+                let restarted = records.iter().find(|r| &r.entry == *name).is_some_and(|r| {
+                    same_declaration(r.spec_hash.as_deref(), setup_hash(&config, name).as_deref())
+                        && started
+                            .get(*container)
+                            .is_some_and(|at| r.container_started_at.as_ref() != Some(at))
+                });
+                if restarted {
+                    st.infra_restarted.entry((*container).clone()).or_default();
+                }
+            }
+        }
+        cx.setup_started_at = Some(started);
+    }
+    if cx.lane.st().infra_restarted.is_empty() {
+        return skip();
+    }
+    let spec = match engine.restarted_infra_spec(&cx.project, &cx.lane).await {
+        Ok(spec) => spec,
+        Err(error) => return PhaseResult::Error(error),
+    };
+    let mut shown = Vec::new();
+    let settled = tokio::select! {
+        settled = engine.with_container_progress(
+            cx,
+            &spec,
+            &mut shown,
+            engine.settle_restarted_infra(&cx.project, &cx.lane, &spec, cx.deadline),
+        ) => settled,
+        () = cx.cancel.cancelled() => return PhaseResult::Error(start_cancelled(cx)),
+    };
+    match settled {
+        Ok(changed) => {
+            if changed {
+                cx.lane.st().refresh_pending = true;
+            }
+            PhaseResult::Done
+        }
+        Err(error) => PhaseResult::Error(error),
     }
 }
 
@@ -817,6 +914,14 @@ impl LanePhase for SetupPhase {
         "setup"
     }
 
+    fn nothing_to_do(&self, cx: &StartCx) -> Option<RpcError> {
+        cx.config
+            .infra
+            .setup
+            .is_empty()
+            .then(|| reason("no_setup", json!({})))
+    }
+
     async fn run(&self, engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult {
         let Some(resolved) = cx.resolved.clone() else {
             return PhaseResult::Skipped(reason("not_resolved", json!({})));
@@ -842,16 +947,26 @@ impl LanePhase for SetupPhase {
             Ok(records) => records,
             Err(error) => return PhaseResult::Error(store_error(error)),
         };
-        let containers: BTreeSet<String> = resolved
-            .setup
-            .values()
-            .filter_map(|command| command.container.clone())
-            .collect();
-        let started = tracing::Instrument::instrument(
-            engine.containers_started_at(&cx.project, &cx.lane, &cx.infra_needs, containers),
-            tracing::debug_span!("container start times"),
-        )
-        .await;
+        let started = match cx.setup_started_at.take() {
+            Some(started) => started,
+            None => {
+                let containers: BTreeSet<String> = resolved
+                    .setup
+                    .values()
+                    .filter_map(|command| command.container.clone())
+                    .collect();
+                tracing::Instrument::instrument(
+                    engine.containers_started_at(
+                        &cx.project,
+                        &cx.lane,
+                        &cx.infra_needs,
+                        containers,
+                    ),
+                    tracing::debug_span!("container start times"),
+                )
+                .await
+            }
+        };
         let mut pending: Vec<(String, Option<String>)> = Vec::new();
         for (name, command) in &resolved.setup {
             let started_at = command
@@ -946,6 +1061,7 @@ impl LanePhase for SetupPhase {
                 {
                     return PhaseResult::Error(store_error(error));
                 }
+                cx.ran.push(format!("setup.{name}"));
                 continue;
             }
             let unit = format!("setup.{name}");
@@ -978,6 +1094,24 @@ impl LanePhase for TasksPhase {
         } else {
             "tasks"
         }
+    }
+
+    fn nothing_to_do(&self, cx: &StartCx) -> Option<RpcError> {
+        if !cx.whole_lane && !cx.setup_only {
+            return Some(reason("lane_running", json!({})));
+        }
+        if self.after && cx.setup_only {
+            return Some(reason("setup_only", json!({})));
+        }
+        let any = cx.config.tasks.values().any(|task| {
+            let hooked = match task.when {
+                Some(TaskWhen::Create) => true,
+                Some(TaskWhen::Start) => !cx.setup_only,
+                _ => false,
+            };
+            hooked && matches!(task.after, Some(devlanes_config::TaskAfter::Services)) == self.after
+        });
+        (!any).then(|| reason("no_tasks", json!({})))
     }
 
     async fn run(&self, engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult {
@@ -1122,7 +1256,7 @@ impl LanePhase for TasksPhase {
                 cx.leftovers.extend(outcome.leftovers.iter().cloned());
             }
             match outcome {
-                Ok(TaskOutcome { code: Some(0), .. }) => {}
+                Ok(TaskOutcome { code: Some(0), .. }) => cx.ran.push(name),
                 Ok(TaskOutcome { code, host, .. }) => {
                     let mut failure = match &host {
                         Some(host) => failure_of(&cx.reference, &name, host).await,
@@ -2524,12 +2658,13 @@ impl Inner {
                                 step.strip_prefix("infra.setup.")
                             {
                                 self.step_command(
-                                    project, lane, resolved, "setup", entry, actor, cancel, None,
+                                    project, lane, resolved, "setup", entry, actor, cancel, session,
                                 )
                                 .await?
                             } else if let Some(entry) = step.strip_prefix("infra.teardown.") {
                                 self.step_command(
-                                    project, lane, resolved, "teardown", entry, actor, cancel, None,
+                                    project, lane, resolved, "teardown", entry, actor, cancel,
+                                    session,
                                 )
                                 .await?
                             } else {
@@ -2924,6 +3059,8 @@ impl Inner {
             resolved: None,
             deadline: Instant::now() + options.timeout,
             started: Vec::new(),
+            ran: Vec::new(),
+            setup_started_at: None,
             already_running: Vec::new(),
             failures: Vec::new(),
             skipped_tasks: Vec::new(),
@@ -2960,6 +3097,14 @@ impl Inner {
             if phase.name() == "services" {
                 // From here other starts add their units alongside this one's.
                 lease = lease.share();
+            }
+            // Without a `started` event, `-v`, `with` and CI logs show no step
+            // for a phase that has nothing to do.
+            if phase.visible()
+                && let Some(why) = phase.nothing_to_do(&cx)
+            {
+                self.phase_event(&cx, phase.name(), "skipped", Some(&why), None);
+                continue;
             }
             if phase.visible() {
                 // Resolution ran before services, so the plan is known by now.
@@ -3159,6 +3304,11 @@ impl Inner {
             warnings,
             started: cx
                 .started
+                .iter()
+                .map(|u| format!("{}:{u}", cx.reference))
+                .collect(),
+            ran: cx
+                .ran
                 .iter()
                 .map(|u| format!("{}:{u}", cx.reference))
                 .collect(),
@@ -3718,6 +3868,25 @@ impl Inner {
             .config
             .require(&reference)
             .map_err(|error| with_ownership(error, &reference, &[]))?;
+        // A container that restarted may publish other ports than the lane
+        // stored; the background refresh may not have read them yet.
+        if !lane.st().infra_restarted.is_empty() {
+            let deadline = Instant::now() + options.timeout;
+            let settle = async {
+                let spec = self.restarted_infra_spec(project, lane).await?;
+                self.settle_restarted_infra(project, lane, &spec, deadline)
+                    .await
+            };
+            let settled = tokio::select! {
+                settled = settle => settled,
+                () = ctl.cancel.cancelled() => Err(RpcError::new(
+                    "start_cancelled",
+                    json!({"lane": reference}),
+                    1,
+                )),
+            };
+            settled.map_err(|error| with_ownership(error, &reference, &[]))?;
+        }
         let resolved = self
             .resolve_config(project, lane, config.clone(), None)
             .await
@@ -3801,6 +3970,8 @@ impl Inner {
             resolved: Some(resolved),
             deadline: Instant::now() + options.timeout,
             started: Vec::new(),
+            ran: Vec::new(),
+            setup_started_at: None,
             already_running: Vec::new(),
             failures: Vec::new(),
             skipped_tasks: Vec::new(),
@@ -3960,6 +4131,7 @@ impl Inner {
             st.units.clear();
             st.started_at_ms = None;
             st.infra_ns = None;
+            st.infra_replaced();
             st.infra_containers.clear();
             st.usage.clear();
             st.moves_to = None;
@@ -4359,6 +4531,7 @@ impl Inner {
         if let Ok(up) = self.infra_namespace_kept(spec).await {
             let mut st = cx.lane.st();
             st.infra_ns = Some(up.namespace);
+            st.infra_replaced();
             st.store_containers(up.containers);
             st.setup_env = up.setup_env;
         }

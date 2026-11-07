@@ -587,8 +587,9 @@ services:
 
 #[tokio::test(flavor = "multi_thread")]
 /// An entry backed by a container runs again only when that container
-/// restarted: a `run` of the entry records the container's start time like a
-/// start does, so a later start into the running lane leaves it alone.
+/// restarted, and only once the container is healthy again: a `run` of the
+/// entry records the container's start time like a start does, so a later
+/// start into the running lane leaves it alone. The result lists the entry.
 async fn setup_entry_reruns_only_after_its_container_restarted() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -616,7 +617,10 @@ async fn setup_entry_reruns_only_after_its_container_restarted() {
         .await
         .expect("run setup entry");
         let web = start(&h, cx(&main), json!({"units": ["web"]})).await;
-        assert!(web.ready && !web.whole_lane, "{web:?}");
+        assert!(
+            web.ready && !web.whole_lane && web.ran.is_empty(),
+            "{web:?}"
+        );
         assert_eq!(
             h.runner.journal.entries(),
             ["echo setup-db", "sleep", "echo setup-db", "sleep"],
@@ -627,7 +631,28 @@ async fn setup_entry_reruns_only_after_its_container_restarted() {
             .await
             .expect("stop web");
         started_at("2026-01-01T01:00:00Z");
-        assert!(start(&h, cx(&main), json!({"units": ["web"]})).await.ready);
+        let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+        *h.infra.wait_gate.lock().expect("lock") = Some(gate.clone());
+        let driver = async {
+            let waited = eventually(Duration::from_secs(5), || async {
+                h.infra
+                    .calls
+                    .entries()
+                    .contains(&"wait backed-lane0-db-1".to_owned())
+                    .then_some(())
+            })
+            .await;
+            assert!(waited.is_some(), "{:?}", h.infra.calls.entries());
+            assert_eq!(
+                h.runner.journal.entries().len(),
+                4,
+                "the entry waits for its container to be healthy"
+            );
+            gate.notify_one();
+        };
+        let (web, ()) = tokio::join!(start(&h, cx(&main), json!({"units": ["web"]})), driver);
+        assert!(web.ready && !web.whole_lane, "{web:?}");
+        assert_eq!(web.ran, ["backed@0:setup.database"]);
         assert_eq!(
             &h.runner.journal.entries()[4..],
             ["echo setup-db", "sleep"],
@@ -688,9 +713,19 @@ services:
             ]
         );
 
+        let queried = h.infra.queries.entries().len();
         let web = start(&h, cx(&main), json!({"units": ["web"]})).await;
         assert!(web.ready && !web.whole_lane, "{web:?}");
         assert_eq!(planned(), ["InfraCommand database", "Service web"]);
+        // No container restarted, so Docker is not asked about them.
+        assert_eq!(h.infra.queries.entries()[queried..], [] as [String; 0]);
+        assert!(
+            !h.infra
+                .calls
+                .entries()
+                .iter()
+                .any(|c| c.starts_with("wait"))
+        );
         // Expressions still see the services that were not planned.
         let lanes = status(&h, cx(&main), json!({})).await;
         let api_port = lanes[0]

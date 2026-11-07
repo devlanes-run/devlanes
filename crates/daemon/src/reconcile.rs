@@ -18,17 +18,39 @@ use crate::{
 impl Inner {
     /// Keeps `ContainerSummary.state` current: the event's container gets the
     /// state it leaves, in every lane that uses it, and those lanes are published.
-    pub(crate) fn apply_container_event(&self, event: &crate::integrations::InfraEvent) {
+    /// A stored container that comes back from down is marked restarted and its
+    /// ports read again; `reconnected` does that for every stored container.
+    /// Returns whether the event concerned a container some lane stored.
+    pub(crate) fn apply_container_event(
+        self: &Arc<Self>,
+        event: &crate::integrations::InfraEvent,
+    ) -> bool {
+        let reconnected = event.state == "reconnected";
         let state = event.container_state();
+        let mut matched = false;
         for (project, lane) in self.all_lanes() {
-            let changed = {
+            let (changed, restarted) = {
                 let mut st = lane.st();
                 let mut changed = false;
+                let mut restarted = Vec::new();
+                let tracked = st.infra_ns.is_some();
                 for container in st
                     .infra_containers
                     .iter_mut()
-                    .filter(|container| container.docker == event.container)
+                    .filter(|container| reconnected || container.docker == event.container)
                 {
+                    matched = true;
+                    if reconnected {
+                        restarted.push(container.name.clone());
+                        continue;
+                    }
+                    // `restart` follows `start` and finds it running already.
+                    let down = container.state.as_deref().is_some_and(|old| {
+                        old.starts_with("exited") || matches!(old, "removed" | "missing" | "oom")
+                    });
+                    if down && state == "running" {
+                        restarted.push(container.name.clone());
+                    }
                     // `stop` follows `die`, which already carried the exit code.
                     let keeps_code = state == "exited"
                         && container
@@ -40,12 +62,22 @@ impl Inner {
                         changed = true;
                     }
                 }
-                changed
+                if !tracked {
+                    restarted.clear();
+                }
+                for name in &restarted {
+                    *st.infra_restarted.entry(name.clone()).or_default() += 1;
+                }
+                (changed, !restarted.is_empty())
             };
+            if restarted {
+                self.queue_infra_refresh(&project, &lane);
+            }
             if changed {
                 self.emit_lane(&project, &lane);
             }
         }
+        matched && !reconnected
     }
 
     /// Reloads known projects, records surviving units as orphans, starts
@@ -254,9 +286,12 @@ impl Inner {
                         event = events.recv() => event,
                     };
                     match event {
+                        // The stream carries every container on the engine;
+                        // clients hear only of the ones a lane uses.
                         Ok(event) => {
-                            engine.apply_container_event(&event);
-                            engine.bus.emit("infra.changed", json!(event));
+                            if engine.apply_container_event(&event) {
+                                engine.bus.emit("infra.changed", json!(event));
+                            }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
