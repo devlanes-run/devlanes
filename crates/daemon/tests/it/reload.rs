@@ -284,7 +284,7 @@ async fn restart_from_a_shell_drops_an_earlier_env_override() {
         let h = harness(
             &tmp.path.join("home"),
             Setup {
-                user: crate::pool("13000-13249"),
+                user: crate::pool("11000-11249"),
                 ..Setup::default()
             },
         )
