@@ -19,7 +19,7 @@ use serde::Serialize;
 
 use crate::{
     ContainerSpec, Error, Health, HealthEvent, Mount, Scope,
-    events::{WATCHED_EVENTS, map_event},
+    events::{WATCHED_EVENTS, WatchEvent, map_event, resubscribing},
     health::{health_from_inspect, health_from_summary, tcp_probe},
     host::{config_dir, resolve_host},
     labels,
@@ -475,6 +475,25 @@ impl DockerInfra {
             .map_err(Error::from)
             .try_filter_map(|event| async move { Ok(map_event(&event)) })
             .boxed()
+    }
+
+    /// Lifecycle events of every container on the engine, plain or Compose, for as
+    /// long as the stream is polled. When Docker closes the stream (an engine
+    /// restart) it waits until the engine answers again, yields
+    /// [`WatchEvent::Reconnected`] and subscribes again.
+    pub fn watch(&self) -> BoxStream<'static, WatchEvent> {
+        let events = self.clone();
+        let ping = self.clone();
+        resubscribing(
+            move || events.events(&BTreeMap::new()),
+            move || {
+                let ping = ping.clone();
+                async move { ping.server_version().await.is_ok() }
+            },
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        )
+        .boxed()
     }
 
     /// Events of every plain container of `project`.

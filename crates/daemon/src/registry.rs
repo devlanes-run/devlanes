@@ -2439,6 +2439,7 @@ pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
         desired: tokio::sync::Mutex::new(()),
         decide: tokio::sync::Mutex::new(()),
         setup: tokio::sync::Mutex::new(()),
+        infra_refresh: tokio::sync::Mutex::new(()),
     })
 }
 

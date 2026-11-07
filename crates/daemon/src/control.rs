@@ -1387,6 +1387,7 @@ impl Inner {
         {
             let mut st = lane.st();
             st.infra_ns = Some(up.namespace.clone());
+            st.infra_replaced();
             st.store_containers(up.containers.clone());
             st.setup_env = up.setup_env.clone();
         }
