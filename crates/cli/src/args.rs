@@ -345,7 +345,7 @@ pub struct WithArgs {
     /// Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
     #[arg(long = "profile", value_name = "PROFILE")]
     pub profiles: Vec<String>,
-    /// Write every unit's log of the run to DIR as text files, for CI artifacts
+    /// Write the log of every unit and task the run started to DIR as text files, for CI artifacts; other files in DIR stay
     #[arg(long, value_name = "DIR")]
     pub logs_dir: Option<PathBuf>,
     /// Leave the lane running afterwards, for debugging
@@ -428,9 +428,9 @@ pub struct LogArgs {
     /// Show the lines around this cursor, such as api#120
     #[arg(long, value_name = "CURSOR")]
     pub around: Option<String>,
-    /// Lines before and after --around
-    #[arg(short = 'C', long = "context", default_value_t = 3, value_name = "N")]
-    pub context_lines: usize,
+    /// Lines before and after --around, or around each --grep or --level match [default: 3 with --around, else 0]
+    #[arg(short = 'C', long = "context", value_name = "N")]
+    pub context_lines: Option<usize>,
     /// Continue after this cursor, as printed by an earlier logs call
     #[arg(long, value_name = "CURSOR")]
     pub cursor: Option<String>,
@@ -928,6 +928,10 @@ pub enum DaemonCommand {
     /// Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
     ResetState,
     /// Print a one-time code that pairs another machine with this one
+    ///
+    /// On a terminal it also prints how long the code is valid and the command
+    /// to run on the other machine. Without a terminal, as in
+    /// `ssh box devlanes daemon pair`, it prints only the code, for scripts.
     Pair,
     /// List the machines paired or connected to this one
     Clients,
@@ -1199,7 +1203,11 @@ impl Cli {
                             grep: args.grep.clone(),
                             level: args.level.clone(),
                             around: args.around.clone(),
-                            context_lines: args.context_lines,
+                            context_lines: args.context_lines.unwrap_or(if args.around.is_some() {
+                                3
+                            } else {
+                                0
+                            }),
                             follow: args.follow,
                             mine: args.mine,
                             // Colors come along only where they are shown.

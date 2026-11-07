@@ -7,7 +7,7 @@ use devlanes_term::{Progress, ProgressMode, Wrap};
 use serde_json::{Value, json};
 
 /// A runtime for `args`, with stdout a terminal or not and CI markers injected.
-fn runtime(args: &[&str], tty: bool, ci: bool) -> Runtime {
+pub(crate) fn runtime(args: &[&str], tty: bool, ci: bool) -> Runtime {
     let cli = Cli::parse_from(args);
     let signals = Signals {
         stdout_tty: tty,
@@ -218,14 +218,14 @@ fn a_start_prints_its_phase_lines_in_human_mode() {
 
 /// What a start prints for `events` in `runtime`, with phase lines rewritten
 /// as the binary does.
-fn rewritten(runtime: &Runtime, events: &[Value]) -> String {
+fn rewritten(runtime: &Runtime, events: &[(&str, Value)]) -> String {
     let reporter = runtime.reporter();
     let mut lines = PhaseLines::new(runtime);
     let mut out = String::new();
-    for data in events {
+    for (name, data) in events {
         let event = Event {
             seq: 1,
-            event: "lane.phase".into(),
+            event: (*name).into(),
             data: data.clone(),
         };
         let mut stdout = reporter.event(Method::Start, &event).expect("event").stdout;
@@ -242,7 +242,7 @@ fn phase_detail_replaces_the_running_line() {
         if let (Some(data), Value::Object(detail)) = (data.as_object_mut(), detail) {
             data.extend(detail);
         }
-        data
+        ("lane.phase", data)
     };
     let containers = |postgres: &str| {
         json!({"containers": [
@@ -282,5 +282,57 @@ fn phase_detail_replaces_the_running_line() {
     assert_eq!(
         rewritten(&runtime(&["devlanes"], false, false), &events),
         "ok infra\nok setup\n"
+    );
+}
+
+#[test]
+fn a_finished_task_replaces_its_phase_line() {
+    let phase = |phase: &str, state: &str, step: Option<(&str, usize, usize)>| {
+        let mut data = json!({"lane": "acme@1", "phase": phase, "state": state, "start_id": 4});
+        if let Some((name, index, count)) = step {
+            data["step"] = json!({"name": name, "index": index, "count": count});
+        }
+        ("lane.phase", data)
+    };
+    let task = |lane: &str, task: &str| {
+        (
+            "task",
+            json!({"lane": lane, "task": task, "state": "done", "exit_code": 0}),
+        )
+    };
+    let events = [
+        phase("tasks", "started", None),
+        phase("tasks", "progress", Some(("install", 1, 1))),
+        // Another lane's task in between: the line is no longer last, so stays.
+        task("acme@2", "build"),
+        task("acme@1", "install"),
+        phase("tasks", "done", None),
+        phase("after-services", "started", None),
+        phase("after-services", "progress", Some(("seed", 1, 2))),
+        task("acme@1", "seed"),
+        phase("after-services", "progress", Some(("notify", 2, 2))),
+        task("acme@1", "notify"),
+        phase("after-services", "done", None),
+    ];
+    let erase = "\x1b[1A\x1b[2K";
+    assert_eq!(
+        rewritten(&runtime(&["devlanes"], true, false), &events),
+        format!(
+            "\u{2026} tasks\n\
+{erase}\u{2026} tasks: install\n\
+\u{2713} build\n\
+\u{2713} install\n\
+\u{2026} after-services\n\
+{erase}\u{2713} services ready\n\
+\u{2026} after-services: seed (1 of 2)\n\
+{erase}\u{2713} seed\n\
+\u{2026} after-services: notify (2 of 2)\n\
+{erase}\u{2713} notify\n"
+        )
+    );
+    // Plain output says when the services were ready, before the tasks that waited.
+    assert_eq!(
+        rewritten(&runtime(&["devlanes"], false, false), &events),
+        "ok build\nok install\nok services ready\nok seed\nok notify\n"
     );
 }

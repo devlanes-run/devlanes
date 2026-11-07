@@ -115,23 +115,33 @@ fn a_start_title_follows_its_events() {
     assert_eq!(title.text(), "devlanes start acme@1 · 1 failed");
 
     // The end of a long start; a quick one is not worth a notification.
-    assert!(title.finished(false, Duration::from_secs(2)).is_none());
+    assert!(title.finished(1, Duration::from_secs(2)).is_none());
     assert_eq!(
-        title.finished(false, Duration::from_secs(30)),
+        title.finished(1, Duration::from_secs(30)),
+        Some(("start of acme@1 failed".into(), "1 failed".into()))
+    );
+    // A timeout that also saw a failure is a failure.
+    assert_eq!(
+        title.finished(124, Duration::from_secs(30)),
         Some(("start of acme@1 failed".into(), "1 failed".into()))
     );
     let mut ok = command_title(&request(&["start"])).expect("start title");
     ok.event(&services);
-    for name in ["api", "web", "worker"] {
+    for name in ["api", "web"] {
         ok.event(&changed(name, "ready"));
     }
     assert_eq!(
-        ok.finished(true, Duration::from_secs(30)),
+        ok.finished(124, Duration::from_secs(30)),
+        Some(("start of acme@1 timed out".into(), "2 of 3 ready".into()))
+    );
+    ok.event(&changed("worker", "ready"));
+    assert_eq!(
+        ok.finished(0, Duration::from_secs(30)),
         Some(("acme@1 is up".into(), "3 of 3 ready".into()))
     );
     // A command that follows no start never notifies.
     let logs = command_title(&request(&["logs", "-f", "api"])).expect("logs title");
-    assert!(logs.finished(true, Duration::from_secs(600)).is_none());
+    assert!(logs.finished(0, Duration::from_secs(600)).is_none());
 }
 
 /// Every feature on, whatever the terminal.

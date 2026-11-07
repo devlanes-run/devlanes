@@ -140,9 +140,29 @@ pub async fn run_with<D: WithDriver + ?Sized>(
         exit_code: 1,
         ..WithOutcome::default()
     };
+    let mut phases = crate::PhaseLines::new(runtime);
+    // `(lane, task)` of each task this start ran: their logs belong to the run
+    // although the start result lists only the services it spawned.
+    let mut tasks: Vec<(String, String)> = Vec::new();
     let start = driver
         .start(&plan.start, &mut |event| {
-            if let Ok(rendered) = reporter.event(Method::Start, &event) {
+            if event.event == devlanes_proto::events::TASK {
+                let field = |key: &str| {
+                    event
+                        .data
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                };
+                if matches!(field("state"), "done" | "exited" | "failed") {
+                    tasks.push((field("lane").to_owned(), field("task").to_owned()));
+                }
+            }
+            if let Ok(mut rendered) = reporter.event(Method::Start, &event) {
+                // `with --json` streams every event as it came.
+                if runtime.mode != crate::OutputMode::Json {
+                    phases.rewrite(&event, &mut rendered.stdout);
+                }
                 emit(rendered);
             }
         })
@@ -268,9 +288,14 @@ pub async fn run_with<D: WithDriver + ?Sized>(
         })
     };
     if let Some(directory) = &plan.logs_dir {
+        let ran = |unit: &str| {
+            tasks
+                .iter()
+                .any(|(lane, task)| *lane == ownership.lane && task == unit)
+        };
         let owned_logs: Vec<UnitLogs> = logs
             .iter()
-            .filter(|unit| owned(&unit.unit))
+            .filter(|unit| owned(&unit.unit) || ran(&unit.unit))
             .cloned()
             .collect();
         match write_log_artifacts(directory, &owned_logs).await {
@@ -652,7 +677,8 @@ pub fn log_filename(unit: &str) -> String {
     name
 }
 
-/// Atomically replaces each unit's artifact so repeated runs do not retain stale logs.
+/// Atomically replaces each unit's artifact, so a rerun leaves no stale lines in
+/// it. Other files in `directory` stay: it is the user's folder.
 #[cfg(not(target_family = "wasm"))]
 pub async fn write_log_artifacts(
     directory: &Path,

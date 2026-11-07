@@ -641,7 +641,12 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
     };
     progress.finish(matches!(result, Ok(0))).await;
     if let Some(title) = &title {
-        title.finish(runtime, matches!(result, Ok(0)));
+        title.finish(
+            runtime,
+            result
+                .as_ref()
+                .map_or(devlanes_cli::exit::FAILED, |code| *code),
+        );
     }
     if result.is_ok() {
         if let Some(data) = &started {

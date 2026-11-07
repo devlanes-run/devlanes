@@ -222,7 +222,10 @@ pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> 
         Method::Start | Method::Restart | Method::Reload | Method::Resume | Method::LaneNew
     );
     match event.event.as_str() {
-        events::PHASE if starting => other::phase_line(&event.data, cx).into_iter().collect(),
+        events::PHASE if starting => other::services_ready_line(&event.data, cx)
+            .into_iter()
+            .chain(other::phase_line(&event.data, cx))
+            .collect(),
         events::TASK if starting => other::task_line(&event.data, cx).into_iter().collect(),
         // The final result lists every unit; transitions would only repeat it.
         events::UNIT_CHANGED | events::LANE_CHANGED if starting => Vec::new(),

@@ -911,9 +911,19 @@ services:
 "#;
         let main = repo(&tmp.path, "r", config);
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let mut bus = h.engine.subscribe();
         let result = start(&h, cx(&main), json!({})).await;
         assert!(!result.ready);
         assert_eq!(result.skipped_tasks, ["seed"]);
+        // Clients read the first after-services step as "services ready"
+        // (`services_ready_line` in devlanes-cli), so a skipped phase sends none.
+        let mut after = Vec::new();
+        while let Ok(event) = bus.try_recv() {
+            if event.data["phase"] == "after-services" {
+                after.push(event.data["state"].as_str().unwrap_or("").to_owned());
+            }
+        }
+        assert_eq!(after, ["started", "skipped"]);
         let failure = result
             .failures
             .iter()

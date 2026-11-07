@@ -624,6 +624,21 @@ pub(super) fn phase_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
     }
 }
 
+/// `✓ services ready` on the first step of the `after-services` phase. The
+/// daemon sends that step only once every unit of the start is ready (it skips
+/// the phase on a timeout or a failed unit), and the result's services line
+/// comes after the stream, so without this the phase's task lines read as if
+/// they ran before the services were up.
+pub(super) fn services_ready_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
+    let step = data
+        .get("step")
+        .and_then(|step| serde_json::from_value::<devlanes_proto::PhaseStep>(step.clone()).ok())?;
+    (text(data, "phase") == "after-services"
+        && text(data, "state") == "progress"
+        && step.index == 1)
+        .then(|| format!("{} services ready", cx.mark(Outcome::Ok)))
+}
+
 /// A finished task during a start: `✓ migrate` or `✗ migrate exit=1`.
 pub(super) fn task_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
     let task = text(data, "task");

@@ -929,6 +929,8 @@ pub const ORPHANED: &str = "orphaned";
 
 /// Canonical lane references can be pasted into a later command.
 /// States: `idle`, `starting`, `running`, `failed`, `stopping`, `unassigned`, `no-config`.
+/// A lane is `starting` while a start runs its phases or any of its services is
+/// starting or queued.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LaneSummary {
     pub reference: String,
@@ -960,6 +962,11 @@ pub struct LaneSummary {
     pub moves_to: Option<u32>,
     #[serde(default)]
     pub domain: Option<String>,
+    /// `domain`'s HTTPS URL through this machine's proxy, with the port unless
+    /// it is 443, as the services' public URLs read. `None` when the lane routes
+    /// no hostname, and from older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     #[serde(default)]
     pub port_block: Option<(u16, u16)>,
     /// Machine-readable reason for `unassigned`/`no-config` or a start failure.
