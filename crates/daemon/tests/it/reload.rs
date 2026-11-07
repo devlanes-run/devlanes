@@ -251,7 +251,8 @@ async fn restart_and_reload_refuse_before_touching_the_lane() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// `restart` without units restarts the whole lane and keeps what it ran.
+/// `restart` without units restarts the whole lane and keeps what it ran; the
+/// exec units it stopped are named in an `exec_stopped` warning.
 async fn restart_without_units_restarts_the_whole_lane() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -260,14 +261,37 @@ async fn restart_without_units_restarts_the_whole_lane() {
         h.call(Method::Start, json!({"units": ["web"]}), cx(&main))
             .await
             .expect("start web");
-        let result: StartResult = serde_json::from_value(
-            h.call(Method::Restart, json!({}), cx(&main))
-                .await
-                .expect("restart"),
+        h.call(
+            Method::Exec,
+            json!({"name": "job", "command": ["sleep"]}),
+            cx(&main),
         )
-        .expect("result");
+        .await
+        .expect("exec");
+        let restart = || async {
+            let result: StartResult = serde_json::from_value(
+                h.call(Method::Restart, json!({}), cx(&main))
+                    .await
+                    .expect("restart"),
+            )
+            .expect("result");
+            result
+        };
+        let result = restart().await;
         assert!(result.whole_lane, "{result:?}");
         assert_eq!(result.started, ["demo@0:web"]);
+        let exec_stopped: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.code == "exec_stopped")
+            .collect();
+        assert_eq!(exec_stopped.len(), 1, "{result:?}");
+        assert_eq!(exec_stopped[0].data["units"], json!(["job"]));
+        let again = restart().await;
+        assert!(
+            again.warnings.iter().all(|w| w.code != "exec_stopped"),
+            "{again:?}"
+        );
         h.close().await;
     })
     .await

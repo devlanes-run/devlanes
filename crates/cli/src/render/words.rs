@@ -390,6 +390,15 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 "set systemd=true under [boot] in /etc/wsl.conf, {WSL_RESTART}"
             ))),
         ),
+        // A task or exec command still running at the deadline: no readiness problem.
+        "timeout" if text(data, "state") == "running" && !text(data, "unit").is_empty() => (
+            format!(
+                "{} is still running after {}",
+                target(data),
+                super::duration(data.get("timeout_ms").and_then(Value::as_u64).unwrap_or(0))
+            ),
+            logs_hint(data),
+        ),
         "timeout" => (
             match target(data) {
                 found if !found.is_empty() => format!("timed out waiting for {found}"),
@@ -414,6 +423,17 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
         "config_error" => (
             config_invalid(data),
             Some(Hint::command(["config", "check"])),
+        ),
+        // A lane-level value of a file that loads did not evaluate (`exec`, `env
+        // show`), such as `${{ env.X }}` the shell does not set: not an invalid file.
+        "lane_env_unresolved" => (
+            format!(
+                "{} has no value in {}: {}",
+                field(data, "path"),
+                or_this_lane(&text(data, "lane")),
+                text(data, "message")
+            ),
+            None,
         ),
         // `config get|set|unset` with a key the user config does not have.
         "unknown_setting" => (
@@ -1600,6 +1620,22 @@ fn memory(data: &Value, key: &str) -> String {
         .map_or_else(|| "?".into(), super::bytes)
 }
 
+/// The `left_out` entries of an `exec` or `env` answer, one line each:
+/// `DATABASE_URL left out: infra postgres is not up; devlanes infra up`.
+pub(crate) fn left_out(data: &Value) -> Vec<String> {
+    list(data, "left_out")
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} left out: infra {} is not up; {}",
+                text(entry, "key"),
+                text(entry, "infra"),
+                Hint::command(["infra", "up"]).0
+            )
+        })
+        .collect()
+}
+
 /// A lane warning (`StartResult.warnings`, `lane.warning`, doctor's `ca_warnings`)
 /// as one line: `api.example.com is outside the CA's names; HTTPS will fail; try api.acme.test`.
 pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
@@ -1633,6 +1669,19 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
             format!(
                 "stopped {}, which the project file no longer has",
                 units.join(", ")
+            )
+        }
+        "exec_stopped" => {
+            let units: Vec<String> = list(data, "units").iter().map(display_value).collect();
+            let (noun, pronoun) = if units.len() == 1 {
+                ("exec unit", "it")
+            } else {
+                ("exec units", "them")
+            };
+            format!(
+                "stopped {noun} {}; run {pronoun} again with {}",
+                units.join(", "),
+                Hint::command(["exec"]).0
             )
         }
         // A result rather than advice: the start summary prints it as an ok line.

@@ -1038,6 +1038,256 @@ async fn exec_logs_and_attach() {
     .expect("timeout");
 }
 
+/// `env --explain` of a running unit as `key -> (value, layer)`.
+async fn explained(
+    h: &crate::Harness,
+    unit: &str,
+    context: Context,
+) -> std::collections::BTreeMap<String, (String, String)> {
+    let env = h
+        .call(Method::Env, json!({"unit": unit, "explain": true}), context)
+        .await
+        .expect("env");
+    env["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| {
+            let text = |key: &str| item[key].as_str().unwrap_or_default().to_owned();
+            (text("key"), (text("value"), text("layer")))
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// An exec command gets the lane-level `global_env` and the runtime CA variables,
+/// which keep a value the shell sets; entries reading `self` stay out.
+async fn exec_gets_the_lane_environment() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = BASIC.replace(
+            "services:\n",
+            "global_env:\n  GREETING: \"hi-${{ lane.name }}\"\n  PER: \"${{ self.name }}\"\nservices:\n",
+        );
+        let main = repo(&tmp.path, "r", &config);
+        let setup = Setup {
+            ca_env: [
+                ("DEVLANES_CA_CERT", "/ca/ca.pem"),
+                ("DEVLANES_CA_BUNDLE", "/ca/bundle.pem"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .into(),
+            ..Setup::default()
+        };
+        let h = harness(&tmp.path.join("home"), setup).await;
+        h.call(
+            Method::Exec,
+            json!({"name": "tool", "command": ["sleep"]}),
+            cx(&main),
+        )
+        .await
+        .expect("exec");
+        let env = explained(&h, "tool", cx(&main)).await;
+        let entry = |key: &str| env.get(key).map(|(v, l)| (v.as_str(), l.as_str()));
+        assert_eq!(entry("GREETING"), Some(("hi-main", "global")));
+        assert_eq!(
+            entry("NODE_EXTRA_CA_CERTS"),
+            Some(("/ca/ca.pem", "contributor"))
+        );
+        assert_eq!(
+            entry("SSL_CERT_FILE"),
+            Some(("/ca/bundle.pem", "contributor"))
+        );
+        assert_eq!(entry("PATH").map(|(_, layer)| layer), Some("client"));
+        assert_eq!(entry("PER"), None);
+
+        let mut shell = cx(&main);
+        if let Some(env) = shell.env.as_mut() {
+            env.insert("NODE_EXTRA_CA_CERTS".into(), "/mine.pem".into());
+        }
+        h.call(
+            Method::Exec,
+            json!({"name": "mine", "command": ["sleep"]}),
+            shell,
+        )
+        .await
+        .expect("exec");
+        let env = explained(&h, "mine", cx(&main)).await;
+        assert_eq!(
+            env.get("NODE_EXTRA_CA_CERTS").map(|(v, _)| v.as_str()),
+            Some("/mine.pem")
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// While the lane runs, an exec after a broken edit keeps the last good config;
+/// once nothing runs it refuses with the config error.
+async fn exec_keeps_the_last_good_config_while_the_lane_runs() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = BASIC.replace("services:\n", "global_env:\n  GREETING: hi\nservices:\n");
+        let main = repo(&tmp.path, "r", &config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        std::fs::write(main.join("devlanes.yaml"), "project: [demo\n").expect("break");
+        h.call(
+            Method::Exec,
+            json!({"name": "tool", "command": ["sleep"]}),
+            cx(&main),
+        )
+        .await
+        .expect("exec while running");
+        let env = explained(&h, "tool", cx(&main)).await;
+        assert_eq!(env.get("GREETING").map(|(v, _)| v.as_str()), Some("hi"));
+        h.call(Method::Stop, json!({}), cx(&main))
+            .await
+            .expect("stop");
+        let refused = h
+            .call(
+                Method::Exec,
+                json!({"name": "again", "command": ["sleep"]}),
+                cx(&main),
+            )
+            .await
+            .expect_err("nothing runs, so no config to keep");
+        assert_eq!(refused.code, "config_error", "{refused:?}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Before the lane's infra is up, exec and `env show` leave out the lane values
+/// that read it and name them; a value that fails for another reason still
+/// refuses, without calling the valid file invalid.
+async fn exec_leaves_out_values_that_wait_on_infra() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = BASIC.replace(
+            "services:\n",
+            "infra:\n  containers:\n    postgres: { image: \"postgres:16\", ports: { \"5432\": 5432 } }\nglobal_env:\n  GREETING: hi\n  DATABASE_URL: \"postgres://127.0.0.1:${{ infra.postgres.port }}/app\"\nservices:\n",
+        );
+        let main = repo(&tmp.path, "r", &config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let unit = h
+            .call(
+                Method::Exec,
+                json!({"name": "tool", "command": ["sleep"]}),
+                cx(&main),
+            )
+            .await
+            .expect("exec runs before infra is up");
+        let waits = json!([{"key": "DATABASE_URL", "infra": "postgres"}]);
+        assert_eq!(unit["left_out"], waits);
+        let env = explained(&h, "tool", cx(&main)).await;
+        assert_eq!(env.get("GREETING").map(|(v, _)| v.as_str()), Some("hi"));
+        assert!(!env.contains_key("DATABASE_URL"));
+        let lane = h
+            .call(Method::Env, json!({}), cx(&main))
+            .await
+            .expect("env show");
+        assert_eq!(lane["env"]["GREETING"], "hi");
+        assert_eq!(lane["left_out"], waits);
+
+        let missing = config.replace("  GREETING: hi\n", "  GREETING: \"${{ env.MISSING }}\"\n");
+        std::fs::write(main.join("devlanes.yaml"), missing).expect("edit");
+        let refused = h
+            .call(
+                Method::Exec,
+                json!({"name": "again", "command": ["sleep"]}),
+                cx(&main),
+            )
+            .await
+            .expect_err("env.MISSING has no value");
+        assert_eq!(refused.code, "lane_env_unresolved", "{refused:?}");
+        assert_eq!(refused.data["path"], "global_env.GREETING");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `wait` on an exec unit waits for its command to exit: a stopped one answers
+/// `stopped`, a running one times out as `running`, a failure answers `failed`
+/// only after the exit, and exit 0 answers `exited` with `ready: true`.
+async fn wait_on_exec_waits_for_exit() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BASIC);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let exec = |name: &'static str, script: &'static str| {
+            let context = cx(&main);
+            let h = &h;
+            async move {
+                h.call(
+                    Method::Exec,
+                    json!({"name": name, "command": ["/bin/sh", "-c", script]}),
+                    context,
+                )
+                .await
+                .expect("exec")
+            }
+        };
+        let wait = |target: &'static str, timeout_ms: u64| {
+            h.call(
+                Method::Wait,
+                json!({"target": target, "timeout_ms": timeout_ms}),
+                cx(&main),
+            )
+        };
+
+        // Before `release`: it opens every `hold`, now and later.
+        exec("stopped", "sleep").await;
+        h.call(Method::Stop, json!({"units": ["stopped"]}), cx(&main))
+            .await
+            .expect("stop");
+        let stopped = wait("stopped", 5_000).await.expect("wait stopped");
+        assert_eq!(
+            (&stopped["state"], &stopped["ready"]),
+            (&json!("stopped"), &json!(false))
+        );
+
+        exec("long", "sleep").await;
+        let timeout = wait("long", 300).await.expect_err("still running");
+        assert_eq!(timeout.code, "timeout");
+        assert_eq!(timeout.data["state"], "running");
+
+        exec("job", "hold; exit 3").await;
+        let job = wait("job", 20_000);
+        tokio::pin!(job);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), &mut job)
+                .await
+                .is_err(),
+            "wait returned while the command still ran"
+        );
+        h.runner.release();
+        let failed = job.await.expect("wait job");
+        assert_eq!(
+            (&failed["state"], &failed["exit_code"]),
+            (&json!("failed"), &json!(3))
+        );
+
+        exec("ok", "hold; exit 0").await;
+        let exited = wait("ok", 20_000).await.expect("wait ok");
+        assert_eq!(
+            (&exited["state"], &exited["ready"]),
+            (&json!("exited"), &json!(true))
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// `stop --mine` stops only units started by the caller's session.
 async fn stop_mine_filters_by_actor() {
@@ -1174,17 +1424,19 @@ async fn port_allocation_is_stable() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// `env --lane-env` returns DEVLANES_* and a public URL per service; `explain`
-/// reports layers.
+/// `env --lane-env` returns DEVLANES_*, a public URL per service and the
+/// lane-level `global_env`; `explain` reports layers.
 async fn lane_env_and_explain() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let main = repo(&tmp.path, "r", BASIC);
+        let config = BASIC.replace("services:\n", "global_env:\n  GREETING: hi\nservices:\n");
+        let main = repo(&tmp.path, "r", &config);
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
         let env = h
             .call(Method::Env, json!({"lane_env": true}), cx(&main))
             .await
             .expect("env");
+        assert_eq!(env["env"]["GREETING"], "hi");
         assert_eq!(env["env"]["DEVLANES_LANE"], "0");
         assert_eq!(env["env"]["DEVLANES_LANE_PROJECT"], "demo");
         assert_eq!(

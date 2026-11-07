@@ -106,7 +106,8 @@ Stop and start units again with a fresh environment, or the whole lane when none
 
 A whole-lane restart stops everything, keeps the lane's saved profiles and
 services, and starts it again as a plain devlanes start does: infra, setup,
-tasks, services and any port change in the project file.
+tasks, services and any port change in the project file. It stops exec units
+and does not run them again.
 
 ```text
 devlanes restart [OPTIONS] [UNIT]...
@@ -123,7 +124,7 @@ Apply project file and .env changes to the running lane.
 Stops the units the file removed, restarts the ones it changed and starts the
 ones it added. Without units, a change to infra or ports restarts the whole
 lane instead. With units, it applies only their changes. devlanes status shows
-what changed.
+what changed. A whole-lane restart stops exec units and does not run them again.
 
 ```text
 devlanes reload [OPTIONS] [UNIT]...
@@ -135,7 +136,11 @@ devlanes reload [OPTIONS] [UNIT]...
 
 ### devlanes status
 
-Show lanes and units with state, ports, URLs, CPU and memory
+Show lanes and units with state, ports, URLs, CPU and memory.
+
+Exits 1 while a lane or unit it shows has failed, a task or exec command that
+exited non-zero included. devlanes stop NAME clears a failed service or exec
+command once you have read why; running a unit again also replaces its failure.
 
 ```text
 devlanes status [OPTIONS] [LANE]
@@ -184,7 +189,9 @@ Examples:
 Wait until a unit or lane is ready or failed.
 
 Exits 0 when ready, 1 when it failed (with the reason and log tail) and 124
-when --timeout passes first [default: 180s].
+when --timeout passes first [default: 180s]. A task or exec unit is waited on
+until its command exits: 0 when it exited 0, 1 when it failed. A server started
+with exec never exits; read its logs instead. A lane counts only its services.
 
 ```text
 devlanes wait [OPTIONS] [TARGET]
@@ -198,13 +205,13 @@ Start the lane, run a command against it, then stop what was started.
 
 Waits for ready first; when a unit fails it prints the failure and exits 1
 without running the command. The command gets the lane's environment, including
-DEVLANES_PUBLIC_URL_<SERVICE> for every service, plus NODE_EXTRA_CA_CERTS,
-DENO_CERT, SSL_CERT_FILE and REQUESTS_CA_BUNDLE for the devlanes CA unless the
-shell sets them. Afterwards devlanes writes --logs-dir, prints each unit's
-state, run time and average and peak CPU and memory when output is not a
-terminal (CI logs, pipes) and adds the same table to the GitHub step summary,
-stops what it started (and the daemon, if it started it) and exits with the
-command's exit code.
+global_env, the profile's env and DEVLANES_PUBLIC_URL_<SERVICE> for every
+service, plus NODE_EXTRA_CA_CERTS, DENO_CERT, SSL_CERT_FILE and
+REQUESTS_CA_BUNDLE for the devlanes CA unless the shell sets them. Afterwards
+devlanes writes --logs-dir, prints each unit's state, run time and average and
+peak CPU and memory when output is not a terminal (CI logs, pipes) and adds
+the same table to the GitHub step summary, stops what it started (and the
+daemon, if it started it) and exits with the command's exit code.
 
 ```text
 devlanes with [OPTIONS] [UNIT]... -- <COMMAND>...
@@ -245,7 +252,12 @@ devlanes run [OPTIONS] [TASK]
 Run an ad-hoc command as a unit of the lane instead of backgrounding it with &.
 
 The daemon owns the process: logs, stop, attach and status work on it by its
---name, and it gets the lane's environment.
+--name. It gets the shell's environment, then the lane's: devlanes variables,
+DEVLANES_PUBLIC_URL_<SERVICE>, and the global_env and profile env entries that
+read neither self nor replica; one that reads infra the lane has not started
+is left out and named. NODE_EXTRA_CA_CERTS, DENO_CERT, SSL_CERT_FILE and
+REQUESTS_CA_BUNDLE point at the devlanes CA unless the shell sets them, and
+--env wins over all of these.
 
 ```text
 devlanes exec [OPTIONS] --name <NAME> -- <COMMAND>...

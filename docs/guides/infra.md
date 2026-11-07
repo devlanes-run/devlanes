@@ -331,7 +331,7 @@ Anything with an image and a port fits this shape when a Compose file would be o
 devlanes infra status          # containers, health and ports
 devlanes infra up              # start infra without the services
 devlanes infra logs db -f      # a container's Docker logs, also across restarts
-devlanes env show --explain    # what infra.* resolved to, through global_env
+devlanes env show              # the lane's variables, infra.* values through global_env included
 docker compose -p acme ps      # the shared project by name
 docker ps --filter label=dev.devlanes.project=acme
 ```

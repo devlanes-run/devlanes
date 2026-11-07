@@ -222,7 +222,9 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "already_running": [], "whole_lane": true, "ready": true, "timed_out": false,
                 "failures": [], "skipped_tasks": [],
                 "units": [unit("api", "ready"), unit("web", "ready")],
-                "warnings": [{"code": "reload_restarted_lane", "data": {"lane": "acme@2",
+                "warnings": [{"code": "exec_stopped", "data": {"lane": "acme@2", "units": ["docs"],
+                    "message": "stopped exec units docs; a whole-lane restart does not run them again"}},
+                    {"code": "reload_restarted_lane", "data": {"lane": "acme@2",
                     "message": "infra or ports changed, so the whole lane restarted"}}],
             }),
         ),
@@ -310,6 +312,20 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "feat/billing",
                 "running",
                 vec![unit("api", "ready"), pgadmin],
+            )])
+        }),
+        // An exec command in progress reads `running` in every text mode.
+        ("status_exec", Method::Status, {
+            let mut docs = unit("docs", "ready");
+            docs["kind"] = json!("exec");
+            docs["ready_check"] = json!("started");
+            docs["urls"] = json!([]);
+            docs["ports"] = json!({});
+            page(vec![lane(
+                Some(2),
+                "feat/billing",
+                "running",
+                vec![unit("api", "ready"), docs],
             )])
         }),
         // An idle lane keeps `state`; `power` adds the level and since when.
@@ -420,14 +436,22 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
         ("exec", Method::Exec, {
             let mut exec = unit("probe", "ready");
             exec["kind"] = json!("exec");
+            exec["ready_check"] = json!("started");
             exec["urls"] = json!([]);
             exec["ports"] = json!({});
+            exec["left_out"] = json!([{"key": "DATABASE_URL", "infra": "postgres"}]);
             exec
         }),
         (
             "wait_ready",
             Method::Wait,
             json!({"lane": "acme@2", "unit": "api", "state": "ready", "ready": true}),
+        ),
+        // A task or exec command that exited 0 on its own.
+        (
+            "wait_exited",
+            Method::Wait,
+            json!({"lane": "acme@2", "unit": "job", "state": "exited", "ready": true, "exit_code": 0}),
         ),
         (
             "wait_failed",
@@ -491,6 +515,13 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             {"key": "API_TOKEN", "value": "tok_test", "layer": "global"},
             {"key": "NODE_ENV", "value": "development", "layer": "service"},
         ], "truncated": false, "next_cursor": null}),
+        ),
+        // The lane's env before its infra is up: a value that reads it waits.
+        (
+            "env_left_out",
+            Method::Env,
+            json!({"lane": "acme@2", "env": {"DEVLANES": "1", "GREETING": "hi"},
+                   "left_out": [{"key": "DATABASE_URL", "infra": "postgres"}]}),
         ),
         (
             "url",
@@ -2164,6 +2195,11 @@ fn daemon_errors_are_worded_with_hints() {
             1,
         ),
         RpcError::new("timeout", json!({"lane": "acme@2", "unit": "api"}), 124),
+        RpcError::new(
+            "timeout",
+            json!({"lane": "acme@2", "unit": "job", "state": "running", "timeout_ms": 5000}),
+            124,
+        ),
         RpcError::new("not_supported_yet", json!({"feature": "remote unlock"}), 1),
         RpcError::new(
             "config_error",
@@ -2171,6 +2207,11 @@ fn daemon_errors_are_worded_with_hints() {
             1,
         ),
         RpcError::new("needs_env", json!({"lane": "acme@2"}), 1),
+        RpcError::new(
+            "lane_env_unresolved",
+            json!({"lane": "acme@2", "path": "global_env.API_TOKEN", "message": "undefined value (devlanes.yaml:4:14)"}),
+            1,
+        ),
         RpcError::new(
             "protocol_mismatch",
             json!({"protocol": 7, "client_protocol": 8, "version": "0.2.0", "build_id": "a1b2c3", "managed_processes": 6}),

@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use crate::{
     Session,
     engine::{Inner, LanePair, params, required},
-    model::{ConfigState, is_mine, lane_summary},
+    model::{ConfigState, Kind, is_mine, lane_summary},
     registry::internal,
     stream::LaneEvents,
     units::{UnitHost, UnitState, now_ms, query_log_dir},
@@ -457,7 +457,10 @@ impl Inner {
         }
     }
 
-    /// `wait`: returns once a unit or lane is ready or failed; `timeout` (exit 124) otherwise.
+    /// `wait`: returns once a unit or lane is ready or failed; `timeout` (exit 124)
+    /// otherwise. A task or exec unit is waited on until its command exits, and
+    /// exiting 0 on its own answers `exited` with `ready: true`; a timeout while
+    /// it still runs carries `state: running` and `timeout_ms`.
     pub(crate) async fn wait_method(
         self: &Arc<Self>,
         value: Value,
@@ -465,10 +468,11 @@ impl Inner {
         session: &Session,
     ) -> Result<Value, RpcError> {
         let args: WaitParams = required(value)?;
-        let deadline = Instant::now()
-            + args
-                .timeout_ms
-                .map_or(self.opts.start_timeout, Duration::from_millis);
+        let timeout = args
+            .timeout_ms
+            .map_or(self.opts.start_timeout, Duration::from_millis);
+        let deadline = Instant::now() + timeout;
+        let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
         let as_unit = self
             .lane_for_units(std::slice::from_ref(&args.target), context)
             .await;
@@ -505,22 +509,27 @@ impl Inner {
         let disconnected = session.disconnected();
         let wait = async {
             loop {
-                let (hosts, busy): (Vec<(String, UnitHost)>, bool) = {
+                // A task or exec unit is waited on until its command exits.
+                let (hosts, busy, runs_to_exit): (Vec<(String, UnitHost)>, bool, bool) = {
                     let st = lane.st();
+                    let mut runs_to_exit = false;
                     let hosts = match &unit {
                         Some(unit) => st
                             .units
                             .get(unit)
-                            .map(|rec| vec![(unit.clone(), rec.host.clone())])
+                            .map(|rec| {
+                                runs_to_exit = matches!(rec.kind, Kind::Task | Kind::Exec);
+                                vec![(unit.clone(), rec.host.clone())]
+                            })
                             .unwrap_or_default(),
                         None => st
                             .units
                             .iter()
-                            .filter(|(_, rec)| rec.kind == crate::model::Kind::Service)
+                            .filter(|(_, rec)| rec.kind == Kind::Service)
                             .map(|(name, rec)| (name.clone(), rec.host.clone()))
                             .collect(),
                     };
-                    (hosts, st.busy.is_some())
+                    (hosts, st.busy.is_some(), runs_to_exit)
                 };
                 let states: Vec<UnitState> = hosts.iter().map(|(_, host)| host.state()).collect();
                 let failed: Vec<usize> = states
@@ -544,7 +553,7 @@ impl Inner {
                 }
                 let all_ready =
                     !states.is_empty() && states.iter().all(|s| matches!(s, UnitState::Ready));
-                if all_ready && !busy {
+                if all_ready && !busy && !runs_to_exit {
                     return Ok(
                         json!({"lane": reference, "unit": unit, "state": "ready", "ready": true}),
                     );
@@ -559,16 +568,25 @@ impl Inner {
                     .find(|(_, h)| matches!(h.state(), UnitState::Exited(_)))
                     .filter(|_| unit.is_some())
                 {
+                    let code = host.exit_outcome().and_then(|o| o.code);
+                    // Exited on its own with 0: the command the wait was for succeeded.
+                    if runs_to_exit && code == Some(0) && !host.stop_was_requested() {
+                        return Ok(
+                            json!({"lane": reference, "unit": name, "state": "exited", "ready": true, "exit_code": 0}),
+                        );
+                    }
                     return Ok(
-                        json!({"lane": reference, "unit": name, "state": host.state().word(), "ready": false, "exit_code": host.exit_outcome().and_then(|o| o.code)}),
+                        json!({"lane": reference, "unit": name, "state": host.state().word(), "ready": false, "exit_code": code}),
                     );
                 }
                 if Instant::now() >= deadline {
-                    return Err(RpcError::new(
-                        "timeout",
-                        json!({"lane": reference, "unit": unit}),
-                        124,
-                    ));
+                    let mut data = json!({"lane": reference, "unit": unit});
+                    // Still running is not a readiness problem: the CLI says so.
+                    if runs_to_exit && hosts.iter().any(|(_, host)| host.is_alive()) {
+                        data["state"] = json!("running");
+                        data["timeout_ms"] = json!(timeout_ms);
+                    }
+                    return Err(RpcError::new("timeout", data, 124));
                 }
                 // Nobody is left to tell; polling on would only hold the lane's state.
                 tokio::select! {
@@ -846,24 +864,24 @@ impl Inner {
         let args: EnvParams = params(value)?;
         if args.lane_env || args.unit.is_none() {
             let (project, lane) = self.target_lane(context).await?;
-            if lane.st().view.is_none() {
-                self.refresh_views(&project).await;
+            let (resolved, layers) = self
+                .resolve_lane_env(
+                    &project,
+                    &lane,
+                    crate::engine::carries_env(context).unwrap_or_default(),
+                )
+                .await?;
+            let env = devlanes_core::env::assemble([
+                (EnvLayer::Devlanes, resolved.lane_env().clone()),
+                (EnvLayer::Global, layers.global),
+                (EnvLayer::Profile, layers.profile),
+            ]);
+            let reference = lane.st().reference(&project.name());
+            let mut result = json!({"lane": reference, "env": env.values});
+            if !layers.unset.is_empty() {
+                result["left_out"] = crate::resolve::left_out(&layers.unset);
             }
-            let st = lane.st();
-            let env = st
-                .view
-                .as_ref()
-                .map(|view| view.lane_env.clone())
-                .ok_or_else(|| {
-                    st.last_error.clone().unwrap_or_else(|| {
-                        RpcError::new(
-                            "unassigned",
-                            json!({"lane": st.reference(&project.name())}),
-                            1,
-                        )
-                    })
-                })?;
-            return Ok(json!({"lane": st.reference(&project.name()), "env": env}));
+            return Ok(result);
         }
         let unit = args.unit.unwrap_or_default();
         let ((project, lane), selectors) = self
@@ -876,9 +894,13 @@ impl Inner {
             .units
             .get(&name)
             .filter(|rec| rec.host.is_alive())
-            .map(|rec| rec.env.clone());
+            .map(|rec| (rec.env.clone(), rec.left_out.clone()));
+        let mut left_out = std::collections::BTreeMap::new();
         let env = match live {
-            Some(env) => env,
+            Some((env, unset)) => {
+                left_out = unset;
+                env
+            }
             None => {
                 let resolved = self
                     .resolve_with(&project, &lane, crate::engine::carries_env(context))
@@ -915,7 +937,7 @@ impl Inner {
                 Arc::new(crate::lifecycle::copy_env(&launch.env))
             }
         };
-        if args.explain {
+        let mut result = if args.explain {
             let items: Vec<Value> = env
                 .values
                 .iter()
@@ -924,11 +946,14 @@ impl Inner {
                     json!({"key": key, "value": value, "layer": layer_word(layer)})
                 })
                 .collect();
-            return Ok(
-                json!({"lane": reference, "unit": name, "items": items, "truncated": false, "next_cursor": null}),
-            );
+            json!({"lane": reference, "unit": name, "items": items, "truncated": false, "next_cursor": null})
+        } else {
+            json!({"lane": reference, "unit": name, "env": env.values})
+        };
+        if !left_out.is_empty() {
+            result["left_out"] = crate::resolve::left_out(&left_out);
         }
-        Ok(json!({"lane": reference, "unit": name, "env": env.values}))
+        Ok(result)
     }
 
     /// `url`: the public URL of a service or `infra.external` entry (internal URL
