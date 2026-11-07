@@ -485,6 +485,89 @@ async fn a_removed_saved_profile_is_dropped_with_a_warning() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A start naming other profiles than a running lane's leaves its running units
+/// alone and warns about the ones those profiles would start differently. A
+/// transient start (`with`) does not make its profiles the lane's, a plain one
+/// shows the difference as drift, and a start with the lane's own profiles does
+/// not warn about drift that has another cause.
+async fn changing_profiles_of_a_running_lane_warns() {
+    const PROFILED: &str = "project: demo\nprofiles:\n  back: { include: [api], env: { MODE: back } }\nservices:\n  web: { run: sleep, ready: started }\n  api: { run: sleep, ready: started }\n";
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", PROFILED);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let start = |params: Value| {
+            let h = &h;
+            let main = &main;
+            async move {
+                let value = h
+                    .call(Method::Start, params, cx(main))
+                    .await
+                    .expect("start back");
+                serde_json::from_value::<StartResult>(value).expect("result")
+            }
+        };
+        let not_applied = |result: &StartResult| {
+            result
+                .warnings
+                .iter()
+                .find(|warning| warning.code == "profile_not_applied")
+                .cloned()
+        };
+
+        // `status` and `reload` see the difference only once the lane stores the
+        // profiles, so only then does the warning point at them.
+        let points_at_reload = |warning: &devlanes_proto::LaneWarning| {
+            warning.data["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("devlanes reload"))
+        };
+        let transient = start(json!({"profiles": ["back"], "transient": true})).await;
+        let warning = not_applied(&transient).expect("transient profile_not_applied");
+        assert!(!points_at_reload(&warning), "{warning:?}");
+        assert!(lane(&h, &main).await.profiles.is_empty());
+        // `with`'s command gets the lane env under the profiles its start named.
+        let env = h
+            .call(
+                Method::Env,
+                json!({"lane_env": true, "profiles": ["back"]}),
+                cx(&main),
+            )
+            .await
+            .expect("lane env");
+        assert_eq!(env["env"]["MODE"], "back", "{env}");
+
+        let plain = start(json!({"profiles": ["back"]})).await;
+        let warning = not_applied(&plain).expect("profile_not_applied");
+        assert!(points_at_reload(&warning), "{warning:?}");
+        assert_eq!(
+            warning.data["units"],
+            json!([{"unit": "api", "fields": ["env MODE"]}])
+        );
+        let drift = eventually(Duration::from_secs(5), || async {
+            let summary = lane(&h, &main).await;
+            summary
+                .units
+                .iter()
+                .find(|unit| unit.name == "api")
+                .and_then(|unit| unit.drift.clone())
+        })
+        .await
+        .expect("api drift");
+        assert_eq!(drift.fields, ["env MODE"]);
+
+        let again = start(json!({"profiles": ["back"]})).await;
+        assert!(not_applied(&again).is_none(), "{again:?}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// Services (idle or running), tasks, exec units and containers carry a color.
 async fn units_and_containers_have_colors() {
     tokio::time::timeout(LIMIT, async {

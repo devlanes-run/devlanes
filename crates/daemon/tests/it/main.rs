@@ -203,8 +203,9 @@ pub struct Setup {
 /// machine, so a test that does either takes a range of its own, outside the
 /// default pool other programs here may listen in.
 ///
-/// Ranges: `engine.rs` 12000-12249, `orphans.rs` 12250-12499, `pacing.rs`
-/// 12500-12999. No other test in this binary uses 12000-12999.
+/// Ranges: `reload.rs` 11000-11249, `engine.rs` 12000-12249, `orphans.rs`
+/// 12250-12499, `pacing.rs` 12500-12999. No other test in this binary uses
+/// 11000-11249 or 12000-12999.
 /// `profiles.rs` takes 15000-15249 for a port nothing may listen on, between
 /// `remote_choice.rs`'s 13000-14999 and `remote_pairing.rs`'s 15400-15799.
 pub fn pool(range: &str) -> Option<devlanes_config::UserConfig> {

@@ -194,6 +194,7 @@ fn env_from_lane_sends_no_env() {
             Method::Exec,
         ),
         (&["lane", "resume"], Method::Resume),
+        (&["env", "show", "api"], Method::Env),
     ] {
         let cli = Cli::try_parse_from(std::iter::once("devlanes").chain(args.iter().copied()))
             .expect("parse");

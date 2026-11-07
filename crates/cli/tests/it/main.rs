@@ -718,6 +718,9 @@ fn environment_is_captured_only_for_relevant_methods() {
         (vec!["lane", "resume"], true),
         (vec!["run", "--list"], false),
         (vec!["env", "show"], false),
+        // A lane that never started plans the unit with this shell's env.
+        (vec!["env", "show", "api"], true),
+        (vec!["env", "export", "api"], true),
         (vec!["status"], false),
         (vec!["lane", "new", "--start"], true),
         (vec!["lane", "new"], false),

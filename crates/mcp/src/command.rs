@@ -4,8 +4,8 @@
 use std::time::Duration;
 
 use devlanes_cli::{
-    Cli, Command, ConfigCommand, DaemonCommand, DebugCommand, LaneCommand, RemoteCommand,
-    clap::Parser, clap::error::ErrorKind,
+    Cli, Command, ConfigCommand, DaemonCommand, DebugCommand, EnvCommand, LaneCommand,
+    RemoteCommand, clap::Parser, clap::error::ErrorKind,
 };
 
 /// A command line ready to run.
@@ -80,7 +80,8 @@ impl Call {
 
     /// Whether the command sends the daemon this process's environment, so a
     /// run without [`devlanes_proto::ENV_FROM_LANE_ENV`] can give a lane one.
-    /// `reload` keeps the env the lane has.
+    /// `reload` keeps the env the lane has. `env show` for one unit plans a lane
+    /// that never started with it, without storing it.
     pub fn sends_env(&self) -> bool {
         matches!(
             &self.cli.command,
@@ -92,6 +93,10 @@ impl Call {
                     | Command::With(_)
                     | Command::Lane {
                         command: LaneCommand::Resume { .. }
+                    }
+                    | Command::Env {
+                        command: EnvCommand::Show { unit: Some(_), .. }
+                            | EnvCommand::Export { unit: Some(_), .. }
                     }
             )
         )
@@ -456,6 +461,9 @@ mod tests {
         assert!(start.sends_env() && with.sends_env());
         assert!(!call(&["reload"]).sends_env());
         assert!(!call(&["status"]).sends_env());
+        // A lane that never started plans one unit's env with the shell's.
+        assert!(call(&["env", "show", "api"]).sends_env());
+        assert!(!call(&["env", "show"]).sends_env());
     }
 
     /// A devlanes command line that `with` or `debug bundle` runs is refused

@@ -1043,7 +1043,7 @@ impl Inner {
             return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
         }
         let (resolved, layers) = self
-            .resolve_lane_env(&project, &lane, Arc::default())
+            .resolve_lane_env(&project, &lane, Arc::default(), None)
             .await?;
         let mut left_out = layers.unset.clone();
         left_out.retain(|key, _| !args.env.contains_key(key));

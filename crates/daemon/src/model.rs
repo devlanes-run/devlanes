@@ -423,6 +423,10 @@ pub(crate) struct LaneSt {
     /// Bumped by every drift update, start and stop, so a computation that began
     /// before one of them does not overwrite its result.
     pub drift_generation: u64,
+    /// Calls of `update_drift` under way on this lane.
+    pub drift_updates: usize,
+    /// The `drift_generation` of the last drift computation that was applied.
+    pub drift_applied: u64,
     /// Set while an explicit daemon shutdown runs this lane's `lane.stop`
     /// tasks: their spawns pass the refusal that starts with the shutdown.
     pub shutdown_hooks: bool,
@@ -563,6 +567,8 @@ impl LaneSt {
             divergent: Vec::new(),
             drift_error: None,
             drift_generation: 0,
+            drift_updates: 0,
+            drift_applied: 0,
             shutdown_hooks: false,
             wanted: false,
             sweeping: false,
@@ -664,6 +670,48 @@ impl LaneSt {
             .any(|unit| unit.kind == Kind::Service && unit.host.is_alive())
     }
 
+    /// Whether the lane's view lays out a service unit named `name`; true while
+    /// there is no view yet.
+    fn lays_out(&self, name: &str) -> bool {
+        self.view
+            .as_ref()
+            .is_none_or(|view| view.services.iter().any(|service| service.unit == name))
+    }
+
+    /// Whether status lists this record. A service the config dropped is listed
+    /// while it runs; once it stopped or failed only `logs` and `debug` show it,
+    /// since it no longer is one of the lane's services.
+    pub(crate) fn shows_unit(&self, name: &str, unit: &UnitRec) -> bool {
+        unit.kind != Kind::Service || unit.host.is_alive() || self.lays_out(name)
+    }
+
+    /// Drops from the last whole start the units the config dropped and that no
+    /// longer run: they are not "left out on purpose", so adding them back to the
+    /// file makes them `added`.
+    pub(crate) fn forget_dropped_units(&mut self) {
+        let Some(started) = &self.started_with else {
+            return;
+        };
+        if self.view.is_none() {
+            return;
+        }
+        let dropped: Vec<String> = started
+            .units
+            .iter()
+            .filter(|unit| {
+                !self.lays_out(unit)
+                    && !self.orphans.contains_key(*unit)
+                    && !self.units.get(*unit).is_some_and(|rec| rec.host.is_alive())
+            })
+            .cloned()
+            .collect();
+        if let Some(started) = &mut self.started_with {
+            for unit in dropped {
+                started.units.remove(&unit);
+            }
+        }
+    }
+
     /// Canonical reference: `project@index`, or `project@<dir>` while unassigned.
     pub(crate) fn reference(&self, project: &str) -> String {
         match self.index() {
@@ -691,8 +739,10 @@ impl LaneSt {
         if let Some(busy) = self.busy {
             return busy;
         }
-        let failed = self.units.values().any(|unit| {
-            unit.kind == Kind::Service && matches!(unit.host.state(), UnitState::Failed(_))
+        let failed = self.units.iter().any(|(name, unit)| {
+            unit.kind == Kind::Service
+                && matches!(unit.host.state(), UnitState::Failed(_))
+                && self.shows_unit(name, unit)
         });
         if failed {
             return "failed";
@@ -1433,7 +1483,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         }
     }
     for (name, unit) in &lane.units {
-        if !units.iter().any(|summary| &summary.name == name) {
+        if lane.shows_unit(name, unit) && !units.iter().any(|summary| &summary.name == name) {
             units.push(unit_summary(&reference, name, unit));
         }
     }
@@ -1473,6 +1523,10 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
     } else {
         lane.profiles.clone()
     };
+    // Nothing running has no drift, the rule `update_drift` applies. It also hides a
+    // flag that `reload_config` set on an idle lane while another operation held its
+    // `op`.
+    let live = lane.any_running() || !lane.starts.is_empty();
     LaneSummary {
         warnings: lane.warnings(&reference),
         reference,
@@ -1482,8 +1536,8 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         name: lane.alias().map(|(_, name)| name.to_owned()),
         path: lane.path.clone(),
         state: lane.state_word().into(),
-        config_changed: lane.config_changed,
-        infra_changed: lane.infra_changed,
+        config_changed: lane.config_changed && live,
+        infra_changed: lane.infra_changed && live,
         units,
         profile: profiles.first().cloned(),
         profiles,

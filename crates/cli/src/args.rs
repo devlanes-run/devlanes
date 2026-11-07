@@ -1565,9 +1565,20 @@ impl Cli {
             Some(Command::Askpass { prompt }) => return Ok(Action::Askpass(prompt.clone())),
         };
         // `reload` is absent: it applies the project file, and the lane keeps the env
-        // its last start stored, as when the TUI reloads. `devlanes mcp` asks for no
-        // env first, so a lane a shell started keeps that shell's env.
-        if (lane_new_start
+        // its last start stored, as when the TUI reloads. `env` for one unit sends it
+        // so a lane that never started plans the unit as a start from this shell
+        // would; the daemon does not keep it. `devlanes mcp` asks for no env first,
+        // so a lane a shell started keeps that shell's env.
+        let unit_env = matches!(
+            &self.command,
+            Some(Command::Env {
+                command: EnvCommand::Show { unit: Some(_), .. }
+                    | EnvCommand::Export { unit: Some(_), .. }
+                    | EnvCommand::Shell { unit: Some(_) }
+            })
+        );
+        if (unit_env
+            || lane_new_start
             || matches!(
                 method,
                 Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume

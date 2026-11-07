@@ -74,7 +74,7 @@ Commands use the project of the nearest `devlanes.yaml` above the current direct
 
 ## Running tests
 
-`devlanes with [units...] [--profile P] -- COMMAND` starts the lane, waits for ready, runs COMMAND in the foreground and exits with its exit code. COMMAND gets the lane's environment plus `DEVLANES_PUBLIC_URL_<SERVICE>` for every service, so tests need no hardcoded ports. Afterwards it stops what it started. If a unit fails to start, it prints that unit's log tail and exits 1 without running COMMAND. `--keep` leaves the stack running; `--logs-dir DIR` writes every unit's log to DIR.
+`devlanes with [units...] [--profile P] -- COMMAND` starts the lane, waits for ready, runs COMMAND in the foreground and exits with its exit code. COMMAND gets the lane's environment plus `DEVLANES_PUBLIC_URL_<SERVICE>` for every service, so tests need no hardcoded ports. Afterwards it stops what it started. If a unit fails to start, it prints that unit's log tail and exits 1 without running COMMAND. On a lane whose running services lack the profile's settings, `with --profile` exits 1 without running COMMAND; stop the lane first, or run `with` in another worktree. `--keep` leaves the stack running; `--logs-dir DIR` writes every unit's log to DIR.
 
 ## Reading output
 

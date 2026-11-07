@@ -979,6 +979,45 @@ async fn with_start_failure_writes_logs_and_stops_without_running_command() {
     "#);
 }
 
+/// A ready start whose running units lack the profile's settings does not run the
+/// command, exits 1 and still stops what it started. Only the refusal shows: the
+/// start's warning would point at `status` and `reload`, which a `with` start
+/// leaves alone, and its result would say `nothing to start` as on success.
+#[tokio::test]
+async fn with_refuses_units_without_the_profile_settings() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let (plan, runtime) = plan(temp.path(), false);
+    let mut driver = FakeDriver {
+        result: json!({"lane": "acme@0", "ready": true, "units": [], "warnings": [{
+            "code": "profile_not_applied",
+            "data": {"lane": "acme@0", "profiles": ["e2e"],
+                     "units": [{"unit": "web", "fields": ["env MODE"]}],
+                     "message": "the start's warning"},
+        }]}),
+        ..FakeDriver::default()
+    };
+    let mut output = String::new();
+    let outcome = run_with(&plan, &runtime, &mut driver, &mut |rendered| {
+        output.push_str(&rendered.stdout);
+        output.push_str(&rendered.stderr);
+    })
+    .await;
+    assert_eq!(outcome.exit_code, 1);
+    assert!(
+        !driver.calls.contains(&"command".to_owned()),
+        "{:?}",
+        driver.calls
+    );
+    assert!(
+        driver.calls.contains(&"stop".to_owned()),
+        "{:?}",
+        driver.calls
+    );
+    assert!(output.contains("the command did not run: web"), "{output}");
+    assert!(!output.contains("the start's warning"), "{output}");
+    assert!(!output.contains("nothing to start"), "{output}");
+}
+
 #[tokio::test]
 async fn with_keep_existing_daemon_signals_and_cleanup_errors() {
     for (keep, spawned, start_error, stop_error, code) in [
