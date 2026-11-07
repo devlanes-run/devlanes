@@ -1178,7 +1178,8 @@ pub(crate) fn proto_actor(actor: &devlanes_core::Actor) -> Actor {
     }
 }
 
-/// True when `unit` was started by the caller's agent session (`--mine`).
+/// True when `unit` was started by the caller's agent session (`--mine`). An agent
+/// that exposes no session id counts all its sessions as one.
 pub(crate) fn is_mine(owner: &Actor, caller: &Actor) -> bool {
     match (&owner.session_id, &caller.session_id) {
         (Some(owner), Some(caller)) => owner == caller,

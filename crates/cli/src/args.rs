@@ -330,7 +330,7 @@ pub struct StopArgs {
     /// Units to stop ([lane:]unit, globs, +tag) [default: the whole lane]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
-    /// Only stop units this agent session started; with no units, across every lane
+    /// Only stop units this agent session started; with no units, those in the current project, or in every project outside one
     #[arg(long)]
     pub mine: bool,
     /// Write each unit's log of this run to DIR as text files, for CI artifacts
@@ -534,7 +534,7 @@ pub enum EnvCommand {
         /// Unit whose environment to print ([lane:]unit) [default: the lane's variables]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
-        /// Show where each variable comes from; secret values are hidden
+        /// Show where each variable comes from; secret-looking values are hidden
         #[arg(long)]
         explain: bool,
     },
