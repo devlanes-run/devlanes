@@ -358,6 +358,15 @@ impl Inner {
                 )
             })
         };
+        let word = |path: &str, value: &devlanes_config::Templated<String>| {
+            value.evaluate_text(&context).map_err(|error| {
+                RpcError::new(
+                    "config_error",
+                    json!({"path": path, "message": error.message}),
+                    1,
+                )
+            })
+        };
         let mut env_map = BTreeMap::new();
         for (key, value) in &infra.env {
             let value = value.evaluate(&context).map_err(|error| {
@@ -386,13 +395,13 @@ impl Inner {
                 Some(Run::Argv(items)) => Some(
                     items
                         .iter()
-                        .map(|item| evaluate(&format!("{path}.command"), item))
+                        .map(|item| word(&format!("{path}.command"), item))
                         .collect::<Result<Vec<_>, _>>()?,
                 ),
                 Some(Run::Shell(text)) => Some(vec![
                     "/bin/sh".into(),
                     "-c".into(),
-                    evaluate(&format!("{path}.command"), text)?,
+                    word(&format!("{path}.command"), text)?,
                 ]),
                 None => None,
             };

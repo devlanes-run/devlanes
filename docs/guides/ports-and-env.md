@@ -130,7 +130,7 @@ A service that needs its own public URL, for OAuth callbacks or absolute links, 
 
 ### Expressions
 
-Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is exactly one expression keeps its type (`autostart: ${{ lane.index == 0 }}` is a boolean); mixed text is a string. Undefined names are errors; `| default('x')` makes them optional. Filters such as `upper`, `replace`, `join`, `int` and the `a if cond else b` form are available.
+Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is exactly one expression keeps its type (`autostart: ${{ lane.index == 0 }}` is a boolean); mixed text is a string. Each item of a `run` list becomes text, so `[node, server.mjs, --port, "${{ self.port }}"]` works. `devlanes config check` checks the syntax of expressions and the names they use, but their values exist only per lane: a value of the wrong type shows on the unit when a start evaluates it. Undefined names are errors; `| default('x')` makes them optional. Filters such as `upper`, `replace`, `join`, `int` and the `a if cond else b` form are available.
 
 | Function | Result |
 | --- | --- |
