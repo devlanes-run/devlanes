@@ -163,7 +163,7 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             let paths = paths()?;
             // Before the request: switching to an installed update restarts the daemon.
             crate::update::startup(runtime, &paths).await;
-            let context = request.context.clone();
+            let context = crate::driver::start_context(&request);
             let code = rpc(cli, runtime, request).await?;
             if code != 0 {
                 return Ok(code);

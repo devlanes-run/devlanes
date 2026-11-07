@@ -7,7 +7,7 @@ use std::path::Path;
 use devlanes_proto::{Context, LaneSummary, Method, Page, StartResult};
 use serde_json::{Value, json};
 
-use crate::{LIMIT, Setup, cx, harness, repo, temp, worktree};
+use crate::{LIMIT, Setup, cx, git, harness, repo, temp, worktree};
 
 const CONFIG: &str = r#"project: demo
 services:
@@ -500,6 +500,71 @@ async fn a_project_whose_lanes_were_all_cleaned_is_forgotten() {
         let lanes = status(&h, cx(&main)).await;
         assert_eq!(lanes.len(), 1, "a command in the folder does");
         assert_eq!(lanes[0].reference, "demo@0");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Starting another project's lane from a cleaned project's folder leaves that
+/// project forgotten, whether `--lane` or a unit names the lane, and so does
+/// naming a project no file there names; naming the folder's own project still
+/// registers it again.
+async fn naming_another_projects_lane_leaves_a_cleaned_project_forgotten() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let root = tmp.path.join("r");
+        for (dir, name) in [("apps/a", "alpha"), ("apps/b", "beta")] {
+            let folder = root.join(dir);
+            std::fs::create_dir_all(&folder).expect("mkdir");
+            std::fs::write(
+                folder.join("devlanes.yaml"),
+                format!("project: {name}\nservices:\n  web: {{ run: sleep, ready: started }}\n"),
+            )
+            .expect("project file");
+        }
+        git(&root, &["init", "-q", "-b", "main"]);
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "init"]);
+        let (a, b) = (root.join("apps/a"), root.join("apps/b"));
+        let home = tmp.path.join("home");
+        let h = harness(&home, Setup::default()).await;
+        start(&h, cx(&a), json!({"units": ["web"]})).await;
+        start(&h, cx(&b), json!({"units": ["web"]})).await;
+        h.call(
+            Method::LaneClean,
+            json!({}),
+            Context {
+                yes: true,
+                ..cx(&a)
+            },
+        )
+        .await
+        .expect("clean");
+
+        let by_lane = start(&h, on_lane(&a, "beta@0"), json!({})).await;
+        let by_unit = start(&h, cx(&a), json!({"units": ["beta@0:web"]})).await;
+        assert_eq!(
+            (by_lane.lane.as_str(), by_unit.lane.as_str()),
+            ("beta@0", "beta@0")
+        );
+        // A project that no file here names is not found, and registers nothing.
+        let error = h
+            .call(Method::Status, json!({}), on_lane(&a, "gamma@0"))
+            .await
+            .expect_err("unknown project");
+        assert_eq!(error.code, "not_found");
+        let lanes: Vec<String> = status(&h, cx(&tmp.path))
+            .await
+            .into_iter()
+            .map(|lane| lane.reference)
+            .collect();
+        assert_eq!(lanes, ["beta@0"]);
+        assert!(!home.join("data/alpha").exists());
+
+        let own = start(&h, on_lane(&a, "alpha@0"), json!({})).await;
+        assert_eq!(own.lane, "alpha@0");
         h.close().await;
     })
     .await

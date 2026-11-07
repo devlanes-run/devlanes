@@ -544,6 +544,40 @@ impl Inner {
             })
     }
 
+    /// Registers the project named `name` from the request's `--file`, else from the
+    /// nearest `devlanes.yaml` above the cwd, when that file names it. A file naming
+    /// another project stays unregistered, so a mistyped reference cannot bring back
+    /// a project `lane clean` forgot.
+    pub(crate) async fn register_named(
+        self: &Arc<Self>,
+        name: &str,
+        context: &devlanes_proto::Context,
+    ) {
+        let file = match &context.file {
+            Some(file) => file.clone(),
+            None if context.cwd.as_os_str().is_empty() => return,
+            None => {
+                let cwd = context.cwd.clone();
+                match tokio::task::spawn_blocking(move || {
+                    devlanes_config::search_project_file(&cwd)
+                })
+                .await
+                {
+                    Ok(Ok(devlanes_config::ConfigSearch::Found(file))) => file,
+                    _ => return,
+                }
+            }
+        };
+        let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
+        let Some(file_name) = file.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            return;
+        };
+        let (state, _) = load_config(dir.clone(), dir, file_name, self.config_checks()).await;
+        if matches!(state, ConfigState::Loaded(config) if config.project == name) {
+            let _ = self.load_project(&file).await;
+        }
+    }
+
     /// The project of the nearest `devlanes.yaml` above `cwd` (registered on first
     /// use). Without one, the projects of the deepest lanes holding `cwd`
     /// ([`Self::projects_holding`]): a project file below the worktree root seen from
