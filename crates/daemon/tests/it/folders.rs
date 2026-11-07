@@ -125,6 +125,18 @@ async fn a_folder_can_hold_several_lanes() {
             .await
             .expect_err("taken");
         assert_eq!(taken.code, "name_taken");
+        assert_eq!(
+            (&taken.data["kind"], &taken.data["lane"]),
+            (&json!("lane"), &json!("demo@1"))
+        );
+        // Lanes without a `lane new` name answer to these as references.
+        for reserved in ["main", "lane7"] {
+            let refused = h
+                .call(Method::LaneNew, json!({"name": reserved}), cx(&main))
+                .await
+                .expect_err(reserved);
+            assert_eq!(refused.code, "invalid_reference", "{reserved}");
+        }
         let unnamed = h
             .call(Method::LaneNew, json!({}), cx(&main))
             .await
@@ -220,6 +232,187 @@ async fn lanes_of_one_folder_have_their_own_data_folders() {
         h.call(Method::Stop, json!({}), cx(&main))
             .await
             .expect("stop main");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// `DEVLANES_LANE_DATA` of `lane`.
+async fn data_path(h: &crate::Harness, main: &Path, lane: &str) -> std::path::PathBuf {
+    let env = h
+        .call(Method::Env, json!({"lane_env": true}), on_lane(main, lane))
+        .await
+        .expect("env");
+    env["env"]["DEVLANES_LANE_DATA"]
+        .as_str()
+        .expect("data path")
+        .into()
+}
+
+/// Whether `env --explain` for `worker` on `lane` lists `key`.
+async fn explains(h: &crate::Harness, main: &Path, lane: &str, key: &str) -> bool {
+    let explained = h
+        .call(
+            Method::Env,
+            json!({"unit": "worker", "explain": true}),
+            on_lane(main, lane),
+        )
+        .await
+        .expect("explain");
+    explained["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .any(|item| item["key"] == key)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A cleaned `lane new` lane's name can be used again and gives a new lane:
+/// none of the old lane's `--env` overrides, and a new data folder, so files
+/// the clean could not delete (held open on Windows) never reach it, and that
+/// delete is retried.
+async fn a_cleaned_lane_name_gets_a_fresh_lane() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CONFIG);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::LaneNew, json!({"name": "review"}), cx(&main))
+            .await
+            .expect("lane new");
+        start(
+            &h,
+            on_lane(&main, "review"),
+            json!({"units": ["worker"], "env": {"FROM_FLAG": "old"}}),
+        )
+        .await;
+        assert!(explains(&h, &main, "review", "FROM_FLAG").await);
+        let old = data_path(&h, &main, "review").await;
+        h.call(
+            Method::LaneClean,
+            json!({}),
+            Context {
+                yes: true,
+                ..on_lane(&main, "review")
+            },
+        )
+        .await
+        .expect("clean");
+        std::fs::create_dir_all(&old).expect("old folder");
+        std::fs::write(old.join("marker.txt"), "old").expect("marker");
+
+        let created = h
+            .call(Method::LaneNew, json!({"name": "review"}), cx(&main))
+            .await
+            .expect("the name is free again");
+        assert_eq!(created["lane"]["name"], "review", "{created}");
+        assert!(!explains(&h, &main, "review", "FROM_FLAG").await);
+        let new = data_path(&h, &main, "review").await;
+        assert_ne!(new, old);
+        assert!(!new.join("marker.txt").exists());
+        assert!(!old.exists(), "the old folder's delete is retried");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `lane new` answers with the project's folder: the worktree root without a
+/// trailing separator, or the subfolder holding the project file.
+async fn lane_new_answers_with_the_project_folder() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CONFIG);
+        let sub = main.join("sub");
+        std::fs::create_dir_all(&sub).expect("sub");
+        std::fs::write(sub.join("devlanes.yaml"), CONFIG.replace("demo", "other"))
+            .expect("sub config");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        for folder in [&main, &sub] {
+            let created = h
+                .call(Method::LaneNew, json!({}), cx(folder))
+                .await
+                .expect("lane new");
+            assert_eq!(created["folder"], json!(folder));
+        }
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `lane new --start` starts the lane with the request's `--env` overrides.
+async fn lane_new_start_uses_the_env_overrides() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: demo\nservices:\n  worker:\n    run: \"printenv FROM_FLAG; sleep\"\n    pty: false\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(
+            Method::LaneNew,
+            json!({"name": "review", "start": true, "env": {"FROM_FLAG": "1"}}),
+            cx(&main),
+        )
+        .await
+        .expect("lane new --start");
+        let lines = crate::eventually(std::time::Duration::from_secs(5), || async {
+            let value = h
+                .call(Method::Logs, json!({"units": ["worker"]}), on_lane(&main, "review"))
+                .await
+                .ok()?;
+            let lines: Vec<String> = value["items"]
+                .as_array()?
+                .iter()
+                .filter_map(|line| line["text"].as_str().map(str::to_owned))
+                .collect();
+            (!lines.is_empty()).then_some(lines)
+        })
+        .await
+        .expect("worker logged");
+        assert_eq!(lines, ["1"]);
+        h.call(Method::Stop, json!({}), on_lane(&main, "review"))
+            .await
+            .expect("stop");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A lone unit selector that matches no unit but is a lane number or a `lane
+/// new` name names that lane in the error; a branch or folder name does not,
+/// since those are often a mistyped unit of the current lane.
+async fn a_unit_selector_that_names_a_lane_says_so() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CONFIG);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::LaneNew, json!({"name": "review"}), cx(&main))
+            .await
+            .expect("lane new");
+        let cases = [
+            (Method::Stop, "1", Some("demo@1")),
+            (Method::Stop, "review", Some("demo@1")),
+            (Method::Start, "review", Some("demo@1")),
+            (Method::Stop, "main", None),
+            (Method::Stop, "r", None),
+            (Method::Stop, "nope", None),
+        ];
+        for (method, unit, lane) in cases {
+            let error = h
+                .call(method, json!({"units": [unit]}), cx(&main))
+                .await
+                .expect_err(unit);
+            assert_eq!(error.code, "not_found", "{unit}");
+            assert_eq!(
+                error.data.get("names_lane").and_then(Value::as_str),
+                lane,
+                "{unit}"
+            );
+        }
         h.close().await;
     })
     .await

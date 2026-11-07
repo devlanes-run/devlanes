@@ -1082,6 +1082,18 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
             })
         }
         "confirmation_required" => confirmation_hint(error),
+        // A unit selector that names a lane (`stop 1`): the same command for that lane.
+        "not_found"
+            if let Some(lane) = error.data.get("names_lane").and_then(Value::as_str)
+                && let Some(verb) = match request.method {
+                    Method::Stop => Some("stop"),
+                    Method::Start => Some("start"),
+                    Method::Restart => Some("restart"),
+                    _ => None,
+                } =>
+        {
+            Some(Hint::command([verb, "--lane", lane]))
+        }
         // What this command accepts, rather than every lane.
         "not_found" => match request.method {
             Method::Run => Some(Hint::command(["run", "--list"])),

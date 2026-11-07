@@ -950,6 +950,7 @@ impl Inner {
         let project = Arc::new(ProjectRt {
             id,
             sync: tokio::sync::Mutex::new(()),
+            lane_new: tokio::sync::Mutex::new(()),
             st: std::sync::Mutex::new(ProjectSt {
                 name,
                 root,
@@ -1785,22 +1786,28 @@ impl Inner {
     }
 
     /// Deletes the lane's data folder (`lane clean`), then the project's folder once no
-    /// lane folder is left in it. A missing folder is not an error.
-    pub(crate) async fn remove_lane_data(&self, project: &str, lane: LaneId) {
+    /// lane folder is left in it. A missing folder is not an error. Returns the
+    /// folder when it could not be deleted, so the caller can name it to the user.
+    pub(crate) async fn remove_lane_data(&self, project: &str, lane: LaneId) -> Option<PathBuf> {
         let path = self.lane_data_path(project, lane);
         let parent = self.project_data_path(project);
-        let result = tokio::task::spawn_blocking(move || {
-            match crate::files::remove_dir_all(&path) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
-                _ => {}
+        let result = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || {
+                match crate::files::remove_dir_all(&path) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(error);
+                    }
+                    _ => {}
+                }
+                // Fails while other lanes' folders remain, which is the point.
+                let _ = std::fs::remove_dir(&parent);
+                Ok(())
             }
-            // Fails while other lanes' folders remain, which is the point.
-            let _ = std::fs::remove_dir(&parent);
-            Ok(())
         })
         .await;
         match result {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => return None,
             #[cfg(windows)]
             Ok(Err(error)) if devlanes_sys_windows::file::is_held(&error) => {
                 tracing::warn!(
@@ -1815,6 +1822,7 @@ impl Inner {
             }
             Err(error) => tracing::warn!(%error, "lane data folder task failed"),
         }
+        Some(path)
     }
 
     /// Deletes the logs of lane `index` (`lane clean`), then the project's log

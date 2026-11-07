@@ -1102,6 +1102,9 @@ pub(crate) struct ProjectRt {
     pub id: ProjectId,
     /// Serializes re-listing and registration.
     pub sync: tokio::sync::Mutex<()>,
+    /// Serializes `lane new`, from the name check until the lane has its record,
+    /// so two requests cannot both take one name.
+    pub lane_new: tokio::sync::Mutex<()>,
     pub st: Mutex<ProjectSt>,
     pub watching: AtomicBool,
     pub watch: tokio_util::sync::CancellationToken,
