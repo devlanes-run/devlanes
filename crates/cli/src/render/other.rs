@@ -475,7 +475,7 @@ pub(super) fn metrics(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 
 /// A `status --watch` lane change: [`event_line`] plus the lane's units counted by
 /// state, so queued and failed units show without printing every unit each time.
-pub(crate) fn watch_line(event: &Event) -> String {
+pub fn watch_line(event: &Event) -> String {
     const ORDER: [&str; 5] = ["failed", "queued", "starting", "stopping", "ready"];
     let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for unit in event.data["lane"]["units"].as_array().into_iter().flatten() {

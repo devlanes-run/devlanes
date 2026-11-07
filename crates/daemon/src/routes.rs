@@ -357,8 +357,9 @@ impl Inner {
 
     /// `hosts`: the routes of the request's scope (as `status`'s) with their lane,
     /// unit, port and state, and for this machine's own routes the URL each
-    /// reporting client opens it at. A box route counts by its project and lane
-    /// reference, which a choice keeps equal to the local lane's.
+    /// reporting client opens it at. A box route counts by its project and the box
+    /// lane's reference, so `--lane` on a local lane that yielded its hostnames to a
+    /// box lane with another reference lists none of them.
     pub(crate) async fn hosts_method(
         self: &Arc<Self>,
         context: &Context,

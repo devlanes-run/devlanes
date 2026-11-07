@@ -14,7 +14,7 @@ use serde_json::Value;
 
 pub(crate) use lanes::display_url;
 pub(crate) use other::doctor_failed;
-pub use other::{DoctorCheck, DoctorState, doctor_checks_of};
+pub use other::{DoctorCheck, DoctorState, doctor_checks_of, watch_line};
 pub use words::status_hint;
 pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording, lane_drift, unit_drift};
 

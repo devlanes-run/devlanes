@@ -180,7 +180,7 @@ impl<'a> ErrorPage<'a> {
         let mut known: Vec<KnownHost<'_>> = self.known_hosts.clone();
         known.sort_by(|a, b| a.host.cmp(b.host));
         known.dedup_by(|a, b| a.host == b.host);
-        let suggestion = closest(self.host, &known);
+        let mut suggestion = closest(self.host, &known);
         let project = if known.is_empty() {
             self.unit
                 .as_deref()
@@ -194,6 +194,8 @@ impl<'a> ErrorPage<'a> {
             let before = known.len();
             known.retain(|known| owner_project(known) == Some(project));
             others = before - known.len();
+            // The parent domain can pick a project the closest name is not in.
+            suggestion = closest(self.host, &known);
         }
         // `url ls` lists the cwd's project, so a reader in another project's folder
         // would not see the names this page is about.

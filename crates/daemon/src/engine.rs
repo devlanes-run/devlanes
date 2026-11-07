@@ -780,22 +780,33 @@ impl Inner {
                 3,
             ));
         };
-        if let Some(lane) = Self::lane_at(&project, &context.cwd) {
-            // Running devlanes in a worktree is what makes it a lane.
-            self.claim_lane(&project, &lane).await;
-            return Ok((project, lane));
-        }
-        if let Some(lane) = context
-            .file
-            .as_deref()
-            .and_then(Path::parent)
-            .and_then(|dir| Self::lane_at(&project, dir))
-        {
-            return Ok((project, lane));
+        let named = context.project.is_some() || context.file.is_some();
+        // A worktree added since the last listing is no lane yet; with `-p` or
+        // `--file` the main lane fallback below would take its place.
+        for relisted in [false, true] {
+            if relisted {
+                if !named {
+                    break;
+                }
+                let _ = self.relist(&project).await;
+            }
+            if let Some(lane) = Self::lane_at(&project, &context.cwd) {
+                // Running devlanes in a worktree is what makes it a lane.
+                self.claim_lane(&project, &lane).await;
+                return Ok((project, lane));
+            }
+            if let Some(lane) = context
+                .file
+                .as_deref()
+                .and_then(Path::parent)
+                .and_then(|dir| Self::lane_at(&project, dir))
+            {
+                return Ok((project, lane));
+            }
         }
         // `DEVLANES_LANE_PROJECT` alone gets no fallback: a lane 2 process running
         // devlanes from `/tmp` must not land on lane 0.
-        if context.project.is_some() || context.file.is_some() {
+        if named {
             return match fallback {
                 MainLane::Allowed => Self::main_lane(&project),
                 MainLane::Refused => Err(lane_required(&project)),

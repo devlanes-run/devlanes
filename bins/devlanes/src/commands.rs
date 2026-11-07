@@ -513,6 +513,11 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
         }
         .reserve(RUN_SUMMARY_BYTES)
     });
+    // `status --watch`: the last line printed per lane. A gated start sends many
+    // changes that read the same once counted, and agents pay for each line.
+    let mut watch_lines: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    let dedup_watch = method == Method::Status && runtime.mode != devlanes_cli::OutputMode::Json;
     let stream = async {
         loop {
             match client.next_frame().await.map_err(rpc_error)? {
@@ -526,6 +531,17 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                     tracing::trace!(event = %event.event, seq = event.seq, "event received");
                     progress.event(&event);
                     crate::terminal::title_event(&mut title, &event);
+                    if dedup_watch && event.event == devlanes_proto::events::LANE_CHANGED {
+                        let lane = event.data["lane"]["reference"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                        let line = devlanes_cli::watch_line(&event);
+                        if watch_lines.get(&lane) == Some(&line) {
+                            continue;
+                        }
+                        watch_lines.insert(lane, line);
+                    }
                     let rendered = match log_stream.as_mut() {
                         Some(stream) => stream.event(&event),
                         None => reporter.event(method, &event),
