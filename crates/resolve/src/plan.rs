@@ -559,13 +559,13 @@ impl<E: Extensions> Planner<'_, '_, E> {
         let run_path = format!("{path}.run");
         let command = match (spec.run, spec.script) {
             (Some(Run::Shell(text)), _) => DraftCommand::Shell(
-                text.evaluate(context)
+                text.evaluate_text(context)
                     .map_err(|e| ResolveError::expression(&run_path, e))?,
             ),
             (Some(Run::Argv(items)), _) => DraftCommand::Argv(
                 items
                     .iter()
-                    .map(|item| item.evaluate(context))
+                    .map(|item| item.evaluate_text(context))
                     .collect::<Result<_, _>>()
                     .map_err(|e| ResolveError::expression(&run_path, e))?,
             ),
@@ -1036,13 +1036,13 @@ fn duration(
 fn shell_line(run: &Run, context: &PreparedContext, path: &str) -> Result<String, ResolveError> {
     match run {
         Run::Shell(text) => text
-            .evaluate(context)
+            .evaluate_text(context)
             .map_err(|e| ResolveError::expression(path, e)),
         Run::Argv(items) => {
             let mut words = Vec::new();
             for item in items {
                 let word = item
-                    .evaluate(context)
+                    .evaluate_text(context)
                     .map_err(|e| ResolveError::expression(path, e))?;
                 words.push(shell_quote(&word));
             }

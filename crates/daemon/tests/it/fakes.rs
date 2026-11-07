@@ -16,7 +16,10 @@
 //! (the spawn returns 500 ms after the journal recorded it, like a slow
 //! `fork`/`exec`, which widens the window before the daemon registers the unit),
 //! `render` (the unit's output renders its terminal, as a Windows pseudo
-//! console's does: see `Unit::renders_screen`).
+//! console's does: see `Unit::renders_screen`), `draw <row> <text>` (writes
+//! `<text>` at the start of `<row>` with a cursor move and no line break, as a
+//! pseudo console does), `nospawn` (the spawn fails with `NotFound`, as for a
+//! missing program).
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -164,6 +167,9 @@ impl UnitRunner for FakeRunner {
         if script.split(';').any(|command| command.trim() == "lag") {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+        if script.split(';').any(|command| command.trim() == "nospawn") {
+            return Err(Error::Io(std::io::ErrorKind::NotFound.into()));
+        }
         let pid = NEXT_PID.fetch_add(1, Ordering::Relaxed);
         let (sender, first) = broadcast::channel(256);
         let stubborn = script
@@ -228,14 +234,19 @@ pub struct FakeUnit {
 }
 
 impl FakeUnit {
-    /// Writes one output chunk.
+    /// Writes one output line.
     fn print(&self, text: &str) {
+        self.write(&format!("{text}\r\n"));
+    }
+
+    /// Writes one output chunk as it is.
+    fn write(&self, text: &str) {
         if let Ok(sender) = self.sender.lock()
             && let Some(sender) = sender.as_ref()
         {
             let _ = sender.send(OutputChunk {
                 stream: OutputStream::Terminal,
-                bytes: Bytes::from(format!("{text}\r\n")),
+                bytes: Bytes::from(text.to_owned()),
             });
         }
     }
@@ -261,6 +272,10 @@ impl FakeUnit {
             let (word, rest) = command.split_once(' ').unwrap_or((command, ""));
             match word {
                 "echo" => self.print(rest),
+                "draw" => {
+                    let (row, text) = rest.split_once(' ').unwrap_or((rest, ""));
+                    self.write(&format!("\x1b[{row};1H{text}"));
+                }
                 "nap" => {
                     let ms = rest.trim().parse().unwrap_or(0);
                     tokio::select! {

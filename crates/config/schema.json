@@ -66,14 +66,14 @@
               "type": "null"
             }
           ],
-          "description": "Command replacing the image's default: a list is used as is, a string runs through `/bin/sh -c` inside the container.",
+          "description": "Command replacing the image's default: a list is used as is, a string runs through `/bin/sh -c` inside the container. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`.",
           "examples": [
             [
               "server",
               "--config=/policies/config.yaml"
             ]
           ],
-          "markdownDescription": "Command replacing the image's default: a list is used as is, a string runs through `/bin/sh -c` inside the container."
+          "markdownDescription": "Command replacing the image's default: a list is used as is, a string runs through `/bin/sh -c` inside the container. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`."
         },
         "env": {
           "additionalProperties": {
@@ -793,7 +793,7 @@
               "type": "null"
             }
           ],
-          "description": "Command to run: a string runs through `/bin/sh -c`, a list runs the program directly. Write the command you mean, such as `docker compose exec -T postgres ...`; devlanes runs it as written. Required.",
+          "description": "Command to run: a string runs through `/bin/sh -c`, a list runs the program directly. Write the command you mean, such as `docker compose exec -T postgres ...`; devlanes runs it as written. Required. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`.",
           "examples": [
             "pnpm dev",
             [
@@ -803,7 +803,7 @@
               "${{ self.port }}"
             ]
           ],
-          "markdownDescription": "Command to run: a string runs through `/bin/sh -c`, a list runs the program directly. Write the command you mean, such as `docker compose exec -T postgres ...`; devlanes runs it as written. Required."
+          "markdownDescription": "Command to run: a string runs through `/bin/sh -c`, a list runs the program directly. Write the command you mean, such as `docker compose exec -T postgres ...`; devlanes runs it as written. Required. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`."
         },
         "timeout": {
           "anyOf": [
@@ -2372,7 +2372,7 @@
               "type": "null"
             }
           ],
-          "description": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the lane's worktree root unless `cwd` is set. devlanes runs it exactly as written, so it cannot be combined with `preset`; prefer `run_script` when the command is a script in a project file. Exactly one of `run` and `run_script` is required after templates are applied.",
+          "description": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the lane's worktree root unless `cwd` is set. devlanes runs it exactly as written, so it cannot be combined with `preset`; prefer `run_script` when the command is a script in a project file. Exactly one of `run` and `run_script` is required after templates are applied. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`.",
           "examples": [
             "pnpm dev",
             [
@@ -2382,7 +2382,7 @@
               "${{ self.port }}"
             ]
           ],
-          "markdownDescription": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the lane's worktree root unless `cwd` is set. devlanes runs it exactly as written, so it cannot be combined with `preset`; prefer `run_script` when the command is a script in a project file. Exactly one of `run` and `run_script` is required after templates are applied."
+          "markdownDescription": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the lane's worktree root unless `cwd` is set. devlanes runs it exactly as written, so it cannot be combined with `preset`; prefer `run_script` when the command is a script in a project file. Exactly one of `run` and `run_script` is required after templates are applied. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`."
         },
         "run_script": {
           "anyOf": [
@@ -2965,7 +2965,7 @@
               "type": "null"
             }
           ],
-          "description": "Command to run: a string runs through `/bin/sh -c` (pipes and multi-line scripts work), a list runs the program directly with those arguments. Use exactly one of `run`, `run_script` or `steps`.",
+          "description": "Command to run: a string runs through `/bin/sh -c` (pipes and multi-line scripts work), a list runs the program directly with those arguments. Use exactly one of `run`, `run_script` or `steps`. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`.",
           "examples": [
             "pnpm dev",
             [
@@ -2975,7 +2975,7 @@
               "${{ self.port }}"
             ]
           ],
-          "markdownDescription": "Command to run: a string runs through `/bin/sh -c` (pipes and multi-line scripts work), a list runs the program directly with those arguments. Use exactly one of `run`, `run_script` or `steps`."
+          "markdownDescription": "Command to run: a string runs through `/bin/sh -c` (pipes and multi-line scripts work), a list runs the program directly with those arguments. Use exactly one of `run`, `run_script` or `steps`. In a list, an item that is one `${{ }}` expression giving a number or `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`."
         },
         "run_script": {
           "anyOf": [

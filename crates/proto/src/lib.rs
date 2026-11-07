@@ -192,7 +192,10 @@ pub enum Method {
     Why,
     /// Freezes the context's lane now, whatever its idle timers say. Reply
     /// [`LanePower`] fields `{lane, level}`. Errors: `lane_not_running`,
-    /// `lane_busy`, `lane_keep_awake` (`{units}`), `lane_has_orphans`.
+    /// `lane_busy` (a start, stop or clean in flight, or a service starting or
+    /// stopping), `lane_runs_task` (`{units}`, running tasks and exec units),
+    /// `lane_keep_awake` (`{units, services}`, with `services` the configured
+    /// service names behind `units`), `lane_has_orphans`.
     #[serde(rename = "debug.freeze")]
     DebugFreeze,
     /// Thaws the context's lane and counts as activity: `{lane, thawed}`, where

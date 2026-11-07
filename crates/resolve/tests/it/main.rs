@@ -1036,6 +1036,37 @@ services:
 }
 
 #[tokio::test]
+/// A `run` list item that is one expression giving a number or boolean
+/// becomes its text; a list result is still a wrong-type error.
+async fn run_list_items_become_text() {
+    let config = parse(
+        r#"
+project: demo
+services:
+  api: { run: [server, --port, "${{ self.port }}", --main, "${{ lane.index == 1 }}"] }
+  bad: { run: [server, "${{ [lane.index] }}"] }
+"#,
+    );
+    let facts = facts("demo", 1, None);
+    let (block, offsets) = allocation(&config, 21_000, &[]);
+    let lane = resolve_lane(ResolveInput::new(&config, &facts, block, &offsets))
+        .await
+        .expect("resolves");
+    let api = &lane.services["api"];
+    assert_eq!(
+        api.launch.args,
+        [
+            "--port".to_owned(),
+            api.port.to_string(),
+            "--main".into(),
+            "true".into()
+        ]
+    );
+    let error = lane.errors.get("services.bad").expect("bad fails");
+    assert!(error.to_string().contains("wrong type"), "{error}");
+}
+
+#[tokio::test]
 /// Launch debug output never shows env values or arguments.
 async fn debug_output_hides_values() {
     let config =

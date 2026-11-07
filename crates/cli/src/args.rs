@@ -31,7 +31,8 @@ References:
   lane or worktree directory name, or a path. Without project@ the project of
   the current directory is used.
   A unit is [lane:]unit, such as api, 2:api or acme@feat/checkout:web.
-  Commands that take several units also accept globs (\"api-*\") and tags (+web).";
+  Commands that take several units also accept globs (\"api-*\"), tags (+web)
+  and a service's name for all its replicas.";
 
 const START_AFTER: &str = "\
 Examples:
@@ -130,7 +131,9 @@ nothing to bring back and starts its default profile; start.restore: false in\n\
     #[command(long_about = "Stop units, or the whole lane when none are named.\n\n\
 Stopped services are left out of what a plain devlanes start brings back. A\n\
 whole-lane stop also forgets the lane's profiles, so its next plain start uses\n\
-the default profile.")]
+the default profile.\n\n\
+A failed service or exec command you name, or every one when the whole lane\n\
+stops, reads stopped afterwards; failed tasks keep their state.")]
     Stop(StopArgs),
     /// Stop and start units again with a fresh environment, or the whole lane when none are named
     #[command(

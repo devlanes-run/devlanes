@@ -4,9 +4,9 @@
 
 `devlanes start` brings up the lane of the current worktree: infra, setup, `lane.create` and `lane.start` tasks, services, then `after: services` tasks. It waits until every started unit is ready or one fails. Units that already run are left alone, so starting twice is safe, and Ctrl-C detaches without stopping anything. `devlanes start api web` starts only those services and `devlanes start --profile e2e` the units of a profile.
 
-`devlanes stop` without unit names runs the lane's `lane.stop` tasks and stops its processes; containers keep running ([infra](infra.md#lifecycle)). `devlanes stop api` stops one service. `devlanes restart api` stops a unit and starts it again with the environment of the shell that ran `restart`. `devlanes restart` without unit names restarts the whole lane: it stops the lane as `devlanes stop` does, without forgetting what ran, then starts the same services and profiles again with infra, setup and tasks, as a plain start does. `devlanes reload` applies only what an edit of the project file changed ([editing the project file](#editing-the-project-file)).
+`devlanes stop` without unit names runs the lane's `lane.stop` tasks and stops its processes; containers keep running ([infra](infra.md#lifecycle)). `devlanes stop api` stops one service and clears its failure if it failed; the same goes for a command started with `devlanes exec`. `devlanes restart api` stops a unit and starts it again with the environment of the shell that ran `restart`. `devlanes restart` without unit names restarts the whole lane: it stops the lane as `devlanes stop` does, without forgetting what ran, then starts the same services and profiles again with infra, setup and tasks, as a plain start does. `devlanes reload` applies only what an edit of the project file changed ([editing the project file](#editing-the-project-file)).
 
-A service that exits shows as failed and stays that way until you start or restart it. devlanes never restarts a process by itself.
+A service that exits, or whose program could not be started, shows as failed and stays that way until you start, restart or stop it. devlanes never restarts a process by itself.
 
 ## Bringing a lane back
 
@@ -186,7 +186,7 @@ Throttling puts every process of the lane in efficiency mode, what Task Manager'
 
 In the TUI a frozen service shows a blue ❄ in place of its dot and a throttled one a dim `z` (`~` and `z` with ASCII glyphs), and the lane row says `frozen` or `throttled` after `@N`.
 
-`devlanes debug freeze` freezes the current lane now, whatever the timers say, which is the quickest way to check that a project still works after a freeze. `devlanes debug thaw` resumes it. Both take a lane reference. Freeze refuses a lane that is not running, is busy, has a `keep_awake` service running or has orphaned processes.
+`devlanes debug freeze` freezes the current lane now, whatever the timers say, which is the quickest way to check that a project still works after a freeze. `devlanes debug thaw` resumes it. Both take a lane reference. Freeze refuses a lane that is not running, is busy, runs a task or `exec` unit, has a `keep_awake` service running or has orphaned processes.
 
 ### Stops, restarts and crashes
 
