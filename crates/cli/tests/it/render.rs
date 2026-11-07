@@ -2264,6 +2264,11 @@ fn daemon_errors_are_worded_with_hints() {
             json!({"name": "review", "project": "acme", "kind": "lane", "lane": "acme@2"}),
             1,
         ),
+        RpcError::new(
+            "invalid_reference",
+            json!({"reference": "main", "message": "a lane name uses letters, digits, `-`, `_` and `.`, is not a number, and is not main or lane<N>"}),
+            2,
+        ),
         // A unit selector that is a lane's number: `stop 1`.
         RpcError::new(
             "not_found",

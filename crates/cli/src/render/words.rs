@@ -272,10 +272,15 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 .and_then(Value::as_str)
                 .map(|first| Hint::command(["status", first])),
         ),
-        "invalid_reference" => (
-            format!("invalid reference {}", reference()),
-            Some(Hint::command(["lane", "ls"])),
-        ),
+        "invalid_reference" => {
+            let mut message = format!("invalid reference {}", reference());
+            // Why it is refused, such as a `lane new --name` of main or lane<N>.
+            let why = text(data, "message");
+            if !why.is_empty() {
+                message.push_str(&format!(": {why}"));
+            }
+            (message, Some(Hint::command(["lane", "ls"])))
+        }
         "confirmation_required" => {
             let flag = data
                 .get("flag")

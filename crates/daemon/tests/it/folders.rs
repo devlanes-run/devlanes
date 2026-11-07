@@ -250,19 +250,43 @@ async fn data_path(h: &crate::Harness, main: &Path, lane: &str) -> std::path::Pa
         .into()
 }
 
+/// Whether `env --explain` for `worker` on `lane` lists `key`.
+async fn explains(h: &crate::Harness, main: &Path, lane: &str, key: &str) -> bool {
+    let explained = h
+        .call(
+            Method::Env,
+            json!({"unit": "worker", "explain": true}),
+            on_lane(main, lane),
+        )
+        .await
+        .expect("explain");
+    explained["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .any(|item| item["key"] == key)
+}
+
 #[tokio::test(flavor = "multi_thread")]
-/// A cleaned `lane new` lane's name can be used again, after a daemon restart
-/// too, and gives a new lane: a new data folder, so files the clean could not
-/// delete (held open on Windows) never reach it, and that delete is retried.
+/// A cleaned `lane new` lane's name can be used again and gives a new lane:
+/// none of the old lane's `--env` overrides, and a new data folder, so files
+/// the clean could not delete (held open on Windows) never reach it, and that
+/// delete is retried.
 async fn a_cleaned_lane_name_gets_a_fresh_lane() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
-        let home = tmp.path.join("home");
-        let h = harness(&home, Setup::default()).await;
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
         h.call(Method::LaneNew, json!({"name": "review"}), cx(&main))
             .await
             .expect("lane new");
+        start(
+            &h,
+            on_lane(&main, "review"),
+            json!({"units": ["worker"], "env": {"FROM_FLAG": "old"}}),
+        )
+        .await;
+        assert!(explains(&h, &main, "review", "FROM_FLAG").await);
         let old = data_path(&h, &main, "review").await;
         h.call(
             Method::LaneClean,
@@ -276,15 +300,13 @@ async fn a_cleaned_lane_name_gets_a_fresh_lane() {
         .expect("clean");
         std::fs::create_dir_all(&old).expect("old folder");
         std::fs::write(old.join("marker.txt"), "old").expect("marker");
-        h.close().await;
-        drop(h);
 
-        let h = harness(&home, Setup::default()).await;
         let created = h
             .call(Method::LaneNew, json!({"name": "review"}), cx(&main))
             .await
             .expect("the name is free again");
         assert_eq!(created["lane"]["name"], "review", "{created}");
+        assert!(!explains(&h, &main, "review", "FROM_FLAG").await);
         let new = data_path(&h, &main, "review").await;
         assert_ne!(new, old);
         assert!(!new.join("marker.txt").exists());
@@ -296,9 +318,9 @@ async fn a_cleaned_lane_name_gets_a_fresh_lane() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// `lane new` names are per project: a project in a subfolder of the same
-/// repository gets its own `review`, and `lane new` prints that subfolder.
-async fn lane_names_are_per_project() {
+/// `lane new` answers with the project's folder: the worktree root without a
+/// trailing separator, or the subfolder holding the project file.
+async fn lane_new_answers_with_the_project_folder() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
@@ -307,23 +329,13 @@ async fn lane_names_are_per_project() {
         std::fs::write(sub.join("devlanes.yaml"), CONFIG.replace("demo", "other"))
             .expect("sub config");
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
-        let first = h
-            .call(Method::LaneNew, json!({"name": "review"}), cx(&main))
-            .await
-            .expect("demo review");
-        assert_eq!(first["lane"]["reference"], "demo@1");
-        assert_eq!(first["folder"], json!(main), "no trailing separator");
-        let second = h
-            .call(Method::LaneNew, json!({"name": "review"}), cx(&sub))
-            .await
-            .expect("other review");
-        assert_eq!(second["lane"]["reference"], "other@1");
-        assert_eq!(second["folder"], json!(sub));
-        let taken = h
-            .call(Method::LaneNew, json!({"name": "review"}), cx(&sub))
-            .await
-            .expect_err("taken in other");
-        assert_eq!(taken.data["lane"], "other@1");
+        for folder in [&main, &sub] {
+            let created = h
+                .call(Method::LaneNew, json!({}), cx(folder))
+                .await
+                .expect("lane new");
+            assert_eq!(created["folder"], json!(folder));
+        }
         h.close().await;
     })
     .await
