@@ -267,6 +267,112 @@ fn docker_setup_entries_run_by_hand_stay_done() -> Result<()> {
     Ok(())
 }
 
+/// A setup entry backed by the shared Redis that appends Redis's health to
+/// `{runs}`, and a service that reads Redis's published port.
+const RESTARTED: &str = r#"project: fixture-pg-redis
+infra:
+  compose: compose.yaml
+  project_name: devlanes-fixture-pg-redis
+  per_lane: [postgres]
+  setup:
+    cache:
+      run: "docker inspect -f '{{.State.Health.Status}}' devlanes-fixture-pg-redis-redis-1 >> '{runs}'"
+      container: redis
+services:
+  api:
+    run: [fixture-server, --log-line, api-ready]
+    env:
+      REDIS_URL: redis://127.0.0.1:${{ infra.redis.port }}/0
+    ready: { http: { path: /healthz } }
+  web:
+    run: [fixture-server, --log-line, web-ready]
+    ready: { http: { path: /healthz } }
+"#;
+
+/// Redis's published port in `status`.
+fn status_redis_port(lab: &Lab) -> Result<Option<u64>> {
+    Ok(lab.lanes(lab.repo())?.first().and_then(|lane| {
+        lane["containers"]
+            .as_array()?
+            .iter()
+            .find(|container| container["name"] == "redis")?["ports"]["6379"]
+            .as_u64()
+    }))
+}
+
+/// After `docker restart` of the shared Redis, which gets a new ephemeral port,
+/// the daemon hears of it from the engine and `status` shows the new port; the
+/// next start reruns the Redis-backed setup entry once Redis is healthy, says
+/// so in `ran`, and a restarted service reads the new port.
+#[test]
+#[ignore = "needs docker"]
+fn docker_restarted_shared_redis_is_settled_and_gets_its_new_port() -> Result<()> {
+    let lab = Lab::docker_projects(
+        "compose-pg-redis",
+        &[SHARED, LANE_ZERO],
+        Duration::from_secs(600),
+    )?;
+    let runs = lab.home().join("setup-runs");
+    // Forward slashes, since a Windows path's backslashes are escapes in a
+    // double-quoted YAML string.
+    lab.write(
+        "devlanes.yaml",
+        &RESTARTED.replace("{runs}", &runs.to_string_lossy().replace('\\', "/")),
+    )?;
+    let last_run = || {
+        std::fs::read_to_string(&runs)
+            .unwrap_or_default()
+            .lines()
+            .last()
+            .map(str::to_owned)
+    };
+    start(&lab, lab.repo())?;
+    assert_eq!(last_run().as_deref(), Some("healthy"));
+
+    let redis = "devlanes-fixture-pg-redis-redis-1";
+    docker(&lab, &["restart", redis])?;
+    let published = docker(&lab, &["port", redis, "6379/tcp"])?;
+    let port: u64 = published
+        .lines()
+        .next()
+        .and_then(|line| line.rsplit(':').next())
+        .and_then(|port| port.parse().ok())
+        .unwrap_or_else(|| panic!("docker port: {published}"));
+    // The engine's events reach the daemon, which reads the port again.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while status_redis_port(&lab)? != Some(port) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "status keeps the old port: {:?}",
+            status_redis_port(&lab)?
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    let command = lab.command(lab.repo(), &["--timeout", "2m", "start", "web"])?;
+    let output = lab.run(command, Duration::from_secs(180))?;
+    let started = output.expect_code(0)?.json()?;
+    assert_eq!(
+        started["ran"],
+        serde_json::json!(["fixture-pg-redis@0:setup.cache"]),
+        "{output}"
+    );
+    assert_eq!(last_run().as_deref(), Some("healthy"));
+
+    // `env show` of a running unit is the env it runs with, so `api` gets the
+    // new port only from its restart.
+    let command = lab.command(lab.repo(), &["--timeout", "2m", "restart", "api"])?;
+    lab.run(command, Duration::from_secs(180))?.expect_code(0)?;
+    let env = lab.json(lab.repo(), &["env", "show", "api"])?;
+    assert_eq!(
+        env["env"]["REDIS_URL"],
+        format!("redis://127.0.0.1:{port}/0"),
+        "{env}"
+    );
+    lab.devlanes(lab.repo(), &["stop"])?.expect_code(0)?;
+    Ok(())
+}
+
 /// `State.Paused` of each container.
 fn paused(lab: &Lab, ids: &[String]) -> Result<Vec<String>> {
     ids.iter()
