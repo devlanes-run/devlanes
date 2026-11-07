@@ -1479,8 +1479,9 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
     } else {
         lane.profiles.clone()
     };
-    // Nothing running has no drift, the rule `update_drift` applies. This also
-    // hides flags an edit seen during another operation on an idle lane left set.
+    // Nothing running has no drift, the rule `update_drift` applies. It also hides a
+    // flag that `reload_config` set on an idle lane while another operation held its
+    // `op`.
     let live = lane.any_running() || !lane.starts.is_empty();
     LaneSummary {
         warnings: lane.warnings(&reference),

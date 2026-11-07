@@ -155,21 +155,28 @@ pub async fn run_with<D: WithDriver + ?Sized>(
             // The start result (units and URLs) also closes any still-open CI phase
             // before test output begins. Without one, JSON prints nothing here: an
             // empty object would be a stray NDJSON line.
-            let shown = if start.result.is_null() {
+            let mut shown = if start.result.is_null() {
                 json!({})
             } else {
                 start.result
             };
+            // Running the command against units without the profile's settings would
+            // test something other than what the profile asks for; the teardown below
+            // still stops what this start added. The refusal replaces the start's
+            // warning, which names the same units.
+            let refusal = profile_refusal(&shown);
+            if refusal.is_some()
+                && let Some(warnings) = shown.get_mut("warnings").and_then(Value::as_array_mut)
+            {
+                warnings.retain(|warning| warning["code"] != "profile_not_applied");
+            }
             if (runtime.mode != crate::OutputMode::Json
                 || !shown.as_object().is_some_and(|o| o.is_empty()))
                 && let Ok(rendered) = reporter.result(&Report::new(Method::Start, &shown))
             {
                 emit(rendered);
             }
-            // Running the command against units without the profile's settings would
-            // test something other than what the profile asks for; the teardown below
-            // still stops what this start added.
-            if let Some(error) = profile_refusal(&shown) {
+            if let Some(error) = refusal {
                 emit(reporter.error(&error, None));
             } else {
                 match driver.env(&ownership.lane).await {

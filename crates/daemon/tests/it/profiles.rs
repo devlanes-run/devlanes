@@ -511,12 +511,21 @@ async fn changing_profiles_of_a_running_lane_warns() {
                 .cloned()
         };
 
+        // `status` and `reload` see the difference only once the lane stores the
+        // profiles, so only then does the warning point at them.
+        let points_at_reload = |warning: &devlanes_proto::LaneWarning| {
+            warning.data["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("devlanes reload"))
+        };
         let transient = start(json!({"profiles": ["back"], "transient": true})).await;
-        assert!(not_applied(&transient).is_some(), "{transient:?}");
+        let warning = not_applied(&transient).expect("transient profile_not_applied");
+        assert!(!points_at_reload(&warning), "{warning:?}");
         assert!(lane(&h, &main).await.profiles.is_empty());
 
         let plain = start(json!({"profiles": ["back"]})).await;
         let warning = not_applied(&plain).expect("profile_not_applied");
+        assert!(points_at_reload(&warning), "{warning:?}");
         assert_eq!(
             warning.data["units"],
             json!([{"unit": "api", "fields": ["env MODE"]}])

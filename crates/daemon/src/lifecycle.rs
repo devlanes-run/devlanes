@@ -1393,10 +1393,13 @@ impl Dropped {
 
 /// `profile_not_applied`: a start changed a running lane's profiles, and `stale`
 /// units it left running differ from what those profiles plan, in these fields.
+/// `stored` says the start made them the lane's profiles; only then do `status`
+/// and `reload` see the difference.
 fn profile_not_applied(
     lane: &str,
     profiles: &[String],
     stale: &[(String, Vec<String>)],
+    stored: bool,
 ) -> devlanes_proto::LaneWarning {
     let names: Vec<&str> = stale.iter().map(|(unit, _)| unit.as_str()).collect();
     let fields: Vec<String> = stale
@@ -1408,6 +1411,16 @@ fn profile_not_applied(
     } else {
         format!("profiles {}", profiles.join(", "))
     };
+    let mut message = format!(
+        "{} run with other settings than {profile} gives them ({})",
+        names.join(", "),
+        fields.join("; "),
+    );
+    if stored {
+        message.push_str(&format!(
+            "; devlanes status lists every unit devlanes reload --lane {lane} restarts"
+        ));
+    }
     devlanes_proto::LaneWarning {
         code: "profile_not_applied".into(),
         data: json!({
@@ -1417,11 +1430,7 @@ fn profile_not_applied(
                 .iter()
                 .map(|(unit, fields)| json!({"unit": unit, "fields": fields}))
                 .collect::<Vec<_>>(),
-            "message": format!(
-                "{} run with other settings than {profile} gives them ({}); devlanes status lists every unit devlanes reload --lane {lane} restarts",
-                names.join(", "),
-                fields.join("; "),
-            ),
+            "message": message,
         }),
     }
 }
@@ -2890,7 +2899,7 @@ impl Inner {
                 )));
             }
             // A request without a shell environment (the TUI's restart, `reload`)
-            // keeps the `--env` values of the start that stored the lane's (decision 7).
+            // keeps the `--env` values stored with the lane's environment (decision 7).
             if options.env.is_some() || !options.overrides.is_empty() {
                 st.overrides = options.overrides.clone();
             }
@@ -3225,6 +3234,7 @@ impl Inner {
                 &cx.reference,
                 &cx.profiles,
                 &cx.profile_stale,
+                cx.recheck_drift,
             ));
         }
         for warning in &warnings {
@@ -3760,7 +3770,7 @@ impl Inner {
             project.st().last_env = Some(env);
         }
         // A request without a shell environment (the TUI's restart, `reload`) keeps
-        // the `--env` values of the start that stored the lane's (decision 7).
+        // the `--env` values stored with the lane's environment (decision 7).
         if options.env.is_some() || !options.overrides.is_empty() {
             lane.st().overrides = options.overrides.clone();
         }

@@ -281,7 +281,14 @@ async fn restart_from_a_shell_drops_an_earlier_env_override() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", BEFORE);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("13000-13249"),
+                ..Setup::default()
+            },
+        )
+        .await;
         h.call(
             Method::Start,
             json!({"units": ["web"], "env": {"EXTRA": "one"}}),
