@@ -32,9 +32,9 @@ use tokio::{
 };
 
 use crate::{
-    ConsoleHelper, WindowsRunner,
+    CONTROL_C_EXIT, ConsoleHelper, WindowsRunner,
     output::{self, Slot},
-    spawn::{self, is_console_host},
+    spawn::{self, is_console_host, is_msys_shell},
     terminal::Terminal,
 };
 
@@ -63,7 +63,9 @@ const FREEZE_PASSES: usize = 5;
 pub struct ExitReport {
     /// The leader's exit code; `None` if it could not be read. Windows has no
     /// signals, so `signal` is always `None`; a process ended by a console
-    /// event reports `STATUS_CONTROL_C_EXIT` (`0xC000013A`) as its code.
+    /// event reports `STATUS_CONTROL_C_EXIT` (`0xC000013A`) as its code, and
+    /// so does a stopped batch shim in a pseudo console or MSYS shell, whose
+    /// own code only says that the event reached it.
     pub outcome: ExitOutcome,
     /// Present when an explicit stop ended the unit.
     pub stop: Option<StopOutcome>,
@@ -96,6 +98,10 @@ struct Inner {
     pty: bool,
     /// The leader is Git's `sh.exe` standing in for `/bin/sh`.
     through_shell: bool,
+    /// The leader is `cmd.exe` running a batch file.
+    batch: bool,
+    /// An MSYS shell was a live member when the stop's event went out.
+    shell_ran: AtomicBool,
     job: Job,
     /// Held so the leader's PID stays its own until the unit is dropped.
     leader: Arc<Child>,
@@ -370,6 +376,8 @@ pub(crate) async fn spawn(
         identity,
         pty,
         through_shell: launched.through_shell,
+        batch: launched.batch,
+        shell_ran: AtomicBool::new(false),
         job: launched.job,
         leader,
         slot,
@@ -476,12 +484,23 @@ async fn supervise(
     inner.close_terminal().await;
     // Collect the last output of processes the sweep just ended.
     let _ = time::timeout(timing.drain_timeout, output_done.wait_for(|done| *done)).await;
+    let stop = stopping.map(|s| StopOutcome {
+        signal: s.signal,
+        escalated: s.escalated,
+    });
+    let facts = StopFacts {
+        asked: inner.asked.load(Ordering::Acquire),
+        answered: lock(&inner.answered).is_some(),
+        batch: inner.batch,
+        pty: inner.pty,
+        shell_ran: inner.shell_ran.load(Ordering::Acquire),
+    };
     inner.finish(ExitReport {
-        outcome: ExitOutcome { code, signal: None },
-        stop: stopping.map(|s| StopOutcome {
-            signal: s.signal,
-            escalated: s.escalated,
-        }),
+        outcome: ExitOutcome {
+            code: stop_code(code, stop, facts),
+            signal: None,
+        },
+        stop,
         swept: sweep.swept,
         escaped: sweep.escaped,
         left_running: Vec::new(),
@@ -497,6 +516,51 @@ fn exit_code(result: Result<io::Result<u32>, oneshot::error::RecvError>) -> Opti
             None
         }
         Err(_) => None,
+    }
+}
+
+/// What a stop did, for [`stop_code`].
+#[derive(Debug, Clone, Copy, Default)]
+struct StopFacts {
+    /// The stop's console event or Ctrl-C key went out.
+    asked: bool,
+    /// `cmd.exe`'s "Terminate batch job (Y/N)?" was answered.
+    answered: bool,
+    /// The leader is `cmd.exe` running a batch file.
+    batch: bool,
+    /// The unit runs in a pseudo console.
+    pty: bool,
+    /// An MSYS shell was a live member when the event went out.
+    shell_ran: bool,
+}
+
+/// How MSYS reports a death by SIGINT to a Windows parent: `signal << 8`.
+const MSYS_SIGINT_EXIT: i32 = 2 << 8;
+
+/// The code to report for a leader that exited with `code` after `stop`:
+/// `STATUS_CONTROL_C_EXIT` when the code is only a reaction to the stop's
+/// event, otherwise `code`.
+///
+/// After a stop, a batch shim in a pseudo console exits 255 once its
+/// "Terminate batch job (Y/N)?" was answered, whatever the program it ran
+/// returned, and 512 is MSYS's report of a shell that SIGINT ended, which
+/// native wrappers such as just pass on. Neither drops anything the leader
+/// still had. A shim in a pipe unit reads end of input at the prompt and
+/// returns the program's code, so it is kept. Only a stop whose event went
+/// out and that did not escalate is mapped.
+fn stop_code(code: Option<i32>, stop: Option<StopOutcome>, facts: StopFacts) -> Option<i32> {
+    let Some(stop) = stop else {
+        return code;
+    };
+    if stop.escalated || stop.signal == StopSignal::Kill || !facts.asked {
+        return code;
+    }
+    let shim = facts.batch && facts.pty && facts.answered && code.is_some_and(|c| c != 0);
+    let shell = facts.shell_ran && code == Some(MSYS_SIGINT_EXIT);
+    if shim || shell {
+        Some(CONTROL_C_EXIT.cast_signed())
+    } else {
+        code
     }
 }
 
@@ -843,6 +907,9 @@ impl Inner {
                 return;
             }
         };
+        if live.iter().any(|p| is_msys_shell(&p.name)) {
+            self.shell_ran.store(true, Ordering::Release);
+        }
         let targets: Vec<(u32, u64)> = live.iter().map(|p| (p.pid, p.start_time)).collect();
         match close_windows(&targets) {
             Ok(0) => {}
@@ -1217,5 +1284,96 @@ impl Unit for WindowsUnit {
     /// screen, not what the programs wrote; the reader marks each new size.
     fn renders_screen(&self) -> bool {
         self.inner.pty
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A shim's or MSYS shell's reaction to a stop reads as interrupted; any
+    /// code that could be the program's own, or that came without a clean
+    /// stop, is kept.
+    #[test]
+    fn stop_codes() {
+        const INTERRUPTED: Option<i32> = Some(CONTROL_C_EXIT.cast_signed());
+        let stop = |signal, escalated| Some(StopOutcome { signal, escalated });
+        let term = stop(StopSignal::Terminate, false);
+        let asked = StopFacts {
+            asked: true,
+            ..StopFacts::default()
+        };
+        let pipe_shim = StopFacts {
+            batch: true,
+            ..asked
+        };
+        let pty_shim = StopFacts {
+            pty: true,
+            ..pipe_shim
+        };
+        let answered = StopFacts {
+            answered: true,
+            ..pty_shim
+        };
+        let shell = StopFacts {
+            shell_ran: true,
+            ..asked
+        };
+        let cases = [
+            (
+                "pty shim after its prompt",
+                Some(255),
+                term,
+                answered,
+                INTERRUPTED,
+            ),
+            ("shell ended by SIGINT", Some(512), term, shell, INTERRUPTED),
+            (
+                "pipe shim passes its program's code",
+                Some(3),
+                term,
+                pipe_shim,
+                Some(3),
+            ),
+            ("no stop", Some(255), None, answered, Some(255)),
+            (
+                "escalated",
+                Some(1),
+                stop(StopSignal::Terminate, true),
+                answered,
+                Some(1),
+            ),
+            (
+                "SIGKILL",
+                Some(1),
+                stop(StopSignal::Kill, false),
+                answered,
+                Some(1),
+            ),
+            (
+                "event never sent",
+                Some(255),
+                term,
+                StopFacts {
+                    asked: false,
+                    ..answered
+                },
+                Some(255),
+            ),
+            ("shim exited 0", Some(0), term, answered, Some(0)),
+            (
+                "pty shim not prompted",
+                Some(255),
+                term,
+                pty_shim,
+                Some(255),
+            ),
+            ("not a batch file", Some(255), term, asked, Some(255)),
+            ("512 without a shell", Some(512), term, asked, Some(512)),
+            ("shell with its own code", Some(3), term, shell, Some(3)),
+        ];
+        for (case, code, stop, facts, expected) in cases {
+            assert_eq!(stop_code(code, stop, facts), expected, "{case}");
+        }
     }
 }

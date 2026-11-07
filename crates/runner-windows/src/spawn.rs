@@ -124,6 +124,8 @@ pub(crate) struct Launched {
     pub pipes: Vec<(OutputStream, PipeReader)>,
     /// The program is Git's `sh.exe` standing in for `/bin/sh`.
     pub through_shell: bool,
+    /// The program is a batch file that `cmd.exe` runs.
+    pub batch: bool,
     /// For `pty: true`: the pseudo console and the size it was created at.
     pub terminal: Option<(Terminal, TerminalSize)>,
 }
@@ -210,6 +212,7 @@ pub(crate) fn launch(
             job,
             pipes: vec![(OutputStream::Terminal, output_reader)],
             through_shell,
+            batch: command.batch,
             terminal: Some((terminal, size)),
         });
     }
@@ -251,6 +254,7 @@ pub(crate) fn launch(
         job,
         pipes,
         through_shell,
+        batch: command.batch,
         terminal: None,
     })
 }
@@ -275,6 +279,17 @@ pub(crate) fn child_env(env: BTreeMap<String, String>) -> BTreeMap<String, Strin
 /// own one is a member of its job.
 pub(crate) fn is_console_host(name: &str) -> bool {
     name.eq_ignore_ascii_case("conhost.exe")
+}
+
+/// Whether `name` is a shell that MSYS2 or Cygwin ships: Git for Windows'
+/// `sh.exe`, `bash.exe` and `dash.exe`, or an MSYS2 `zsh.exe` or `fish.exe`.
+/// Their runtime turns a console event into SIGINT for the shell, and the
+/// native programs they start ignore a Ctrl-C event. A native program with
+/// one of these names only keeps getting Ctrl-Break.
+pub(crate) fn is_msys_shell(name: &str) -> bool {
+    ["sh.exe", "bash.exe", "dash.exe", "zsh.exe", "fish.exe"]
+        .iter()
+        .any(|shell| name.eq_ignore_ascii_case(shell))
 }
 
 #[cfg(test)]

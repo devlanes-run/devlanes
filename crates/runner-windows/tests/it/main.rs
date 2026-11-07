@@ -545,6 +545,8 @@ async fn pty_shell_units_stop_on_ctrl_break() {
             .await
             .expect("stop");
         assert_stopped(&report, StopSignal::Terminate, false);
+        // MSYS reports the shell's SIGINT death as 512.
+        assert_eq!(report.outcome.code, Some(CONTROL_C_EXIT), "{report:?}");
         assert!(!any_alive(&members), "{members:?}");
     })
     .await;
@@ -576,6 +578,8 @@ async fn pty_batch_prompts_are_answered() {
             .await
             .expect("stop");
         assert_stopped(&report, StopSignal::Terminate, false);
+        // `cmd.exe` exits 255 after the answer, which is not the program's code.
+        assert_eq!(report.outcome.code, Some(CONTROL_C_EXIT), "{report:?}");
         let rest = text(&rest.await.expect("join"), OutputStream::Terminal);
         assert!(plain(&rest).contains("Terminate batch job"), "{rest:?}");
     })
