@@ -536,7 +536,7 @@ expression: tools(&harness).await
   },
   {
     "name": "debug_top",
-    "description": "Show CPU and memory of the running units and containers of every lane. It answers any question about which process, service or container uses the most CPU or memory.",
+    "description": "Show CPU and memory of the running units and containers of the current project, or of every project outside one. It answers any question about which process, service or container uses the most CPU or memory.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -582,7 +582,7 @@ expression: tools(&harness).await
   },
   {
     "name": "url_ls",
-    "description": "List the routed hostnames of every lane with their lane, unit, port and state. It tells which lane and service answer a hostname; url_print gives one service's URL.",
+    "description": "List the current project's routed hostnames with their lane, unit, port and state; outside a project, every project's. It tells which lane and service answer a hostname; url_print gives one service's URL.",
     "inputSchema": {
       "type": "object",
       "properties": {
