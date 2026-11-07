@@ -1,5 +1,11 @@
 # devlanes-preset-wrangler
 
+## 0.7.0 — 2026-11-07
+
+### Patch changes
+
+- [077b5b0](https://github.com/devlanes-run/devlanes/commit/077b5b0ed890510e4b3417c26d621fc41a97a5cc) Fixed `WRANGLER_REGISTRY_PATH` and the other Wrangler registry variables on Windows to use `/` like `DEVLANES_LANE_DATA`.
+
 ## 0.6.0 — 2026-10-28
 
 ### Patch changes

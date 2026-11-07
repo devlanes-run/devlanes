@@ -1,5 +1,11 @@
 # devlanes-config
 
+## 0.11.0 — 2026-11-07
+
+### Patch changes
+
+- [6090b6e](https://github.com/devlanes-run/devlanes/commit/6090b6e6e954c332aab772ac7bf9383226ab9971) Fixed `run` lists failing to start when an item is one `${{ }}` expression that gives a number, such as `self.port`.
+
 ## 0.10.2 — 2026-11-02
 
 ### Patch changes

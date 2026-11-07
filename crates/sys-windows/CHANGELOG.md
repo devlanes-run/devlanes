@@ -1,5 +1,11 @@
 # devlanes-sys-windows
 
+## 0.7.0 — 2026-11-07
+
+### Patch changes
+
+- [077b5b0](https://github.com/devlanes-run/devlanes/commit/077b5b0ed890510e4b3417c26d621fc41a97a5cc) Fixed boxes showing no name for a Windows client in `devlanes daemon clients` and `daemon revoke`.
+
 ## 0.6.1 — 2026-11-06
 
 ### Patch changes

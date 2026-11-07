@@ -1,5 +1,17 @@
 # devlanes-proto
 
+## 0.12.0 — 2026-11-07
+
+### Patch changes
+
+- [5db5cde](https://github.com/devlanes-run/devlanes/commit/5db5cdec69bc61915e31237b81abf0456a061bfc) Added `devlanes lane clean --dry-run`, which lists what a clean would stop, run and delete, with sizes.
+- [2e0091c](https://github.com/devlanes-run/devlanes/commit/2e0091c226381bb1794d99f52d6db471ee498efc) Fixed `devlanes start` rerunning a `container:` setup entry before its restarted container is healthy.
+  
+  The start result now lists the setup entries and tasks it ran instead of saying nothing started.
+- [8c98423](https://github.com/devlanes-run/devlanes/commit/8c98423b5737190e5c480826fac0d0d4bc4b84a3) Fixed `devlanes status --mine` showing lane URLs without `https://` and the proxy port.
+  
+  `status --json` lanes now carry that URL as `url`.
+
 ## 0.11.0 — 2026-11-01
 
 ### Minor changes

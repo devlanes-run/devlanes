@@ -1,5 +1,14 @@
 # devlanes-runner-windows
 
+## 0.8.0 — 2026-11-07
+
+### Patch changes
+
+- [077b5b0](https://github.com/devlanes-run/devlanes/commit/077b5b0ed890510e4b3417c26d621fc41a97a5cc) Fixed stopped units on Windows showing exit codes such as 255 or 512 instead of reading as interrupted.
+- [077b5b0](https://github.com/devlanes-run/devlanes/commit/077b5b0ed890510e4b3417c26d621fc41a97a5cc) Changed the default Windows stop (`stop.signal: SIGTERM`) to send Ctrl-C, so Node programs such as `wrangler dev` run their shutdown code.
+  
+  Units where Git's `sh` or `bash` runs, and `run:` strings, still get Ctrl-Break.
+
 ## 0.7.0 — 2026-11-01
 
 ### Patch changes

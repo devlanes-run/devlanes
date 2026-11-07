@@ -1,5 +1,11 @@
 # devlanes-pages
 
+## 0.6.0 — 2026-11-07
+
+### Patch changes
+
+- [00d1870](https://github.com/devlanes-run/devlanes/commit/00d1870829ef88ec951452efd6d0fbde4af9069b) Changed the DL101 unknown-host page to list only the requested name's project when it can tell which.
+
 ## 0.5.0 — 2026-10-28
 
 ### Minor changes

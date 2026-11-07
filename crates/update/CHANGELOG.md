@@ -1,5 +1,11 @@
 # devlanes-update
 
+## 0.3.0 — 2026-11-07
+
+### Patch changes
+
+- [5db5cde](https://github.com/devlanes-run/devlanes/commit/5db5cdec69bc61915e31237b81abf0456a061bfc) Fixed `devlanes update` on Windows failing when another program held `devlanes.exe` for a moment.
+
 ## 0.2.2 — 2026-11-06
 
 ### Patch changes

@@ -1,5 +1,11 @@
 # devlanes-proxy
 
+## 0.8.0 — 2026-11-07
+
+### Patch changes
+
+- [6090b6e](https://github.com/devlanes-run/devlanes/commit/6090b6e6e954c332aab772ac7bf9383226ab9971) Fixed the proxy on Windows taking about 8 seconds instead of 5 to show DL301 for a service that is not listening.
+
 ## 0.7.0 — 2026-11-01
 
 ### Patch changes
