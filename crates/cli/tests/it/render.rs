@@ -2273,8 +2273,13 @@ fn daemon_errors_are_worded_with_hints() {
         RpcError::new("lane_not_running", json!({"lane": "acme@2"}), 1),
         RpcError::new("lane_busy", json!({"lane": "acme@2"}), 1),
         RpcError::new(
+            "lane_runs_task",
+            json!({"lane": "acme@2", "units": ["docsrv"]}),
+            1,
+        ),
+        RpcError::new(
             "lane_keep_awake",
-            json!({"lane": "acme@2", "units": ["worker", "queue"]}),
+            json!({"lane": "acme@2", "units": ["worker.1", "worker.2", "queue"], "services": ["worker", "queue"]}),
             1,
         ),
         RpcError::new(

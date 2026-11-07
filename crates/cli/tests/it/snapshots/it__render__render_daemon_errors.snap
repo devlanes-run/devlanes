@@ -73,7 +73,9 @@ error: lane acme@2 has no running service to freeze
 hint: devlanes status --lane acme@2
 error: lane acme@2 is starting, stopping or running a task; retry when it is done
 hint: devlanes status --lane acme@2
-error: lane acme@2 runs keep_awake services (worker, queue), so it stays awake
+error: lane acme@2 runs docsrv; a running task or exec unit keeps a lane awake
+hint: devlanes status --lane acme@2
+error: lane acme@2 runs keep_awake services (worker.1, worker.2, queue), so it stays awake
 hint: set services.worker.keep_awake and services.queue.keep_awake to false in the project config to let it freeze
 error: lane acme@2 has units left running by a previous daemon (bg); they are not supervised, so the lane is not frozen
 hint: devlanes stop bg --lane acme@2

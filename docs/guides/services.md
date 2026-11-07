@@ -129,7 +129,7 @@ services:
       WORKER_ID: "${{ replica.index }}"
 ```
 
-Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `services.worker.url` is replica 1. Named ports are allocated per replica too.
+Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `services.worker.url` is replica 1. Named ports are allocated per replica too. `devlanes stop worker`, `restart worker` and `logs worker` act on every replica; commands about one unit, such as `attach` or `debug why`, take `worker.2`.
 
 ## Services that start on demand
 
@@ -265,7 +265,7 @@ A server started with `devlanes exec`, or outside devlanes, gets no hostname and
 ## Agents and CI
 
 ```sh
-devlanes exec --name smoke -- pnpm test:smoke          # an ad-hoc unit with the lane's env; logs, stop and attach work on it
+devlanes exec --name smoke -- pnpm test:smoke          # an ad-hoc unit with the lane's env; logs, stop and attach work on it, and stop clears it once it failed
 devlanes wait api --timeout 2m
 devlanes with --profile e2e --logs-dir devlanes-logs -- pnpm test:e2e
 ```

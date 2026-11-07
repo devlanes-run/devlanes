@@ -321,8 +321,14 @@ impl Inner {
             let started = lane.st().started_at_ms.unwrap_or(0);
             query.since = Some(started.to_string());
         }
-        let candidates: Vec<(String, Vec<String>)> = {
+        let (candidates, selectors) = {
             let st = lane.st();
+            let services = st.view.iter().flat_map(|view| {
+                view.services
+                    .iter()
+                    .map(|s| (s.name.as_str(), s.unit.as_str()))
+            });
+            let selectors = crate::engine::expand_replicas(&selectors, services);
             let mut names: Vec<(String, Vec<String>)> = st
                 .units
                 .iter()
@@ -338,7 +344,7 @@ impl Inner {
                     }
                 }
             }
-            names
+            (names, selectors)
         };
         let units = if args.all || selectors.is_empty() {
             if !args.all && selectors.is_empty() {
@@ -715,9 +721,15 @@ impl Inner {
         let push = |reasons: &mut Vec<Value>, code: &str, data: Value| {
             reasons.push(json!({"code": code, "data": data}))
         };
-        let (host, service, st_reason, needs_env, config, busy, unassigned, orphan) = {
+        let (host, service, st_reason, needs_env, config, busy, unassigned, orphan, saved) = {
             let st = lane.st();
             let orphan = st.orphan_error(&project.name(), &name);
+            // A start by name adds to these, and a plain start brings them back.
+            let saved: Vec<String> = st
+                .record
+                .as_ref()
+                .map(|record| record.services.clone())
+                .unwrap_or_default();
             let host = st.units.get(&name).map(|rec| rec.host.clone());
             let service = st
                 .view
@@ -732,6 +744,7 @@ impl Inner {
                 st.busy,
                 st.unassigned.clone(),
                 orphan,
+                saved,
             )
         };
         // Left running by a previous daemon at `started_at_ms`, found at
@@ -784,6 +797,7 @@ impl Inner {
             }
             if let Some((profiles, selected)) = Inner::profile_services(&lane)
                 && !selected.contains(&service.name)
+                && !saved.contains(&service.name)
             {
                 if !service.autostart {
                     push(&mut reasons, "autostart_off", json!({}));
@@ -801,6 +815,15 @@ impl Inner {
                     &mut reasons,
                     "port_in_use",
                     json!({"port": service.port, "pid": pid}),
+                );
+            }
+        }
+        if alive && host.as_ref().is_some_and(|h| h.state() == UnitState::Ready) {
+            for (port, listening) in self.closed_ports(&lane, &name).await {
+                push(
+                    &mut reasons,
+                    "not_listening",
+                    json!({"port": port, "listening": listening}),
                 );
             }
         }
@@ -834,6 +857,57 @@ impl Inner {
             }
         }
         Ok(result)
+    }
+
+    /// The ports of running unit `name` that should accept connections and do
+    /// not, each with the ports its processes listen on: the ports its hosts
+    /// route to, or its main port when a `tcp` or `http` ready check looked at
+    /// it. A unit without either (a worker) is not checked.
+    async fn closed_ports(&self, lane: &crate::model::LaneRt, name: &str) -> Vec<(u16, Vec<u16>)> {
+        let (mut ports, managed) = {
+            let st = lane.st();
+            let Some(rec) = st.units.get(name) else {
+                return Vec::new();
+            };
+            // A live unit keeps the ports it was spawned with, as the proxy does.
+            let mut ports: Vec<u16> = st
+                .view
+                .iter()
+                .flat_map(|view| view.routes.iter())
+                .filter(|route| route.unit == name)
+                .map(|route| {
+                    rec.ports
+                        .get(&route.port_name)
+                        .copied()
+                        .unwrap_or(route.port)
+                })
+                .collect();
+            if ports.is_empty() && matches!(rec.ready_check, Some("tcp" | "http")) {
+                ports.extend(rec.ports.get("default").copied());
+            }
+            (ports, rec.managed.clone())
+        };
+        ports.retain(|port| *port != 0);
+        ports.sort_unstable();
+        ports.dedup();
+        // Concurrent, since a closed port costs up to a second on Windows.
+        let open =
+            futures_util::future::join_all(ports.iter().map(|port| crate::ready::tcp_open(*port)))
+                .await;
+        let closed: Vec<u16> = ports
+            .into_iter()
+            .zip(open)
+            .filter(|(_, open)| !open)
+            .map(|(port, _)| port)
+            .collect();
+        if closed.is_empty() {
+            return Vec::new();
+        }
+        let listening = managed.listening_ports().await;
+        closed
+            .into_iter()
+            .map(|port| (port, listening.clone()))
+            .collect()
     }
 
     /// `env`: lane env (`lane_env: true` or no unit) or one unit's env, optionally

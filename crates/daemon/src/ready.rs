@@ -37,7 +37,8 @@ pub enum Readiness {
         /// Host header to send; `None` sends `127.0.0.1:<port>`.
         host: Option<String>,
     },
-    /// Regex over ANSI-stripped output lines.
+    /// Regex over ANSI-stripped output lines. For a unit whose output renders
+    /// its screen (Windows with `pty: true`), over the lines its log shows.
     Log {
         pattern: String,
     },
@@ -229,6 +230,9 @@ async fn probe_until_ready(
             let Ok(regex) = regex::Regex::new(pattern) else {
                 return Err(());
             };
+            if host.renders_screen() {
+                return logged_line_matches(host, &regex, deadline).await;
+            }
             // Subscribe first, then scan history, so a line printed in between is not lost.
             let mut output = host.subscribe_output();
             if host.tail(200).await.iter().any(|line| regex.is_match(line)) {
@@ -260,6 +264,59 @@ async fn probe_until_ready(
                     Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => return Err(()),
                 }
             }
+        }
+    }
+}
+
+/// Waits for a line of this run's log that `regex` matches, for a unit whose
+/// output renders its screen (ConPTY): rows are placed with cursor moves, so
+/// the raw stream has no line starts, while the screen model logs whole rows,
+/// the lines `devlanes logs` shows. The log is read at most once per [`POLL`],
+/// only after output arrived, and once more after a quiet [`POLL`], since the
+/// screen model logs a row it stopped on after a pause.
+async fn logged_line_matches(
+    host: &UnitHost,
+    regex: &regex::Regex,
+    deadline: Instant,
+) -> Result<(), ()> {
+    use tokio::sync::broadcast::error::RecvError;
+    let mut output = host.subscribe_output();
+    let mut cursor = host.run_cursor();
+    // The first read covers what was logged before the subscription.
+    let mut stale = true;
+    let mut settle = false;
+    loop {
+        if stale || settle {
+            loop {
+                let query = devlanes_proto::LogQuery {
+                    cursor: cursor.clone(),
+                    max_bytes: Some(64 * 1024),
+                    ..devlanes_proto::LogQuery::default()
+                };
+                let page = host.logs(query).await.map_err(|_| ())?;
+                if page.items.iter().any(|line| regex.is_match(&line.text)) {
+                    return Ok(());
+                }
+                if let Some(line) = page.items.last() {
+                    cursor = Some(format!("{}#{}", line.unit, line.seq));
+                }
+                if !page.truncated || page.items.is_empty() {
+                    break;
+                }
+            }
+            settle = stale;
+            stale = false;
+        }
+        let tick = (Instant::now() + POLL).min(deadline);
+        loop {
+            match tokio::time::timeout_at(tick, output.recv()).await {
+                Err(_) => break,
+                Ok(Ok(_) | Err(RecvError::Lagged(_))) => stale = true,
+                Ok(Err(RecvError::Closed)) => return Err(()),
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(());
         }
     }
 }

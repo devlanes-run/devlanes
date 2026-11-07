@@ -29,7 +29,8 @@ References:
   lane or worktree directory name, or a path. Without project@ the project of
   the current directory is used.
   A unit is [lane:]unit, such as api, 2:api or acme@feat/checkout:web.
-  Commands that take several units also accept globs ("api-*") and tags (+web).
+  Commands that take several units also accept globs ("api-*"), tags (+web)
+  and a service's name for all its replicas.
 ```
 
 ## Global options
@@ -91,6 +92,9 @@ Stop units, or the whole lane when none are named.
 Stopped services are left out of what a plain devlanes start brings back. A
 whole-lane stop also forgets the lane's profiles, so its next plain start uses
 the default profile.
+
+A failed service or exec command you name, or every one when the whole lane
+stops, reads stopped afterwards; failed tasks keep their state.
 
 ```text
 devlanes stop [OPTIONS] [UNIT]...
