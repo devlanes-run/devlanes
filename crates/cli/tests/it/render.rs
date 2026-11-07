@@ -1489,9 +1489,10 @@ fn status_of_idle_lanes_says_nothing_runs() {
 }
 
 #[test]
-/// A start that found everything up says so instead of looking like a fresh start.
+/// A start that found everything up says so instead of looking like a fresh
+/// start, unless it ran a setup entry or task.
 fn start_of_a_running_lane_says_already_running() {
-    let data = json!({
+    let mut data = json!({
         "lane": "acme@2", "branch": "feat/billing", "started": [],
         "already_running": ["acme@2:api"], "whole_lane": false, "ready": true, "timed_out": false,
         "failures": [], "skipped_tasks": [], "units": [unit("api", "ready")],
@@ -1506,6 +1507,12 @@ fn start_of_a_running_lane_says_already_running() {
         parts[2].contains("already running (nothing started)"),
         "{text}"
     );
+    data["ran"] = json!(["acme@2:setup.cache"]);
+    let text = render_text(Method::Start, &data);
+    assert!(!text.contains("already running"), "{text}");
+    // The first line of each part names its mode.
+    let header = modes(&text)[2].lines().nth(1).unwrap_or_default();
+    assert!(header.ends_with(", ran setup.cache"), "{text}");
 }
 
 #[test]

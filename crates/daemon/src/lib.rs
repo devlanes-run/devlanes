@@ -18,6 +18,7 @@ mod files;
 pub mod hosts;
 pub mod idle;
 mod infra_logs;
+mod infra_restarts;
 mod input;
 pub mod integrations;
 mod lifecycle;

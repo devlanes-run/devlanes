@@ -307,9 +307,13 @@ fn start_warnings(result: &StartResult, cx: &Ctx<'_>) -> Vec<String> {
         .collect()
 }
 
-/// A start that found every selected unit up: it spawned nothing and ran no task.
+/// A start that found every selected unit up: it spawned nothing and ran no
+/// task or setup entry.
 fn nothing_started(result: &StartResult) -> bool {
-    result.started.is_empty() && !result.already_running.is_empty() && result.failures.is_empty()
+    result.started.is_empty()
+        && result.ran.is_empty()
+        && !result.already_running.is_empty()
+        && result.failures.is_empty()
 }
 
 /// A reload that started nothing: it only stopped removed units or found no
@@ -349,6 +353,14 @@ fn start_result(result: &StartResult, cx: &Ctx<'_>) -> Vec<String> {
         }
         if nothing_started(result) {
             header.push_str(", already running (nothing started)");
+        }
+        if result.started.is_empty() && !result.ran.is_empty() {
+            let names: Vec<String> = result
+                .ran
+                .iter()
+                .map(|unit| clean(unit.split_once(':').map_or(unit.as_str(), |(_, name)| name)))
+                .collect();
+            header.push_str(&format!(", ran {}", names.join(", ")));
         }
         if !result.skipped_tasks.is_empty() {
             let names: Vec<String> = result.skipped_tasks.iter().map(|t| clean(t)).collect();

@@ -117,7 +117,7 @@ tasks:
     interactive: true
 ```
 
-Start order: infra, setup, `lane.create` tasks (until they succeed once per lane), `lane.start` tasks (every start, in file order), services together, `after: services` tasks. An `infra.setup` entry or `lane.create` task that you edit after it succeeded runs again at the next start; devlanes compares its declaration in the file, so an edit to a variable it reads does not count. A failed task before services fails the start and prints its log tail. `devlanes run reset-db` runs a task by hand; `devlanes run --list` shows them. Tasks with `confirm` need `--yes` without a terminal, and `interactive` tasks get your terminal and never run from a hook.
+Start order: infra, setup, `lane.create` tasks (until they succeed once per lane), `lane.start` tasks (every start, in file order), services together, `after: services` tasks. An `infra.setup` entry or `lane.create` task that you edit after it succeeded runs again at the next start; devlanes compares its declaration in the file, so an edit to a variable it reads does not count. A failed task before services fails the start and prints its log tail. `devlanes run reset-db` runs a task by hand and streams each step's output; `devlanes run --list` shows them. `devlanes logs reset-db` shows the logs of a task's steps when it has only `steps`. Tasks with `confirm` need `--yes` without a terminal, and `interactive` tasks get your terminal and never run from a hook.
 
 `lane.stop` tasks run before the processes stop when the whole lane stops: `devlanes stop` without unit names, `devlanes daemon stop` and `daemon restart`. `lane.clean` tasks run on `devlanes lane clean`, after the processes stop and before `infra.teardown`.
 

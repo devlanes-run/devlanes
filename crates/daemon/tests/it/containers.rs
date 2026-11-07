@@ -607,6 +607,114 @@ async fn db_state(h: &crate::Harness, main: &std::path::Path) -> Option<String> 
         .and_then(|c| c.state.clone())
 }
 
+/// The `cache` container of the lane at `main`: its published port and state.
+async fn cache(h: &crate::Harness, main: &std::path::Path) -> Option<(u16, Option<String>)> {
+    let status = h.call(Method::Status, json!({}), cx(main)).await.ok()?;
+    let lanes: Page<LaneSummary> = serde_json::from_value(status).ok()?;
+    let cache = lanes.items[0]
+        .containers
+        .iter()
+        .find(|c| c.name == "cache")?;
+    Some((*cache.ports.get("6379")?, cache.state.clone()))
+}
+
+/// A container event of the shared `cache`.
+fn cache_event(state: &str) -> devlanes_daemon::integrations::InfraEvent {
+    devlanes_daemon::integrations::InfraEvent {
+        project: "demo".into(),
+        lane: None,
+        container: "demo-cache-1".into(),
+        state: state.into(),
+        exit_code: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A shared container that restarts with a new published port: the lane reads
+/// it again, `status` shows it, the service that reads it shows drift and its
+/// restart gets the new port. After an engine reconnect a container that is
+/// down keeps its last port and does not hold up a start; its later start
+/// counts as a restart.
+async fn restarted_shared_container_refreshes_ports_and_drift() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = CONFIG
+            .replace(
+                "infra:\n  containers:\n",
+                "infra:\n  containers:\n    cache: { image: \"redis:7\", ports: { \"6379\": 6379 } }\n",
+            )
+            .replace(
+                "api: { run: sleep }",
+                "api: { run: \"printenv CACHE_PORT; sleep\", env: { CACHE_PORT: \"${{ infra.cache.port }}\" } }\n  web: { run: sleep }",
+            );
+        let main = repo(&tmp.path, "r", &config);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({"units": ["api"]}), cx(&main))
+            .await
+            .expect("start");
+        assert_eq!(cache(&h, &main).await.map(|c| c.0), Some(6379));
+
+        *h.infra.cache_down.lock().expect("lock") = true;
+        h.infra.emit(cache_event("reconnected"));
+        let missing = crate::eventually(std::time::Duration::from_secs(5), || async {
+            cache(&h, &main)
+                .await
+                .filter(|(_, state)| state.as_deref() == Some("missing"))
+        })
+        .await;
+        assert_eq!(missing.map(|c| c.0), Some(6379), "the last port stays");
+        h.call(Method::Start, json!({"units": ["web"]}), cx(&main))
+            .await
+            .expect("a down container does not fail the start");
+
+        *h.infra.cache_port.lock().expect("lock") = Some(6380);
+        *h.infra.cache_down.lock().expect("lock") = false;
+        h.infra.emit(cache_event("started"));
+        let drifted = crate::eventually(std::time::Duration::from_secs(5), || async {
+            let status = h.call(Method::Status, json!({}), cx(&main)).await.ok()?;
+            let lanes: Page<LaneSummary> = serde_json::from_value(status).ok()?;
+            let api = lanes.items[0].units.iter().find(|u| u.name == "api")?;
+            let port = cache(&h, &main).await?.0;
+            (port == 6380 && api.drift.is_some()).then_some(())
+        })
+        .await;
+        assert!(drifted.is_some(), "status shows the new port and the drift");
+
+        h.call(Method::Restart, json!({"units": ["api"]}), cx(&main))
+            .await
+            .expect("restart api");
+        let printed = crate::eventually(std::time::Duration::from_secs(5), || async {
+            let logs = h
+                .call(
+                    Method::Logs,
+                    json!({"units": ["api"], "tail": 1}),
+                    cx(&main),
+                )
+                .await
+                .ok()?;
+            logs["items"][0]["text"]
+                .as_str()
+                .filter(|text| *text == "6380")
+                .map(str::to_owned)
+        })
+        .await;
+        assert!(printed.is_some(), "the restarted service reads the new port");
+        h.call(Method::Stop, json!({}), cx(&main))
+            .await
+            .expect("stop");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 /// A machine at 37% CPU with 4 GiB of 16 GiB available, under warn pressure.
 pub(crate) struct FakeMachine;
 
