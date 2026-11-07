@@ -574,6 +574,33 @@ fn uninstall_flags_pick_the_action() {
 }
 
 #[test]
+/// OpenCode sessions are told apart by `OPENCODE_SESSION_ID`, so `stop --mine` in
+/// one leaves another's units alone; other agents keep their own session variable.
+fn opencode_session_is_read() {
+    let detect = |vars: &[(&str, &str)]| {
+        let vars: BTreeMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        detect_actor(|key| vars.get(key).cloned(), |_| false)
+            .map(|actor| (actor.agent_id.unwrap_or_default(), actor.session_id))
+    };
+    let session = |agent: &str, id: Option<&str>| Some((agent.to_owned(), id.map(str::to_owned)));
+    assert_eq!(
+        detect(&[("OPENCODE", "1"), ("OPENCODE_SESSION_ID", "ses_a")]),
+        session("opencode", Some("ses_a"))
+    );
+    assert_eq!(
+        detect(&[("OPENCODE", "1"), ("OPENCODE_SESSION_ID", " ")]),
+        session("opencode", None)
+    );
+    assert_eq!(
+        detect(&[("CLAUDECODE", "1"), ("OPENCODE_SESSION_ID", "x")]),
+        session("claude-code", None)
+    );
+}
+
+#[test]
 fn output_precedence_and_attribution_are_deterministic() {
     let actor = Actor {
         kind: ActorKind::Agent,
@@ -691,7 +718,8 @@ fn environment_is_captured_only_for_relevant_methods() {
         (vec!["env", "show", "api"], true),
         (vec!["env", "export", "api"], true),
         (vec!["status"], false),
-        (vec!["lane", "new", "--start"], false),
+        (vec!["lane", "new", "--start"], true),
+        (vec!["lane", "new"], false),
     ] {
         let cli = Cli::parse_from(std::iter::once("devlanes").chain(args));
         let called = std::cell::Cell::new(false);

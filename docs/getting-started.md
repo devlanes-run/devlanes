@@ -67,9 +67,9 @@ cd ../acme-checkout
 devlanes start
 ```
 
-A worktree becomes a lane the first time devlanes runs in it (here, `start`); a worktree that only exists gets no lane, except the one on the primary branch. The daemon follows moved and removed worktrees by itself. `devlanes lane ls` lists every lane, and commands take a lane reference such as `2`, `feat/checkout` or `acme@2:api` from any directory. Removing a worktree stops its lane and keeps its data and ports; `devlanes lane gc --yes` cleans lanes whose folder is gone, and `lanes.removed_worktrees: clean` has the daemon do it by itself ([removed worktrees](guides/lifecycle.md#removed-worktrees)). `devlanes lane clean <lane> --yes` removes one lane's data and frees its ports by hand.
+A worktree becomes a lane the first time devlanes runs in it (here, `start`); a worktree that only exists gets no lane, except the one on the primary branch. The daemon follows moved and removed worktrees by itself. `devlanes lane ls` lists every lane, and commands take a lane reference such as `2` or `feat/checkout` with `--lane`, or as a unit prefix such as `acme@2:api`, from any directory. Removing a worktree stops its lane and keeps its data and ports; `devlanes lane gc --yes` cleans lanes whose folder is gone, and `lanes.removed_worktrees: clean` has the daemon do it by itself ([removed worktrees](guides/lifecycle.md#removed-worktrees)). `devlanes lane clean <lane> --yes` removes one lane's data and frees its ports by hand. The worktree gets a fresh lane the next time devlanes runs in it, the primary one at once; a lane added with `lane new` comes back only through `lane new --name`.
 
-To run a folder twice, for example with two profiles, `devlanes lane new --name review` in it adds a second lane with its own index, ports and domain. `--lane review` addresses it; commands run in the folder keep using its first lane.
+To run a folder twice, for example with two profiles, `devlanes lane new --name review` in it adds a second lane with its own index, ports and domain. `--lane review` addresses it, and `review:web` one of its units; commands run in the folder keep using its first lane. The name is for commands: inside the lane, `lane.name` and `DEVLANES_LANE_NAME` are `lane<N>`.
 
 ## HTTPS and certificates
 
@@ -89,6 +89,8 @@ Run `devlanes` with no command (or `devlanes ui`) on a terminal. It lists every 
 ## Coding agents
 
 Agents should start services through devlanes instead of backgrounding `pnpm dev &` in their shell. The [agent plugin](../agent-plugin/README.md) packages a guide for them as a Claude Code and Codex plugin, a skill for the skills CLI and a Codex `AGENTS.md` to paste into a repository; the plugin also has a hook that rejects backgrounded dev servers. When devlanes detects an agent it switches to terse output with failures first; `devlanes exec --name NAME -- COMMAND` runs a one-off process as a unit, and `devlanes wait` and budgeted `devlanes logs` let the agent check on it.
+
+`devlanes stop --mine` stops what this agent session started in the current project, or in each project of a repository root that holds several; `-p` names another project, and outside any project it covers every project. Sessions are told apart by the agent's session id; an agent that exposes none counts all its sessions as one.
 
 In CI, `devlanes with -- pnpm test:e2e` starts the lane, runs the command with the lane's URLs in its environment, stops what it started and exits with the command's code.
 

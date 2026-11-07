@@ -45,7 +45,7 @@ Accepted by every command, before or after the command name.
 - `--lane <LANE>`: Use this lane ([project@]lane) instead of the current worktree's
 - `--yes`: Confirm actions that would ask first; needed when no terminal can prompt
 - `--quiet`: Print nothing on success; errors still go to stderr
-- `--env <KEY=VALUE>`: Set a variable for started processes (start, restart, run TASK, exec); repeatable
+- `--env <KEY=VALUE>`: Set a variable for started processes (start, restart, run TASK, exec, lane new --start); repeatable
 - `--timeout <DURATION>`: Limit waits and streams, such as 30s, 5m or 1h [default for start and wait: 180s]
 - `--budget <BYTES>`: Cap agent-mode output at this many bytes [default: 16384, minimum: 256]
 - `-v, --verbose`: Print timestamped diagnostics of the client and daemon to stderr; -vv for more. A bare devlanes -v prints the version [env: DEVLANES_VERBOSE=1|2]
@@ -96,12 +96,14 @@ the default profile.
 A failed service or exec command you name, or every one when the whole lane
 stops, reads stopped afterwards; failed tasks keep their state.
 
+To stop another lane, name it with --lane: devlanes stop --lane 2.
+
 ```text
 devlanes stop [OPTIONS] [UNIT]...
 ```
 
 - `[UNIT]...`: Units to stop ([lane:]unit, globs, +tag) [default: the whole lane]
-- `--mine`: Only stop units this agent session started; with no units, across every lane
+- `--mine`: Only stop units this agent session started; with no units, those in the current project, or in every project outside one
 - `--logs-dir <DIR>`: Write each unit's log of this run to DIR as text files, for CI artifacts
 
 ### devlanes restart
@@ -306,26 +308,35 @@ devlanes lane ls [OPTIONS]
 
 ### devlanes lane new
 
-Add another lane for the current folder. It has its own index, ports
-and domain, and `--lane <name>` or `--lane <index>` addresses it. Commands run in the
-folder keep using the folder's first lane.
+Add another lane for the current folder. It has its own index, ports,
+domain and data folder. Its name is a lane reference: `--lane <name>`, `<name>:<unit>`
+and `lane clean <name>` reach it, as its index does. A cleaned lane's name can be used
+again and gives a new lane with empty data. Inside the lane, `lane.name` and
+DEVLANES_LANE_NAME stay `lane<N>`. Commands run in the folder keep using the folder's
+first lane.
 
 For a lane on another branch, create a worktree with `git worktree add <path> <branch>`
 and run `devlanes start` in it.
 
-Without --start, a terminal asks whether to start the new lane right away.
+Without --start, a terminal asks whether to start the new lane right away. --start uses
+this shell's environment and --env, as start does.
 
 ```text
 devlanes lane new [OPTIONS]
 ```
 
-- `--name <NAME>`: Name of the extra lane for this folder, used by `--lane` [default: <folder>-<n>]
+- `--name <NAME>`: Name of the extra lane, a lane reference for --lane and <name>:unit; not a number, main or lane<N> [default: <folder>-<n>]
 - `--start`: Start the new lane right away
 - `--no-ui`: With --start, print the start as text instead of running it in the TUI
 
 ### devlanes lane clean
 
-Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes)
+Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes).
+
+The worktree gets a lane again, with an empty data folder and possibly other ports,
+the next time a devlanes command runs in it. The primary worktree's lane comes back on
+the next command for its project. A lane added with `lane new` does not come back;
+`lane new --name <name>` creates it again.
 
 ```text
 devlanes lane clean [OPTIONS] [LANE]
@@ -473,7 +484,7 @@ devlanes env show [OPTIONS] [UNIT]
 ```
 
 - `[UNIT]`: Unit whose environment to print ([lane:]unit) [default: the lane's variables]
-- `--explain`: Show where each variable comes from; secret values are hidden
+- `--explain`: Show where each variable comes from; secret-looking values are hidden
 
 ### devlanes env export
 

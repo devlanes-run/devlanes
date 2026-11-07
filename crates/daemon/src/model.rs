@@ -1152,6 +1152,9 @@ pub(crate) struct ProjectRt {
     pub id: ProjectId,
     /// Serializes re-listing and registration.
     pub sync: tokio::sync::Mutex<()>,
+    /// Serializes `lane new`, from the name check until the lane has its record,
+    /// so two requests cannot both take one name.
+    pub lane_new: tokio::sync::Mutex<()>,
     pub st: Mutex<ProjectSt>,
     pub watching: AtomicBool,
     pub watch: tokio_util::sync::CancellationToken,
@@ -1223,7 +1226,8 @@ pub(crate) fn proto_actor(actor: &devlanes_core::Actor) -> Actor {
     }
 }
 
-/// True when `unit` was started by the caller's agent session (`--mine`).
+/// True when `unit` was started by the caller's agent session (`--mine`). An agent
+/// that exposes no session id counts all its sessions as one.
 pub(crate) fn is_mine(owner: &Actor, caller: &Actor) -> bool {
     match (&owner.session_id, &caller.session_id) {
         (Some(owner), Some(caller)) => owner == caller,
