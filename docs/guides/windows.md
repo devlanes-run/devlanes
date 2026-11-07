@@ -103,11 +103,14 @@ Windows has no POSIX signals. Console programs see Ctrl-C and Ctrl-Break, so `st
 
 | `stop.signal` | On Windows |
 | --- | --- |
-| `SIGINT` | Ctrl-C; Ctrl-Break for a `run:` string, because programs that Git's `sh` starts ignore Ctrl-C |
-| `SIGTERM` (default), `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2` | Ctrl-Break |
+| `SIGTERM` (default) | Ctrl-C; Ctrl-Break for a `run:` string or a unit where Git's `sh`, `bash` or `dash`, or MSYS2's `zsh` or `fish`, runs (a `[sh, -c, ...]` list, a just recipe), because programs those shells start ignore Ctrl-C |
+| `SIGINT` | Ctrl-C; Ctrl-Break for a `run:` string |
+| `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2` | Ctrl-Break |
 | `SIGKILL` | the unit's processes are ended at once |
 
-A unit whose signal is sent as something else gets a launch note that says so. A stop also asks the unit's visible windows to close (`WM_CLOSE`), for desktop apps that do not watch their console. Whatever still runs when `stop.timeout` ends is terminated. A unit that a stop ends reports `interrupted by Ctrl-C or Ctrl-Break`, because Windows gives both the same exit code. That includes a `pty: true` unit started through a `.cmd` shim such as `npm.cmd`, and a unit where Git's `sh` or `bash` ran (a `run:` string, a `[sh, -c, ...]` list or a just recipe), whose own codes (255 and 512) only say that the event reached them. With `pty: false` a `.cmd` shim passes on its program's code, so a stopped npm script can report npm's own code, such as 1.
+Node runs its `SIGINT` handlers on Ctrl-C but ends at once on Ctrl-Break, so start programs that must clean up on stop with `run_script` or a `run` list rather than a `run:` string. `wrangler dev` is one: otherwise its dev registry entry stays behind and sibling workers' bindings fail. Wrangler also removes the entry only with the default `pty: true`. A program that ignores Ctrl-C runs until `stop.timeout` and is then terminated, as a Unix program that ignores SIGTERM is.
+
+A unit whose signal is sent as something else gets a launch note that says so. A stop also asks the unit's visible windows to close (`WM_CLOSE`), for desktop apps that do not watch their console. Whatever still runs when `stop.timeout` ends is terminated. A unit that a stop ends reports `interrupted by Ctrl-C or Ctrl-Break`, because Windows gives both the same exit code. That includes a `pty: true` unit started through a `.cmd` shim such as `npm.cmd`, and a unit where Git's `sh` or `bash` ran (a `run:` string, a `[sh, -c, ...]` list or a just recipe), whose own codes (255 and 512) only say that the event reached them. With `pty: false` a `.cmd` shim passes on its program's code, and npm exits 1 after any stop, so every stop of a `pty: false` unit started through `npm run`, the default stop included, reports `exit=1` even when the program shut down cleanly. Keep the default `pty: true`, or run the program directly (`run: [node, server.js]`), to avoid it.
 
 ## Idle lanes
 

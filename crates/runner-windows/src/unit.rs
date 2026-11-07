@@ -777,16 +777,29 @@ impl Inner {
     /// in the background so the supervisor keeps watching the deadline.
     /// A pseudo console gets Ctrl-C as the key, which also reaches programs
     /// that read the console raw, as a terminal's interrupt character would.
-    /// A frozen or throttled unit is put back at `Power::Normal` first.
+    /// SIGTERM is Ctrl-C unless an MSYS shell runs in the unit, read from the
+    /// job once here. A frozen or throttled unit is put back at
+    /// `Power::Normal` first.
     fn begin_stop(self: &Arc<Self>, signal: StopSignal, deadline: Instant) {
         self.stopping.store(true, Ordering::Release);
         let stop = signal.windows_stop(self.through_shell);
-        if stop == WindowsStop::Terminate {
-            self.terminate_job();
-        }
+        let check_shell = stop == WindowsStop::CtrlCUnlessShell;
+        let event = match stop {
+            WindowsStop::Terminate => {
+                self.terminate_job();
+                None
+            }
+            WindowsStop::CtrlC => Some(CtrlEvent::CtrlC),
+            WindowsStop::CtrlBreak => Some(CtrlEvent::CtrlBreak),
+            WindowsStop::CtrlCUnlessShell => None,
+        };
         let deadline = deadline.into_std();
-        if self.holds_no_power() {
-            return self.ask_to_stop(stop, deadline);
+        let holds_power = !self.holds_no_power();
+        if !holds_power && !check_shell {
+            if let Some(event) = event {
+                self.ask_to_stop(event, deadline);
+            }
+            return;
         }
         let inner = Arc::clone(self);
         tokio::spawn(async move {
@@ -794,9 +807,29 @@ impl Inner {
             // message, so the unit runs again before it is asked to stop.
             // Terminating the job works on suspended processes, so SIGKILL
             // did not wait for this.
-            let waking = Arc::clone(&inner);
-            let _ = blocking(move || waking.normal_for_stop()).await;
-            inner.ask_to_stop(stop, deadline);
+            if holds_power {
+                let waking = Arc::clone(&inner);
+                let _ = blocking(move || waking.normal_for_stop()).await;
+            }
+            let event = if check_shell {
+                let live = inner.live_members().await;
+                let shell = live.iter().any(|p| is_msys_shell(&p.name));
+                tracing::debug!(
+                    pid = inner.identity.pid,
+                    shell,
+                    "SIGTERM is Ctrl-Break when an MSYS shell runs, else Ctrl-C"
+                );
+                Some(if shell {
+                    CtrlEvent::CtrlBreak
+                } else {
+                    CtrlEvent::CtrlC
+                })
+            } else {
+                event
+            };
+            if let Some(event) = event {
+                inner.ask_to_stop(event, deadline);
+            }
         });
     }
 
@@ -813,17 +846,14 @@ impl Inner {
     }
 
     /// Sends the graceful part of a stop: Ctrl-C as a key to a pseudo
-    /// console, or a console event and `WM_CLOSE` through a blocking task.
-    /// Nothing for `WindowsStop::Terminate`.
-    fn ask_to_stop(self: &Arc<Self>, stop: WindowsStop, deadline: std::time::Instant) {
-        let event = match stop {
-            WindowsStop::Terminate => return,
-            WindowsStop::CtrlC if self.pty => {
+    /// console, or `event` and `WM_CLOSE` through a blocking task.
+    fn ask_to_stop(self: &Arc<Self>, event: CtrlEvent, deadline: std::time::Instant) {
+        let event = match event {
+            CtrlEvent::CtrlC if self.pty => {
                 self.write_input(Bytes::from_static(CTRL_C), true);
                 None
             }
-            WindowsStop::CtrlC => Some(CtrlEvent::CtrlC),
-            WindowsStop::CtrlBreak => Some(CtrlEvent::CtrlBreak),
+            event => Some(event),
         };
         let inner = Arc::clone(self);
         task::spawn_blocking(move || inner.ask_to_close(event, deadline));
@@ -1107,7 +1137,8 @@ impl WindowsUnit {
     ///
     /// SIGKILL terminates the job. Every other signal posts `WM_CLOSE` to the
     /// unit's visible windows and sends one console event (see
-    /// [`StopSignal::windows_stop`]) to its console; once only the console
+    /// [`StopSignal::windows_stop`]; SIGTERM is Ctrl-C unless an MSYS shell
+    /// runs in the unit) to its console; once only the console
     /// host is left, or at `policy.timeout`, the job is terminated. A repeated
     /// stop only shortens the timeout. Cancelling this future does not cancel
     /// the stop. Stopping an exited unit returns its existing report. If the
