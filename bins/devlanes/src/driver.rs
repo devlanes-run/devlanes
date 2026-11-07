@@ -593,9 +593,9 @@ impl WithDriver for ClientDriver {
                 };
                 match frame.map_err(rpc_error)? {
                     Frame::Control(Control::Event(event)) => {
-                        if lane.is_none()
-                            && let Some(name) = event.data.get("lane").and_then(Value::as_str)
-                        {
+                        // A start's events name only its own lane, in full, so they
+                        // replace a seed that matches no summary (a folder name).
+                        if let Some(name) = event.data.get("lane").and_then(Value::as_str) {
                             lane = Some(name.to_owned());
                         }
                         progress.event(&event);
