@@ -287,13 +287,22 @@ async fn logged_line_matches(
     let mut settle = false;
     loop {
         if stale || settle {
+            let mut read = true;
             loop {
                 let query = devlanes_proto::LogQuery {
                     cursor: cursor.clone(),
                     max_bytes: Some(64 * 1024),
                     ..devlanes_proto::LogQuery::default()
                 };
-                let page = host.logs(query).await.map_err(|_| ())?;
+                let page = match host.logs(query).await {
+                    Ok(page) => page,
+                    // Read again on the next tick; only the deadline fails the check.
+                    Err(error) => {
+                        tracing::debug!(unit = %host.info().name, code = %error.code, "ready.log read failed");
+                        read = false;
+                        break;
+                    }
+                };
                 if page.items.iter().any(|line| regex.is_match(&line.text)) {
                     return Ok(());
                 }
@@ -304,8 +313,10 @@ async fn logged_line_matches(
                     break;
                 }
             }
-            settle = stale;
-            stale = false;
+            if read {
+                settle = stale;
+                stale = false;
+            }
         }
         let tick = (Instant::now() + POLL).min(deadline);
         loop {

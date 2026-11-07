@@ -225,6 +225,22 @@ async fn unit_summary(
         .find(|u| u.name == unit)
 }
 
+/// Asserts that a start or restart answer reports `unit` failed with `code`,
+/// as the error itself or as one of the result's failures.
+fn assert_unit_failed(answer: Result<Value, devlanes_proto::RpcError>, unit: &str, code: &str) {
+    match answer {
+        Ok(value) => {
+            let failed = value["failures"].as_array().is_some_and(|failures| {
+                failures
+                    .iter()
+                    .any(|failure| failure["unit"] == unit && failure["reason"]["code"] == code)
+            });
+            assert!(failed, "{value}");
+        }
+        Err(error) => assert_eq!(error.code, code, "{error:?}"),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// A service whose program could not be started stays failed with the spawn
 /// error, for every reader, until a restart tries again or a stop clears it.
@@ -270,12 +286,7 @@ async fn spawn_failure_stays_failed() {
         let restarted = h
             .call(Method::Restart, json!({"units": ["missing"]}), cx(&main))
             .await;
-        let restarted = match restarted {
-            Ok(value) => value.to_string(),
-            Err(error) => format!("{error:?}"),
-        };
-        assert!(restarted.contains("spawn_failed"), "{restarted}");
-        assert!(!restarted.contains("unit_running"), "{restarted}");
+        assert_unit_failed(restarted, "missing", "spawn_failed");
 
         let stopped = h
             .call(Method::Stop, json!({"units": ["missing"]}), cx(&main))
@@ -296,10 +307,18 @@ async fn spawn_failure_stays_failed() {
 async fn ready_timeout_then_exit_is_recorded() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let config = "project: acme\nservices:\n  slow: { run: \"nap 300; exit 3\", ready: { log: never, timeout: 100ms } }\n";
+        let config = "project: acme\nservices:\n  slow: { run: \"hold; exit 3\", ready: { log: never, timeout: 100ms } }\n";
         let main = repo(&tmp.path, "r", config);
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
         let _ = h.call(Method::Start, json!({}), cx(&main)).await;
+        let timed_out = crate::eventually(std::time::Duration::from_secs(5), || async {
+            let reason = unit_summary(&h, &main, "slow").await?.reason?;
+            (reason.code == "ready_timeout").then_some(())
+        })
+        .await;
+        assert!(timed_out.is_some(), "the ready check fails first");
+        // Only now does the unit exit, so its exit is no state change.
+        h.runner.release();
         let crashed = crate::eventually(std::time::Duration::from_secs(5), || async {
             let errors = h.call(Method::Errors, json!({}), cx(&main)).await.ok()?;
             let slow = errors["items"]
@@ -356,11 +375,7 @@ async fn unresolved_service_is_failed_unless_running() {
 
         std::fs::write(main.join("devlanes.yaml"), invalid).expect("break");
         let again = h.call(Method::Start, json!({}), cx(&main)).await;
-        let again = match again {
-            Ok(value) => value.to_string(),
-            Err(error) => format!("{error:?}"),
-        };
-        assert!(again.contains("config_error"), "{again}");
+        assert_unit_failed(again, "bad", "config_error");
         let bad = unit_summary(&h, &main, "bad").await.expect("bad");
         assert_eq!((bad.state.as_str(), bad.pid), ("ready", pid));
         let stopped = h

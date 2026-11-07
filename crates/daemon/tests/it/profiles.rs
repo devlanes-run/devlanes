@@ -560,7 +560,7 @@ async fn why_names_the_real_cause() {
         let h = harness(
             &tmp.path.join("home"),
             Setup {
-                user: crate::pool("13000-13249"),
+                user: crate::pool("15000-15249"),
                 ..Setup::default()
             },
         )
