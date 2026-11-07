@@ -97,22 +97,37 @@ pub fn secret_name(name: &str) -> bool {
     SECRET_WORDS.iter().any(|word| upper.contains(word))
 }
 
-/// Values of the secret-named variables in `vars` that look like credentials,
-/// longest first so a value containing another is replaced whole. A credential
-/// here has 8 characters or more, no whitespace and something other than ASCII
-/// letters: words such as `Console` (`SESSIONNAME`), `database`
-/// (`SESSION_DRIVER`) or a name (`GIT_AUTHOR_NAME`) would blank out unrelated text.
+/// Which values of secret-named variables [`secret_values`] collects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretValues {
+    /// 6 characters or more, for files attached to bug reports (`debug bundle`),
+    /// where a missed secret costs more than a hidden word.
+    Broad,
+    /// Values that look like credentials: 8 characters or more, no whitespace and
+    /// something other than ASCII letters. For output read on screen (`env show
+    /// --explain`), where words such as `Console` (`SESSIONNAME`), `database`
+    /// (`SESSION_DRIVER`) or a name (`GIT_AUTHOR_NAME`) would hide unrelated values.
+    Credentials,
+}
+
+/// Values of the secret-named variables in `vars` that `which` selects, longest
+/// first so a value containing another is replaced whole. Values under 6
+/// characters ("1", "yes") are always left out: they would blank out unrelated text.
 pub fn secret_values<K: AsRef<str>, V: AsRef<str>>(
     vars: impl IntoIterator<Item = (K, V)>,
+    which: SecretValues,
 ) -> Vec<String> {
-    let credential = |value: &str| {
-        value.len() >= 8
-            && !value.chars().any(char::is_whitespace)
-            && !value.chars().all(|c| c.is_ascii_alphabetic())
+    let selected = |value: &str| match which {
+        SecretValues::Broad => value.len() >= 6,
+        SecretValues::Credentials => {
+            value.len() >= 8
+                && !value.chars().any(char::is_whitespace)
+                && !value.chars().all(|c| c.is_ascii_alphabetic())
+        }
     };
     let mut values: Vec<String> = vars
         .into_iter()
-        .filter(|(name, value)| secret_name(name.as_ref()) && credential(value.as_ref()))
+        .filter(|(name, value)| secret_name(name.as_ref()) && selected(value.as_ref()))
         .map(|(_, value)| value.as_ref().to_owned())
         .collect();
     values.sort_by_key(|value| std::cmp::Reverse(value.len()));
@@ -192,7 +207,7 @@ mod tests {
             ("SITE", "https://web.acme.localhost"),
             ("PORT", "3000"),
         ];
-        let secrets = secret_values(vars);
+        let secrets = secret_values(vars, SecretValues::Credentials);
         let shown: BTreeMap<&str, String> = vars
             .iter()
             .map(|(name, value)| (*name, redact_value(name, value, &secrets)))

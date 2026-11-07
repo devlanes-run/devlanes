@@ -9,7 +9,9 @@ use std::{
 
 use devlanes_cli::{OutputMode, Rendered, Runtime};
 use devlanes_client::{Client, Context, Method, Paths};
-use devlanes_core::env::{REDACTED, hide_url_passwords, hide_values, secret_name, secret_values};
+use devlanes_core::env::{
+    REDACTED, SecretValues, hide_url_passwords, hide_values, secret_name, secret_values,
+};
 use devlanes_proto::RpcError;
 use serde_json::{Value, json};
 
@@ -250,7 +252,7 @@ impl Redactor {
             .find(|(name, value)| name == "HOME" && value.len() > 1)
             .map(|(_, value)| value.clone());
         Self {
-            values: secret_values(vars),
+            values: secret_values(vars, SecretValues::Broad),
             home,
         }
     }
@@ -352,6 +354,9 @@ mod tests {
         Redactor::from_env(
             [
                 ("ACME_API_TOKEN", "tok-4711-very-secret"),
+                ("DB_PASS", "s3cr3t"),
+                ("ACME_SECRET", "correcthorsebattery"),
+                ("ACME_PASSPHRASE", "staple gun river"),
                 ("HOME", "/Users/someone"),
                 ("PATH", "/usr/bin:/bin"),
                 ("CI_PASS", "1"),
@@ -372,11 +377,17 @@ ACME_API_TOKEN=tok-4711-very-secret\n\
 GITHUB_TOKEN=ghp_other PORT=3000\n\
 DATABASE_URL=postgres://postgres:hunter22@127.0.0.1:5432/app\n\
 log line mentioning tok-4711-very-secret in passing\n\
+copied under neutral names: pin=s3cr3t word=correcthorsebattery phrase=\"staple gun river\"\n\
 {\"env\":{\"ACME_API_TOKEN\":\"tok-4711-very-secret\",\"PORT\":\"3000\"},\"api_key\":\"k-123456\",\"lane\":\"acme@0\"}\n\
 cwd=/Users/someone/src/acme\n";
         let out = redactor.text(text);
         for secret in [
             "tok-4711-very-secret",
+            // Short, all-letter and multi-word secrets are searched for in a bundle,
+            // unlike in `env show --explain`.
+            "s3cr3t",
+            "correcthorsebattery",
+            "staple gun river",
             "ghp_other",
             "hunter22",
             "k-123456",

@@ -902,7 +902,10 @@ impl Inner {
             // `--explain` output ends up in transcripts and bug reports; the plain
             // listing keeps real values for `eval` and subshells.
             if args.explain {
-                let secrets = devlanes_core::env::secret_values(env.iter());
+                let secrets = devlanes_core::env::secret_values(
+                    env.iter(),
+                    devlanes_core::env::SecretValues::Credentials,
+                );
                 for (key, value) in env.iter_mut() {
                     *value = devlanes_core::env::redact_value(key, value, &secrets);
                 }
@@ -960,7 +963,10 @@ impl Inner {
             }
         };
         if args.explain {
-            let secrets = devlanes_core::env::secret_values(env.values.iter());
+            let secrets = devlanes_core::env::secret_values(
+                env.values.iter(),
+                devlanes_core::env::SecretValues::Credentials,
+            );
             let items: Vec<Value> = env
                 .values
                 .iter()
