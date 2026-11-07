@@ -13,6 +13,7 @@ project: diag-missing
 services:
   api:
     run: [devlanes-no-such-program, --flag]
+    hosts: api.${{ lane.domain }}
 ";
 
 /// A service that gets a secret from the shell through its environment.
@@ -30,7 +31,8 @@ services:
 const SECRET_VALUE: &str = "e2e-s3cret-value-4711-zz";
 
 /// `start` names the missing program, the reason and the PATH searched, in the
-/// failure and in the unit's log; `logs` shows the `[devlanes]` line.
+/// failure and in the unit's log; `logs` shows the `[devlanes]` line, and
+/// `status` and the route keep the unit failed.
 #[test]
 fn spawn_failure_names_the_program_and_reaches_the_log() -> Result<()> {
     let lab = Lab::with_config(MISSING, BUDGET)?;
@@ -67,6 +69,19 @@ fn spawn_failure_names_the_program_and_reaches_the_log() -> Result<()> {
             .is_some_and(|items| items.iter().any(|line| line["text"] == tail)),
         "{logs}"
     );
+    let status = lab.devlanes(lab.repo(), &["status", "--json"])?.json()?;
+    let api = &status["items"][0]["units"]
+        .as_array()
+        .and_then(|units| units.iter().find(|unit| unit["name"] == "api").cloned())
+        .unwrap_or_default();
+    assert_eq!(api["state"], "failed", "{status}");
+    assert_eq!(api["reason"]["code"], "spawn_failed", "{status}");
+    let routes = lab.devlanes(lab.repo(), &["url", "ls", "--json"])?.json()?;
+    let route = routes["items"]
+        .as_array()
+        .and_then(|items| items.iter().find(|route| route["unit"] == "api").cloned())
+        .unwrap_or_default();
+    assert_eq!(route["state"], "failed", "{routes}");
     // Plain output words it and points at the lane's PATH.
     let plain = lab.devlanes(lab.repo(), &["start", "--output", "plain"])?;
     assert!(

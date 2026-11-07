@@ -99,4 +99,5 @@ References:
   lane or worktree directory name, or a path. Without project@ the project of
   the current directory is used.
   A unit is [lane:]unit, such as api, 2:api or acme@feat/checkout:web.
-  Commands that take several units also accept globs ("api-*") and tags (+web).
+  Commands that take several units also accept globs ("api-*"), tags (+web)
+  and a service's name for all its replicas.

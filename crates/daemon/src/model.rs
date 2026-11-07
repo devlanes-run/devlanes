@@ -149,6 +149,9 @@ impl ExternalInfo {
 #[derive(Debug, Clone)]
 pub(crate) struct LaneView {
     pub domain: String,
+    /// `domain`'s HTTPS URL through the proxy, built like the services' public
+    /// URLs; `None` when the lane routes no hostname.
+    pub url: Option<String>,
     /// `lane.port`.
     pub port: u16,
     /// Evaluated `lanes.vars`, for infra expressions.
@@ -160,7 +163,6 @@ pub(crate) struct LaneView {
     pub infra_routes: Vec<InfraRoute>,
     /// `infra.external` entries, in declaration order.
     pub externals: Vec<ExternalInfo>,
-    pub lane_env: EnvMap,
     /// The lane's `services` expression namespace.
     pub services_namespace: Value,
 }
@@ -181,6 +183,9 @@ pub(crate) struct UnitRec {
     pub env: Arc<Environment>,
     /// Launch notes of this run, for `env --explain`.
     pub notes: Vec<String>,
+    /// An exec run's lane variables left out because the infra container they
+    /// read was not up (variable to container), for `env show` to name.
+    pub left_out: BTreeMap<String, String>,
     /// Last log lines captured when the unit failed, for proxy pages and errors.
     pub failure_tail: Vec<String>,
     /// `failure_tail` with colors; empty when it had none.
@@ -319,6 +324,15 @@ pub(crate) struct LaneSt {
     pub infra_ns: Option<Value>,
     /// Running containers behind `infra_ns`, for Docker stats.
     pub infra_containers: Vec<crate::integrations::InfraContainer>,
+    /// Stored containers (by namespace key) that went from down to running since
+    /// `infra_ns` was written, with a count bumped on every such restart. Their
+    /// published ports may have changed; see [`crate::infra_restarts`].
+    pub infra_restarted: BTreeMap<String, u64>,
+    /// A background refresh of the restarted containers is scheduled.
+    pub infra_refresh_queued: bool,
+    /// Bumped whenever `infra_ns` is written or cleared as a whole, so a partial
+    /// refresh that read Docker before that drops its result.
+    pub infra_generation: u64,
     pub setup_env: EnvMap,
     pub last_error: Option<RpcError>,
     pub skipped_tasks: Vec<String>,
@@ -516,6 +530,9 @@ impl LaneSt {
             allocation: None,
             infra_ns: None,
             infra_containers: Vec::new(),
+            infra_restarted: BTreeMap::new(),
+            infra_refresh_queued: false,
+            infra_generation: 0,
             setup_env: EnvMap::new(),
             last_error: None,
             skipped_tasks: Vec::new(),
@@ -595,6 +612,13 @@ impl LaneSt {
         self.infra_containers = containers;
     }
 
+    /// Records that `infra_ns` was written or cleared as a whole: the containers'
+    /// ports are current again, and partial refreshes in flight are dropped.
+    pub(crate) fn infra_replaced(&mut self) {
+        self.infra_generation += 1;
+        self.infra_restarted.clear();
+    }
+
     /// `ports_pending` and `host_conflict` warnings for the lane's summary.
     pub(crate) fn warnings(&self, reference: &str) -> Vec<devlanes_proto::LaneWarning> {
         let mut warnings = Vec::new();
@@ -648,7 +672,10 @@ impl LaneSt {
         }
     }
 
-    /// Lifecycle word for `LaneSummary.state`.
+    /// Lifecycle word for `LaneSummary.state`: `starting` while a start runs
+    /// its phases or a service is still starting. Queued services make it
+    /// `starting` too, in [`crate::engine::Inner::fill_queued`], since the lane does not
+    /// see the gate.
     pub(crate) fn state_word(&self) -> &'static str {
         if self.record.is_none()
             && matches!(
@@ -669,6 +696,14 @@ impl LaneSt {
         });
         if failed {
             return "failed";
+        }
+        // `--all-at-once`, the end of a gated start and a start that returned on
+        // its timeout leave no start running while services still get ready.
+        let starting = self.units.values().any(|unit| {
+            unit.kind == Kind::Service && matches!(unit.host.state(), UnitState::Starting)
+        });
+        if starting {
+            return "starting";
         }
         if self.any_running() {
             "running"
@@ -732,6 +767,9 @@ pub(crate) struct LaneRt {
     /// Held while a start checks and runs setup entries, so two starts never
     /// run the same entry at once.
     pub setup: tokio::sync::Mutex<()>,
+    /// Held by a partial refresh of restarted containers across its Docker read
+    /// and its merge, so two of them never finish out of order.
+    pub infra_refresh: tokio::sync::Mutex<()>,
 }
 
 impl LaneRt {
@@ -1447,6 +1485,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         profiles,
         moves_to: lane.moves_to,
         domain: lane.view.as_ref().map(|view| view.domain.clone()),
+        url: lane.view.as_ref().and_then(|view| view.url.clone()),
         port_block: lane.view.as_ref().map(|view| {
             (
                 view.block.0,

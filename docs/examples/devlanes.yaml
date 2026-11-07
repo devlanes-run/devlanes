@@ -392,7 +392,7 @@ profiles:
     include: [+web]
     # Skip containers and infra setup.
     infra: false
-    # Variables for the services and tasks the lane runs under this profile, above their own env.
+    # Variables for everything the lane runs under this profile, above each unit's own env.
     env:
       ACME_USE_STAGE_APIS: "1"
   e2e:                                  # production-like run: devlanes with --profile e2e -- pnpm test:e2e

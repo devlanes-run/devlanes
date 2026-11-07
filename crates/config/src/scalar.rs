@@ -108,6 +108,31 @@ impl<T: Clone + serde::de::DeserializeOwned> Templated<T> {
     }
 }
 
+impl Templated<String> {
+    /// Resolve a command word (a `run` or `command` list item, or shell text):
+    /// a whole expression that gives a number or boolean becomes its text, as
+    /// environment values do, so `--port` can be followed by `${{ self.port }}`.
+    /// Lists, maps and null still fail with a wrong-type error.
+    pub fn evaluate_text<C: crate::EvaluationContext>(
+        &self,
+        context: &C,
+    ) -> Result<String, crate::ConfigError> {
+        match self {
+            Self::Literal(value) => Ok(value.clone()),
+            Self::Expression(text) => {
+                serde_json::from_value::<Scalar>(crate::evaluate(text, context)?)
+                    .map(|value| value.to_string())
+                    .map_err(|error| {
+                        crate::ConfigError::plain(format!(
+                            "expression result has the wrong type: {}",
+                            plain_type_names(&error.to_string())
+                        ))
+                    })
+            }
+        }
+    }
+}
+
 /// A duration: a whole number followed by `ms`, `s`, `m`, `h` or `d`, such as `500ms`, `15s`
 /// or `10m`. Units cannot be combined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]

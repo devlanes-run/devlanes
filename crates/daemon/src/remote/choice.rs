@@ -466,9 +466,13 @@ impl Inner {
             }
         }
         drop(choosing);
-        // The listeners and routes follow the new assignment by the time this
-        // returns. The wait only lets the mirrors bring `host.list` up to date.
+        // The listeners follow the new assignment once it is computed, here or
+        // by a mirror or route pass that got to it first. The proxy has it only
+        // once a route pass that read it finished, which may be another
+        // caller's: until then it would reuse a pooled connection to the old box.
         let (version, after) = self.reassign();
+        self.routes_published().await;
+        // Lets the mirrors bring `host.list` up to date.
         self.await_applied(version).await;
         let mirrored = match &args.host {
             Some(host) => after.mirrors(host, &lane),

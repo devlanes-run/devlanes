@@ -124,19 +124,13 @@ async fn adapter_renders_flags_and_env() {
     fake.script_body = Some("wrangler dev --persist-to .state");
     let draft = fake.apply().await.expect("apply");
     insta::assert_snapshot!(draft.args.join(" "), @"--port 20010 --inspector-port 20011 --var DEBUG:true --var PUBLIC_BASE_URL:https://api.acme1.localhost --var RETRIES:3 --env-file .dev.vars");
-    let registry = Path::new(DATA).join("wrangler-registry");
     for name in REGISTRY_ENVS {
         assert_eq!(
             draft.env.get(name).map(String::as_str),
-            Some(registry.display().to_string().as_str()),
+            Some("/data/acme/7/wrangler-registry"),
             "{name}"
         );
     }
-    #[cfg(unix)]
-    assert_eq!(
-        draft.env.get("WRANGLER_REGISTRY_PATH").map(String::as_str),
-        Some("/data/acme/7/wrangler-registry")
-    );
 }
 
 /// A `run_script` body with `--port` fails the launch with the fix.

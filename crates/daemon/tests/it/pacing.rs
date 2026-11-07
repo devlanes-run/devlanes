@@ -228,6 +228,8 @@ async fn queued_units_stop_bypass_and_restart() {
         let lanes = status(&h, cx(&main)).await;
         assert_eq!(state_of(&lanes, "a").as_deref(), Some("ready"));
         assert_eq!(state_of(&lanes, "b").as_deref(), Some("queued"));
+        // The start returned, but its queued units still have to start.
+        assert_eq!(lanes[0].state, "starting");
         let reason = lanes[0]
             .units
             .iter()
@@ -309,16 +311,48 @@ async fn queued_units_stop_bypass_and_restart() {
             .await
             .expect("restart");
         assert_eq!(restart["timed_out"], true, "{restart}");
-        assert_eq!(
-            state_of(&status(&h, cx(&main)).await, "a").as_deref(),
-            Some("queued")
-        );
+        let lanes = status(&h, cx(&main)).await;
+        assert_eq!(state_of(&lanes, "a").as_deref(), Some("queued"));
+        assert_eq!(lanes[0].state, "starting");
         drop(holder);
         let ready = eventually(Duration::from_secs(5), || async {
             (state_of(&status(&h, cx(&main)).await, "a").as_deref() == Some("ready")).then_some(())
         })
         .await;
         assert!(ready.is_some(), "restart spawned after the slot freed");
+        h.close().await;
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `all_at_once` spawns everything at once, so the start's phases end before
+/// its services are ready; the lane reads `starting` until they are.
+async fn a_lane_reads_starting_until_its_services_are_ready() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = r#"project: paced
+services:
+  a: { run: "echo a; sleep", ready: started }
+  slow: { run: sleep, ready: { log: never, timeout: 30s } }
+"#;
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let started: StartResult = serde_json::from_value(
+            h.call(
+                Method::Start,
+                json!({"all_at_once": true, "timeout_ms": 300}),
+                cx(&main),
+            )
+            .await
+            .expect("start"),
+        )
+        .expect("start result");
+        assert!(started.timed_out, "{started:?}");
+        let lanes = status(&h, cx(&main)).await;
+        assert_eq!(state_of(&lanes, "slow").as_deref(), Some("starting"));
+        assert_eq!(lanes[0].state, "starting");
         h.close().await;
     })
     .await

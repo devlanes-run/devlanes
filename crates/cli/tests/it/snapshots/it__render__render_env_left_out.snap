@@ -1,0 +1,16 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+DEVLANES=1
+GREETING=hi
+# DATABASE_URL left out: infra postgres is not up; devlanes infra up
+--- plain (exit 0)
+DEVLANES=1
+GREETING=hi
+# DATABASE_URL left out: infra postgres is not up; devlanes infra up
+--- agent (exit 0)
+DEVLANES=1
+GREETING=hi
+# DATABASE_URL left out: infra postgres is not up; devlanes infra up

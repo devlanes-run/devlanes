@@ -60,6 +60,12 @@ pub enum WindowsStop {
     /// Ctrl-Break to the unit's console; the default handler ends the process
     /// (Node reports `SIGBREAK`).
     CtrlBreak,
+    /// Ctrl-C, or Ctrl-Break when an MSYS or Cygwin shell (`sh`, `bash`,
+    /// `dash`, `zsh` or `fish`) is among the unit's live processes when the
+    /// stop begins, since
+    /// the native programs such a shell starts ignore a Ctrl-C event. The
+    /// runner picks one event once and never sends another.
+    CtrlCUnlessShell,
     /// Immediate termination of every unit process.
     Terminate,
 }
@@ -68,12 +74,16 @@ pub enum WindowsStop {
 impl StopSignal {
     /// The Windows stop for this signal. `through_shell` says whether the unit
     /// runs through Git's `sh` (a `run:` string): programs `sh` starts ignore
-    /// Ctrl-C, so SIGINT becomes Ctrl-Break there. SIGHUP, SIGQUIT, SIGUSR1 and
-    /// SIGUSR2 have no equivalent and get Ctrl-Break like SIGTERM, so a config
-    /// shared with Unix machines still works.
+    /// Ctrl-C, so SIGINT and SIGTERM become Ctrl-Break there. Elsewhere SIGTERM
+    /// is Ctrl-C, which Node, Python and most servers treat as a graceful
+    /// stop, unless an MSYS shell runs in the unit when the stop begins
+    /// ([`WindowsStop::CtrlCUnlessShell`]). SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2
+    /// have no equivalent and get Ctrl-Break, so a config shared with Unix
+    /// machines still works.
     pub fn windows_stop(self, through_shell: bool) -> WindowsStop {
         match self {
             Self::Interrupt if !through_shell => WindowsStop::CtrlC,
+            Self::Terminate if !through_shell => WindowsStop::CtrlCUnlessShell,
             Self::Kill => WindowsStop::Terminate,
             Self::Interrupt
             | Self::Terminate
@@ -121,15 +131,18 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    /// SIGINT is Ctrl-C unless the shell runs the unit, SIGKILL terminates and
+    /// SIGINT and SIGTERM are Ctrl-C unless the shell runs the unit (SIGTERM
+    /// also checks for a shell when the stop begins), SIGKILL terminates and
     /// everything else is Ctrl-Break, with a note unless it is SIGTERM.
     fn windows_mapping() {
         use StopSignal::*;
         assert_eq!(Interrupt.windows_stop(false), WindowsStop::CtrlC);
         assert_eq!(Interrupt.windows_stop(true), WindowsStop::CtrlBreak);
+        assert_eq!(Terminate.windows_stop(false), WindowsStop::CtrlCUnlessShell);
+        assert_eq!(Terminate.windows_stop(true), WindowsStop::CtrlBreak);
         for shell in [false, true] {
             assert_eq!(Kill.windows_stop(shell), WindowsStop::Terminate);
-            for signal in [Terminate, Hangup, Quit, User1, User2] {
+            for signal in [Hangup, Quit, User1, User2] {
                 assert_eq!(signal.windows_stop(shell), WindowsStop::CtrlBreak);
             }
             for signal in [Terminate, Kill] {

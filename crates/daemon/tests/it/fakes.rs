@@ -16,7 +16,10 @@
 //! (the spawn returns 500 ms after the journal recorded it, like a slow
 //! `fork`/`exec`, which widens the window before the daemon registers the unit),
 //! `render` (the unit's output renders its terminal, as a Windows pseudo
-//! console's does: see `Unit::renders_screen`).
+//! console's does: see `Unit::renders_screen`), `draw <row> <text>` (writes
+//! `<text>` at the start of `<row>` with a cursor move and no line break, as a
+//! pseudo console does), `nospawn` (the spawn fails with `NotFound`, as for a
+//! missing program).
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -184,6 +187,9 @@ impl UnitRunner for FakeRunner {
         if script.split(';').any(|command| command.trim() == "lag") {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+        if script.split(';').any(|command| command.trim() == "nospawn") {
+            return Err(Error::Io(std::io::ErrorKind::NotFound.into()));
+        }
         let pid = NEXT_PID.fetch_add(1, Ordering::Relaxed);
         let (sender, first) = broadcast::channel(256);
         let stubborn = script
@@ -248,14 +254,19 @@ pub struct FakeUnit {
 }
 
 impl FakeUnit {
-    /// Writes one output chunk.
+    /// Writes one output line.
     fn print(&self, text: &str) {
+        self.write(&format!("{text}\r\n"));
+    }
+
+    /// Writes one output chunk as it is.
+    fn write(&self, text: &str) {
         if let Ok(sender) = self.sender.lock()
             && let Some(sender) = sender.as_ref()
         {
             let _ = sender.send(OutputChunk {
                 stream: OutputStream::Terminal,
-                bytes: Bytes::from(format!("{text}\r\n")),
+                bytes: Bytes::from(text.to_owned()),
             });
         }
     }
@@ -281,6 +292,10 @@ impl FakeUnit {
             let (word, rest) = command.split_once(' ').unwrap_or((command, ""));
             match word {
                 "echo" => self.print(rest),
+                "draw" => {
+                    let (row, text) = rest.split_once(' ').unwrap_or((rest, ""));
+                    self.write(&format!("\x1b[{row};1H{text}"));
+                }
                 "nap" => {
                     let ms = rest.trim().parse().unwrap_or(0);
                     tokio::select! {
@@ -652,6 +667,16 @@ pub struct FakeInfra {
     pub progress_read: Arc<tokio::sync::Notify>,
     /// Container events, sent with [`FakeInfra::emit`].
     events: Arc<std::sync::OnceLock<broadcast::Sender<InfraEvent>>>,
+    /// The host port the shared `cache` publishes; 6379 when unset.
+    pub cache_port: Arc<Mutex<Option<u16>>>,
+    /// `cache` is down: `namespace` leaves it out, as Compose lists only
+    /// running containers, and `wait_healthy` skips it.
+    pub cache_down: Arc<Mutex<bool>>,
+    /// When set, `wait_healthy` waits for a notification before it answers.
+    pub wait_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
+    /// `up` leaves the lane's `db` out of its containers, as for a lane whose
+    /// containers a restarted daemon learned while `db` was down.
+    pub up_omits_db: Arc<Mutex<bool>>,
 }
 
 impl FakeInfra {
@@ -697,10 +722,15 @@ impl FakeInfra {
         }
     }
 
-    /// Namespace from the allocated port.
-    fn namespace(spec: &InfraSpec) -> Value {
+    /// Namespace from the allocated port and the cache's current one.
+    fn namespace(&self, spec: &InfraSpec) -> Value {
         let port = spec.ports.get("infra.db/5432").copied();
-        json!({"db": {"port": port, "ports": {"5432": port}}, "cache": {"port": 6379, "ports": {"6379": 6379}}})
+        let mut namespace = json!({"db": {"port": port, "ports": {"5432": port}}});
+        if !self.cache_down.lock().is_ok_and(|down| *down) {
+            let cache = self.cache_port.lock().ok().and_then(|p| *p).unwrap_or(6379);
+            namespace["cache"] = json!({"port": cache, "ports": {"6379": cache}});
+        }
+        namespace
     }
 
     /// The lane's `db` container (one per replica) in `db_state` and a shared
@@ -717,14 +747,16 @@ impl FakeInfra {
                 state: Some(db_state.to_owned()),
             })
             .collect();
-        containers.push(InfraContainer {
-            name: "cache".into(),
-            docker: format!("{}-cache-1", spec.project),
-            shared: true,
-            compose_project: Some(spec.project.clone()),
-            publishes: true,
-            state: None,
-        });
+        if !self.cache_down.lock().is_ok_and(|down| *down) {
+            containers.push(InfraContainer {
+                name: "cache".into(),
+                docker: format!("{}-cache-1", spec.project),
+                shared: true,
+                compose_project: Some(spec.project.clone()),
+                publishes: true,
+                state: None,
+            });
+        }
         containers
     }
 }
@@ -750,16 +782,22 @@ impl InfraProvider for FakeInfra {
             let _ = tokio::time::timeout(Duration::from_secs(20), read).await;
         }
         Ok(InfraUp {
-            namespace: Self::namespace(spec),
+            namespace: self.namespace(spec),
             setup_env: BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())]),
             report: json!({"services": ["db"]}),
-            containers: self.containers(spec, "healthy"),
+            containers: {
+                let mut containers = self.containers(spec, "healthy");
+                if self.up_omits_db.lock().is_ok_and(|omits| *omits) {
+                    containers.retain(|c| c.name != "db");
+                }
+                containers
+            },
         })
     }
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
         self.query("namespace");
         Ok(InfraUp {
-            namespace: Self::namespace(spec),
+            namespace: self.namespace(spec),
             // As Compose's provider: the same env `up` gives, nothing started.
             setup_env: BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())]),
             containers: self.containers(
@@ -804,6 +842,39 @@ impl InfraProvider for FakeInfra {
                     .collect()
             })
             .unwrap_or_default())
+    }
+    /// Records `wait <docker names>`, waits for the gate when one is set and
+    /// skips the containers that are down.
+    async fn wait_healthy(
+        &self,
+        _: &InfraSpec,
+        containers: &[InfraContainer],
+        _: Duration,
+    ) -> Result<Vec<String>, InfraError> {
+        let names: Vec<&str> = containers.iter().map(|c| c.docker.as_str()).collect();
+        self.record(format!("wait {}", names.join(" ")));
+        let gate = self.wait_gate.lock().ok().and_then(|gate| gate.clone());
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
+        let cache_down = self.cache_down.lock().is_ok_and(|down| *down);
+        let db_down = self
+            .namespace_db_state
+            .lock()
+            .ok()
+            .and_then(|state| state.clone())
+            .is_some_and(|state| state.starts_with("exited"));
+        Ok(containers
+            .iter()
+            .filter(|c| {
+                if c.name == "cache" {
+                    cache_down
+                } else {
+                    db_down
+                }
+            })
+            .map(|c| c.docker.clone())
+            .collect())
     }
     /// The stored lines (the last `tail`), then live ones while following.
     async fn container_logs(

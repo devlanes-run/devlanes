@@ -17,6 +17,8 @@ use devlanes_sys_windows::{
     spawn::{self as win, CreationFlags, Spawn, Stdio, Stream},
 };
 
+use crate::CONTROL_C_EXIT;
+
 /// The hidden first argument `devlanes` dispatches to [`console_ctrl_main`] on,
 /// before parsing anything else: `devlanes __console-ctrl <pid> <c|break>`.
 pub const HELPER_ARG: &str = "__console-ctrl";
@@ -25,10 +27,6 @@ pub const HELPER_ARG: &str = "__console-ctrl";
 /// console host handled it. The host drops a request whose sender has left,
 /// so the helper must not exit before that.
 const EVENT_WAIT: Duration = Duration::from_secs(5);
-
-/// `STATUS_CONTROL_C_EXIT`: a process ended by a console control event. The
-/// helper can be ended by the event it sent while it detaches; it went out.
-const CONTROL_C_EXIT: u32 = 0xC000_013A;
 
 /// Helper exit codes the runner tells apart in its logs.
 mod code {
@@ -139,6 +137,8 @@ impl ConsoleHelper {
         .map_err(HelperError::Spawn)?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         match child.wait_timeout(remaining).map_err(HelperError::Spawn)? {
+            // The helper can be ended by the event it sent while it
+            // detaches; it went out.
             Some(code) if code == u32::from(code::SENT) || code == CONTROL_C_EXIT => Ok(()),
             Some(code) => Err(HelperError::Exit(code)),
             None => {

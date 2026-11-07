@@ -766,11 +766,11 @@ impl Proxy {
     ) -> Result<Connection, BoxError> {
         let deadline = tokio::time::Instant::now() + self.limits.refused_retry;
         let mut delay = Duration::from_millis(50);
+        let mut error = match self.connect(target, shutdown.clone()).await {
+            Ok(connection) => return Ok(connection),
+            Err(error) => error,
+        };
         loop {
-            let error = match self.connect(target, shutdown.clone()).await {
-                Ok(connection) => return Ok(connection),
-                Err(error) => error,
-            };
             let refused = error
                 .downcast_ref::<io::Error>()
                 .is_some_and(|error| error.kind() == io::ErrorKind::ConnectionRefused);
@@ -785,6 +785,13 @@ impl Proxy {
                 _ = tokio::time::sleep(delay) => {}
             }
             delay = (delay * 2).min(Duration::from_secs(1));
+            // A refused loopback connect takes about 2 s per address on Windows,
+            // so a retry is cut at the deadline; it keeps the last refusal.
+            match tokio::time::timeout_at(deadline, self.connect(target, shutdown.clone())).await {
+                Ok(Ok(connection)) => return Ok(connection),
+                Ok(Err(next)) => error = next,
+                Err(_) => return Err(error),
+            }
         }
     }
 

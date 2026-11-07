@@ -229,7 +229,8 @@ service_fields! {
     /// the project file's directory unless `cwd` is set. devlanes runs it exactly as written, so
     /// it cannot be combined with `preset`; prefer `run_script` when the command is a script
     /// in a project file. Exactly one of `run` and `run_script` is required after templates
-    /// are applied.
+    /// are applied. In a list, an item that is one `${{ }}` expression giving a number or
+    /// `true`/`false` becomes its text, such as `--port` followed by `${{ self.port }}`.
     run: Run,
     /// Script to run from a project file, as `{ file, name }`, such as
     /// `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file

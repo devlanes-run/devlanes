@@ -71,6 +71,10 @@ pub use orphan::{OrphanStop, stop_orphan};
 pub use spawn::SpawnError;
 pub use unit::{ExitReport, StopOutcome, WindowsUnit};
 
+/// `STATUS_CONTROL_C_EXIT`: the exit code of a process that Ctrl-C or
+/// Ctrl-Break ended.
+pub(crate) const CONTROL_C_EXIT: u32 = 0xC000_013A;
+
 /// Spawns units in job objects with piped output. Cheap to clone; holds only
 /// tuning values, the shell and the console helper's command.
 #[derive(Debug, Clone)]

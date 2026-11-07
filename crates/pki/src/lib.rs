@@ -431,7 +431,11 @@ fn subject(common_name: Option<&str>, unit: &str) -> DistinguishedName {
 fn machine_label() -> String {
     let read = |key: &str| std::env::var(key).ok().filter(|value| !value.is_empty());
     let user = read("USERNAME").unwrap_or_else(|| "user".to_owned());
-    let host = read("COMPUTERNAME").unwrap_or_else(|| "localhost".to_owned());
+    // Asked from the system: a daemon the CLI starts has no `COMPUTERNAME`.
+    let host = devlanes_sys_windows::system::computer_name()
+        .ok()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "localhost".to_owned());
     format!("{user}@{host}")
 }
 
