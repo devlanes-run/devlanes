@@ -11,7 +11,8 @@ This repository runs its dev services with devlanes. A per-user daemon owns the 
 - Inspect with `devlanes status`, `devlanes wait UNIT --timeout 180s`, `devlanes debug errors` and `devlanes debug why UNIT`.
 - Read logs with `devlanes logs UNIT --tail 100`, `--head 50` or `--grep RE`, and continue with `--cursor`. Follow logs only with `--timeout`.
 - Run tests with `devlanes with -- COMMAND`. It starts the lane, waits, runs COMMAND, stops what it started and exits with COMMAND's code.
-- Clean up with `devlanes stop --mine`, which stops only what this session started; `devlanes status --mine` lists it.
+- Clean up with `devlanes stop --mine`, which stops only what this session started in the current project; `devlanes status --mine` lists it. Its output names the command for other projects where this session's units still run, such as `devlanes -p PROJECT stop --mine`.
+- As a subagent, stop the units you started by name (`devlanes stop LANE:UNIT`) before you return: the parent's `stop --mine` may not reach them, and yours may stop the parent's units.
 - A command that needs confirmation exits 2. Rerun it with `--yes` only when the user asked for that action.
 - A command run without the unit, task or lane it needs exits 2 and lists the options with a command to run; pick one from that list. Exit 3 there means nothing can be chosen, such as no devlanes.yaml in this directory or its parents.
 - Ctrl-C detaches from services. Foreground tasks started with `devlanes run TASK` are the exception.

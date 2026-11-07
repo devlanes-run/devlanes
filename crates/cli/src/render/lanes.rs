@@ -611,13 +611,10 @@ pub(super) fn resume(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
-/// `stop`: one `stopped lane:unit` line per stopped unit.
+/// `stop`: one `stopped lane:unit` line per stopped unit, then the warnings.
 pub(super) fn stop(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let items = list(data, "items");
-    if items.is_empty() {
-        return vec!["nothing was running".into()];
-    }
-    items
+    let mut lines: Vec<String> = items
         .iter()
         .filter_map(|value| serde_json::from_value::<UnitSummary>(value.clone()).ok())
         .map(|unit| {
@@ -642,7 +639,17 @@ pub(super) fn stop(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
             }
             line
         })
-        .collect()
+        .collect();
+    if items.is_empty() {
+        lines.push("nothing was running".into());
+    }
+    lines.extend(list(data, "warnings").iter().map(|warning| {
+        cx.warning(&words::lane_warning(
+            &text(warning, "code"),
+            warning.get("data").unwrap_or(&Value::Null),
+        ))
+    }));
+    lines
 }
 
 /// Service units of a lane.

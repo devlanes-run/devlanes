@@ -23,7 +23,7 @@ use crate::{
     Session,
     engine::{Inner, LanePair, carries_env, confirmation, params, required},
     lifecycle::{SpawnRequest, StartOptions, TaskOutcome},
-    model::{EnvMap, Kind, LaneRt, ProjectRt, lane_summary, lock, unit_summary},
+    model::{EnvMap, Kind, LaneRt, ProjectRt, is_mine, lane_summary, lock, unit_summary},
     registry::{internal, store_error},
     stream::LaneEvents,
     units::UnitHost,
@@ -241,22 +241,31 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let selection: Selection = params(value)?;
         let mut stopped: Vec<UnitSummary> = Vec::new();
-        // `stop --mine` across lanes: one lane's failure must not leave the rest running.
+        // `stop --mine` across the lanes of `mine_scope` (the current project, or every
+        // project outside one): one lane's failure must not leave the rest running.
         let mut errors: Vec<Value> = Vec::new();
+        let mut warnings: Vec<Value> = Vec::new();
         if selection.mine && selection.units.is_empty() && context.lane.is_none() {
-            for (project, lane) in self.all_lanes() {
+            let scope = self.mine_scope(context).await?;
+            for (project, lane) in &scope {
                 if lane.st().any_running() {
                     match self
-                        .stop_lane(&project, &lane, None, Some(&context.actor), false)
+                        .stop_lane(project, lane, None, Some(&context.actor), false)
                         .await
                     {
-                        Ok(units) => stopped.extend(units),
+                        Ok(units) => {
+                            stopped.extend(units);
+                            self.prune_drift(lane);
+                        }
                         Err(error) => errors.push(json!({
                             "lane": lane.st().reference(&project.name()),
                             "error": error,
                         })),
                     }
                 }
+            }
+            if let Some(warning) = self.mine_elsewhere(&scope, &context.actor) {
+                warnings.push(warning);
             }
         } else {
             let ((project, lane), selectors) =
@@ -275,7 +284,38 @@ impl Inner {
         if !errors.is_empty() {
             result["errors"] = json!(errors);
         }
+        if !warnings.is_empty() {
+            result["warnings"] = json!(warnings);
+        }
         Ok(result)
+    }
+
+    /// A `mine_elsewhere` warning naming the lanes outside `scope` where `actor`'s
+    /// units still run, so a narrowed `stop --mine` does not leave them unnoticed.
+    fn mine_elsewhere(&self, scope: &[LanePair], actor: &devlanes_proto::Actor) -> Option<Value> {
+        let mut lanes = Vec::new();
+        let mut projects = BTreeSet::new();
+        for (project, lane) in self.all_lanes() {
+            if scope.iter().any(|(_, inside)| Arc::ptr_eq(inside, &lane)) {
+                continue;
+            }
+            let st = lane.st();
+            let mine = st
+                .units
+                .values()
+                .any(|rec| rec.host.is_alive() && is_mine(&rec.host.info().actor, actor))
+                || st
+                    .orphans
+                    .values()
+                    .any(|orphan| is_mine(&orphan.actor, actor));
+            if mine {
+                lanes.push(st.reference(&project.name()));
+                projects.insert(project.name());
+            }
+        }
+        (!lanes.is_empty()).then(
+            || json!({"code": "mine_elsewhere", "data": {"lanes": lanes, "projects": projects}}),
+        )
     }
 
     /// `restart`: stops and starts named units with fresh plans; without units, the

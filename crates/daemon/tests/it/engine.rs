@@ -1090,6 +1090,87 @@ async fn stop_mine_filters_by_actor() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A unit-less `stop --mine` covers the current project (every project at a
+/// repository root holding several, as `status --mine` lists), names the lanes
+/// where the session's units still run, and fails instead of widening when the
+/// cwd's project file does not load.
+async fn stop_mine_stays_in_the_project() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let root = tmp.path.join("r");
+        for name in ["alpha", "beta"] {
+            let folder = root.join("apps").join(name);
+            std::fs::create_dir_all(&folder).expect("mkdir");
+            std::fs::write(folder.join("devlanes.yaml"), format!("project: {name}\n"))
+                .expect("project file");
+        }
+        git(&root, &["init", "-q", "-b", "main"]);
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "init"]);
+        let broken = repo(&tmp.path, "c", "project: [broken");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let mine = |cwd: &Path| Context {
+            actor: agent("s1"),
+            ..cx(cwd)
+        };
+        let (alpha, beta) = (root.join("apps/alpha"), root.join("apps/beta"));
+        for cwd in [&alpha, &beta] {
+            h.call(
+                Method::Exec,
+                json!({"name": "job", "command": ["sleep"]}),
+                mine(cwd),
+            )
+            .await
+            .expect("exec");
+        }
+        let at_root = status(&h, mine(&root), json!({"mine": true})).await;
+        let references: Vec<&str> = at_root.iter().map(|l| l.reference.as_str()).collect();
+        assert_eq!(references, ["alpha@0", "beta@0"]);
+        let job_state = |lanes: Vec<LaneSummary>, reference: &str| {
+            lanes
+                .into_iter()
+                .find(|l| l.reference == reference)
+                .and_then(|l| l.units.into_iter().find(|u| u.name == "job"))
+                .map(|u| u.state)
+        };
+        let stopped = h
+            .call(Method::Stop, json!({"mine": true}), mine(&alpha))
+            .await
+            .expect("stop mine");
+        let lanes: Vec<&str> = stopped["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .filter_map(|u| u["lane"].as_str())
+            .collect();
+        assert_eq!(lanes, ["alpha@0"]);
+        assert_eq!(stopped["warnings"][0]["code"], "mine_elsewhere");
+        assert_eq!(stopped["warnings"][0]["data"]["lanes"], json!(["beta@0"]));
+        assert_eq!(stopped["warnings"][0]["data"]["projects"], json!(["beta"]));
+        let error = h
+            .call(Method::Stop, json!({"mine": true}), mine(&broken))
+            .await
+            .expect_err("unloadable project");
+        assert_eq!(error.code, "config_error");
+        let all = status(&h, cx(&root), json!({"all": true})).await;
+        assert_eq!(job_state(all, "beta@0").as_deref(), Some("ready"));
+        let named = Context {
+            project: Some("beta".into()),
+            ..mine(&alpha)
+        };
+        let stopped = h
+            .call(Method::Stop, json!({"mine": true}), named)
+            .await
+            .expect("stop mine in beta");
+        assert_eq!(stopped["items"][0]["lane"], "beta@0");
+        assert!(stopped.get("warnings").is_none(), "{stopped}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// Lane references resolve by number and branch; misses and ambiguity list candidates.
 async fn lane_references_and_candidates() {
     tokio::time::timeout(LIMIT, async {
@@ -1196,17 +1277,32 @@ async fn lane_env_and_explain() {
                 .as_str()
                 .is_some_and(|u| u.starts_with("http://127.0.0.1:"))
         );
+        let mut shell = cx(&main);
+        let env = shell.env.as_mut().expect("env");
+        env.insert("ACME_API_TOKEN".into(), "tok-4711-very-secret".into());
+        env.insert("ALIAS".into(), "tok-4711-very-secret".into());
         let explained = h
-            .call(
-                Method::Env,
-                json!({"unit": "web", "explain": true}),
-                cx(&main),
-            )
+            .call(Method::Env, json!({"unit": "web", "explain": true}), shell)
             .await
             .expect("explain");
         let items = explained["items"].as_array().expect("items");
+        let value = |key: &str| {
+            items
+                .iter()
+                .find(|i| i["key"] == key)
+                .map(|i| i["value"].clone())
+        };
+        // Secret-looking values are hidden, under their own name or a copy.
+        assert_eq!(value("ACME_API_TOKEN"), Some(json!("[redacted]")));
+        assert_eq!(value("ALIAS"), Some(json!("[redacted]")));
+        assert!(!explained.to_string().contains("tok-4711-very-secret"));
         let port = items.iter().find(|i| i["key"] == "PORT").expect("PORT");
         assert_eq!(port["layer"], "devlanes");
+        assert!(
+            port["value"]
+                .as_str()
+                .is_some_and(|p| p.parse::<u16>().is_ok())
+        );
         let path = items.iter().find(|i| i["key"] == "PATH").expect("PATH");
         assert_eq!(path["layer"], "client");
         let url = h
