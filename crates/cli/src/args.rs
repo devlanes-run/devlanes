@@ -154,8 +154,8 @@ what changed. A whole-lane restart stops exec units and does not run them again.
     #[command(
         long_about = "Show lanes and units with state, ports, URLs, CPU and memory.\n\n\
 Exits 1 while a lane or unit it shows has failed, a task or exec command that\n\
-exited non-zero included. devlanes stop NAME clears a failed unit once you have\n\
-read why; running it again also replaces it."
+exited non-zero included. devlanes stop NAME clears a failed service or exec\n\
+command once you have read why; running a unit again also replaces its failure."
     )]
     Status(StatusArgs),
     /// Read unit logs; each line carries a cursor to continue from

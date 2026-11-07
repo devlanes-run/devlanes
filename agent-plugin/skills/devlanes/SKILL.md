@@ -95,7 +95,7 @@ Failures come first, each with its last log lines and the command that shows mor
 | `starting`, `queued` | Starting, or waiting for a start slot; a task in progress also shows `starting`. `devlanes wait UNIT --timeout 180s`. |
 | `running` | An exec command still running (JSON: `state: ready`). Read its logs; `devlanes wait UNIT` waits for it to exit, so do not wait on one that serves. |
 | `external` | An `infra.external` entry: devlanes routes its port and hostnames but runs nothing there, so it has no logs and `start` or `stop` do not apply. Whatever listens on the port is yours to run. |
-| `failed` | Exited or never got ready. Read the printed tail, then `devlanes logs UNIT --tail 200` and `devlanes debug why UNIT`; fix the code and `devlanes restart UNIT`, or fix the config and `devlanes reload`. A service that keeps failing its ready check usually has the wrong port or check: see references/configuration.md. For an exec command, `devlanes stop NAME` clears it. |
+| `failed` | Exited or never got ready. Read the printed tail, then `devlanes logs UNIT --tail 200` and `devlanes debug why UNIT`; fix the code and `devlanes restart UNIT`, or fix the config and `devlanes reload`. A service that keeps failing its ready check usually has the wrong port or check: see references/configuration.md. `devlanes stop NAME` clears a failed service or exec command; a failed task stays failed until it runs again. |
 | `exited` | A task or exec that ended. `devlanes logs UNIT --tail 50` shows how. |
 | `stopping`, `stopped`, `idle` | Not running. `devlanes start UNIT` when you need it. |
 | `orphaned` | A previous daemon left the process running and nothing supervises it. `devlanes stop UNIT --lane LANE`, then start it again. |
@@ -104,7 +104,7 @@ An error ends with a `hint:` line naming the command that fixes it. Ask the user
 
 With `--json`, a command prints one JSON document; lists have the shape `{items, truncated, next_cursor}`. Streams (`start --json`, `logs -f --json`, `debug events -f`) print NDJSON.
 
-Exit codes: 0 success, 1 failure, 2 usage error or missing `--yes`, 3 unknown or ambiguous reference, 4 daemon unreachable, 124 timeout. `devlanes status` exits 1 while any unit it shows has failed, a task or exec command that exited non-zero included, until `devlanes stop NAME` clears it or it runs again.
+Exit codes: 0 success, 1 failure, 2 usage error or missing `--yes`, 3 unknown or ambiguous reference, 4 daemon unreachable, 124 timeout. `devlanes status` exits 1 while any unit it shows has failed, a task or exec command that exited non-zero included. `devlanes stop NAME` clears a failed service or exec command; a failed task stays failed until it runs again.
 
 ## Typical loop
 

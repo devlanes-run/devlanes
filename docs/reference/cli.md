@@ -139,8 +139,8 @@ devlanes reload [OPTIONS] [UNIT]...
 Show lanes and units with state, ports, URLs, CPU and memory.
 
 Exits 1 while a lane or unit it shows has failed, a task or exec command that
-exited non-zero included. devlanes stop NAME clears a failed unit once you have
-read why; running it again also replaces it.
+exited non-zero included. devlanes stop NAME clears a failed service or exec
+command once you have read why; running a unit again also replaces its failure.
 
 ```text
 devlanes status [OPTIONS] [LANE]
