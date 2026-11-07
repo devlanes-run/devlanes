@@ -80,7 +80,12 @@ pub async fn run(
     if let Some(data) = nothing_reloaded(request.method, &handoff) {
         return crate::commands::render_result(runtime, request.method, data, None);
     }
-    let options = crate::wiring::tui_options(paths).await;
+    // Scoped to the started lane: a cwd-only first `status` would register the
+    // cwd's project when the start named another project's lane.
+    let options = devlanes_tui::Options {
+        scope: Some(crate::driver::start_context(&request)),
+        ..crate::wiring::tui_options(paths).await
+    };
     let (exit, relaunch) = devlanes_tui::run_start(paths.clone(), options, handoff)
         .await
         .map_err(crate::wiring::tui_error)?;

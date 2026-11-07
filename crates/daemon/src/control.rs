@@ -175,21 +175,39 @@ impl Inner {
         units: &[String],
         context: &Context,
     ) -> Result<(LanePair, Vec<String>), RpcError> {
-        // A named lane resolves by its reference, so the cwd's project may fail to
-        // resolve (a folder shared by several projects) without failing the start.
-        let named = context.lane.is_some()
-            || units.iter().any(|unit| {
-                unit.parse::<devlanes_core::refs::UnitRef>()
-                    .is_ok_and(|parsed| parsed.lane.is_some())
-            });
-        if named {
-            for id in self.reference_scope(context).await.unwrap_or_default() {
-                if let Some(project) = self.project(id) {
+        // The lane `lane_for_units` resolves: a unit's lane part wins over `--lane`.
+        let named: Option<devlanes_core::refs::LaneRef> = units
+            .iter()
+            .find_map(|unit| unit.parse::<devlanes_core::refs::UnitRef>().ok()?.lane)
+            .or_else(|| context.lane.as_deref()?.parse().ok());
+        match named {
+            // A reference naming a known project relists that project, not the
+            // cwd's: a project `lane clean` forgot stays forgotten. An unknown one
+            // is registered, if at all, by `resolve_lane_ref`.
+            Some(devlanes_core::refs::LaneRef {
+                project: Some(name),
+                ..
+            }) => {
+                if let Ok(project) = self.project_by_name(&name) {
                     let _ = self.relist(&project).await;
                 }
             }
-        } else if let Some(project) = self.project_for(context).await? {
-            let _ = self.relist(&project).await;
+            None if context.lane.is_none() => {
+                if let Some(project) = self.project_for(context).await? {
+                    let _ = self.relist(&project).await;
+                }
+            }
+            // A short reference (or a `--lane` that does not parse, which
+            // `lane_for_units` reports) resolves among the cwd's projects, so the
+            // cwd's project may fail to resolve (a folder shared by several
+            // projects) without failing the start.
+            _ => {
+                for id in self.reference_scope(context).await.unwrap_or_default() {
+                    if let Some(project) = self.project(id) {
+                        let _ = self.relist(&project).await;
+                    }
+                }
+            }
         }
         self.lane_for_units(units, context).await
     }

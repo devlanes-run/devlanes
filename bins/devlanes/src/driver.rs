@@ -243,6 +243,30 @@ impl ClientDriver {
     }
 }
 
+/// `request`'s context with `lane` set, when `--lane` is absent, from the first
+/// unit that names a lane (`beta@0:web`): the lane the daemon resolves for the
+/// start. A `status` sent with it resolves that lane instead of the cwd's
+/// project, so it registers nothing from the cwd.
+pub fn start_context(request: &Request) -> Context {
+    let mut context = request.context.clone();
+    if context.lane.is_none() {
+        context.lane = request
+            .params
+            .get("units")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            // A unit that does not parse is reported by the start itself.
+            .find_map(|unit| unit.parse::<devlanes_core::refs::UnitRef>().ok()?.lane)
+            .map(|lane| match lane.project {
+                Some(project) => format!("{project}@{}", lane.selector),
+                None => lane.selector,
+            });
+    }
+    context
+}
+
 /// The lane and units an interrupted start owns, from lane snapshots taken before
 /// the start and after the interrupt: units active now that were not active before.
 /// A lane that was idle (or did not exist) before belongs to the start as a whole.
@@ -498,9 +522,12 @@ impl WithDriver for ClientDriver {
             if let Some(stop) = self.pending_signal() {
                 return Err(interrupted(stop));
             }
+            // Snapshots name the started lane, so `with beta@0:web` in another
+            // project's folder does not register that folder's project.
+            let context = start_context(request);
             // Only needed to work out ownership if a signal cuts the start short.
             let before = match self.signals {
-                Some(_) => self.lanes(&request.context).await,
+                Some(_) => self.lanes(&context).await,
                 None => None,
             };
             let id = self
@@ -512,7 +539,13 @@ impl WithDriver for ClientDriver {
                 )
                 .await
                 .map_err(rpc_error)?;
-            let mut lane = request.context.lane.clone();
+            // A unit's short lane (`1:web`) matches no summary's reference, so it
+            // is left to the start's events, which name the lane in full.
+            let mut lane = request
+                .context
+                .lane
+                .clone()
+                .or_else(|| context.lane.clone().filter(|lane| lane.contains('@')));
             loop {
                 let frame = match self.signals.as_mut() {
                     Some(signals) => tokio::select! {
@@ -521,7 +554,7 @@ impl WithDriver for ClientDriver {
                             // The daemon keeps starting after a client leaves, so the units
                             // this start brought up so far are stopped by the teardown.
                             if let Some(before) = &before {
-                                let after = self.lanes(&request.context).await.unwrap_or_default();
+                                let after = self.lanes(&context).await.unwrap_or_default();
                                 if let Some(owned) = interrupted_ownership(
                                     before,
                                     &after,
