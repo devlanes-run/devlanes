@@ -506,7 +506,10 @@ impl Render for UnitSummary {
         };
         let mut line = format!("{label} {}:{}", clean(&self.lane), clean(&self.name));
         if let Some(code) = self.exit_code {
-            line.push_str(&format!(" exit={code}"));
+            line.push_str(&crate::render::exit_field(
+                &self.state.to_lowercase(),
+                code.into(),
+            ));
         }
         for url in &self.urls {
             line.push(' ');

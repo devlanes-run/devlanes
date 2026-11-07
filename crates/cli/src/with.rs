@@ -4,7 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use devlanes_core::contrib::{CA_BUNDLE_ENV, CA_CERT_ENV};
+use devlanes_core::contrib::runtime_ca_env;
 use devlanes_proto::{Event, LogLine, LogQuery, Method, Request, RpcError, Selection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -142,9 +142,29 @@ pub async fn run_with<D: WithDriver + ?Sized>(
         exit_code: 1,
         ..WithOutcome::default()
     };
+    let mut phases = crate::PhaseLines::new(runtime);
+    // `(lane, task)` of each task this start ran: their logs belong to the run
+    // although the start result lists only the services it spawned.
+    let mut tasks: Vec<(String, String)> = Vec::new();
     let start = driver
         .start(&plan.start, &mut |event| {
-            if let Ok(rendered) = reporter.event(Method::Start, &event) {
+            if event.event == devlanes_proto::events::TASK {
+                let field = |key: &str| {
+                    event
+                        .data
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                };
+                if matches!(field("state"), "done" | "exited" | "failed") {
+                    tasks.push((field("lane").to_owned(), field("task").to_owned()));
+                }
+            }
+            if let Ok(mut rendered) = reporter.event(Method::Start, &event) {
+                // `with --json` streams every event as it came.
+                if runtime.mode != crate::OutputMode::Json {
+                    phases.rewrite(&event, &mut rendered.stdout);
+                }
                 emit(rendered);
             }
         })
@@ -172,7 +192,9 @@ pub async fn run_with<D: WithDriver + ?Sized>(
                 Ok(lane_env) => {
                     let mut env = plan.env.clone();
                     env.extend(lane_env);
-                    add_runtime_ca_env(&mut env);
+                    // Test code calling `https://*.localhost` then trusts the proxy.
+                    let ca = runtime_ca_env(&env, |name| env.contains_key(name));
+                    env.extend(ca);
                     match driver
                         .spawn_command(&plan.command, &env, &plan.start.context.cwd)
                         .await
@@ -268,9 +290,14 @@ pub async fn run_with<D: WithDriver + ?Sized>(
         })
     };
     if let Some(directory) = &plan.logs_dir {
+        let ran = |unit: &str| {
+            tasks
+                .iter()
+                .any(|(lane, task)| *lane == ownership.lane && task == unit)
+        };
         let owned_logs: Vec<UnitLogs> = logs
             .iter()
-            .filter(|unit| owned(&unit.unit))
+            .filter(|unit| owned(&unit.unit) || ran(&unit.unit))
             .cloned()
             .collect();
         match write_log_artifacts(directory, &owned_logs).await {
@@ -378,30 +405,6 @@ pub async fn run_with<D: WithDriver + ?Sized>(
         }
     }
     result
-}
-
-/// Variables runtimes read for their roots, with the devlanes CA variable each
-/// points at: the certificate where a runtime adds roots, the bundle where it
-/// replaces them.
-const RUNTIME_CA_ENV: [(&str, &str); 4] = [
-    ("NODE_EXTRA_CA_CERTS", CA_CERT_ENV),
-    ("DENO_CERT", CA_CERT_ENV),
-    ("SSL_CERT_FILE", CA_BUNDLE_ENV),
-    ("REQUESTS_CA_BUNDLE", CA_BUNDLE_ENV),
-];
-
-/// Points the runtime CA variables of `with`'s command at the devlanes CA, so
-/// test code calling `https://*.localhost` trusts the proxy. A value the shell
-/// already set is kept: it may name a CA the tests need as well.
-fn add_runtime_ca_env(env: &mut BTreeMap<String, String>) {
-    for (name, source) in RUNTIME_CA_ENV {
-        if env.contains_key(name) {
-            continue;
-        }
-        if let Some(path) = env.get(source).cloned() {
-            env.insert(name.to_owned(), path);
-        }
-    }
 }
 
 /// Services of a start result still `starting` or `queued` when it ended without
@@ -676,7 +679,8 @@ pub fn log_filename(unit: &str) -> String {
     name
 }
 
-/// Atomically replaces each unit's artifact so repeated runs do not retain stale logs.
+/// Atomically replaces each unit's artifact, so a rerun leaves no stale lines in
+/// it. Other files in `directory` stay: it is the user's folder.
 #[cfg(not(target_family = "wasm"))]
 pub async fn write_log_artifacts(
     directory: &Path,

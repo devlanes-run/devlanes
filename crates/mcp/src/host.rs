@@ -32,8 +32,9 @@ const CLAUDE_CODE_TOOL_TIMEOUT: &str = "MCP_TOOL_TIMEOUT";
 /// builds wait longer. OpenCode waits 30 s. Claude Code waits about 28 hours
 /// unless `MCP_TOOL_TIMEOUT` says otherwise; without it the CLI's own 180 s
 /// default would do, and 170 s keeps the result in the call rather than in a
-/// background task for longer. Other hosts get 60 s, the default request
-/// timeout of the MCP TypeScript SDK many clients are built on.
+/// background task for longer. Other hosts get 55 s, under the 60 s default
+/// request timeout of the MCP TypeScript SDK many clients are built on, so
+/// devlanes answers before such a host gives up.
 pub fn default_timeout(client: &str, env: &BTreeMap<String, String>) -> Duration {
     let client = client.to_ascii_lowercase();
     if client.contains("claude-code") {
@@ -46,7 +47,7 @@ pub fn default_timeout(client: &str, env: &BTreeMap<String, String>) -> Duration
     } else if client.contains("opencode") {
         25
     } else {
-        60
+        55
     })
 }
 
@@ -148,42 +149,42 @@ mod tests {
     /// Cursor, also behind mcp-remote, is Cursor and not VS Code.
     #[test]
     fn cursor() {
-        host("cursor-vscode", 60, Some("cursor"));
-        host("cursor-vscode (via mcp-remote 0.1.37)", 60, Some("cursor"));
+        host("cursor-vscode", 55, Some("cursor"));
+        host("cursor-vscode (via mcp-remote 0.1.37)", 55, Some("cursor"));
     }
 
     /// VS Code and its Insiders build run Copilot's agent, as the Copilot CLI does.
     #[test]
     fn vs_code_copilot() {
-        host("Visual Studio Code", 60, Some("github-copilot"));
-        host("Visual Studio Code - Insiders", 60, Some("github-copilot"));
-        host("github-copilot-developer", 60, Some("github-copilot"));
+        host("Visual Studio Code", 55, Some("github-copilot"));
+        host("Visual Studio Code - Insiders", 55, Some("github-copilot"));
+        host("github-copilot-developer", 55, Some("github-copilot"));
     }
 
     /// Gemini CLI is the agent is-ai-agent calls `gemini-cli`.
     #[test]
     fn gemini_cli() {
-        host("gemini-cli-mcp-client", 60, Some("gemini-cli"));
+        host("gemini-cli-mcp-client", 55, Some("gemini-cli"));
     }
 
     /// Goose's CLI and desktop app are both Goose.
     #[test]
     fn goose() {
-        host("goose-cli", 60, Some("goose"));
-        host("goose-desktop", 60, Some("goose"));
+        host("goose-cli", 55, Some("goose"));
+        host("goose-desktop", 55, Some("goose"));
     }
 
     /// Claude Desktop is no coding agent, so its calls name none.
     #[test]
     fn claude_desktop() {
-        host("claude-ai", 60, None);
+        host("claude-ai", 55, None);
     }
 
-    /// A client the table does not know gets 60 s and no agent.
+    /// A client the table does not know gets 55 s and no agent.
     #[test]
     fn unknown() {
-        host("", 60, None);
-        host("acme-client", 60, None);
+        host("", 55, None);
+        host("acme-client", 55, None);
     }
 
     /// Every id the table sets is one is-ai-agent 0.7 classifies as that agent,

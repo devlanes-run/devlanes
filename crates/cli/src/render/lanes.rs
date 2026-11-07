@@ -5,8 +5,8 @@ use devlanes_proto::{LaneSummary, RpcError, StartResult, UnitFailureData, UnitSu
 use serde_json::Value;
 
 use super::{
-    Ctx, Outcome, bytes, clean, display_value, int, leftover_notes, leftover_notes_of, list,
-    percent, plural, table, tail_lines, text, tree, words,
+    Ctx, Outcome, bytes, clean, display_value, exit_field, int, leftover_notes, leftover_notes_of,
+    list, percent, plural, table, tail_lines, text, tree, words,
 };
 use crate::{Hint, OutputMode};
 
@@ -33,13 +33,25 @@ fn unit_label(unit: &UnitSummary, cx: &Ctx<'_>) -> String {
 }
 
 /// The state word people see ([`UnitSummary::shown_state`]: `running`, `frozen`,
-/// `throttled`); other modes keep the protocol word, which scripts match.
+/// `throttled`); other modes keep the protocol word, which scripts match, except
+/// `running` for an exec command (see [`runs_unprobed`]).
 fn state_word<'a>(unit: &'a UnitSummary, cx: &Ctx<'_>) -> &'a str {
     if cx.human() {
         unit.shown_state()
+    } else if runs_unprobed(unit, cx) {
+        "running"
     } else {
         &unit.state
     }
+}
+
+/// Whether text output shows a `ready` unit as `running`: an exec command in every
+/// text mode, since it is ready only by being alive and `wait` waits for its exit;
+/// for people also any unit whose readiness is only that its process started.
+/// JSON keeps `ready`.
+fn runs_unprobed(unit: &UnitSummary, cx: &Ctx<'_>) -> bool {
+    unit.state == "ready"
+        && (unit.kind == "exec" || (cx.human() && unit.ready_check.as_deref() == Some("started")))
 }
 
 /// The state word, with the queue place for queued units (`queued 6/40`). People
@@ -77,9 +89,15 @@ fn orphan_note(unit: &UnitSummary) -> String {
 
 /// Agent line for one unit: `state lane:unit exit=N urls ports actor=`.
 pub(crate) fn unit_line(unit: &UnitSummary, cx: &Ctx<'_>) -> String {
+    // Never the power word: the line keeps `ready` first and adds `power=` below.
+    let state = if runs_unprobed(unit, cx) {
+        "running"
+    } else {
+        &unit.state
+    };
     let mut line = format!(
         "{} {}:{}",
-        cx.state(&clean(&unit.state.to_lowercase())),
+        cx.state(&clean(&state.to_lowercase())),
         clean(&unit.lane),
         cx.unit_name(&clean(&unit.name), &unit.state, unit.color.as_deref())
     );
@@ -89,7 +107,7 @@ pub(crate) fn unit_line(unit: &UnitSummary, cx: &Ctx<'_>) -> String {
         line.push_str(&format!(" {place}"));
     }
     if let Some(code) = unit.exit_code {
-        line.push_str(&format!(" exit={code}"));
+        line.push_str(&exit_field(&unit.state.to_lowercase(), code.into()));
     }
     // The line keeps `ready` first: a frozen unit still serves, its next request thaws it.
     if let Some(power) = &unit.power {
@@ -307,9 +325,13 @@ fn start_warnings(result: &StartResult, cx: &Ctx<'_>) -> Vec<String> {
         .collect()
 }
 
-/// A start that found every selected unit up: it spawned nothing and ran no task.
+/// A start that found every selected unit up: it spawned nothing and ran no
+/// task or setup entry.
 fn nothing_started(result: &StartResult) -> bool {
-    result.started.is_empty() && !result.already_running.is_empty() && result.failures.is_empty()
+    result.started.is_empty()
+        && result.ran.is_empty()
+        && !result.already_running.is_empty()
+        && result.failures.is_empty()
 }
 
 /// A reload that started nothing: it only stopped removed units or found no
@@ -349,6 +371,14 @@ fn start_result(result: &StartResult, cx: &Ctx<'_>) -> Vec<String> {
         }
         if nothing_started(result) {
             header.push_str(", already running (nothing started)");
+        }
+        if result.started.is_empty() && !result.ran.is_empty() {
+            let names: Vec<String> = result
+                .ran
+                .iter()
+                .map(|unit| clean(unit.split_once(':').map_or(unit.as_str(), |(_, name)| name)))
+                .collect();
+            header.push_str(&format!(", ran {}", names.join(", ")));
         }
         if !result.skipped_tasks.is_empty() {
             let names: Vec<String> = result.skipped_tasks.iter().map(|t| clean(t)).collect();
@@ -425,17 +455,19 @@ fn start_result(result: &StartResult, cx: &Ctx<'_>) -> Vec<String> {
     // A start that ran no service (its units were refused) has no services
     // line: "0 of 0 ready" says nothing.
     if !view.services.is_empty() {
-        let outcome = if view.failed.is_empty() && result.ready {
-            Outcome::Ok
-        } else {
-            Outcome::Fail
-        };
-        lines.push(format!(
-            "{} services  {} of {} ready",
-            cx.mark(outcome),
+        let line = format!(
+            "services  {} of {} ready",
             view.ready_services(),
             view.services.len()
-        ));
+        );
+        // A timeout with nothing failed leaves units starting, not failed.
+        lines.push(if view.failed.is_empty() && result.ready {
+            format!("{} {line}", cx.mark(Outcome::Ok))
+        } else if view.failed.is_empty() && result.timed_out {
+            cx.warning(&line)
+        } else {
+            format!("{} {line}", cx.mark(Outcome::Fail))
+        });
     } else if result.ready && !reload_only(result) {
         lines.push(format!("{} nothing to start", cx.mark(Outcome::Ok)));
     }
@@ -634,7 +666,7 @@ pub(super) fn stop(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                 clean(&unit.name)
             );
             if let Some(code) = unit.exit_code.filter(|code| *code != 0) {
-                line.push_str(&format!(" exit={code}"));
+                line.push_str(&exit_field(word, code.into()));
             }
             // A stopped orphan keeps `orphaned_since_ms`.
             if unit.orphaned_since_ms.is_some() {
@@ -768,10 +800,13 @@ fn proxy_origin(lanes: &[LaneSummary]) -> Option<(String, String)> {
         })
 }
 
-/// The lane's base URL from its domain, with the scheme and port the proxy
-/// serves units on, such as `https://acme2.localhost:8443`. The bare domain
-/// when no unit URL shows them.
+/// The lane's base URL, such as `https://acme2.localhost:8443`: the daemon's,
+/// else from its domain with the scheme and port the proxy serves units on
+/// (older daemons), else the bare domain.
 fn lane_url(lane: &LaneSummary, origin: Option<&(String, String)>) -> String {
+    if let Some(url) = &lane.url {
+        return clean(url);
+    }
     match (&lane.domain, origin) {
         (None, _) => "–".into(),
         (Some(domain), Some((scheme, port))) => format!("{scheme}://{}{port}", clean(domain)),
@@ -1307,7 +1342,8 @@ pub(super) fn lane_gc(data: &Value) -> Vec<String> {
     lines
 }
 
-/// `exec`: the adopted unit and how to follow or stop it.
+/// `exec`: the adopted unit, the lane variables it went without, and how to
+/// follow or stop it.
 pub(super) fn exec(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let Ok(unit) = serde_json::from_value::<UnitSummary>(data.clone()) else {
         return tree(data);
@@ -1323,11 +1359,18 @@ pub(super) fn exec(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     } else {
         Hint::command(["logs", target.as_str(), "-f"])
     };
-    vec![
-        line,
-        format!("  logs: {}", logs.0),
-        format!("  stop: {}", Hint::command(["stop", target.as_str()]).0),
-    ]
+    let mut lines = vec![line];
+    lines.extend(
+        words::left_out(data)
+            .into_iter()
+            .map(|note| format!("  {note}")),
+    );
+    lines.push(format!("  logs: {}", logs.0));
+    lines.push(format!(
+        "  stop: {}",
+        Hint::command(["stop", target.as_str()]).0
+    ));
+    lines
 }
 
 /// `wait`: the target's final state, with the failure tail when it failed.
@@ -1341,12 +1384,12 @@ pub(super) fn wait(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     };
     let state = text(data, "state");
     let word = match state.as_str() {
-        "exited" | "stopping" => "stopped",
+        "stopping" => "stopped",
         other => other,
     };
     let mut line = format!("{} {target}", cx.state(word));
     if let Some(code) = int(data, "exit_code") {
-        line.push_str(&format!(" exit={code}"));
+        line.push_str(&exit_field(word, code));
     }
     let mut lines = vec![line];
     match word {

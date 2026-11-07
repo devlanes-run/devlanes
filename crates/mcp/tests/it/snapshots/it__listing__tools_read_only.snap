@@ -82,8 +82,7 @@ expression: tools(&harness).await
         },
         "context": {
           "type": "integer",
-          "default": 3,
-          "description": "Lines before and after --around"
+          "description": "Lines before and after --around, or around each --grep or --level match [default: 3 with --around, else 0]"
         },
         "cursor": {
           "type": "string",

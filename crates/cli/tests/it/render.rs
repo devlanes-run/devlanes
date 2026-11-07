@@ -168,6 +168,17 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
     vec![
         ("start", Method::Start, start_result()),
         ("start_queued", Method::Start, start_queued),
+        // `--timeout` hit while web still starts: nothing failed.
+        (
+            "start_timed_out",
+            Method::Start,
+            json!({
+                "lane": "acme@2", "branch": "feat/billing", "started": ["acme@2:api", "acme@2:web"],
+                "already_running": [], "whole_lane": true, "ready": false, "timed_out": true,
+                "failures": [], "skipped_tasks": [],
+                "units": [unit("api", "ready"), unit("web", "starting")],
+            }),
+        ),
         // `start bg` while bg is a previous daemon's orphan: refused, nothing ran.
         (
             "start_refused_orphan",
@@ -250,7 +261,9 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "already_running": [], "whole_lane": true, "ready": true, "timed_out": false,
                 "failures": [], "skipped_tasks": [],
                 "units": [unit("api", "ready"), unit("web", "ready")],
-                "warnings": [{"code": "reload_restarted_lane", "data": {"lane": "acme@2",
+                "warnings": [{"code": "exec_stopped", "data": {"lane": "acme@2", "units": ["docs"],
+                    "message": "stopped exec units docs; a whole-lane restart does not run them again"}},
+                    {"code": "reload_restarted_lane", "data": {"lane": "acme@2",
                     "message": "infra or ports changed, so the whole lane restarted"}}],
             }),
         ),
@@ -338,6 +351,20 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "feat/billing",
                 "running",
                 vec![unit("api", "ready"), pgadmin],
+            )])
+        }),
+        // An exec command in progress reads `running` in every text mode.
+        ("status_exec", Method::Status, {
+            let mut docs = unit("docs", "ready");
+            docs["kind"] = json!("exec");
+            docs["ready_check"] = json!("started");
+            docs["urls"] = json!([]);
+            docs["ports"] = json!({});
+            page(vec![lane(
+                Some(2),
+                "feat/billing",
+                "running",
+                vec![unit("api", "ready"), docs],
             )])
         }),
         // An idle lane keeps `state`; `power` adds the level and since when.
@@ -465,14 +492,22 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
         ("exec", Method::Exec, {
             let mut exec = unit("probe", "ready");
             exec["kind"] = json!("exec");
+            exec["ready_check"] = json!("started");
             exec["urls"] = json!([]);
             exec["ports"] = json!({});
+            exec["left_out"] = json!([{"key": "DATABASE_URL", "infra": "postgres"}]);
             exec
         }),
         (
             "wait_ready",
             Method::Wait,
             json!({"lane": "acme@2", "unit": "api", "state": "ready", "ready": true}),
+        ),
+        // A task or exec command that exited 0 on its own.
+        (
+            "wait_exited",
+            Method::Wait,
+            json!({"lane": "acme@2", "unit": "job", "state": "exited", "ready": true, "exit_code": 0}),
         ),
         (
             "wait_failed",
@@ -536,6 +571,13 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             {"key": "API_TOKEN", "value": "tok_test", "layer": "global"},
             {"key": "NODE_ENV", "value": "development", "layer": "service"},
         ], "truncated": false, "next_cursor": null}),
+        ),
+        // The lane's env before its infra is up: a value that reads it waits.
+        (
+            "env_left_out",
+            Method::Env,
+            json!({"lane": "acme@2", "env": {"DEVLANES": "1", "GREETING": "hi"},
+                   "left_out": [{"key": "DATABASE_URL", "infra": "postgres"}]}),
         ),
         (
             "url",
@@ -1403,6 +1445,49 @@ fn ctrl_c_exits_read_as_interrupted() {
 }
 
 #[test]
+/// Agent lines leave `exit=` off a unit that a Windows stop ended, as a Unix
+/// stop by signal carries no code; a failure or another code keeps it.
+fn stopped_ctrl_c_exits_drop_the_code() {
+    let interrupted = i64::from(0xC000_013A_u32.cast_signed());
+    let agent = |method: Method, data: &Value| {
+        runtime(OutputMode::Agent)
+            .reporter()
+            .result(&Report::new(method, data))
+            .expect("render")
+            .stdout
+    };
+    let with_code = |state: &str, code: i64| {
+        let mut unit = unit("api", state);
+        unit["exit_code"] = json!(code);
+        unit
+    };
+    for (state, code, kept) in [
+        ("stopped", interrupted, !cfg!(windows)),
+        ("failed", interrupted, true),
+        ("stopped", 3, true),
+    ] {
+        let field = format!("exit={code}");
+        let items = json!({"items": [with_code(state, code)]});
+        let status =
+            json!({"items": [lane(Some(2), "main", "running", vec![with_code(state, code)])]});
+        let wait = json!({"lane": "acme@2", "unit": "api", "state": state, "exit_code": code});
+        for (method, data) in [
+            (Method::Stop, &items),
+            (Method::Status, &status),
+            (Method::Wait, &wait),
+        ] {
+            let text = agent(method, data);
+            assert_eq!(
+                text.contains(&field),
+                kept,
+                "{state} {code} {method:?}: {text}"
+            );
+            assert!(text.contains("acme@2"), "{text}");
+        }
+    }
+}
+
+#[test]
 /// A human terminal with colors gets a unit's colors back, each line ending in a
 /// reset and nothing but SGR kept; every other output gets plain text.
 fn logs_keep_colors_only_where_they_show() {
@@ -1534,9 +1619,10 @@ fn status_of_idle_lanes_says_nothing_runs() {
 }
 
 #[test]
-/// A start that found everything up says so instead of looking like a fresh start.
+/// A start that found everything up says so instead of looking like a fresh
+/// start, unless it ran a setup entry or task.
 fn start_of_a_running_lane_says_already_running() {
-    let data = json!({
+    let mut data = json!({
         "lane": "acme@2", "branch": "feat/billing", "started": [],
         "already_running": ["acme@2:api"], "whole_lane": false, "ready": true, "timed_out": false,
         "failures": [], "skipped_tasks": [], "units": [unit("api", "ready")],
@@ -1551,6 +1637,12 @@ fn start_of_a_running_lane_says_already_running() {
         parts[2].contains("already running (nothing started)"),
         "{text}"
     );
+    data["ran"] = json!(["acme@2:setup.cache"]);
+    let text = render_text(Method::Start, &data);
+    assert!(!text.contains("already running"), "{text}");
+    // The first line of each part names its mode.
+    let header = modes(&text)[2].lines().nth(1).unwrap_or_default();
+    assert!(header.ends_with(", ran setup.cache"), "{text}");
 }
 
 #[test]
@@ -2209,6 +2301,11 @@ fn daemon_errors_are_worded_with_hints() {
             1,
         ),
         RpcError::new("timeout", json!({"lane": "acme@2", "unit": "api"}), 124),
+        RpcError::new(
+            "timeout",
+            json!({"lane": "acme@2", "unit": "job", "state": "running", "timeout_ms": 5000}),
+            124,
+        ),
         RpcError::new("not_supported_yet", json!({"feature": "remote unlock"}), 1),
         RpcError::new(
             "config_error",
@@ -2216,6 +2313,11 @@ fn daemon_errors_are_worded_with_hints() {
             1,
         ),
         RpcError::new("needs_env", json!({"lane": "acme@2"}), 1),
+        RpcError::new(
+            "lane_env_unresolved",
+            json!({"lane": "acme@2", "path": "global_env.API_TOKEN", "message": "undefined value (devlanes.yaml:4:14)"}),
+            1,
+        ),
         RpcError::new(
             "protocol_mismatch",
             json!({"protocol": 7, "client_protocol": 8, "version": "0.2.0", "build_id": "a1b2c3", "managed_processes": 6}),
@@ -2318,8 +2420,13 @@ fn daemon_errors_are_worded_with_hints() {
         RpcError::new("lane_not_running", json!({"lane": "acme@2"}), 1),
         RpcError::new("lane_busy", json!({"lane": "acme@2"}), 1),
         RpcError::new(
+            "lane_runs_task",
+            json!({"lane": "acme@2", "units": ["docsrv"]}),
+            1,
+        ),
+        RpcError::new(
             "lane_keep_awake",
-            json!({"lane": "acme@2", "units": ["worker", "queue"]}),
+            json!({"lane": "acme@2", "units": ["worker.1", "worker.2", "queue"], "services": ["worker", "queue"]}),
             1,
         ),
         RpcError::new(

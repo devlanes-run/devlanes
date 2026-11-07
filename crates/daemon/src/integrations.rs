@@ -363,7 +363,9 @@ pub struct InfraEvent {
     /// The Docker container name.
     pub container: String,
     /// `started`, `health_starting`, `healthy`, `unhealthy`, `died`, `stopped`,
-    /// `out_of_memory` or `removed`.
+    /// `out_of_memory` or `removed`; or `reconnected` (with no project, lane or
+    /// container) when the engine's event stream came back and events may have
+    /// been missed.
     pub state: String,
     /// The main process's exit code with `died`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -428,6 +430,20 @@ pub trait InfraProvider: Send + Sync {
         spec: &InfraSpec,
         containers: &[String],
     ) -> Result<BTreeMap<String, String>, InfraError>;
+    /// Waits until each of `containers` that runs now is healthy, or running when
+    /// it has no healthcheck, at most `timeout`; they are waited for together.
+    /// Never starts, creates or recreates anything. A container that does not
+    /// run when the call begins is skipped, and its Docker name returned. One
+    /// that turns unhealthy, exits during the wait or is not healthy in time
+    /// fails the call.
+    async fn wait_healthy(
+        &self,
+        _spec: &InfraSpec,
+        _containers: &[InfraContainer],
+        _timeout: std::time::Duration,
+    ) -> Result<Vec<String>, InfraError> {
+        Ok(Vec::new())
+    }
     /// Output of the container `docker` ([`InfraContainer::docker`]), plain or compose,
     /// for `ready: {log}` and `infra.logs`. Nothing is stored; the engine keeps the logs.
     async fn container_logs(

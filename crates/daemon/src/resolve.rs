@@ -9,7 +9,7 @@ use std::{
 use devlanes_config::{ComposeFiles, Run};
 use devlanes_core::ports::{PortBlock, PortName};
 use devlanes_proto::RpcError;
-use devlanes_resolve::{ResolveError, ResolveInput, ResolvedLane};
+use devlanes_resolve::{LaneLayers, ResolveError, ResolveInput, ResolvedLane};
 use devlanes_state::BlockOwner;
 use serde_json::{Value, json};
 
@@ -67,6 +67,17 @@ pub(crate) fn resolve_error(error: &ResolveError) -> RpcError {
         ),
     };
     RpcError::new(code, data, exit)
+}
+
+/// The `left_out` field of `exec` and lane-level `env` answers: each variable
+/// [`LaneLayers::unset`] names, as `{key, infra}` with the container it waits on.
+pub(crate) fn left_out(unset: &BTreeMap<String, String>) -> Value {
+    unset
+        .iter()
+        .map(|(key, container)| {
+            json!({"key": devlanes_core::env::fold_name(key.clone()), "infra": container})
+        })
+        .collect()
 }
 
 /// Config paths of `task` and everything its `steps` run, recursively (see
@@ -139,6 +150,74 @@ impl Inner {
             .and_then(|config| task_units(config, task));
         self.resolve_planned(project, lane, None, None, Some(extra), only.as_ref(), false)
             .await
+    }
+
+    /// Resolves the lane without planning a unit, for its lane-level env
+    /// ([`ResolvedLane::lane_env`] and its [`LaneLayers`]) that `exec`, `with`
+    /// and `env show` use. The stored client env wins over `fallback`. While the
+    /// lane runs something, a project file that does not load leaves the last
+    /// good config in use, as for the lane's view. A value that does not evaluate
+    /// in a file that loads fails with `lane_env_unresolved`, never `config_error`,
+    /// which would call the file invalid.
+    pub(crate) async fn resolve_lane_env(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+        fallback: Arc<EnvMap>,
+    ) -> Result<(Arc<ResolvedLane>, LaneLayers), RpcError> {
+        let reference = lane.st().reference(&project.name());
+        let (config, loads) = {
+            let st = lane.st();
+            if st.record.is_none() {
+                let mut error = st
+                    .unassigned
+                    .clone()
+                    .or_else(|| st.last_error.clone())
+                    .unwrap_or_else(|| RpcError::new("unassigned", json!({}), 1));
+                if error.data.is_null() {
+                    error.data = json!({});
+                }
+                if let Some(data) = error.data.as_object_mut() {
+                    data.entry("lane").or_insert(json!(reference));
+                }
+                return Err(error);
+            }
+            match &st.config {
+                ConfigState::Loaded(_) => (None, true),
+                _ => {
+                    let kept = st.last_good.clone().filter(|_| st.any_running());
+                    let loads = kept.is_some();
+                    (kept, loads)
+                }
+            }
+        };
+        let unresolved = |mut error: RpcError| {
+            // Only evaluation errors name a config path; a cycle is the file's own.
+            if loads && error.code == "config_error" && error.data.get("path").is_some() {
+                error.code = "lane_env_unresolved".into();
+                if let Some(data) = error.data.as_object_mut() {
+                    data.insert("lane".into(), json!(reference));
+                }
+            }
+            error
+        };
+        let resolved = self
+            .resolve_planned(
+                project,
+                lane,
+                Some(fallback),
+                config,
+                None,
+                Some(&BTreeSet::new()),
+                false,
+            )
+            .await
+            .map_err(unresolved)?;
+        let layers = resolved
+            .lane_layers()
+            .map_err(|error| unresolved(resolve_error(error)))?
+            .clone();
+        Ok((resolved, layers))
     }
 
     /// Like [`Self::resolve_full`], against `config` instead of the lane's current
@@ -379,6 +458,15 @@ impl Inner {
                 )
             })
         };
+        let word = |path: &str, value: &devlanes_config::Templated<String>| {
+            value.evaluate_text(&context).map_err(|error| {
+                RpcError::new(
+                    "config_error",
+                    json!({"path": path, "message": error.message}),
+                    1,
+                )
+            })
+        };
         let mut env_map = BTreeMap::new();
         for (key, value) in &infra.env {
             let value = value.evaluate(&context).map_err(|error| {
@@ -407,13 +495,13 @@ impl Inner {
                 Some(Run::Argv(items)) => Some(
                     items
                         .iter()
-                        .map(|item| evaluate(&format!("{path}.command"), item))
+                        .map(|item| word(&format!("{path}.command"), item))
                         .collect::<Result<Vec<_>, _>>()?,
                 ),
                 Some(Run::Shell(text)) => Some(vec![
                     "/bin/sh".into(),
                     "-c".into(),
-                    evaluate(&format!("{path}.command"), text)?,
+                    word(&format!("{path}.command"), text)?,
                 ]),
                 None => None,
             };

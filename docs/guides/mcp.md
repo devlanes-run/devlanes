@@ -131,7 +131,7 @@ When one of those commands names no `--timeout`, the server adds one that fits t
 | Claude Code | about 28 hours, or `MCP_TOOL_TIMEOUT` | 170 s, or a little under `MCP_TOOL_TIMEOUT` |
 | Codex | 60 s (`tool_timeout_sec`) | 50 s |
 | OpenCode | 30 s (`timeout`) | 25 s |
-| any other host | not known | 60 s |
+| any other host | not known, often 60 s | 55 s |
 
 When the timeout passes, the call returns what is ready so far, such as `2/3 ready, web starting`, and the units keep starting in the daemon; the agent calls the `wait` tool to continue. A timeout that is too short costs an extra `wait` call, and one longer than the host's limit brings back the bare timeout, so the values lean short.
 

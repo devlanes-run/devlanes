@@ -1,0 +1,21 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 124)
+acme@2 · feat/billing
+! services  1 of 2 ready
+  starting  web
+  ✓         api  https://api.acme2.localhost:8443
+! timed out before every unit was ready
+--- plain (exit 124)
+acme@2 · feat/billing
+warn services  1 of 2 ready
+  starting  web
+  ok        api  https://api.acme2.localhost:8443
+timed out before every unit was ready
+--- agent (exit 124)
+acme@2 (feat/billing): 1/2 ready, timed out
+starting web
+ready api http://127.0.0.1:20103 https://api.acme2.localhost:8443
+next: devlanes debug why acme@2:web

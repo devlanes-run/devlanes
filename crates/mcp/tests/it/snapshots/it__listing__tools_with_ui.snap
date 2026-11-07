@@ -191,8 +191,7 @@ expression: tools
         },
         "context": {
           "type": "integer",
-          "default": 3,
-          "description": "Lines before and after --around"
+          "description": "Lines before and after --around, or around each --grep or --level match [default: 3 with --around, else 0]"
         },
         "cursor": {
           "type": "string",
@@ -417,7 +416,7 @@ expression: tools
         },
         "logs_dir": {
           "type": "string",
-          "description": "Write every unit's log of the run to DIR as text files, for CI artifacts"
+          "description": "Write the log of every unit and task the run started to DIR as text files, for CI artifacts; other files in DIR stay"
         },
         "keep": {
           "type": "boolean",

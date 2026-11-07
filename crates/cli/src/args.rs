@@ -31,7 +31,8 @@ References:
   lane or worktree directory name, or a path. Without project@ the project of
   the current directory is used.
   A unit is [lane:]unit, such as api, 2:api or acme@feat/checkout:web.
-  Commands that take several units also accept globs (\"api-*\") and tags (+web).";
+  Commands that take several units also accept globs (\"api-*\"), tags (+web)
+  and a service's name for all its replicas.";
 
 const START_AFTER: &str = "\
 Examples:
@@ -139,14 +140,17 @@ nothing to bring back and starts its default profile; start.restore: false in\n\
     #[command(long_about = "Stop units, or the whole lane when none are named.\n\n\
 Stopped services are left out of what a plain devlanes start brings back. A\n\
 whole-lane stop also forgets the lane's profiles, so its next plain start uses\n\
-the default profile.")]
+the default profile.\n\n\
+A failed service or exec command you name, or every one when the whole lane\n\
+stops, reads stopped afterwards; failed tasks keep their state.")]
     Stop(StopArgs),
     /// Stop and start units again with a fresh environment, or the whole lane when none are named
     #[command(
         long_about = "Stop and start units again with a fresh environment, or the whole lane when none are named.\n\n\
 A whole-lane restart stops everything, keeps the lane's saved profiles and\n\
 services, and starts it again as a plain devlanes start does: infra, setup,\n\
-tasks, services and any port change in the project file."
+tasks, services and any port change in the project file. It stops exec units\n\
+and does not run them again."
     )]
     Restart(RestartArgs),
     /// Apply project file and .env changes to the running lane
@@ -155,11 +159,17 @@ tasks, services and any port change in the project file."
 Stops the units the file removed, restarts the ones it changed and starts the\n\
 ones it added. Without units, a change to infra or ports restarts the whole\n\
 lane instead. With units, it applies only their changes. devlanes status shows\n\
-what changed."
+what changed. A whole-lane restart stops exec units and does not run them again."
     )]
     Reload(ReloadArgs),
     /// Show lanes and units with state, ports, URLs, CPU and memory
-    #[command(after_help = STATUS_AFTER)]
+    #[command(
+        long_about = "Show lanes and units with state, ports, URLs, CPU and memory.\n\n\
+Exits 1 while a lane or unit it shows has failed, a task or exec command that\n\
+exited non-zero included. devlanes stop NAME clears a failed service or exec\n\
+command once you have read why; running a unit again also replaces its failure.",
+        after_help = STATUS_AFTER
+    )]
     Status(StatusArgs),
     /// Read unit logs; each line carries a cursor to continue from
     #[command(
@@ -173,7 +183,9 @@ terminal the output defaults to the last 100 lines within the output budget.",
     /// Wait until a unit or lane is ready or failed
     #[command(long_about = "Wait until a unit or lane is ready or failed.\n\n\
 Exits 0 when ready, 1 when it failed (with the reason and log tail) and 124\n\
-when --timeout passes first [default: 180s].")]
+when --timeout passes first [default: 180s]. A task or exec unit is waited on\n\
+until its command exits: 0 when it exited 0, 1 when it failed. A server started\n\
+with exec never exits; read its logs instead. A lane counts only its services.")]
     Wait {
         /// Unit ([lane:]unit) or lane ([project@]lane) to wait for, such as api, 2:web or acme@2 [default: pick from a list]
         #[arg(value_name = "TARGET")]
@@ -184,13 +196,13 @@ when --timeout passes first [default: 180s].")]
         long_about = "Start the lane, run a command against it, then stop what was started.\n\n\
 Waits for ready first; when a unit fails it prints the failure and exits 1\n\
 without running the command. The command gets the lane's environment, including\n\
-DEVLANES_PUBLIC_URL_<SERVICE> for every service, plus NODE_EXTRA_CA_CERTS,\n\
-DENO_CERT, SSL_CERT_FILE and REQUESTS_CA_BUNDLE for the devlanes CA unless the\n\
-shell sets them. Afterwards devlanes writes --logs-dir, prints each unit's\n\
-state, run time and average and peak CPU and memory when output is not a\n\
-terminal (CI logs, pipes) and adds the same table to the GitHub step summary,\n\
-stops what it started (and the daemon, if it started it) and exits with the\n\
-command's exit code.",
+global_env, the profile's env and DEVLANES_PUBLIC_URL_<SERVICE> for every\n\
+service, plus NODE_EXTRA_CA_CERTS, DENO_CERT, SSL_CERT_FILE and\n\
+REQUESTS_CA_BUNDLE for the devlanes CA unless the shell sets them. Afterwards\n\
+devlanes writes --logs-dir, prints each unit's state, run time and average and\n\
+peak CPU and memory when output is not a terminal (CI logs, pipes) and adds\n\
+the same table to the GitHub step summary, stops what it started (and the\n\
+daemon, if it started it) and exits with the command's exit code.",
         after_help = WITH_AFTER
     )]
     With(WithArgs),
@@ -206,7 +218,12 @@ need --yes when no terminal can prompt."
     #[command(
         long_about = "Run an ad-hoc command as a unit of the lane instead of backgrounding it with &.\n\n\
 The daemon owns the process: logs, stop, attach and status work on it by its\n\
---name, and it gets the lane's environment."
+--name. It gets the shell's environment, then the lane's: devlanes variables,\n\
+DEVLANES_PUBLIC_URL_<SERVICE>, and the global_env and profile env entries that\n\
+read neither self nor replica; one that reads infra the lane has not started\n\
+is left out and named. NODE_EXTRA_CA_CERTS, DENO_CERT, SSL_CERT_FILE and\n\
+REQUESTS_CA_BUNDLE point at the devlanes CA unless the shell sets them, and\n\
+--env wins over all of these."
     )]
     Exec(ExecArgs),
     /// Attach this terminal to a unit's terminal; C-a d detaches
@@ -341,7 +358,7 @@ pub struct WithArgs {
     /// Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
     #[arg(long = "profile", value_name = "PROFILE")]
     pub profiles: Vec<String>,
-    /// Write every unit's log of the run to DIR as text files, for CI artifacts
+    /// Write the log of every unit and task the run started to DIR as text files, for CI artifacts; other files in DIR stay
     #[arg(long, value_name = "DIR")]
     pub logs_dir: Option<PathBuf>,
     /// Leave the lane running afterwards, for debugging
@@ -427,9 +444,9 @@ pub struct LogArgs {
     /// Show the lines around this cursor, such as api#120
     #[arg(long, value_name = "CURSOR")]
     pub around: Option<String>,
-    /// Lines before and after --around
-    #[arg(short = 'C', long = "context", default_value_t = 3, value_name = "N")]
-    pub context_lines: usize,
+    /// Lines before and after --around, or around each --grep or --level match [default: 3 with --around, else 0]
+    #[arg(short = 'C', long = "context", value_name = "N")]
+    pub context_lines: Option<usize>,
     /// Continue after this cursor, as printed by an earlier logs call
     #[arg(long, value_name = "CURSOR")]
     pub cursor: Option<String>,
@@ -977,6 +994,10 @@ pub enum DaemonCommand {
     /// Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
     ResetState,
     /// Print a one-time code that pairs another machine with this one
+    ///
+    /// On a terminal it also prints how long the code is valid and the command
+    /// to run on the other machine. Without a terminal, as in
+    /// `ssh box devlanes daemon pair`, it prints only the code, for scripts.
     Pair,
     /// List the machines paired or connected to this one
     Clients,
@@ -1279,7 +1300,11 @@ impl Cli {
                             grep: args.grep.clone(),
                             level: args.level.clone(),
                             around: args.around.clone(),
-                            context_lines: args.context_lines,
+                            context_lines: args.context_lines.unwrap_or(if args.around.is_some() {
+                                3
+                            } else {
+                                0
+                            }),
                             follow: args.follow,
                             mine: args.mine,
                             // Colors come along only where they are shown.

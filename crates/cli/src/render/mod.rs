@@ -225,7 +225,10 @@ pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> 
         Method::Start | Method::Restart | Method::Reload | Method::Resume | Method::LaneNew
     );
     match event.event.as_str() {
-        events::PHASE if starting => other::phase_line(&event.data, cx).into_iter().collect(),
+        events::PHASE if starting => other::services_ready_line(&event.data, cx)
+            .into_iter()
+            .chain(other::phase_line(&event.data, cx))
+            .collect(),
         events::TASK if starting => other::task_line(&event.data, cx).into_iter().collect(),
         // The final result lists every unit; transitions would only repeat it.
         events::UNIT_CHANGED | events::LANE_CHANGED if starting => Vec::new(),
@@ -323,6 +326,17 @@ pub(crate) fn text(value: &Value, key: &str) -> String {
 /// Integer field.
 pub(crate) fn int(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(Value::as_i64)
+}
+
+/// The ` exit=N` field of an agent line. Left off for a stopped unit whose
+/// code has words (a Windows console event), as a Unix stop by signal
+/// carries no code.
+pub(crate) fn exit_field(state: &str, code: i64) -> String {
+    if state == "stopped" && crate::exit::words(code).is_some() {
+        String::new()
+    } else {
+        format!(" exit={code}")
+    }
 }
 
 /// Array field, empty when absent.

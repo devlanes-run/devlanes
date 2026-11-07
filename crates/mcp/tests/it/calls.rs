@@ -120,7 +120,7 @@ async fn blocking_commands_get_the_hosts_timeout() {
 
 #[tokio::test]
 /// Claude Code's `MCP_TOOL_TIMEOUT` in the server's environment sets the
-/// limit, and a client the server does not know gets 60 s.
+/// limit, and a client the server does not know gets 55 s.
 async fn the_hosts_tool_timeout_sets_the_limit() {
     tokio::time::timeout(LIMIT, async {
         let claude = connect(
@@ -145,7 +145,7 @@ async fn the_hosts_tool_timeout_sets_the_limit() {
         .await;
         other.call_with("start", json!({})).await;
         assert_eq!(claude.lines(), ["--output agent start --timeout 590s"]);
-        assert_eq!(other.lines(), ["--output agent start --timeout 60s"]);
+        assert_eq!(other.lines(), ["--output agent start --timeout 55s"]);
     })
     .await
     .expect("in time");

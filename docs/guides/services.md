@@ -129,7 +129,7 @@ services:
       WORKER_ID: "${{ replica.index }}"
 ```
 
-Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `services.worker.url` is replica 1. Named ports are allocated per replica too.
+Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `services.worker.url` is replica 1. Named ports are allocated per replica too. `devlanes stop worker`, `restart worker` and `logs worker` act on every replica; commands about one unit, such as `attach` or `debug why`, take `worker.2`.
 
 ## Services that start on demand
 
@@ -265,12 +265,12 @@ A server started with `devlanes exec`, or outside devlanes, gets no hostname and
 ## Agents and CI
 
 ```sh
-devlanes exec --name smoke -- pnpm test:smoke          # an ad-hoc unit with the lane's env; logs, stop and attach work on it
+devlanes exec --name smoke -- pnpm test:smoke          # an ad-hoc unit with the lane's env; logs, stop and attach work on it, and stop clears it once it failed
 devlanes wait api --timeout 2m
 devlanes with --profile e2e --logs-dir devlanes-logs -- pnpm test:e2e
 ```
 
-`with` starts the lane, waits for ready, runs the command with the lane's environment (`DEVLANES_PUBLIC_URL_API`, `DEVLANES_PUBLIC_URL_WEB`, …), writes each unit's log to `--logs-dir`, stops what it started and exits with the command's code. The command also gets `NODE_EXTRA_CA_CERTS` and `DENO_CERT` set to the devlanes CA and `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` set to a bundle of the system roots plus the CA, unless your shell already sets them, so test code can call the lane's `https://` URLs.
+`with` starts the lane, waits for ready, runs the command with the lane's environment (`DEVLANES_PUBLIC_URL_API`, `DEVLANES_PUBLIC_URL_WEB`, …), writes the log of each unit and task it started to `--logs-dir` (as `unit-<name>.log`, replacing those files and leaving the folder's other files, so use a fresh folder per run), stops what it started and exits with the command's code. The command also gets `NODE_EXTRA_CA_CERTS` and `DENO_CERT` set to the devlanes CA and `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` set to a bundle of the system roots plus the CA, unless your shell already sets them, so test code can call the lane's `https://` URLs.
 
 In CI the checkout takes lane 0 when it is free, on any branch, detached pull request checkouts included. Outside GitHub Actions, run `devlanes setup --yes` first. On Linux, also add `chrome` to `tls.trust` so Playwright's Chromium trusts the CA, and expect the proxy on 8443 unless the runner may bind 443.
 

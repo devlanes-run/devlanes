@@ -194,6 +194,8 @@ pub struct Setup {
     pub ci: bool,
     /// The OS resolver file check; none reports nothing.
     pub resolver_files: Option<Arc<dyn devlanes_daemon::integrations::ResolverFiles>>,
+    /// CA trust variables (`DEVLANES_CA_CERT`, `DEVLANES_CA_BUNDLE`); none by default.
+    pub ca_env: BTreeMap<String, String>,
 }
 
 /// A user config whose port pool is `range`, for [`Setup::user`]. A restart
@@ -203,6 +205,8 @@ pub struct Setup {
 ///
 /// Ranges: `engine.rs` 12000-12249, `orphans.rs` 12250-12499, `pacing.rs`
 /// 12500-12999. No other test in this binary uses 12000-12999.
+/// `profiles.rs` takes 15000-15249 for a port nothing may listen on, between
+/// `remote_choice.rs`'s 13000-14999 and `remote_pairing.rs`'s 15400-15799.
 pub fn pool(range: &str) -> Option<devlanes_config::UserConfig> {
     let mut user = devlanes_config::UserConfig::default();
     user.ports.range = range.into();
@@ -228,6 +232,7 @@ pub async fn harness(home: &Path, setup: Setup) -> Harness {
     integ.system_pressure = setup.system;
     integ.contributors = setup.contributors;
     integ.resolver_files = setup.resolver_files;
+    integ.ca_env = setup.ca_env;
     if let Some(ports) = setup.ports {
         integ.ports = ports;
     }

@@ -2,7 +2,7 @@
 //! identifiers and descriptors, private directories, named pipes, the process
 //! table, job objects, process creation, suspension and efficiency mode,
 //! consoles, windows, the registry, the shell's `ShellExecuteExW`, file
-//! identity, certificate stores and socket options.
+//! identity, certificate stores, socket options and the computer name.
 //!
 //! The wrappers hold no policy and produce no user-facing text; the crates that
 //! call them decide what a result means. Every call blocks, so async callers use
@@ -51,6 +51,8 @@ pub mod security;
 pub mod shell_execute;
 #[allow(unsafe_code)]
 pub mod spawn;
+#[allow(unsafe_code)]
+pub mod system;
 #[allow(unsafe_code)]
 pub mod token;
 #[allow(unsafe_code)]
