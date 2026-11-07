@@ -166,8 +166,7 @@ devlanes logs [OPTIONS] [UNIT]...
 - `--grep <REGEX>`: Only lines matching this regular expression
 - `--level <LEVEL>`: Only lines at this level or above: debug, info, warn or error
 - `--around <CURSOR>`: Show the lines around this cursor, such as api#120
-- `-C, --context <N>`: Lines before and after --around
-  Default: `3`.
+- `-C, --context <N>`: Lines before and after --around, or around each --grep or --level match [default: 3 with --around, else 0]
 - `--cursor <CURSOR>`: Continue after this cursor, as printed by an earlier logs call
 - `--mine`: Only units this agent session started
 
@@ -212,7 +211,7 @@ devlanes with [OPTIONS] [UNIT]... -- <COMMAND>...
 
 - `[UNIT]...`: Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]
 - `--profile <PROFILE>`: Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
-- `--logs-dir <DIR>`: Write every unit's log of the run to DIR as text files, for CI artifacts
+- `--logs-dir <DIR>`: Write the log of every unit and task the run started to DIR as text files, for CI artifacts; other files in DIR stay
 - `--keep`: Leave the lane running afterwards, for debugging
 - `--all-at-once`: Start every selected service immediately, bypassing the machine-wide start gate for this run
 - `<COMMAND>...`: Command and arguments to run once the lane is ready
@@ -876,6 +875,8 @@ devlanes daemon reset-state [OPTIONS]
 ### devlanes daemon pair
 
 Print a one-time code that pairs another machine with this one
+
+On a terminal it also prints how long the code is valid and the command to run on the other machine. Without a terminal, as in `ssh box devlanes daemon pair`, it prints only the code, for scripts.
 
 ```text
 devlanes daemon pair [OPTIONS]

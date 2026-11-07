@@ -69,7 +69,7 @@ devlanes daemon pair
 # on your other machine, run: devlanes remote connect <box> --code K7QM-3XWD
 ```
 
-`<box>` is the name the client reaches this machine by. Without `--code`, `remote connect` asks for the code. In the TUI on the box, `B` opens the boxes view, and `p` there shows a code with how long it stays valid.
+`<box>` is the name the client reaches this machine by. Without a terminal, such as `ssh box devlanes daemon pair`, only the code is printed. Without `--code`, `remote connect` asks for the code. In the TUI on the box, `B` opens the boxes view, and `p` there shows a code with how long it stays valid.
 
 The client enters it once ([first connection](#first-connection)) and connects with a token from then on, one per box name it connects by. `devlanes daemon clients` lists the paired machines and the ones connected now; `devlanes daemon revoke <name>` removes one and cuts its connection. The boxes view of the TUI on the box (`B`) shows the same list under this machine, and `x` there revokes the selected client. A wrong code voids every code you handed out, and five wrong codes within 10 minutes pause pairing for up to 10 minutes. To let every machine that reaches the box over SSH connect without a code, set this in the box's `~/.devlanes/config.yaml`:
 
