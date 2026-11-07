@@ -698,10 +698,11 @@ impl Inner {
             return;
         };
         let waiting = lock(&self.pacing.waiting);
-        let mut queued_service = false;
+        // Only services wait in the gate.
+        let mut queued = false;
         for unit in &mut summary.units {
             if let Some(entry) = snapshot.find(&summary.reference, &unit.name) {
-                queued_service |= unit.kind.is_empty() || unit.kind == "service";
+                queued = true;
                 unit.state = "queued".into();
                 unit.reason = Some(RpcError::new("queued", queued_data(snapshot, entry), 0));
                 // Idle summaries carry no actor; `status --mine` needs the requester.
@@ -714,7 +715,7 @@ impl Inner {
         }
         // A queued service belongs to a start the lane is still in. `failed`,
         // `stopping` and the lane states without a record keep their word.
-        if queued_service && matches!(summary.state.as_str(), "running" | "idle") {
+        if queued && matches!(summary.state.as_str(), "running" | "idle") {
             summary.state = "starting".into();
         }
     }

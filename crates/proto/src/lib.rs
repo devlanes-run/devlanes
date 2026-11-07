@@ -960,7 +960,8 @@ pub struct LaneSummary {
     #[serde(default)]
     pub domain: Option<String>,
     /// `domain`'s HTTPS URL through this machine's proxy, with the port unless
-    /// it is 443, as the services' public URLs read. `None` from older daemons.
+    /// it is 443, as the services' public URLs read. `None` when the lane routes
+    /// no hostname, and from older daemons.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(default)]

@@ -149,8 +149,9 @@ impl ExternalInfo {
 #[derive(Debug, Clone)]
 pub(crate) struct LaneView {
     pub domain: String,
-    /// `domain`'s HTTPS URL through the proxy, built like the services' public URLs.
-    pub url: String,
+    /// `domain`'s HTTPS URL through the proxy, built like the services' public
+    /// URLs; `None` when the lane routes no hostname.
+    pub url: Option<String>,
     /// `lane.port`.
     pub port: u16,
     /// Evaluated `lanes.vars`, for infra expressions.
@@ -1458,7 +1459,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         profiles,
         moves_to: lane.moves_to,
         domain: lane.view.as_ref().map(|view| view.domain.clone()),
-        url: lane.view.as_ref().map(|view| view.url.clone()),
+        url: lane.view.as_ref().and_then(|view| view.url.clone()),
         port_block: lane.view.as_ref().map(|view| {
             (
                 view.block.0,

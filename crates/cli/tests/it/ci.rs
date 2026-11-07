@@ -922,7 +922,9 @@ async fn with_json_prints_no_empty_object() {
             serde_json::from_str::<serde_json::Value>(line).expect("ndjson line");
         }
     }
+    // Every event streams as it came, the phase's `started` included.
     assert!(lines[0].starts_with("{\"seq\""), "{output}");
+    assert!(lines[0].contains("\"state\":\"started\""), "{output}");
 }
 
 #[tokio::test]

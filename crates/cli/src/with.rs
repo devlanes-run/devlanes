@@ -159,7 +159,10 @@ pub async fn run_with<D: WithDriver + ?Sized>(
                 }
             }
             if let Ok(mut rendered) = reporter.event(Method::Start, &event) {
-                phases.rewrite(&event, &mut rendered.stdout);
+                // `with --json` streams every event as it came.
+                if runtime.mode != crate::OutputMode::Json {
+                    phases.rewrite(&event, &mut rendered.stdout);
+                }
                 emit(rendered);
             }
         })
