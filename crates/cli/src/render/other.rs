@@ -321,7 +321,8 @@ fn one_line(value: &str) -> String {
     clean(&value.replace('\r', "\\r").replace('\n', "\\n"))
 }
 
-/// `env`: `KEY=VALUE` lines, or with `--explain` a `KEY VALUE LAYER` table.
+/// `env`: `KEY=VALUE` lines, or with `--explain` a `KEY VALUE LAYER` table and
+/// the launch's notes.
 pub(super) fn env(data: &Value) -> Vec<String> {
     if let Some(items) = data.get("items").and_then(Value::as_array) {
         let mut rows = vec![["KEY", "VALUE", "LAYER"].map(str::to_owned).to_vec()];
@@ -338,7 +339,11 @@ pub(super) fn env(data: &Value) -> Vec<String> {
                 text(item, "layer"),
             ]);
         }
-        return table(&rows, "");
+        let mut lines = table(&rows, "");
+        for note in list(data, "notes").iter().filter_map(Value::as_str) {
+            lines.push(format!("note: {}", one_line(note)));
+        }
+        return lines;
     }
     let Some(env) = data.get("env").and_then(Value::as_object) else {
         return tree(data);

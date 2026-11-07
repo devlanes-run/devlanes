@@ -54,7 +54,7 @@ pub struct LaunchPlan {
     pub detection: DetectionSource,
     /// Version from the declared field, for diagnostics.
     pub version: Option<String>,
-    /// Non-fatal findings for `env --explain` and `why`, such as a missing
+    /// Non-fatal findings for `env --explain`, such as a missing
     /// `packageManager` field.
     pub notes: Vec<String>,
     /// The script's command line, for presets that reject hardcoded flags.

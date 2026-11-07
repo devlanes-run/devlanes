@@ -238,7 +238,7 @@ pub struct ScriptPlan {
     pub body: Option<String>,
     /// Non-fatal findings, such as a package manager picked from a lockfile
     /// because `packageManager` is missing. Lane resolution copies them into
-    /// the launch notes shown by `env --explain` and `why`.
+    /// the launch notes shown by `env --explain`.
     #[serde(default)]
     pub notes: Vec<String>,
     /// One line on how the runner was chosen, such as

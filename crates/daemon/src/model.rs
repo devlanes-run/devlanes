@@ -179,6 +179,8 @@ pub(crate) struct UnitRec {
     pub literal_port: Option<u16>,
     /// Effective environment with provenance for `env --explain`.
     pub env: Arc<Environment>,
+    /// Launch notes of this run, for `env --explain`.
+    pub notes: Vec<String>,
     /// Last log lines captured when the unit failed, for proxy pages and errors.
     pub failure_tail: Vec<String>,
     /// `failure_tail` with colors; empty when it had none.

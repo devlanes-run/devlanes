@@ -490,7 +490,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             {"key": "PORT", "value": "20101", "layer": "devlanes"},
             {"key": "API_TOKEN", "value": "tok_test", "layer": "global"},
             {"key": "NODE_ENV", "value": "development", "layer": "service"},
-        ], "truncated": false, "next_cursor": null}),
+        ], "notes": ["npm: pnpm 10.4.1 (packageManager in package.json)"], "truncated": false, "next_cursor": null}),
         ),
         (
             "url",
