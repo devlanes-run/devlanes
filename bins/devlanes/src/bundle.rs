@@ -9,6 +9,9 @@ use std::{
 
 use devlanes_cli::{OutputMode, Rendered, Runtime};
 use devlanes_client::{Client, Context, Method, Paths};
+use devlanes_core::env::{
+    REDACTED, SecretValues, hide_url_passwords, hide_values, secret_name, secret_values,
+};
 use devlanes_proto::RpcError;
 use serde_json::{Value, json};
 
@@ -16,23 +19,6 @@ use crate::output::emit;
 
 /// Longest the `-- ARGS` run may take.
 const RERUN_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// Name fragments of variables whose values never go into a bundle.
-const SECRET_WORDS: [&str; 10] = [
-    "TOKEN",
-    "SECRET",
-    "PASS",
-    "KEY",
-    "CREDENTIAL",
-    "AUTH",
-    "PRIVATE",
-    "SESSION",
-    "COOKIE",
-    "DSN",
-];
-
-/// What replaces a hidden value.
-const HIDDEN: &str = "[redacted]";
 
 /// Collects, redacts and archives; prints the archive's path.
 pub async fn run(
@@ -247,12 +233,6 @@ fn io(message: String) -> RpcError {
     RpcError::new("io", json!({"message": message}), 1)
 }
 
-/// Whether a variable named `name` likely holds a secret.
-fn secret_name(name: &str) -> bool {
-    let upper = name.to_ascii_uppercase();
-    SECRET_WORDS.iter().any(|word| upper.contains(word))
-}
-
 /// Replaces secrets in text and JSON: values of this shell's secret-looking
 /// variables wherever they appear, `NAME=value` and `"name": value` pairs with
 /// secret-looking names, values under an `env` object, URL passwords and the
@@ -266,20 +246,15 @@ pub(crate) struct Redactor {
 impl Redactor {
     /// Learns the secret values of `vars` (the client's environment).
     pub(crate) fn from_env(vars: impl Iterator<Item = (String, String)>) -> Self {
-        let mut home = None;
-        let mut values: Vec<String> = Vec::new();
-        for (name, value) in vars {
-            if name == "HOME" && value.len() > 1 {
-                home = Some(value.clone());
-            }
-            // Short values ("1", "yes") would blank out unrelated text.
-            if secret_name(&name) && value.len() >= 6 {
-                values.push(value);
-            }
+        let vars: Vec<(String, String)> = vars.collect();
+        let home = vars
+            .iter()
+            .find(|(name, value)| name == "HOME" && value.len() > 1)
+            .map(|(_, value)| value.clone());
+        Self {
+            values: secret_values(vars, SecretValues::Broad),
+            home,
         }
-        values.sort_by_key(|value| std::cmp::Reverse(value.len()));
-        values.dedup();
-        Self { values, home }
     }
 
     /// Pretty JSON of `value`, redacted.
@@ -304,10 +279,7 @@ impl Redactor {
                 _ => out.push_str(line),
             }
         }
-        for value in &self.values {
-            out = out.replace(value.as_str(), HIDDEN);
-        }
-        let mut out = hide_assignments(&hide_url_passwords(&out));
+        let mut out = hide_assignments(&hide_url_passwords(&hide_values(&out, &self.values)));
         if let Some(home) = &self.home {
             out = out.replace(home.as_str(), "~");
         }
@@ -322,7 +294,7 @@ fn hide_json(value: &mut Value, hide_all: bool) {
         Value::Object(map) => {
             for (key, entry) in map.iter_mut() {
                 if entry.is_string() && (hide_all || secret_name(key)) {
-                    *entry = json!(HIDDEN);
+                    *entry = json!(REDACTED);
                 } else {
                     hide_json(entry, hide_all || key == "env");
                 }
@@ -333,34 +305,9 @@ fn hide_json(value: &mut Value, hide_all: bool) {
                 hide_json(item, hide_all);
             }
         }
-        Value::String(text) if hide_all => *text = HIDDEN.into(),
+        Value::String(text) if hide_all => *text = REDACTED.into(),
         _ => {}
     }
-}
-
-/// `scheme://user:password@host` with the password hidden.
-fn hide_url_passwords(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(index) = rest.find("://") {
-        let (before, after) = rest.split_at(index + 3);
-        out.push_str(before);
-        let end = after
-            .find(|c: char| c.is_whitespace() || "/\"'".contains(c))
-            .unwrap_or(after.len());
-        let authority = &after[..end];
-        match (authority.rfind('@'), authority.find(':')) {
-            (Some(at), Some(colon)) if colon < at => {
-                out.push_str(&authority[..=colon]);
-                out.push_str(HIDDEN);
-                out.push_str(&authority[at..]);
-            }
-            _ => out.push_str(authority),
-        }
-        rest = &after[end..];
-    }
-    out.push_str(rest);
-    out
 }
 
 /// `NAME=value` with an upper-case, secret-looking NAME: the value hidden up to
@@ -387,7 +334,7 @@ fn hide_assignments(text: &str) -> String {
                 .find(|c: char| c.is_whitespace() || "\"'".contains(c))
                 .unwrap_or(after.len());
             if end > 0 {
-                out.push_str(HIDDEN);
+                out.push_str(REDACTED);
             }
             rest = &after[end..];
         } else {
@@ -407,6 +354,9 @@ mod tests {
         Redactor::from_env(
             [
                 ("ACME_API_TOKEN", "tok-4711-very-secret"),
+                ("DB_PASS", "s3cr3t"),
+                ("ACME_SECRET", "correcthorsebattery"),
+                ("ACME_PASSPHRASE", "staple gun river"),
                 ("HOME", "/Users/someone"),
                 ("PATH", "/usr/bin:/bin"),
                 ("CI_PASS", "1"),
@@ -427,11 +377,17 @@ ACME_API_TOKEN=tok-4711-very-secret\n\
 GITHUB_TOKEN=ghp_other PORT=3000\n\
 DATABASE_URL=postgres://postgres:hunter22@127.0.0.1:5432/app\n\
 log line mentioning tok-4711-very-secret in passing\n\
+copied under neutral names: pin=s3cr3t word=correcthorsebattery phrase=\"staple gun river\"\n\
 {\"env\":{\"ACME_API_TOKEN\":\"tok-4711-very-secret\",\"PORT\":\"3000\"},\"api_key\":\"k-123456\",\"lane\":\"acme@0\"}\n\
 cwd=/Users/someone/src/acme\n";
         let out = redactor.text(text);
         for secret in [
             "tok-4711-very-secret",
+            // Short, all-letter and multi-word secrets are searched for in a bundle,
+            // unlike in `env show --explain`.
+            "s3cr3t",
+            "correcthorsebattery",
+            "staple gun river",
             "ghp_other",
             "hunter22",
             "k-123456",
@@ -460,7 +416,7 @@ cwd=/Users/someone/src/acme\n";
         }));
         let parsed: Value = serde_json::from_str(&out).expect("json");
         assert_eq!(parsed["daemon"]["version"], "0.1.0");
-        assert_eq!(parsed["daemon"]["token"], HIDDEN);
-        assert_eq!(parsed["items"][0]["env"]["A"], HIDDEN);
+        assert_eq!(parsed["daemon"]["token"], REDACTED);
+        assert_eq!(parsed["items"][0]["env"]["A"], REDACTED);
     }
 }
