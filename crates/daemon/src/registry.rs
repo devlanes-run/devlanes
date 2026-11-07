@@ -2117,6 +2117,7 @@ impl Inner {
             self.integ.routes.https_port(),
         );
         Ok(LaneView {
+            url: devlanes_resolve::https_url(&layout.domain, self.integ.routes.https_port()),
             domain: layout.domain.clone(),
             port: layout.port,
             vars: layout.vars.clone(),

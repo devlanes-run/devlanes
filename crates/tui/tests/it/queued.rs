@@ -503,3 +503,37 @@ async fn the_header_names_steps_the_way_people_read_them() -> TestResult {
     assert!(!line.contains("tasks"), "{line}");
     Ok(())
 }
+
+/// With more project tabs than fit, a wide bar still shows the whole message.
+#[tokio::test]
+async fn folded_tabs_leave_a_wide_header_its_message() -> TestResult {
+    let mut lanes = vec![lane(
+        "acme",
+        Some(1),
+        "feat/billing-and-invoices-for-teams",
+        "starting",
+        vec![
+            unit("acme@1", "api", "starting"),
+            unit("acme@1", "web", "starting"),
+            unit("acme@1", "worker", "starting"),
+        ],
+    )];
+    for i in 0..30 {
+        lanes.push(lane(
+            &format!("project-{i:02}"),
+            Some(0),
+            "main",
+            "idle",
+            vec![],
+        ));
+    }
+    let api = FakeApi::with_lanes(lanes);
+    let (app, _) = loaded(&api, 200, 60).await;
+    let line = header(&app)?;
+    assert!(line.contains('\u{203a}'), "tabs fold: {line}");
+    assert!(
+        line.contains("starting feat/billing-and-invoices-for-teams: 0 of 3 ready"),
+        "{line}"
+    );
+    Ok(())
+}

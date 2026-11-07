@@ -682,7 +682,8 @@ impl Inner {
         self.integ.start_gate.as_ref().map(|gate| gate.snapshot())
     }
 
-    /// Marks units waiting in the start gate as `queued`, with the reason data.
+    /// Marks units waiting in the start gate as `queued`, with the reason data,
+    /// and a `running` or `idle` lane with a queued service as `starting`.
     pub(crate) fn fill_queued(&self, summary: &mut LaneSummary) {
         self.fill_queued_with(self.gate_snapshot().as_ref(), summary);
     }
@@ -697,8 +698,10 @@ impl Inner {
             return;
         };
         let waiting = lock(&self.pacing.waiting);
+        let mut queued_service = false;
         for unit in &mut summary.units {
             if let Some(entry) = snapshot.find(&summary.reference, &unit.name) {
+                queued_service |= unit.kind.is_empty() || unit.kind == "service";
                 unit.state = "queued".into();
                 unit.reason = Some(RpcError::new("queued", queued_data(snapshot, entry), 0));
                 // Idle summaries carry no actor; `status --mine` needs the requester.
@@ -708,6 +711,11 @@ impl Inner {
                     unit.actor = start.actor.clone();
                 }
             }
+        }
+        // A queued service belongs to a start the lane is still in. `failed`,
+        // `stopping` and the lane states without a record keep their word.
+        if queued_service && matches!(summary.state.as_str(), "running" | "idle") {
+            summary.state = "starting".into();
         }
     }
 

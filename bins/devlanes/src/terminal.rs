@@ -95,12 +95,12 @@ impl Title {
     /// The command ended: a start that ran long says so in a notification,
     /// where the terminal itself skips a focused window or the user asked
     /// for notifications always. The title is put back on drop.
-    pub fn finish(&self, runtime: &Runtime, ok: bool) {
+    pub fn finish(&self, runtime: &Runtime, code: u8) {
         let Some(notifications) = runtime.terminal.notifications.filter(|n| n.without_focus())
         else {
             return;
         };
-        if let Some((title, body)) = self.title.finished(ok, self.started.elapsed()) {
+        if let Some((title, body)) = self.title.finished(code, self.started.elapsed()) {
             let mut stdout = std::io::stdout();
             let _ = stdout.write_all(notifications.sequence(&title, &body).as_bytes());
             let _ = stdout.flush();
