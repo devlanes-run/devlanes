@@ -267,7 +267,9 @@ impl RunScript {
 pub struct TaskConfig {
     /// Command to run: a string runs through `/bin/sh -c` (pipes and multi-line scripts
     /// work), a list runs the program directly with those arguments. Use exactly one of
-    /// `run`, `run_script` or `steps`.
+    /// `run`, `run_script` or `steps`. In a list, an item that is one `${{ }}` expression
+    /// giving a number or `true`/`false` becomes its text, such as `--port` followed by
+    /// `${{ self.port }}`.
     pub run: Option<Run>,
     /// Script to run from a project file, as `{ file, name }`, such as
     /// `{ file: apps/api/package.json, name: migrate }`. It runs with that file's tool (the
@@ -762,7 +764,9 @@ pub struct ContainerConfig {
     pub image: Option<Templated<String>>,
     #[schemars(extend("examples" = [["server","--config=/policies/config.yaml"]]))]
     /// Command replacing the image's default: a list is used as is, a string runs through
-    /// `/bin/sh -c` inside the container.
+    /// `/bin/sh -c` inside the container. In a list, an item that is one `${{ }}`
+    /// expression giving a number or `true`/`false` becomes its text, such as `--port`
+    /// followed by `${{ self.port }}`.
     pub command: Option<Run>,
     #[schemars(extend("examples" = [["./infra/cerbos:/policies:ro"]]))]
     /// Mounts as `source:destination[:mode]`. `./relative` and `/absolute` sources are bind
@@ -968,7 +972,9 @@ pub enum InfraCommand {
 pub struct InfraCommandOptions {
     /// Command to run: a string runs through `/bin/sh -c`, a list runs the program
     /// directly. Write the command you mean, such as `docker compose exec -T postgres ...`;
-    /// devlanes runs it as written. Required.
+    /// devlanes runs it as written. Required. In a list, an item that is one `${{ }}`
+    /// expression giving a number or `true`/`false` becomes its text, such as `--port`
+    /// followed by `${{ self.port }}`.
     pub run: Option<Run>,
     #[schemars(extend("examples" = ["rabbitmq"]))]
     /// Run this setup entry again whenever the named container has restarted since it last

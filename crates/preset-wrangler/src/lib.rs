@@ -258,11 +258,7 @@ pub fn contribution(input: &WranglerInput<'_>) -> Result<Contribution, WranglerE
     args.extend(input.options.args.iter().flatten().cloned());
     let mut env = BTreeMap::new();
     if input.options.isolate_registry != Some(false) {
-        let registry = input
-            .lane_data
-            .join(REGISTRY_DIR)
-            .to_string_lossy()
-            .into_owned();
+        let registry = devlanes_core::paths::forward_slashes(&input.lane_data.join(REGISTRY_DIR));
         for name in REGISTRY_ENVS {
             env.insert(name.to_owned(), registry.clone());
         }
@@ -394,20 +390,17 @@ mod tests {
         })
         .expect("valid input");
         insta::assert_snapshot!(result.args.join(" "), @"--port 20010 --inspector-port 20011 --var A:1 --var PUBLIC_BASE_URL:https://api.acme1.localhost --env-file .dev.vars.stripe");
-        let registry = Path::new("/data/acme/7")
-            .join(REGISTRY_DIR)
-            .display()
-            .to_string();
+        // `/` on every OS, like `DEVLANES_LANE_DATA`.
         let expected: BTreeMap<String, String> = REGISTRY_ENVS
             .iter()
-            .map(|name| ((*name).to_owned(), registry.clone()))
+            .map(|name| {
+                (
+                    (*name).to_owned(),
+                    "/data/acme/7/wrangler-registry".to_owned(),
+                )
+            })
             .collect();
         assert_eq!(result.env, expected);
-        #[cfg(unix)]
-        assert_eq!(
-            result.env.get(WRANGLER_REGISTRY_ENV).map(String::as_str),
-            Some("/data/acme/7/wrangler-registry")
-        );
     }
 
     /// The variable names match the ones workers-sdk reads; a typo would silently

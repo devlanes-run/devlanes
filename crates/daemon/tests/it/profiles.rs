@@ -547,3 +547,73 @@ async fn units_and_containers_have_colors() {
     .await
     .expect("timeout");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+/// `why` blames the profile only for services nothing selected, and names a
+/// ready service that accepts nothing on its routed port.
+async fn why_names_the_real_cause() {
+    const WHY: &str = "project: demo\nprofiles:\n  default: [api]\nservices:\n  api: { run: sleep }\n  worker: { run: fail }\n  web: { run: sleep, hosts: [\"web.${{ lane.domain }}\"], ready: started }\n";
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", WHY);
+        // Other tests' servers listen in the default pool, and web's port must stay closed.
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("15000-15249"),
+                ..Setup::default()
+            },
+        )
+        .await;
+        let codes = |why: &Value| -> Vec<String> {
+            why["reasons"]
+                .as_array()
+                .expect("reasons")
+                .iter()
+                .filter_map(|reason| reason["code"].as_str().map(str::to_owned))
+                .collect()
+        };
+        let _ = h
+            .call(Method::Start, json!({"units": ["worker"]}), cx(&main))
+            .await;
+        let why = eventually(Duration::from_secs(5), || async {
+            let why = h
+                .call(Method::Why, json!({"unit": "worker"}), cx(&main))
+                .await
+                .ok()?;
+            codes(&why).contains(&"exited".to_owned()).then_some(why)
+        })
+        .await
+        .expect("worker failed");
+        assert!(!codes(&why).contains(&"not_in_profile".to_owned()), "{why}");
+
+        h.call(Method::Start, json!({"units": ["web"]}), cx(&main))
+            .await
+            .expect("start web");
+        let why = h
+            .call(Method::Why, json!({"unit": "web"}), cx(&main))
+            .await
+            .expect("why web");
+        let port = lane(&h, &main)
+            .await
+            .units
+            .iter()
+            .find(|u| u.name == "web")
+            .and_then(|u| u.ports.get("default").copied())
+            .expect("web port");
+        let reason = why["reasons"]
+            .as_array()
+            .expect("reasons")
+            .iter()
+            .find(|reason| reason["code"] == "not_listening")
+            .cloned()
+            .unwrap_or_else(|| panic!("{why}"));
+        assert_eq!(reason["data"]["port"], port, "{why}");
+        h.call(Method::Stop, json!({}), cx(&main))
+            .await
+            .expect("stop");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}

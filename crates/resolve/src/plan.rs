@@ -7,8 +7,8 @@ use std::{
 
 use devlanes_config::{
     Env, ExpressionContext, Extensions, InfraCommand, PreparedContext, ProfileConfig,
-    ProfileOptions, ReadyConfig, Run, ServiceConfig, StopConfig, SyncConfig, TaskAfter, TaskConfig,
-    TcpReady, Templated,
+    ProfileOptions, ReadyConfig, Run, Scalar, ServiceConfig, StopConfig, SyncConfig, TaskAfter,
+    TaskConfig, TcpReady, Templated,
 };
 use devlanes_core::{
     StopPolicy, StopSignal,
@@ -24,8 +24,8 @@ use serde_json::{Value, json};
 use tracing::Instrument as _;
 
 use crate::{
-    DEFAULT_READY_TIMEOUT, Launch, Ready, ReadySpec, ResolveError, ResolveInput, ResolvedCommand,
-    ResolvedLane, ResolvedService, ResolvedTask, ServiceLayout, SyncSpec,
+    DEFAULT_READY_TIMEOUT, LaneLayers, Launch, Ready, ReadySpec, ResolveError, ResolveInput,
+    ResolvedCommand, ResolvedLane, ResolvedService, ResolvedTask, ServiceLayout, SyncSpec,
     layout::{self, Namespaces, env_namespace, replica_value},
     select::{active_profiles, merge_options},
     util::shell_quote,
@@ -56,6 +56,9 @@ pub async fn resolve_lane<E: Extensions>(
         .await
         .map_err(|error| error.locate(config))?;
     for error in lane.errors.values_mut() {
+        *error = error.clone().locate(config);
+    }
+    if let Err(error) = &mut lane.lane_layers {
         *error = error.clone().locate(config);
     }
     Ok(lane)
@@ -122,6 +125,13 @@ async fn plan_lane<E: Extensions>(
         let _span = tracing::debug_span!("evaluate global_env").entered();
         shared_globals(&config.global_env, &lane_context)
     };
+    let lane_layers = lane_layers(
+        &config.global_env,
+        &global,
+        &profile_envs,
+        &lane_context,
+        input.infra,
+    );
 
     let mut planner = Planner {
         input: &input,
@@ -223,6 +233,7 @@ async fn plan_lane<E: Extensions>(
         errors,
         warnings: layout.warnings,
         lane_env: layout.lane_env,
+        lane_layers,
         services_namespace,
     })
 }
@@ -548,13 +559,13 @@ impl<E: Extensions> Planner<'_, '_, E> {
         let run_path = format!("{path}.run");
         let command = match (spec.run, spec.script) {
             (Some(Run::Shell(text)), _) => DraftCommand::Shell(
-                text.evaluate(context)
+                text.evaluate_text(context)
                     .map_err(|e| ResolveError::expression(&run_path, e))?,
             ),
             (Some(Run::Argv(items)), _) => DraftCommand::Argv(
                 items
                     .iter()
-                    .map(|item| item.evaluate(context))
+                    .map(|item| item.evaluate_text(context))
                     .collect::<Result<_, _>>()
                     .map_err(|e| ResolveError::expression(&run_path, e))?,
             ),
@@ -884,17 +895,7 @@ fn shared_globals(
     values
         .iter()
         .map(|(key, value)| {
-            let per_unit = match value {
-                Templated::Literal(_) => false,
-                Templated::Expression(text) => {
-                    devlanes_config::references(text).map_or(true, |references| {
-                        references
-                            .iter()
-                            .any(|r| matches!(r.split('.').next(), Some("self" | "replica")))
-                    })
-                }
-            };
-            (!per_unit).then(|| {
+            (reads_unit(value) == Some(false)).then(|| {
                 value
                     .evaluate(lane)
                     .map(|value| value.to_string())
@@ -902,6 +903,105 @@ fn shared_globals(
             })
         })
         .collect()
+}
+
+/// Whether `value` reads `self` or `replica`; `None` when its references cannot be read.
+fn reads_unit(value: &Templated<Scalar>) -> Option<bool> {
+    match value {
+        Templated::Literal(_) => Some(false),
+        Templated::Expression(text) => devlanes_config::references(text).ok().map(|references| {
+            references
+                .iter()
+                .any(|r| matches!(r.split('.').next(), Some("self" | "replica")))
+        }),
+    }
+}
+
+/// The first `infra.<container>` that `value` reads and `infra` (the lane's infra
+/// namespace) does not have yet, because the lane's infra is not up.
+fn missing_infra(value: &Templated<Scalar>, infra: &Value) -> Option<String> {
+    let Templated::Expression(text) = value else {
+        return None;
+    };
+    devlanes_config::references(text)
+        .ok()?
+        .iter()
+        .find_map(|reference| {
+            let mut parts = reference.split('.');
+            let container = parts
+                .next()
+                .filter(|root| *root == "infra")
+                .and(parts.next())?;
+            infra.get(container).is_none().then(|| container.to_owned())
+        })
+}
+
+/// [`ResolvedLane::lane_layers`] from the [`shared_globals`] values and each
+/// profile's `env`. Entries whose references cannot be read are evaluated here
+/// too, so their error surfaces instead of the entry going missing. An entry that
+/// fails while it reads a container `infra` lacks is left out and named in
+/// [`LaneLayers::unset`]: a command outside a unit runs before infra too.
+fn lane_layers(
+    global_env: &Env,
+    shared: &[Option<Result<String, ResolveError>>],
+    profile_envs: &[(String, &Env)],
+    lane: &PreparedContext,
+    infra: &Value,
+) -> Result<LaneLayers, ResolveError> {
+    // `Ok(Err(container))`: left out until that container is up.
+    let settle = |value: &Templated<Scalar>, result: Result<String, ResolveError>| match (
+        result,
+        missing_infra(value, infra),
+    ) {
+        (Ok(value), _) => Ok(Ok(value)),
+        (Err(_), Some(container)) => Ok(Err(container)),
+        (Err(error), None) => Err(error),
+    };
+    let evaluate = |path: String, value: &Templated<Scalar>| {
+        value
+            .evaluate(lane)
+            .map(|value| value.to_string())
+            .map_err(|e| ResolveError::expression(path, e))
+    };
+    let mut global = BTreeMap::new();
+    let mut unset = BTreeMap::new();
+    for ((key, value), shared) in global_env.iter().zip(shared) {
+        let result = match shared {
+            Some(shared) => shared.clone(),
+            None if reads_unit(value) == Some(true) => continue,
+            None => evaluate(format!("global_env.{key}"), value),
+        };
+        match settle(value, result)? {
+            Ok(value) => global.insert(key.clone(), value),
+            Err(container) => unset.insert(key.clone(), container),
+        };
+    }
+    let mut profile = BTreeMap::new();
+    for (path, env) in profile_envs {
+        for (key, value) in env.iter() {
+            if reads_unit(value) == Some(true) {
+                continue;
+            }
+            match settle(value, evaluate(format!("{path}.{key}"), value))? {
+                // It replaces whatever a lower layer had or left out.
+                Ok(value) => {
+                    unset.remove(key);
+                    profile.insert(key.clone(), value);
+                }
+                // A lower layer's value must not show through where the profile replaces it.
+                Err(container) => {
+                    global.remove(key);
+                    profile.remove(key);
+                    unset.insert(key.clone(), container);
+                }
+            }
+        }
+    }
+    Ok(LaneLayers {
+        global,
+        profile,
+        unset,
+    })
 }
 
 /// Evaluates an optional boolean with a default.
@@ -936,13 +1036,13 @@ fn duration(
 fn shell_line(run: &Run, context: &PreparedContext, path: &str) -> Result<String, ResolveError> {
     match run {
         Run::Shell(text) => text
-            .evaluate(context)
+            .evaluate_text(context)
             .map_err(|e| ResolveError::expression(path, e)),
         Run::Argv(items) => {
             let mut words = Vec::new();
             for item in items {
                 let word = item
-                    .evaluate(context)
+                    .evaluate_text(context)
                     .map_err(|e| ResolveError::expression(path, e))?;
                 words.push(shell_quote(&word));
             }

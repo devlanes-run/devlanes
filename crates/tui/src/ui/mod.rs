@@ -548,11 +548,13 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     // shown project in view.
     // Each tab pads itself; one space separates them.
     let tab_widths: Vec<usize> = tabs.iter().map(|(_, s)| spans_width(s) + 1).collect();
-    // Tabs that already fold (`›`) leave a message 24 columns, so a notice
+    // Tabs that already fold (`›`) leave a message at least 24 columns, and
+    // up to half the bar on a wide terminal, so a start's progress or a notice
     // such as why a box lane's key did nothing still shows.
     let folds = used + tab_widths.iter().sum::<usize>() + 2 > width.saturating_sub(buttons_width);
+    let cap = (width.saturating_sub(buttons_width + used) / 2).max(24);
     let reserve = match &message {
-        Some((spans, _)) if folds => spans_width(spans).min(24) + 4,
+        Some((spans, _)) if folds => spans_width(spans).min(cap) + 4,
         _ => 0,
     };
     let room = width.saturating_sub(buttons_width + used + reserve);

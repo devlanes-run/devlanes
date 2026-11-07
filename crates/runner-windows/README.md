@@ -56,11 +56,14 @@ A bare program name is looked up on the unit's `PATH` with `PATHEXT` (`.COM`, `.
 
 | `stop.signal` | Windows action |
 |---|---|
-| `SIGINT` | Ctrl-C (in a pseudo console, the `0x03` key), or Ctrl-Break for `/bin/sh` units, whose programs ignore Ctrl-C |
-| `SIGTERM`, `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2` | Ctrl-Break |
+| `SIGTERM` | Ctrl-C (in a pseudo console, the `0x03` key), or Ctrl-Break for `/bin/sh` units and when `sh.exe`, `bash.exe`, `dash.exe`, `zsh.exe` or `fish.exe` is a job member as the stop begins, since programs an MSYS shell starts ignore Ctrl-C |
+| `SIGINT` | Ctrl-C (in a pseudo console, the `0x03` key), or Ctrl-Break for `/bin/sh` units |
+| `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2` | Ctrl-Break |
 | `SIGKILL` | terminate the job |
 
-A graceful stop also posts `WM_CLOSE` to the members' visible windows, then sends one console event through the helper, which the supervisor does not wait for. In a pseudo console a `.cmd` shim asks "Terminate batch job (Y/N)?" after the event; once only `cmd.exe` is left, the runner answers `Y`, again every half second while it still is (an answer typed before `cmd.exe` reached the prompt can be lost), which is not an escalation. Once only the console host is left, or at the timeout, the job is terminated; the report says whether the timeout was reached. A process ended by a console event exits with `STATUS_CONTROL_C_EXIT` (`0xC000013A`), which is reported as its code.
+The event is chosen once and no second one is sent; a unit that ignores it is terminated at the timeout.
+
+A graceful stop also posts `WM_CLOSE` to the members' visible windows, then sends one console event through the helper, which the supervisor does not wait for. In a pseudo console a `.cmd` shim asks "Terminate batch job (Y/N)?" after the event; once only `cmd.exe` is left, the runner answers `Y`, again every half second while it still is (an answer typed before `cmd.exe` reached the prompt can be lost), which is not an escalation. Once only the console host is left, or at the timeout, the job is terminated; the report says whether the timeout was reached. A process ended by a console event exits with `STATUS_CONTROL_C_EXIT` (`0xC000013A`), which is reported as its code. A stop that did not escalate also reports that code for a `.cmd` shim in a pseudo console that exits non-zero after its prompt was answered (`cmd.exe` then exits 255 whatever its program returned), and for an exit code of 512 when an MSYS shell (Git's `sh.exe`, `bash.exe` or `dash.exe`, or MSYS2's `zsh.exe` or `fish.exe`) was a member as the event went out (MSYS reports a SIGINT death as `2 << 8`, and wrappers such as just pass it on). A shim in a pipe unit returns its program's code, which is kept.
 
 ## Idle units
 

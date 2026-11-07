@@ -119,10 +119,11 @@ fn host_name() -> String {
         .into_owned()
 }
 
-/// The machine's host name, empty when unknown.
+/// The machine's host name, empty when unknown. Asked from the system: a
+/// daemon the CLI starts has no `COMPUTERNAME`.
 #[cfg(windows)]
 fn host_name() -> String {
-    std::env::var("COMPUTERNAME").unwrap_or_default()
+    devlanes_sys_windows::system::computer_name().unwrap_or_default()
 }
 
 #[cfg(test)]

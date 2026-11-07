@@ -29,7 +29,8 @@ References:
   lane or worktree directory name, or a path. Without project@ the project of
   the current directory is used.
   A unit is [lane:]unit, such as api, 2:api or acme@feat/checkout:web.
-  Commands that take several units also accept globs ("api-*") and tags (+web).
+  Commands that take several units also accept globs ("api-*"), tags (+web)
+  and a service's name for all its replicas.
 ```
 
 ## Global options
@@ -92,6 +93,9 @@ Stopped services are left out of what a plain devlanes start brings back. A
 whole-lane stop also forgets the lane's profiles, so its next plain start uses
 the default profile.
 
+A failed service or exec command you name, or every one when the whole lane
+stops, reads stopped afterwards; failed tasks keep their state.
+
 To stop another lane, name it with --lane: devlanes stop --lane 2.
 
 ```text
@@ -108,7 +112,8 @@ Stop and start units again with a fresh environment, or the whole lane when none
 
 A whole-lane restart stops everything, keeps the lane's saved profiles and
 services, and starts it again as a plain devlanes start does: infra, setup,
-tasks, services and any port change in the project file.
+tasks, services and any port change in the project file. It stops exec units
+and does not run them again.
 
 ```text
 devlanes restart [OPTIONS] [UNIT]...
@@ -125,7 +130,7 @@ Apply project file and .env changes to the running lane.
 Stops the units the file removed, restarts the ones it changed and starts the
 ones it added. Without units, a change to infra or ports restarts the whole
 lane instead. With units, it applies only their changes. devlanes status shows
-what changed.
+what changed. A whole-lane restart stops exec units and does not run them again.
 
 ```text
 devlanes reload [OPTIONS] [UNIT]...
@@ -137,7 +142,11 @@ devlanes reload [OPTIONS] [UNIT]...
 
 ### devlanes status
 
-Show lanes and units with state, ports, URLs, CPU and memory
+Show lanes and units with state, ports, URLs, CPU and memory.
+
+Exits 1 while a lane or unit it shows has failed, a task or exec command that
+exited non-zero included. devlanes stop NAME clears a failed service or exec
+command once you have read why; running a unit again also replaces its failure.
 
 ```text
 devlanes status [OPTIONS] [LANE]
@@ -168,8 +177,7 @@ devlanes logs [OPTIONS] [UNIT]...
 - `--grep <REGEX>`: Only lines matching this regular expression
 - `--level <LEVEL>`: Only lines at this level or above: debug, info, warn or error
 - `--around <CURSOR>`: Show the lines around this cursor, such as api#120
-- `-C, --context <N>`: Lines before and after --around
-  Default: `3`.
+- `-C, --context <N>`: Lines before and after --around, or around each --grep or --level match [default: 3 with --around, else 0]
 - `--cursor <CURSOR>`: Continue after this cursor, as printed by an earlier logs call
 - `--mine`: Only units this agent session started
 
@@ -186,7 +194,9 @@ Examples:
 Wait until a unit or lane is ready or failed.
 
 Exits 0 when ready, 1 when it failed (with the reason and log tail) and 124
-when --timeout passes first [default: 180s].
+when --timeout passes first [default: 180s]. A task or exec unit is waited on
+until its command exits: 0 when it exited 0, 1 when it failed. A server started
+with exec never exits; read its logs instead. A lane counts only its services.
 
 ```text
 devlanes wait [OPTIONS] [TARGET]
@@ -200,13 +210,13 @@ Start the lane, run a command against it, then stop what was started.
 
 Waits for ready first; when a unit fails it prints the failure and exits 1
 without running the command. The command gets the lane's environment, including
-DEVLANES_PUBLIC_URL_<SERVICE> for every service, plus NODE_EXTRA_CA_CERTS,
-DENO_CERT, SSL_CERT_FILE and REQUESTS_CA_BUNDLE for the devlanes CA unless the
-shell sets them. Afterwards devlanes writes --logs-dir, prints each unit's
-state, run time and average and peak CPU and memory when output is not a
-terminal (CI logs, pipes) and adds the same table to the GitHub step summary,
-stops what it started (and the daemon, if it started it) and exits with the
-command's exit code.
+global_env, the profile's env and DEVLANES_PUBLIC_URL_<SERVICE> for every
+service, plus NODE_EXTRA_CA_CERTS, DENO_CERT, SSL_CERT_FILE and
+REQUESTS_CA_BUNDLE for the devlanes CA unless the shell sets them. Afterwards
+devlanes writes --logs-dir, prints each unit's state, run time and average and
+peak CPU and memory when output is not a terminal (CI logs, pipes) and adds
+the same table to the GitHub step summary, stops what it started (and the
+daemon, if it started it) and exits with the command's exit code.
 
 ```text
 devlanes with [OPTIONS] [UNIT]... -- <COMMAND>...
@@ -214,7 +224,7 @@ devlanes with [OPTIONS] [UNIT]... -- <COMMAND>...
 
 - `[UNIT]...`: Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]
 - `--profile <PROFILE>`: Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
-- `--logs-dir <DIR>`: Write every unit's log of the run to DIR as text files, for CI artifacts
+- `--logs-dir <DIR>`: Write the log of every unit and task the run started to DIR as text files, for CI artifacts; other files in DIR stay
 - `--keep`: Leave the lane running afterwards, for debugging
 - `--all-at-once`: Start every selected service immediately, bypassing the machine-wide start gate for this run
 - `<COMMAND>...`: Command and arguments to run once the lane is ready
@@ -247,7 +257,12 @@ devlanes run [OPTIONS] [TASK]
 Run an ad-hoc command as a unit of the lane instead of backgrounding it with &.
 
 The daemon owns the process: logs, stop, attach and status work on it by its
---name, and it gets the lane's environment.
+--name. It gets the shell's environment, then the lane's: devlanes variables,
+DEVLANES_PUBLIC_URL_<SERVICE>, and the global_env and profile env entries that
+read neither self nor replica; one that reads infra the lane has not started
+is left out and named. NODE_EXTRA_CA_CERTS, DENO_CERT, SSL_CERT_FILE and
+REQUESTS_CA_BUNDLE point at the devlanes CA unless the shell sets them, and
+--env wins over all of these.
 
 ```text
 devlanes exec [OPTIONS] --name <NAME> -- <COMMAND>...
@@ -887,6 +902,8 @@ devlanes daemon reset-state [OPTIONS]
 ### devlanes daemon pair
 
 Print a one-time code that pairs another machine with this one
+
+On a terminal it also prints how long the code is valid and the command to run on the other machine. Without a terminal, as in `ssh box devlanes daemon pair`, it prints only the code, for scripts.
 
 ```text
 devlanes daemon pair [OPTIONS]

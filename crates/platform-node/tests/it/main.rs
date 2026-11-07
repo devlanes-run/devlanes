@@ -150,12 +150,10 @@ async fn node_respects_client_choices() {
     assert_eq!(node.notes.len(), 1);
 }
 
-/// Expected draft env: every registry variable set to `<data>/wrangler-registry`.
+/// Expected draft env: every registry variable set to `<data>/wrangler-registry`,
+/// with `/` on every OS.
 fn registry_env(data: &str) -> BTreeMap<String, String> {
-    let registry = Path::new(data)
-        .join("wrangler-registry")
-        .display()
-        .to_string();
+    let registry = format!("{data}/wrangler-registry");
     REGISTRY_ENVS
         .iter()
         .map(|name| ((*name).to_owned(), registry.clone()))

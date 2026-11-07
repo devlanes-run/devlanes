@@ -99,6 +99,8 @@ On Windows, variable names are uppercased in every layer, since Windows treats `
 
 Tasks and infra commands get layers 1 to 7 as well, minus the service-only variables, plus Compose variables (`COMPOSE_PROJECT_NAME`, `COMPOSE_FILE`, `COMPOSE_PROFILES`, `DEVLANES_COMPOSE_LANE_PROJECT`) that let `docker compose exec` reach the project's containers without flags.
 
+Commands run with `devlanes exec` and `devlanes with` get layer 1, layer 3 without the service-only variables, and the entries of layers 4 and 6 that read neither `self` nor `replica` (those have no value outside a unit); `exec` also gets layer 7. Until the lane's infra is up, an entry that reads `infra.*` is left out, and `exec` and `env show` name it. Both add `NODE_EXTRA_CA_CERTS`, `DENO_CERT`, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` pointing at the devlanes CA, but keep a value the shell already sets, while Node and Bun services replace it.
+
 ### devlanes variables
 
 Every process devlanes starts (services, tasks, infra commands) and every command run with `devlanes with`, `devlanes exec` or `devlanes env shell` gets these. A program or script that wants to know whether it runs under devlanes checks `DEVLANES=1`, for example to skip its own port selection or to read its lane's data folder.
@@ -126,11 +128,11 @@ Services also get:
 
 A service that needs its own public URL, for OAuth callbacks or absolute links, sets it in `env` with `${{ self.public_url }}`, and another service's with `${{ services.x.public_url }}`.
 
-`DEVLANES_PUBLIC_URL_<SERVICE>` (uppercase, non-alphanumerics replaced by `_`) exists only in the lane-level environment: `devlanes with`, `devlanes exec`, `env show` without a unit. Tests and scripts read their base URLs from it; for a service without hosts the value is its `http://127.0.0.1:<port>` URL. Services do not get these variables.
+`DEVLANES_PUBLIC_URL_<SERVICE>` (uppercase, non-alphanumerics replaced by `_`) exists only in the lane-level environment: `devlanes with`, `devlanes exec`, `env show` without a unit. That environment also carries the `global_env` and profile `env` entries that read neither `self` nor `replica`. Tests and scripts read their base URLs from it; for a service without hosts the value is its `http://127.0.0.1:<port>` URL. Services do not get these variables.
 
 ### Expressions
 
-Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is exactly one expression keeps its type (`autostart: ${{ lane.index == 0 }}` is a boolean); mixed text is a string. Undefined names are errors; `| default('x')` makes them optional. Filters such as `upper`, `replace`, `join`, `int` and the `a if cond else b` form are available.
+Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is exactly one expression keeps its type (`autostart: ${{ lane.index == 0 }}` is a boolean); mixed text is a string. Each item of a `run` list becomes text, so `[node, server.mjs, --port, "${{ self.port }}"]` works. `devlanes config check` checks the syntax of expressions and the names they use, but their values exist only per lane: a value of the wrong type shows on the unit when a start evaluates it. Undefined names are errors; `| default('x')` makes them optional. Filters such as `upper`, `replace`, `join`, `int` and the `a if cond else b` form are available.
 
 | Function | Result |
 | --- | --- |
@@ -260,7 +262,7 @@ lanes:
   data_dir: /Volumes/fast/devlanes
 ```
 
-On Windows the folder is under `%USERPROFILE%\.devlanes\data`, `lanes.data_dir` may also start with `~\` or a drive letter, and `${{ lane.data_path }}` and `DEVLANES_LANE_DATA` are written with `/` (`C:/Users/acme/.devlanes/data/acme/3`), which Windows programs accept and `sh` strings leave intact.
+On Windows the folder is under `%USERPROFILE%\.devlanes\data`, `lanes.data_dir` may also start with `~\` or a drive letter, and `${{ lane.data_path }}`, `DEVLANES_LANE_DATA` and the Wrangler registry variables are written with `/` (`C:/Users/acme/.devlanes/data/acme/3`), which Windows programs accept and `sh` strings leave intact.
 
 devlanes creates the folder when the lane is created and again before each start, run and container start, so deleting it by hand is safe while the lane is stopped. `devlanes lane clean` deletes it after `lane.clean` tasks and teardown have run, and the project's folder goes with its last lane. A lane that comes back after a clean starts with an empty folder.
 
