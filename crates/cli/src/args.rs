@@ -534,7 +534,8 @@ pub enum EnvCommand {
         /// Unit whose environment to print ([lane:]unit) [default: the lane's variables]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
-        /// Show where each variable comes from; secret-looking values are hidden
+        /// Show where each variable comes from; secret-looking values are hidden. With a unit,
+        /// also prints the unit's launch notes
         #[arg(long)]
         explain: bool,
     },
