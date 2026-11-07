@@ -542,7 +542,11 @@ async fn pty_shell_units_stop_on_ctrl_break() {
             .expect("Git for Windows' sh.exe");
         let dir = tempfile::tempdir().expect("tempdir");
         let fixture = fixture().to_string_lossy().replace('\\', "/");
-        let script = format!("'{fixture}' --port 0");
+        // `sh` execs the program and passes on its code when the program ends
+        // first. A program that handles the event and exits 0 makes the code
+        // 0 or 512 depending on timing; one that the event ends gives 512 in
+        // either order.
+        let script = format!("'{fixture}' --port 0 --default-ctrl-handler");
         let unit = runner()
             .with_shell(Some(shell))
             .spawn_unit(pty_spec("/bin/sh", &["-c", &script], dir.path(), env(&[])))
