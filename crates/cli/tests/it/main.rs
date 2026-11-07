@@ -207,6 +207,10 @@ fn entire_command_inventory_builds_actions() {
             &["lane", "clean", "acme@2", "--yes"],
             Some(Method::LaneClean),
         ),
+        (
+            &["lane", "clean", "acme@2", "--dry-run"],
+            Some(Method::LaneCleanPlan),
+        ),
         (&["lane", "gc", "--yes"], Some(Method::LaneGc)),
         (&["infra", "up"], Some(Method::InfraUp)),
         (&["infra", "down"], Some(Method::InfraDown)),
@@ -1712,9 +1716,10 @@ fn completion_is_lazy_and_filters_existing_candidates() {
             .contains("COMPLETE=")
     );
 }
-mod agent_guide;
+mod agent_docs;
 mod choose;
 mod ci;
+mod classify;
 mod codes;
 mod diagnostics;
 mod help;
@@ -1724,4 +1729,5 @@ mod pwsh_export;
 mod reference_docs;
 mod render;
 mod start_ui;
+mod statusline;
 mod terminal;

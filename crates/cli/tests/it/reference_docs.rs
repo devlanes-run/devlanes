@@ -60,23 +60,16 @@ fn render(root: &Command) -> String {
     page.push_str(
         "\n## Hidden commands\n\nHidden from `--help` because you rarely type them. A \
          `remote.<box>.command` must end with `devlanes tunnel --stdio` \
-         ([remote boxes reached by a command](../guides/remote-command.md)); devlanes, ssh, \
-         the install scripts and the agent plugin run the others.\n\n",
+         ([remote boxes reached by a command](../guides/remote-command.md)); devlanes, ssh \
+         and the install scripts run the others.\n\n",
     );
     let mut found = Vec::new();
     hidden(root, "devlanes", &mut found);
     for (usage, help) in found {
         page.push_str(&format!("- `{usage}`: {help}\n"));
     }
-    page.push_str(AGENT_HOOK);
     page
 }
-
-/// Run by the agent plugin's hooks before clap parses anything
-/// (`bins/devlanes/src/main.rs`), so the command tree does not have it.
-const AGENT_HOOK: &str = "- `devlanes __agent-hook --agent <AGENT>`: Check a shell command \
-an agent is about to run and block one that starts a dev server in the background \
-(run by the agent plugin's hooks)\n";
 
 /// Hidden commands and options as `(usage, help)`: a hidden subcommand once,
 /// without its children, and each hidden option of a visible command.

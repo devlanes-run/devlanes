@@ -289,6 +289,27 @@ pub fn current_uid() -> u32 {
     rustix::process::getuid().as_raw()
 }
 
+/// Makes the child of `command` lead a new session (`setsid`), so it has no
+/// controlling terminal: an interactive shell started this way cannot take
+/// over or stop on the terminal of the process that started it. The child
+/// also leads a new process group with its own PID, so do not combine this
+/// with `process_group`, whose `setpgid` would make the `setsid` fail.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+pub fn new_session(command: &mut std::process::Command) -> &mut std::process::Command {
+    use std::os::unix::process::CommandExt as _;
+    // SAFETY: the hook runs in the forked child before exec, where only
+    // async-signal-safe operations are allowed. It makes one setsid system
+    // call, converts its error without allocating, and touches no locks or
+    // state shared with other threads.
+    unsafe {
+        command.pre_exec(|| {
+            rustix::process::setsid()?;
+            Ok(())
+        })
+    }
+}
+
 /// An open file to look for in other processes' descriptor tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenFile {

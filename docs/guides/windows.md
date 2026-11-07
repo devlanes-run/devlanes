@@ -201,7 +201,9 @@ cargo binstall, `cargo install` and pip installs are left to you: `devlanes upda
 
 ## Coding agents
 
-Claude Code on Windows often runs commands through its PowerShell tool, and Codex runs every shell command in PowerShell. The [agent plugin](../../agent-plugin/README.md#hook)'s hook runs `devlanes __agent-hook` and reads those commands as PowerShell, so it rejects backgrounded dev servers there too (`pnpm dev &`, `Start-Process`, `Start-Job`, `cmd /c start`). It needs `devlanes` on the agent's `PATH`; when devlanes is missing or too old, the error goes to the hook's stderr and every call passes.
+A shell inside the Codex sandbox cannot reach the daemon's pipe, even when the daemon runs, and `devlanes daemon install` does not help there. Codex starts MCP servers outside its sandbox, so register `devlanes mcp` with Codex instead ([Codex](mcp.md#codex)).
+
+Apps started from the Start menu, Claude Desktop among them, get no PowerShell profile. When a tool such as fnm adds to `PATH` only from the profile, set `DEVLANES_SHELL_ENV=pwsh` in the MCP server's `env` ([environment](mcp.md#environment)).
 
 ## Remote boxes
 

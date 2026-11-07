@@ -1,0 +1,5 @@
+---
+source: crates/mcp/tests/it/listing.rs
+expression: resources.resources
+---
+[]

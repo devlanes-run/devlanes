@@ -1342,6 +1342,65 @@ async fn wait_on_exec_waits_for_exit() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A request without a client env (`devlanes mcp` tries that first) answers
+/// `needs_env` while the lane has none, and uses the env a shell gave the lane
+/// once it has one.
+async fn requests_without_env_use_the_lanes_env() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BASIC);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let bare = Context {
+            env: None,
+            ..cx(&main)
+        };
+        let exec = |name: &str| {
+            json!({"name": name, "command": ["/bin/sh", "-c", "printenv HOME; sleep"]})
+        };
+        for (method, params) in [
+            (Method::Start, json!({})),
+            (Method::Exec, exec("early")),
+            (Method::Resume, json!({})),
+        ] {
+            let error = h
+                .call(method, params, bare.clone())
+                .await
+                .expect_err("no env yet");
+            assert_eq!(error.code, "needs_env", "{method:?}: {error:?}");
+        }
+        h.call(Method::Start, json!({"units": ["worker"]}), cx(&main))
+            .await
+            .expect("start from a shell");
+        h.call(Method::Restart, json!({"units": ["worker"]}), bare.clone())
+            .await
+            .expect("restart without env");
+        h.call(Method::Start, json!({}), bare.clone())
+            .await
+            .expect("start without env");
+        h.call(Method::Exec, exec("tool"), bare.clone())
+            .await
+            .expect("exec without env");
+        let home = cx(&main)
+            .env
+            .and_then(|env| env.get("HOME").cloned())
+            .expect("HOME");
+        let printed = eventually(Duration::from_secs(5), || async {
+            let page = h
+                .call(Method::Logs, json!({"units": ["tool"], "tail": 10}), cx(&main))
+                .await
+                .ok()?;
+            page["items"][0]["text"].as_str().map(str::to_owned)
+        })
+        .await
+        .expect("exec output");
+        assert_eq!(printed, home);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// `stop --mine` stops only units started by the caller's session.
 async fn stop_mine_filters_by_actor() {
     tokio::time::timeout(LIMIT, async {

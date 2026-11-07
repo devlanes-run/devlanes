@@ -1,0 +1,31 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "debug why",
+  "args": [
+    "debug",
+    "why",
+    "2:api"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": "failure",
+  "data": {
+    "lane": "acme@2",
+    "unit": "api",
+    "state": "failed",
+    "reasons": [
+      {
+        "code": "ready_timeout",
+        "data": {
+          "check": "http /health",
+          "timeout_ms": 30000
+        }
+      }
+    ]
+  },
+  "read_only": false,
+  "card": 1
+}

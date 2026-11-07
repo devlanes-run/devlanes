@@ -550,6 +550,7 @@ impl Inner {
             Method::LaneList => self.lane_list(&context).await,
             Method::LaneNew => self.lane_new(params, &context, &session).await,
             Method::LaneClean => self.lane_clean_method(params, &context).await,
+            Method::LaneCleanPlan => self.lane_clean_plan_method(params, &context).await,
             Method::LaneGc => self.lane_gc(&context).await,
             Method::Exec => self.exec_method(params, &context).await,
             Method::Run => self.run_method(params, &context, &session).await,
@@ -716,10 +717,22 @@ impl Inner {
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<LanePair, RpcError> {
+        self.cwd_lane_with(context, true).await
+    }
+
+    /// [`Self::cwd_lane`]; without `claim` a worktree that is no lane yet stays
+    /// one without a lane, for requests that must change nothing.
+    pub(crate) async fn cwd_lane_with(
+        self: &Arc<Self>,
+        context: &Context,
+        claim: bool,
+    ) -> Result<LanePair, RpcError> {
         if let Some(project) = self.project_for(context).await? {
             if let Some(lane) = Self::lane_at(&project, &context.cwd) {
                 // Running devlanes in a worktree is what makes it a lane.
-                self.claim_lane(&project, &lane).await;
+                if claim {
+                    self.claim_lane(&project, &lane).await;
+                }
                 return Ok((project, lane));
             }
         } else if !context.cwd.as_os_str().is_empty() {
@@ -915,28 +928,67 @@ impl Engine {
 }
 
 /// Requests counted as attempts to use the client environment (decision 7).
+/// The variables `devlanes mcp` sets for one command stay out, so no unit
+/// inherits them from an older client that still sends them.
 #[cfg(unix)]
-pub(crate) fn carries_env(context: &Context) -> Option<Arc<crate::model::EnvMap>> {
-    context.env.as_ref().map(|env| Arc::new(env.clone()))
-}
-
-/// Requests counted as attempts to use the client environment (decision 7).
-/// The askpass relay variable of an ssh run stays out, so no unit inherits it
-/// from a client started under that run, in any spelling.
-#[cfg(windows)]
 pub(crate) fn carries_env(context: &Context) -> Option<Arc<crate::model::EnvMap>> {
     context.env.as_ref().map(|env| {
         let mut env = env.clone();
-        env.retain(|name, _| !name.eq_ignore_ascii_case(devlanes_proto::remote::ASKPASS_ENV));
+        env.retain(|name, _| !devlanes_proto::CALL_ENV.contains(&name.as_str()));
         Arc::new(env)
     })
 }
 
-#[cfg(all(test, windows))]
+/// Requests counted as attempts to use the client environment (decision 7).
+/// The askpass relay variable of an ssh run and the variables `devlanes mcp`
+/// sets for one command stay out, so no unit inherits them from a client, in
+/// any spelling.
+#[cfg(windows)]
+pub(crate) fn carries_env(context: &Context) -> Option<Arc<crate::model::EnvMap>> {
+    context.env.as_ref().map(|env| {
+        let mut env = env.clone();
+        env.retain(|name, _| {
+            !std::iter::once(devlanes_proto::remote::ASKPASS_ENV)
+                .chain(devlanes_proto::CALL_ENV)
+                .any(|own| name.eq_ignore_ascii_case(own))
+        });
+        Arc::new(env)
+    })
+}
+
+/// Sets the daemon-wide flag once; true for the first caller.
+pub(crate) fn once(flag: &AtomicBool) -> bool {
+    !flag.swap(true, Ordering::SeqCst)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A client environment reaches units without the variables of one
+    /// `devlanes mcp` command.
+    #[test]
+    fn client_environments_lose_the_mcp_call_variables() {
+        let context = Context {
+            env: Some(
+                [
+                    ("PATH", "/usr/bin"),
+                    ("DEVLANES_JSON_OUT", "/tmp/devlanes-mcp-1.json"),
+                    ("DEVLANES_ENV_FROM_LANE", "1"),
+                    ("DEVLANES_HOME", "/tmp/dl"),
+                ]
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .into(),
+            ),
+            ..Context::default()
+        };
+        let env = carries_env(&context).unwrap_or_default();
+        let names: Vec<&str> = env.keys().map(String::as_str).collect();
+        assert_eq!(names, ["DEVLANES_HOME", "PATH"]);
+    }
+
     /// A client environment reaches units without the askpass relay variable.
+    #[cfg(windows)]
     #[test]
     fn client_environments_lose_the_askpass_relay() {
         let context = Context {
@@ -957,11 +1009,6 @@ mod tests {
         assert_eq!(names, ["DEVLANES_HOME", "PATH"]);
         assert!(carries_env(&Context::default()).is_none());
     }
-}
-
-/// Sets the daemon-wide flag once; true for the first caller.
-pub(crate) fn once(flag: &AtomicBool) -> bool {
-    !flag.swap(true, Ordering::SeqCst)
 }
 
 #[cfg(test)]

@@ -126,7 +126,7 @@ impl Inner {
         lane: &Arc<LaneRt>,
         fallback: Option<Arc<EnvMap>>,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
-        self.resolve_planned(project, lane, fallback, None, None, None)
+        self.resolve_planned(project, lane, fallback, None, None, None, false)
             .await
     }
 
@@ -148,7 +148,7 @@ impl Inner {
             .config
             .loaded()
             .and_then(|config| task_units(config, task));
-        self.resolve_planned(project, lane, None, None, Some(extra), only.as_ref())
+        self.resolve_planned(project, lane, None, None, Some(extra), only.as_ref(), false)
             .await
     }
 
@@ -209,6 +209,7 @@ impl Inner {
                 config,
                 None,
                 Some(&BTreeSet::new()),
+                false,
             )
             .await
             .map_err(unresolved)?;
@@ -229,12 +230,30 @@ impl Inner {
         config: Arc<devlanes_config::ProjectConfig>,
         only: Option<&BTreeSet<String>>,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
-        self.resolve_planned(project, lane, None, Some(config), None, only)
+        self.resolve_planned(project, lane, None, Some(config), None, only, false)
+            .await
+    }
+
+    /// Like [`Self::resolve_config`] (the lane's own config without `config`)
+    /// for a plan that launches nothing, such as `lane clean --dry-run`: no
+    /// contributor is asked for anything, so no secret store is read, and the
+    /// lane's data folder is not created. Script runners still read the
+    /// worktree's script files, which runs nothing.
+    pub(crate) async fn resolve_dry(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+        config: Option<Arc<devlanes_config::ProjectConfig>>,
+        only: Option<&BTreeSet<String>>,
+    ) -> Result<Arc<ResolvedLane>, RpcError> {
+        self.resolve_planned(project, lane, None, config, None, only, true)
             .await
     }
 
     /// Shared body of the resolve methods; `config` overrides the lane's, `extra`
-    /// is layered over the lane's overrides, `only` limits the planned units.
+    /// is layered over the lane's overrides, `only` limits the planned units,
+    /// and `dry` plans as [`Self::resolve_dry`] says.
+    #[allow(clippy::too_many_arguments)]
     async fn resolve_planned(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -243,6 +262,7 @@ impl Inner {
         config: Option<Arc<devlanes_config::ProjectConfig>>,
         extra: Option<&EnvMap>,
         only: Option<&BTreeSet<String>>,
+        dry: bool,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
         let reference = lane.st().reference(&project.name());
         let (config, allocation, env, mut overrides, profiles, infra_ns, index) = {
@@ -294,9 +314,11 @@ impl Inner {
         use tracing::Instrument as _;
         let facts = self.facts(project, lane)?;
         // Every launch (service, task, hook, `exec`) is planned here, and may write to it.
-        self.ensure_lane_data(project, lane)
-            .instrument(tracing::debug_span!("lane data"))
-            .await?;
+        if !dry {
+            self.ensure_lane_data(project, lane)
+                .instrument(tracing::debug_span!("lane data"))
+                .await?;
+        }
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
         let dotenv = read_dotenv(lane_dir, primary_dir)
             .instrument(tracing::debug_span!("dotenv"))
@@ -320,7 +342,7 @@ impl Inner {
         input.projects = &projects;
         input.profiles = &profiles;
         input.overrides = &overrides;
-        input.contributors = &self.integ.contributors;
+        input.contributors = if dry { &[] } else { &self.integ.contributors };
         input.script_runners = &self.integ.script_runners;
         input.ca_env = &self.integ.ca_env;
         input.public_https_port = self.integ.routes.https_port();

@@ -24,6 +24,8 @@ pub struct LaneLogQuery {
 pub struct WithPlan {
     pub start: Request,
     pub command: Vec<String>,
+    /// The client's environment, which the command gets under the lane's.
+    pub env: BTreeMap<String, String>,
     pub logs_dir: Option<PathBuf>,
     pub keep: bool,
 }
@@ -188,7 +190,7 @@ pub async fn run_with<D: WithDriver + ?Sized>(
             }
             match driver.env(&ownership.lane).await {
                 Ok(lane_env) => {
-                    let mut env = plan.start.context.env.clone().unwrap_or_default();
+                    let mut env = plan.env.clone();
                     env.extend(lane_env);
                     // Test code calling `https://*.localhost` then trusts the proxy.
                     let ca = runtime_ca_env(&env, |name| env.contains_key(name));

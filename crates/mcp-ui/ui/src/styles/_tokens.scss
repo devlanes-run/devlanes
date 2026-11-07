@@ -1,0 +1,36 @@
+// The devlanes palette, for hosts that send no style variables. Light is the website's page
+// (crates/pages/styles/page.scss), dark its terminal window with the TUI's state tones
+// (crates/tui/src/theme.rs). A test in tests/it/main.rs keeps the shared values equal to
+// crates/pages.
+
+$surface-light: #e9e7e1;
+$ink-light: #24231f;
+$muted-light: #63615a;
+$line-light: #d1cfc7;
+$info-light: #2f5f8f;
+$warning-light: #8a6400;
+$error-light: #b42318;
+// The TUI's green is too light on the page surface (1.87:1); this one is 4.97:1.
+$success-light: #2a6e47;
+$tertiary-light: #7a776f;
+// The page's --code-bg: color-mix(in srgb, --line 45%, --surface).
+$well-light: #dedcd5;
+$focus-light: #a77900;
+
+$terminal: #1a1917;
+$terminal-bar: #22211f;
+$terminal-ink: #e8e6df;
+$dim: #a39e91;
+// Lighter than the terminal's cursor grey (#6b675e), which is 2.86:1 on the window.
+$tertiary-dark: #857f73;
+$pane-border: #5a554b;
+
+$ok: #4cbf7f;
+$failure: #e5584a;
+$attention: #e8a13c;
+$frozen: #6ca8e8;
+
+$paint: #f5c542;
+
+$mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+$prose: 'Overpass', system-ui, -apple-system, 'Segoe UI', sans-serif;

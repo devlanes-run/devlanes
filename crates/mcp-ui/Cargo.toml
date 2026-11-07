@@ -1,0 +1,23 @@
+[package]
+name = "devlanes-mcp-ui"
+description = "The MCP Apps card devlanes mcp serves to chat hosts, as one self-contained HTML document."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+devlanes-version = { path = "../version" }
+
+[dev-dependencies]
+base64.workspace = true
+devlanes-proto = { path = "../proto" }
+# The box registry `remote ls` lists, for the box lane fixtures.
+devlanes-transport = { path = "../transport" }
+insta = { version = "1", features = ["json"] }
+serde_json.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

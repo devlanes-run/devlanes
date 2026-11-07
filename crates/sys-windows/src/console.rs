@@ -160,6 +160,22 @@ unsafe extern "system" fn ignore(_event: u32) -> BOOL {
     1
 }
 
+/// Sends `CTRL_BREAK_EVENT` to the process group `group`, the PID of a live
+/// child started with `CREATE_NEW_PROCESS_GROUP` on this process's console:
+/// the child and the processes it started without a group of their own get
+/// it, this process does not. Fails without a console.
+pub fn ctrl_break_group(group: u32) -> io::Result<()> {
+    // Group 0 would be every process on the console, this one included.
+    if group == 0 {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    // SAFETY: plain call with a nonzero group, which leaves other groups alone.
+    if unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, group) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// PIDs of the processes attached to this process's console. Fails without a
 /// console.
 pub fn console_processes() -> io::Result<Vec<u32>> {
