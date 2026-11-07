@@ -8,6 +8,8 @@
 
 mod code;
 
+use std::net::IpAddr;
+
 use askama::Template;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
@@ -175,13 +177,40 @@ impl<'a> ErrorPage<'a> {
     /// Resolves everything the templates show.
     fn view(&self) -> View<'_> {
         let unit = self.unit.as_deref().unwrap_or("<service>");
+        let mut known: Vec<KnownHost<'_>> = self.known_hosts.clone();
+        known.sort_by(|a, b| a.host.cmp(b.host));
+        known.dedup_by(|a, b| a.host == b.host);
+        let suggestion = closest(self.host, &known);
+        let project = if known.is_empty() {
+            self.unit
+                .as_deref()
+                .and_then(|unit| unit.split_once('@'))
+                .map(|(project, _)| project)
+        } else {
+            host_project(self.host, &known, suggestion)
+        };
+        let mut others = 0;
+        if let Some(project) = project {
+            let before = known.len();
+            known.retain(|known| owner_project(known) == Some(project));
+            others = before - known.len();
+        }
+        // `url ls` lists the cwd's project, so a reader in another project's folder
+        // would not see the names this page is about.
+        let url_ls = match project {
+            Some(project) => format!("devlanes -p {project} url ls"),
+            None => "devlanes url ls".to_owned(),
+        };
         let mut checks: Vec<ViewCheck> = self
             .code
             .checks()
             .into_iter()
             .map(|check| ViewCheck {
                 text: check.text,
-                command: check.command.map(|command| command.replace("{unit}", unit)),
+                command: check.command.map(|command| match command {
+                    "devlanes url ls" => url_ls.clone(),
+                    _ => command.replace("{unit}", unit),
+                }),
             })
             .collect();
         // The daemon's hint is a bare start command for local lanes, which only adds to
@@ -199,10 +228,6 @@ impl<'a> ErrorPage<'a> {
             }
             hint = "";
         }
-        let mut known: Vec<KnownHost<'_>> = self.known_hosts.clone();
-        known.sort_by(|a, b| a.host.cmp(b.host));
-        known.dedup_by(|a, b| a.host == b.host);
-        let suggestion = closest(self.host, &known);
         let hidden = known.len().saturating_sub(MAX_KNOWN_HOSTS);
         known.truncate(MAX_KNOWN_HOSTS);
         View {
@@ -226,6 +251,8 @@ impl<'a> ErrorPage<'a> {
             suggestion,
             known,
             hidden,
+            others,
+            url_ls,
             checks,
             docs_url: docs_url(self.code),
             issue_url: issue_url(self.code),
@@ -292,6 +319,10 @@ struct View<'a> {
     suggestion: Option<KnownHost<'a>>,
     known: Vec<KnownHost<'a>>,
     hidden: usize,
+    /// Routed names left out because they belong to other projects.
+    others: usize,
+    /// The `url ls` command that lists the page's project, or every project.
+    url_ls: String,
     checks: Vec<ViewCheck>,
     docs_url: String,
     issue_url: String,
@@ -335,6 +366,46 @@ fn closest<'a>(host: &str, known: &[KnownHost<'a>]) -> Option<KnownHost<'a>> {
         })
         .min_by_key(|(distance, _)| *distance)
         .map(|(_, candidate)| candidate)
+}
+
+/// The project `host` most likely belongs to: the one owning every routed name under
+/// its parent domain (`x.acme2.localhost` -> names under `acme2.localhost`), else the
+/// owner of the closest suggestion. `None` for `localhost`, an IP or an unrelated
+/// name, whose page keeps listing every project.
+fn host_project<'a>(
+    host: &str,
+    known: &[KnownHost<'a>],
+    suggestion: Option<KnownHost<'a>>,
+) -> Option<&'a str> {
+    if !host.contains('.') || host.trim_matches(['[', ']']).parse::<IpAddr>().is_ok() {
+        return None;
+    }
+    // A one-label parent is the TLD (`localhost`), which every project shares.
+    if let Some((_, parent)) = host.split_once('.')
+        && parent.contains('.')
+    {
+        let suffix = format!(".{parent}");
+        let mut owners = known
+            .iter()
+            .filter(|known| {
+                let name = known.host.strip_prefix("*.").unwrap_or(known.host);
+                name == parent || name.ends_with(&suffix)
+            })
+            .map(owner_project);
+        if let Some(Some(first)) = owners.next()
+            && owners.all(|owner| owner == Some(first))
+        {
+            return Some(first);
+        }
+    }
+    suggestion.as_ref().and_then(owner_project)
+}
+
+/// The project part of a known host's `project@lane` owner.
+fn owner_project<'a>(known: &KnownHost<'a>) -> Option<&'a str> {
+    known
+        .owner
+        .map(|owner| owner.split_once('@').map_or(owner, |(project, _)| project))
 }
 
 /// Levenshtein distance over bytes; hostnames are ASCII.
