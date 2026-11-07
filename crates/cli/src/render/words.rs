@@ -390,6 +390,15 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 "set systemd=true under [boot] in /etc/wsl.conf, {WSL_RESTART}"
             ))),
         ),
+        // A task or exec command still running at the deadline: no readiness problem.
+        "timeout" if text(data, "state") == "running" && !text(data, "unit").is_empty() => (
+            format!(
+                "{} is still running after {}",
+                target(data),
+                super::duration(data.get("timeout_ms").and_then(Value::as_u64).unwrap_or(0))
+            ),
+            logs_hint(data),
+        ),
         "timeout" => (
             match target(data) {
                 found if !found.is_empty() => format!("timed out waiting for {found}"),
@@ -414,6 +423,17 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
         "config_error" => (
             config_invalid(data),
             Some(Hint::command(["config", "check"])),
+        ),
+        // A lane-level value of a file that loads did not evaluate (`exec`, `env
+        // show`), such as `${{ env.X }}` the shell does not set: not an invalid file.
+        "lane_env_unresolved" => (
+            format!(
+                "{} has no value in {}: {}",
+                field(data, "path"),
+                or_this_lane(&text(data, "lane")),
+                text(data, "message")
+            ),
+            None,
         ),
         // `config get|set|unset` with a key the user config does not have.
         "unknown_setting" => (
@@ -511,7 +531,8 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 _ => ("the lane is already running".into(), None),
             }
         }
-        // `debug freeze` refusals, each `{lane}`; keep_awake and orphans add `units`.
+        // `debug freeze` refusals, each `{lane}`; keep_awake, running tasks and
+        // orphans add `units`.
         "lane_not_running" => {
             let lane = text(data, "lane");
             (
@@ -526,11 +547,30 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             ),
             Some(lane_command(["status"], &text(data, "lane"))),
         ),
+        "lane_runs_task" => {
+            let lane = text(data, "lane");
+            let units: Vec<String> = list(data, "units").iter().map(display_value).collect();
+            (
+                format!(
+                    "{} runs {}; a running task or exec unit keeps a lane awake",
+                    or_this_lane(&lane),
+                    if units.is_empty() {
+                        "a task".to_owned()
+                    } else {
+                        units.join(", ")
+                    }
+                ),
+                Some(lane_command(["status"], &lane)),
+            )
+        }
         "lane_keep_awake" => {
             let units: Vec<String> = list(data, "units").iter().map(display_value).collect();
-            let keys: Vec<String> = units
+            // `services` names the config entries behind replicas; older
+            // daemons send only `units`.
+            let services: Vec<String> = list(data, "services").iter().map(display_value).collect();
+            let keys: Vec<String> = if services.is_empty() { &units } else { &services }
                 .iter()
-                .map(|unit| format!("services.{unit}.keep_awake"))
+                .map(|name| format!("services.{name}.keep_awake"))
                 .collect();
             let lane = or_this_lane(&text(data, "lane"));
             (
@@ -1600,6 +1640,22 @@ fn memory(data: &Value, key: &str) -> String {
         .map_or_else(|| "?".into(), super::bytes)
 }
 
+/// The `left_out` entries of an `exec` or `env` answer, one line each:
+/// `DATABASE_URL left out: infra postgres is not up; devlanes infra up`.
+pub(crate) fn left_out(data: &Value) -> Vec<String> {
+    list(data, "left_out")
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} left out: infra {} is not up; {}",
+                text(entry, "key"),
+                text(entry, "infra"),
+                Hint::command(["infra", "up"]).0
+            )
+        })
+        .collect()
+}
+
 /// A lane warning (`StartResult.warnings`, `lane.warning`, doctor's `ca_warnings`)
 /// as one line: `api.example.com is outside the CA's names; HTTPS will fail; try api.acme.test`.
 pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
@@ -1633,6 +1689,19 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
             format!(
                 "stopped {}, which the project file no longer has",
                 units.join(", ")
+            )
+        }
+        "exec_stopped" => {
+            let units: Vec<String> = list(data, "units").iter().map(display_value).collect();
+            let (noun, pronoun) = if units.len() == 1 {
+                ("exec unit", "it")
+            } else {
+                ("exec units", "them")
+            };
+            format!(
+                "stopped {noun} {}; run {pronoun} again with {}",
+                units.join(", "),
+                Hint::command(["exec"]).0
             )
         }
         // A result rather than advice: the start summary prints it as an ok line.
@@ -1812,6 +1881,22 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
             ),
             Some(Hint::command(["stop", &target(data)])),
         ),
+        "not_listening" => {
+            let listening: Vec<String> =
+                list(data, "listening").iter().map(display_value).collect();
+            (
+                format!(
+                    "nothing accepts connections on port {}{}",
+                    field(data, "port"),
+                    if listening.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; it listens on {}", listening.join(", "))
+                    }
+                ),
+                Some(Hint::command(["env", "show", &format!("{lane}:{unit}")])),
+            )
+        }
         "waiting_after_services" => (
             "waiting for the lane's services to be ready (after: services)".into(),
             Some(Hint::command(["wait", lane])),

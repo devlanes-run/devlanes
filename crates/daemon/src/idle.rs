@@ -322,25 +322,44 @@ fn idle_units(st: &LaneSt, reference: &str) -> Result<Vec<Named>, RpcError> {
     if !st.starts.is_empty() || st.busy.is_some() || st.spawning > 0 || st.closing || st.sweeping {
         return Err(refusal("lane_busy", lane));
     }
+    let live = || st.units.iter().filter(|(_, rec)| rec.host.is_alive());
+    // A running task or exec does work the user waits for.
+    let tasks: Vec<&String> = live()
+        .filter(|(_, rec)| rec.kind != Kind::Service)
+        .map(|(name, _)| name)
+        .collect();
+    if !tasks.is_empty() {
+        return Err(refusal(
+            "lane_runs_task",
+            json!({"lane": reference, "units": tasks}),
+        ));
+    }
     let mut units = Vec::new();
     let mut keep_awake = Vec::new();
-    for (name, rec) in st.units.iter().filter(|(_, rec)| rec.host.is_alive()) {
-        // A running task or exec does work the user waits for; a unit that is
-        // starting or stopping belongs to an operation in flight.
-        if rec.kind != Kind::Service
-            || matches!(rec.host.state(), UnitState::Starting | UnitState::Stopping)
-        {
+    let mut services: Vec<String> = Vec::new();
+    for (name, rec) in live() {
+        // A unit that is starting or stopping belongs to an operation in flight.
+        if matches!(rec.host.state(), UnitState::Starting | UnitState::Stopping) {
             return Err(refusal("lane_busy", lane));
         }
         if rec.keep_awake {
             keep_awake.push(name.clone());
+            // The config key is per service, not per replica.
+            let service = st
+                .view
+                .as_ref()
+                .and_then(|view| view.services.iter().find(|s| s.unit == *name))
+                .map_or_else(|| name.clone(), |s| s.name.clone());
+            if !services.contains(&service) {
+                services.push(service);
+            }
         }
         units.push((name.clone(), rec.managed.clone()));
     }
     if !keep_awake.is_empty() {
         return Err(refusal(
             "lane_keep_awake",
-            json!({"lane": reference, "units": keep_awake}),
+            json!({"lane": reference, "units": keep_awake, "services": services}),
         ));
     }
     if units.is_empty() {

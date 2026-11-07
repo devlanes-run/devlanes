@@ -41,7 +41,7 @@ Commands use the project of the nearest `devlanes.yaml` above the current direct
 |---|---|
 | Bring up this worktree's lane | `devlanes start`, or `devlanes start api web` |
 | States, URLs and ports | `devlanes status`, `devlanes status --mine` |
-| Wait for a unit or lane | `devlanes wait api --timeout 180s` |
+| Wait for a unit or lane to be ready, or a task or exec command to finish | `devlanes wait api --timeout 180s` |
 | Recent logs | `devlanes logs api --tail 100` |
 | Search logs | `devlanes logs api --grep 'ECONNREFUSED' --since 10m` |
 | Lines around a log cursor | `devlanes logs api --around CURSOR -C 20` |
@@ -93,10 +93,10 @@ Failures come first, each with its last log lines and the command that shows mor
 |---|---|
 | `ready` | Up and passing its ready check. Use it. |
 | `frozen`, `throttled` | A ready service in a lane that had no activity for a while (agent output shows `ready` with `power=frozen` or `power=throttled`, JSON `state: ready` with a `power` field). Any request, connection or devlanes command on the lane resumes it; no action needed. |
-| `starting`, `queued` | Starting, or waiting for a start slot. `devlanes wait UNIT --timeout 180s`. |
-| `running` | A task or exec in progress. Wait for it or read its logs. |
+| `starting`, `queued` | Starting, or waiting for a start slot; a task in progress also shows `starting`. `devlanes wait UNIT --timeout 180s`. |
+| `running` | An exec command still running (JSON: `state: ready`). Read its logs; `devlanes wait UNIT` waits for it to exit, so do not wait on one that serves. |
 | `external` | An `infra.external` entry: devlanes routes its port and hostnames but runs nothing there, so it has no logs and `start` or `stop` do not apply. Whatever listens on the port is yours to run. |
-| `failed` | Exited or never got ready. Read the printed tail, then `devlanes logs UNIT --tail 200` and `devlanes debug why UNIT`; fix the code and `devlanes restart UNIT`, or fix the config and `devlanes reload`. A service that keeps failing its ready check usually has the wrong port or check: see references/configuration.md. |
+| `failed` | Exited or never got ready. Read the printed tail, then `devlanes logs UNIT --tail 200` and `devlanes debug why UNIT`; fix the code and `devlanes restart UNIT`, or fix the config and `devlanes reload`. A service that keeps failing its ready check usually has the wrong port or check: see references/configuration.md. `devlanes stop NAME` clears a failed service or exec command; a failed task stays failed until it runs again. |
 | `exited` | A task or exec that ended. `devlanes logs UNIT --tail 50` shows how. |
 | `stopping`, `stopped`, `idle` | Not running. `devlanes start UNIT` when you need it. |
 | `orphaned` | A previous daemon left the process running and nothing supervises it. `devlanes stop UNIT --lane LANE`, then start it again. |
@@ -105,7 +105,7 @@ An error ends with a `hint:` line naming the command that fixes it. Ask the user
 
 With `--json`, a command prints one JSON document; lists have the shape `{items, truncated, next_cursor}`. Streams (`start --json`, `logs -f --json`, `debug events -f`) print NDJSON.
 
-Exit codes: 0 success, 1 failure, 2 usage error or missing `--yes`, 3 unknown or ambiguous reference, 4 daemon unreachable, 124 timeout.
+Exit codes: 0 success, 1 failure, 2 usage error or missing `--yes`, 3 unknown or ambiguous reference, 4 daemon unreachable, 124 timeout. `devlanes status` exits 1 while any unit it shows has failed, a task or exec command that exited non-zero included. `devlanes stop NAME` clears a failed service or exec command; a failed task stays failed until it runs again.
 
 ## Typical loop
 

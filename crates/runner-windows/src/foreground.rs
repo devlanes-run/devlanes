@@ -10,13 +10,9 @@ use devlanes_sys_windows::spawn::{
     self as win, Child, CreationFlags, Environment, Spawn, Stdio, Stream,
 };
 
-use crate::SpawnError;
 use crate::command::{self, Quoting};
 use crate::spawn::child_env;
-
-/// `STATUS_CONTROL_C_EXIT`, the exit code of a process that Ctrl-C or
-/// Ctrl-Break ended.
-const STATUS_CONTROL_C_EXIT: u32 = 0xC000_013A;
+use crate::{CONTROL_C_EXIT, SpawnError};
 
 /// Starts `program` with `args` in `cwd`, with exactly `env` (minus the
 /// `=C:`-style drive entries), on this process's console and standard
@@ -70,7 +66,7 @@ fn stream(handle: &impl AsHandle) -> Stream<'_> {
 /// `STATUS_CONTROL_C_EXIT`, as for a Unix SIGINT, the code itself up to 255,
 /// and 1 for any other code (NTSTATUS crash codes, large exit values).
 pub fn shell_exit_code(code: u32) -> u8 {
-    if code == STATUS_CONTROL_C_EXIT {
+    if code == CONTROL_C_EXIT {
         return 130;
     }
     u8::try_from(code).unwrap_or(1)

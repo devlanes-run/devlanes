@@ -9,7 +9,12 @@ use std::{
 };
 
 use devlanes_config::OpaqueExtensions;
-use devlanes_core::{LaunchSpec, TerminalSize, ports::PortName};
+use devlanes_core::{
+    LaunchSpec, TerminalSize,
+    contrib::runtime_ca_env,
+    env::{EnvLayer, assemble},
+    ports::PortName,
+};
 use devlanes_proto::{
     Context, ExecParams, Page, ResumePlan, RpcError, RunParams, Selection, UnitSummary, events,
 };
@@ -845,6 +850,7 @@ impl Inner {
             ));
         }
         let (project, lane) = self.target_lane(context).await?;
+        self.fresh_config(&project, &lane).await;
         // An exec unit under a configured name would take that unit's place: its
         // logs, its stop and the next start of the real one.
         let taken = {
@@ -876,26 +882,35 @@ impl Inner {
             lane.st().env = Some(env.clone());
             project.st().last_env = Some(env);
         }
-        let (mut env, lane_env, reference) = {
+        let (resolved, layers) = self
+            .resolve_lane_env(&project, &lane, Arc::default())
+            .await?;
+        let mut left_out = layers.unset.clone();
+        left_out.retain(|key, _| !args.env.contains_key(key));
+        let (client, reference) = {
             let st = lane.st();
             (
                 st.env.as_deref().cloned().unwrap_or_default(),
-                st.view
-                    .as_ref()
-                    .map(|view| view.lane_env.clone())
-                    .unwrap_or_default(),
                 st.reference(&project.name()),
             )
         };
-        env.extend(lane_env);
-        env.extend(args.env.clone());
+        let lane_env = resolved.lane_env();
+        let runtime_ca = runtime_ca_env(lane_env, |name| {
+            client.contains_key(name) || args.env.contains_key(name)
+        });
         let cwd = if context.cwd.as_os_str().is_empty() {
             lane.st().path.clone()
         } else {
             context.cwd.clone()
         };
-        let environment =
-            devlanes_core::env::assemble([(devlanes_core::env::EnvLayer::Client, env.clone())]);
+        let environment = assemble([
+            (EnvLayer::Client, client),
+            (EnvLayer::Contributor, runtime_ca),
+            (EnvLayer::Devlanes, lane_env.clone()),
+            (EnvLayer::Global, layers.global),
+            (EnvLayer::Profile, layers.profile),
+            (EnvLayer::Override, args.env.clone()),
+        ]);
         let request = SpawnRequest {
             name: args.name.clone(),
             kind: Kind::Exec,
@@ -903,7 +918,7 @@ impl Inner {
                 program: program.clone(),
                 args: rest.to_vec(),
                 cwd,
-                env,
+                env: environment.values.clone(),
                 pty: args.pty,
                 size: TerminalSize::default(),
             },
@@ -933,13 +948,20 @@ impl Inner {
         let (host, _) = self.spawn_unit(&project, &lane, request).await?;
         drop(adhoc);
         host.set_state(crate::units::UnitState::Ready);
-        let st = lane.st();
-        let summary = st
-            .units
-            .get(&args.name)
-            .map(|rec| unit_summary(&reference, &args.name, rec))
-            .unwrap_or_default();
-        serde_json::to_value(summary).map_err(|e| internal("encode", e))
+        let mut st = lane.st();
+        let summary = match st.units.get_mut(&args.name) {
+            Some(rec) => {
+                rec.left_out = left_out.clone();
+                unit_summary(&reference, &args.name, rec)
+            }
+            None => UnitSummary::default(),
+        };
+        drop(st);
+        let mut result = serde_json::to_value(summary).map_err(|e| internal("encode", e))?;
+        if !left_out.is_empty() {
+            result["left_out"] = crate::resolve::left_out(&left_out);
+        }
+        Ok(result)
     }
 
     /// `run`: one task, streamed as `log` events unless detached.
@@ -1427,6 +1449,7 @@ impl Inner {
         {
             let mut st = lane.st();
             st.infra_ns = Some(up.namespace.clone());
+            st.infra_replaced();
             st.store_containers(up.containers.clone());
             st.setup_env = up.setup_env.clone();
         }
