@@ -242,7 +242,7 @@ expression: tools
         },
         "mine": {
           "type": "boolean",
-          "description": "Only stop units this agent session started; with no units, across every lane"
+          "description": "Only stop units this agent session started; with no units, those in the current project, or in every project outside one"
         },
         "logs_dir": {
           "type": "string",
@@ -651,7 +651,7 @@ expression: tools
         },
         "explain": {
           "type": "boolean",
-          "description": "Show where each variable comes from; secret values are hidden"
+          "description": "Show where each variable comes from; secret-looking values are hidden"
         },
         "lane": {
           "type": "string",

@@ -295,7 +295,7 @@ expression: tools(&harness).await
         },
         "explain": {
           "type": "boolean",
-          "description": "Show where each variable comes from; secret values are hidden"
+          "description": "Show where each variable comes from; secret-looking values are hidden"
         },
         "lane": {
           "type": "string",

@@ -242,6 +242,37 @@ impl Inner {
         }
     }
 
+    /// Lanes `stop --mine` without units and `status --mine` cover: the `--lane`, the
+    /// `--file` or `-p` project, else the cwd's project, or every project of a
+    /// repository root that holds several, else every lane outside any project.
+    /// Unlike [`Self::scope_lanes`], a project that fails to resolve is an error, so a
+    /// stop never widens to every project by accident, and no lane is claimed.
+    pub(crate) async fn mine_scope(
+        self: &Arc<Self>,
+        context: &Context,
+    ) -> Result<Vec<LanePair>, RpcError> {
+        if context.lane.is_some() {
+            return Ok(vec![self.target_lane(context).await?]);
+        }
+        let projects = if context.file.is_some() || context.project.is_some() {
+            self.project_for(context).await?.into_iter().collect()
+        } else {
+            self.projects_here(context).await?
+        };
+        if projects.is_empty() {
+            return Ok(self.all_lanes());
+        }
+        Ok(projects
+            .into_iter()
+            .flat_map(|project| {
+                project
+                    .lanes()
+                    .into_iter()
+                    .map(move |lane| (project.clone(), lane))
+            })
+            .collect())
+    }
+
     /// Lane summaries with the sampler's latest CPU and memory.
     pub(crate) fn summaries(
         &self,
@@ -282,7 +313,12 @@ impl Inner {
         session: &Session,
     ) -> Result<Value, RpcError> {
         let args: StatusParams = params(value)?;
-        let lanes = self.scope_lanes(context, args.all).await?;
+        // `--mine` lists what a unit-less `stop --mine` would stop.
+        let lanes = if args.mine && !args.all {
+            self.mine_scope(context).await?
+        } else {
+            self.scope_lanes(context, args.all).await?
+        };
         let mine = args.mine.then_some(&context.actor);
         let items = self.summaries(&lanes, mine);
         if args.watch {
@@ -1001,11 +1037,22 @@ impl Inner {
                     crate::engine::carries_env(context).unwrap_or_default(),
                 )
                 .await?;
-            let env = devlanes_core::env::assemble([
+            let mut env = devlanes_core::env::assemble([
                 (EnvLayer::Devlanes, resolved.lane_env().clone()),
                 (EnvLayer::Global, layers.global),
                 (EnvLayer::Profile, layers.profile),
             ]);
+            // `--explain` output ends up in transcripts and bug reports; the plain
+            // listing keeps real values for `eval` and subshells.
+            if args.explain {
+                let secrets = devlanes_core::env::secret_values(
+                    env.values.iter(),
+                    devlanes_core::env::SecretValues::Credentials,
+                );
+                for (key, value) in env.values.iter_mut() {
+                    *value = devlanes_core::env::redact_value(key, value, &secrets);
+                }
+            }
             let reference = lane.st().reference(&project.name());
             let mut result = json!({"lane": reference, "env": env.values});
             if !layers.unset.is_empty() {
@@ -1068,11 +1115,16 @@ impl Inner {
             }
         };
         let mut result = if args.explain {
+            let secrets = devlanes_core::env::secret_values(
+                env.values.iter(),
+                devlanes_core::env::SecretValues::Credentials,
+            );
             let items: Vec<Value> = env
                 .values
                 .iter()
                 .map(|(key, value)| {
                     let layer = env.sources.get(key).copied().unwrap_or(EnvLayer::Client);
+                    let value = devlanes_core::env::redact_value(key, value, &secrets);
                     json!({"key": key, "value": value, "layer": layer_word(layer)})
                 })
                 .collect();

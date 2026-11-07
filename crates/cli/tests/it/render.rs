@@ -284,6 +284,13 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::Stop,
             page(vec![unit("api", "stopped"), unit("web", "exited")]),
         ),
+        // `stop --mine` in acme while the session's units also run in shop.
+        ("stop_mine_elsewhere", Method::Stop, {
+            let mut stopped = page(vec![unit("api", "stopped")]);
+            stopped["warnings"] = json!([{"code": "mine_elsewhere",
+                "data": {"lanes": ["shop@0"], "projects": ["shop"]}}]);
+            stopped
+        }),
         (
             "status",
             Method::Status,
@@ -568,7 +575,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::Env,
             json!({"lane": "acme@2", "unit": "api", "items": [
             {"key": "PORT", "value": "20101", "layer": "devlanes"},
-            {"key": "API_TOKEN", "value": "tok_test", "layer": "global"},
+            {"key": "API_TOKEN", "value": "[redacted]", "layer": "global"},
             {"key": "NODE_ENV", "value": "development", "layer": "service"},
         ], "truncated": false, "next_cursor": null}),
         ),

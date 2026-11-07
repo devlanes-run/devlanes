@@ -90,6 +90,8 @@ Run `devlanes` with no command (or `devlanes ui`) on a terminal. It lists every 
 
 Agents should start services through devlanes instead of backgrounding `pnpm dev &` in their shell. The devlanes skill teaches them how; install it with `npx skills add devlanes-run/devlanes --skill devlanes`. [Coding agents](guides/mcp.md) also covers `devlanes mcp`, an optional MCP server. When devlanes detects an agent it switches to terse output with failures first; `devlanes exec --name NAME -- COMMAND` runs a long-running process that is not in `devlanes.yaml` as a unit, and `devlanes wait` and budgeted `devlanes logs` let the agent check on it.
 
+`devlanes stop --mine` stops what this agent session started in the current project, or in each project of a repository root that holds several; `-p` names another project, and outside any project it covers every project. Sessions are told apart by the agent's session id; an agent that exposes none counts all its sessions as one.
+
 In CI, `devlanes with -- pnpm test:e2e` starts the lane, runs the command with the lane's URLs in its environment, stops what it started and exits with the command's code.
 
 ## GUI tools

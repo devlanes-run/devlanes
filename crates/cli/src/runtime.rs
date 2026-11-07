@@ -1,4 +1,7 @@
-use std::{io::IsTerminal, path::PathBuf};
+use std::{
+    io::IsTerminal,
+    path::{Path, PathBuf},
+};
 
 use clap::ValueEnum;
 use devlanes_proto::{Actor, ActorKind};
@@ -68,11 +71,10 @@ impl Signals {
         let detected_actor = if agent_disabled {
             None
         } else {
-            is_ai_agent::detect().map(|agent| Actor {
-                kind: ActorKind::Agent,
-                agent_id: Some(agent.id.as_str().into()),
-                session_id: agent.session_id,
-            })
+            detect_actor(
+                |key| std::env::var(key).ok(),
+                |path| Path::new(path).exists(),
+            )
         };
         Self {
             stdout_tty: std::io::stdout().is_terminal(),
@@ -106,6 +108,32 @@ impl Signals {
             .map(PathBuf::from);
         self
     }
+}
+
+/// Session variables of agents is-ai-agent 0.7 reads none for. Without one, the
+/// daemon counts every session of the agent as the caller's (`stop --mine`).
+/// Entries go away once is-ai-agent reads them itself.
+const SESSION_VARS: &[(is_ai_agent::AgentId, &str)] =
+    &[(is_ai_agent::AgentId::OpenCode, "OPENCODE_SESSION_ID")];
+
+/// The agent running this command, with its session id, from `env` lookups.
+pub fn detect_actor(
+    env: impl Fn(&str) -> Option<String>,
+    file_exists: impl Fn(&str) -> bool,
+) -> Option<Actor> {
+    let agent = is_ai_agent::detect_with(&env, file_exists)?;
+    let session_id = agent.session_id.or_else(|| {
+        SESSION_VARS
+            .iter()
+            .find(|(id, _)| *id == agent.id)
+            .and_then(|(_, var)| env(var))
+            .filter(|value| !value.trim().is_empty())
+    });
+    Some(Actor {
+        kind: ActorKind::Agent,
+        agent_id: Some(agent.id.as_str().into()),
+        session_id,
+    })
 }
 
 /// Resolved once and reused for every request, renderer, and terminal decision.

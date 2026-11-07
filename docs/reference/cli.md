@@ -103,7 +103,7 @@ devlanes stop [OPTIONS] [UNIT]...
 ```
 
 - `[UNIT]...`: Units to stop ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: the whole lane]
-- `--mine`: Only stop units this agent session started; with no units, across every lane
+- `--mine`: Only stop units this agent session started; with no units, those in the current project, or in every project outside one
 - `--logs-dir <DIR>`: Write each unit's log of this run to DIR as text files, for CI artifacts
 
 ### devlanes restart
@@ -496,7 +496,7 @@ devlanes env show [OPTIONS] [UNIT]
 ```
 
 - `[UNIT]`: Unit whose environment to print ([lane:]unit, such as api or 2:api) [default: the lane's variables]
-- `--explain`: Show where each variable comes from; secret values are hidden
+- `--explain`: Show where each variable comes from; secret-looking values are hidden
 
 ### devlanes env export
 
