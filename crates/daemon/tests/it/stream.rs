@@ -87,10 +87,30 @@ async fn a_start_streams_its_events_before_the_response() {
                 "tasks:progress",
                 "tasks:done",
                 "services:started",
+                "services:ready",
                 "services:done",
                 "after-services:skipped",
             ]
         );
+        // Whoever reacts to the milestone already holds a lane showing it.
+        let ready = streamed
+            .iter()
+            .position(|e| e.event == events::PHASE && e.data["state"] == "ready")
+            .expect("services:ready");
+        let lane = streamed[..ready]
+            .iter()
+            .rfind(|e| e.event == events::LANE_CHANGED)
+            .expect("a lane.changed before services:ready");
+        let state = |name: &str| {
+            lane.data["lane"]["units"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|unit| unit["name"] == name)
+                .map(|unit| unit["state"].clone())
+        };
+        assert_eq!(state("web"), Some(json!("ready")), "{lane:?}");
+        assert_eq!(state("worker"), Some(json!("ready")), "{lane:?}");
         assert_eq!(
             planned(&streamed),
             Some(vec!["web".to_owned(), "worker".to_owned()])
@@ -158,7 +178,10 @@ async fn a_start_streams_its_events_before_the_response() {
             .expect("restart");
         let restart: StartResult = serde_json::from_value(value).expect("result");
         let streamed = drain_events(&mut frames);
-        assert_eq!(phases(&streamed), ["services:started", "services:done"]);
+        assert_eq!(
+            phases(&streamed),
+            ["services:started", "services:ready", "services:done"]
+        );
         assert_eq!(planned(&streamed), Some(vec!["worker".to_owned()]));
         let restart_id = restart.start_id.expect("restart id");
         assert_ne!(restart_id, id);

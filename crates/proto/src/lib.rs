@@ -1738,12 +1738,16 @@ pub mod events {
     pub const LANE_REMOVED: &str = "lane.removed";
     /// `{unit: UnitSummary}` on every unit state transition.
     pub const UNIT_CHANGED: &str = "unit.changed";
-    /// `{lane, phase, state: started|progress|done|failed|skipped, reason?, start_id?,
-    /// units?, containers?, step?}` for start pipeline progress. `start_id` tells
-    /// concurrent starts of one lane apart; `services:started` lists in `units` the
-    /// units this start spawns. `progress` comes while a phase runs, each time its
-    /// detail changes: [`super::PhaseContainer`]s during infra, the running
-    /// [`super::PhaseStep`] during setup and tasks.
+    /// `{lane, phase, state: started|progress|ready|done|failed|skipped, reason?,
+    /// start_id?, units?, containers?, step?}` for start pipeline progress.
+    /// `start_id` tells concurrent starts of one lane apart; `services:started`
+    /// lists in `units` the units this start spawns. `progress` comes while a
+    /// phase runs, each time its detail changes: [`super::PhaseContainer`]s during
+    /// infra, the running [`super::PhaseStep`] during setup and tasks.
+    /// `services:ready` comes once every unit the start brought up is ready, after
+    /// a `lane.changed` showing them ready and before `services:done`; a start that
+    /// timed out, had a failed unit or brought nothing up sends none, and
+    /// `after: services` tasks run only after it.
     pub const PHASE: &str = "lane.phase";
     /// `{lane, task, state, exit_code?}` for task runs.
     pub const TASK: &str = "task";

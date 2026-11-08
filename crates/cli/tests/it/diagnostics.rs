@@ -177,7 +177,8 @@ fn stream(runtime: &Runtime, events: &[Event]) -> String {
 
 #[test]
 /// On a terminal each phase prints as it begins, then the line becomes its
-/// outcome or goes away; elsewhere only outcomes print.
+/// outcome or goes away; elsewhere only outcomes print, and JSON keeps every
+/// event.
 fn phases_print_as_they_begin() {
     let events = [
         phase("infra", "started", None),
@@ -185,6 +186,7 @@ fn phases_print_as_they_begin() {
         phase("setup", "started", None),
         phase("setup", "skipped", Some("no_setup")),
         phase("services", "started", None),
+        phase("services", "ready", None),
     ];
     let tty = stream(&runtime(&["devlanes"], OutputMode::Human, true, 0), &events);
     assert_eq!(
@@ -193,13 +195,25 @@ fn phases_print_as_they_begin() {
 \x1b[1A\x1b[2K✓ infra\n\
 … setup: running infra.setup\n\
 \x1b[1A\x1b[2K\
-… services\n"
+… services\n\
+\x1b[1A\x1b[2K✓ services ready\n"
     );
     let piped = stream(
         &runtime(&["devlanes"], OutputMode::Human, false, 0),
         &events,
     );
-    assert_eq!(piped, "✓ infra\n");
+    assert_eq!(piped, "✓ infra\n✓ services ready\n");
+    let json = stream(&runtime(&["devlanes"], OutputMode::Json, false, 0), &events);
+    let records: Vec<(String, Value)> = json
+        .lines()
+        .map(|line| serde_json::from_str::<Event>(line).expect("one event per line"))
+        .map(|event| (event.event, event.data))
+        .collect();
+    let sent: Vec<(String, Value)> = events
+        .iter()
+        .map(|event| (event.event.clone(), event.data.clone()))
+        .collect();
+    assert_eq!(records, sent);
     // With -v the stderr diagnostics interleave, so nothing is erased.
     let verbose = stream(&runtime(&["devlanes"], OutputMode::Human, true, 1), &events);
     assert!(verbose.starts_with("… infra"), "{verbose}");

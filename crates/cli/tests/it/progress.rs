@@ -307,6 +307,7 @@ fn a_finished_task_replaces_its_phase_line() {
         task("acme@2", "build"),
         task("acme@1", "install"),
         phase("tasks", "done", None),
+        phase("services", "ready", None),
         phase("after-services", "started", None),
         phase("after-services", "progress", Some(("seed", 1, 2))),
         task("acme@1", "seed"),
@@ -322,9 +323,9 @@ fn a_finished_task_replaces_its_phase_line() {
 {erase}\u{2026} tasks: install\n\
 \u{2713} build\n\
 \u{2713} install\n\
+\u{2713} services ready\n\
 \u{2026} after-services\n\
-{erase}\u{2713} services ready\n\
-\u{2026} after-services: seed (1 of 2)\n\
+{erase}\u{2026} after-services: seed (1 of 2)\n\
 {erase}\u{2713} seed\n\
 \u{2026} after-services: notify (2 of 2)\n\
 {erase}\u{2713} notify\n"

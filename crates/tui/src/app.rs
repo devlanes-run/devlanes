@@ -2784,8 +2784,9 @@ impl App {
         let detail = devlanes_term::phase_detail(data);
         match phases.steps.iter_mut().find(|step| step.phase == phase) {
             Some(step) => {
-                // Progress keeps the phase running; only an end changes the state.
-                if state != "progress" {
+                // Progress and the services milestone keep the phase running;
+                // only an end changes the state.
+                if !matches!(state.as_str(), "progress" | "ready") {
                     step.state = state;
                 }
                 if detail.is_some() {
@@ -2794,7 +2795,7 @@ impl App {
             }
             None => phases.steps.push(PhaseStep {
                 phase,
-                state: if state == "progress" {
+                state: if matches!(state.as_str(), "progress" | "ready") {
                     "started".into()
                 } else {
                     state

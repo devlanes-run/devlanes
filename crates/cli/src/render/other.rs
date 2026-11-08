@@ -632,6 +632,8 @@ pub(super) fn phase_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
         // What the phase waits on now; replaces the line above the same way.
         "progress" if cx.human() => devlanes_term::phase_detail(data)
             .map(|detail| cx.paint(&format!("… {phase}: {}", clean(&detail)), "2")),
+        // Sent once every unit the start brought up is ready.
+        "ready" => Some(format!("{} {phase} ready", cx.mark(Outcome::Ok))),
         "done" if matches!(phase.as_str(), "tasks" | "services" | "after-services") => None,
         "done" => Some(format!("{} {phase}", cx.mark(Outcome::Ok))),
         "failed" => Some(format!(
@@ -652,21 +654,6 @@ pub(super) fn phase_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
         }
         _ => None,
     }
-}
-
-/// `✓ services ready` on the first step of the `after-services` phase. The
-/// daemon sends that step only once every unit of the start is ready (it skips
-/// the phase on a timeout or a failed unit), and the result's services line
-/// comes after the stream, so without this the phase's task lines read as if
-/// they ran before the services were up.
-pub(super) fn services_ready_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
-    let step = data
-        .get("step")
-        .and_then(|step| serde_json::from_value::<devlanes_proto::PhaseStep>(step.clone()).ok())?;
-    (text(data, "phase") == "after-services"
-        && text(data, "state") == "progress"
-        && step.index == 1)
-        .then(|| format!("{} services ready", cx.mark(Outcome::Ok)))
 }
 
 /// A finished task during a start: `✓ migrate` or `✗ migrate exit=1`.
