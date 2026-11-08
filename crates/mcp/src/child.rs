@@ -432,9 +432,9 @@ impl Tee {
     /// Creates the FIFO and opens its read end, then a write end of the
     /// server's own. Both open non-blocking, reader first, since a FIFO takes
     /// a non-blocking writer only once it has a reader; the read end then
-    /// turns blocking for a reader thread. The runtime's reactor cannot wait
-    /// on a FIFO: kqueue on macOS does not wake its reader when the last
-    /// writer closes, so the read would never end there.
+    /// turns blocking for a reader thread. Reading the FIFO through the
+    /// runtime's event loop hung on a macOS CI run; the thread relies only on
+    /// a blocking read of a pipe returning 0 once no writer is left.
     #[cfg(unix)]
     async fn open(phases: Option<UnboundedSender<String>>) -> std::io::Result<Self> {
         use rustix::fs::{Mode, OFlags};
