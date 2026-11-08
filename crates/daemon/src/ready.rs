@@ -13,10 +13,10 @@ use serde_json::json;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    time::{Instant, sleep, timeout},
+    time::{Instant, sleep, sleep_until, timeout},
 };
 
-use crate::units::{Logged, UnitHost, UnitState, now_ms};
+use crate::units::{Logged, UnitHost, UnitState};
 
 /// What "ready" means for one unit, after config evaluation.
 #[derive(Clone)]
@@ -103,7 +103,7 @@ const CMD_ATTEMPT: Duration = Duration::from_secs(10);
 
 /// How long after its spawn a unit's exit still counts as a failed start: a
 /// unit is ready only once its check passed and it has run this long.
-const EARLY_EXIT: Duration = Duration::from_millis(500);
+pub(crate) const EARLY_EXIT: Duration = Duration::from_millis(500);
 
 /// Waits for readiness, process exit or the timeout, then records the result on the host.
 /// `listening` reports the ports the unit's tree bound, for the tcp timeout diagnostic.
@@ -178,12 +178,10 @@ where
 /// Marks the unit ready once it has run [`EARLY_EXIT`] since its spawn, unless
 /// it exits first; the waiter task classifies that exit.
 async fn ready_after_window(host: &UnitHost) {
-    let early = u64::try_from(EARLY_EXIT.as_millis()).unwrap_or(u64::MAX);
-    let left = (host.info().started_at_ms + early).saturating_sub(now_ms());
     tokio::select! {
         biased;
         _ = host.wait_exit() => {}
-        () = sleep(Duration::from_millis(left)) => host.set_state(UnitState::Ready),
+        () = sleep_until(host.spawned() + EARLY_EXIT) => host.set_state(UnitState::Ready),
     }
 }
 
