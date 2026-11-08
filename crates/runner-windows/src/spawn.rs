@@ -17,6 +17,8 @@ use devlanes_sys_windows::{
 use crate::{
     StderrMode,
     command::{self, CommandError, Quoting},
+    exit::Leader,
+    runtime::Runtimes,
     terminal::Terminal,
 };
 
@@ -122,8 +124,11 @@ pub(crate) struct Launched {
     pub child: Child,
     pub job: Job,
     pub pipes: Vec<(OutputStream, PipeReader)>,
-    /// The program is a batch file that `cmd.exe` runs.
-    pub batch: bool,
+    /// What the leader is, which decides how its exit code reads.
+    pub leader_kind: Leader,
+    /// `<System32>\cmd.exe`, the command interpreter that asks "Terminate
+    /// batch job (Y/N)?".
+    pub system_cmd: PathBuf,
     /// For `pty: true`: the pseudo console and the size it was created at.
     pub terminal: Option<(Terminal, TerminalSize)>,
 }
@@ -136,11 +141,13 @@ pub(crate) struct Launched {
 /// [`TerminalSize::RENDERED_HEADLESS`] when that is the default (no viewer
 /// yet); its one output pipe carries the console host's rendering. Nothing
 /// that fails before `CreateProcessW` succeeded leaves a job or a process
-/// behind.
+/// behind. The leader is [`Leader::Msys`] when `runtimes` says the resolved
+/// program links the MSYS runtime, else [`Leader::Native`].
 pub(crate) fn launch(
     spec: LaunchSpec,
     stderr: StderrMode,
     shell: Option<&Path>,
+    runtimes: &Runtimes,
 ) -> Result<Launched, SpawnError> {
     let through_shell = spec.program == POSIX_SHELL;
     let mut env = spec.env;
@@ -166,6 +173,15 @@ pub(crate) fn launch(
         Quoting::Native
     };
     let command = command::build(&program, &spec.args, &env, &spec.cwd, &system, quoting)?;
+    let leader_kind = match runtimes.links_msys(&command.application) {
+        Ok(true) => Leader::Msys,
+        Ok(false) => Leader::Native,
+        Err(error) => {
+            tracing::debug!(%error, program = %command.application.display(), "image not read; leader counted as native");
+            Leader::Native
+        }
+    };
+    let system_cmd = system.join("cmd.exe");
     let environment = Environment::new(&env)?;
     let job = || {
         Job::create(JobOptions {
@@ -209,7 +225,8 @@ pub(crate) fn launch(
             child,
             job,
             pipes: vec![(OutputStream::Terminal, output_reader)],
-            batch: command.batch,
+            leader_kind,
+            system_cmd,
             terminal: Some((terminal, size)),
         });
     }
@@ -250,7 +267,8 @@ pub(crate) fn launch(
         child,
         job,
         pipes,
-        batch: command.batch,
+        leader_kind,
+        system_cmd,
         terminal: None,
     })
 }

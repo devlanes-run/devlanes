@@ -13,8 +13,8 @@ use std::{
 };
 
 use devlanes_core::{
-    Error, LaunchSpec, OutputChunk, OutputStream, Power, ProcessIdentity, StopPolicy, StopSignal,
-    TerminalSize, Unit,
+    Error, ExitOutcome, LaunchSpec, OutputChunk, OutputStream, Power, ProcessIdentity, StopPolicy,
+    StopSignal, TerminalSize, Unit,
 };
 use devlanes_runner_windows::{
     ConsoleHelper, ExitReport, HELPER_ARG, StderrMode, WindowsRunner, WindowsUnit,
@@ -27,8 +27,6 @@ use tokio::sync::broadcast::{Receiver, error::RecvError};
 const LIMIT: Duration = Duration::from_secs(60);
 /// Grace for stops that are expected to succeed without escalating.
 const GRACE: Duration = Duration::from_secs(20);
-/// `STATUS_CONTROL_C_EXIT` as the signed code an exit report carries.
-const CONTROL_C_EXIT: i32 = 0xC000_013A_u32.cast_signed();
 
 /// Not a test of its own: started with [`HELPER_ARG`] among its arguments,
 /// this binary is the runner's console helper, as `devlanes __console-ctrl`
@@ -575,8 +573,8 @@ async fn pty_shell_units_get_the_ctrl_c_key() {
 }
 
 /// A `.cmd` shim in a pseudo console asks "Terminate batch job (Y/N)?" once
-/// its program stopped on Ctrl-C; the runner answers it, and the stop does
-/// not escalate.
+/// its program stopped on Ctrl-C; the runner answers it, the stop does not
+/// escalate, and the unit reports the program's own code.
 #[tokio::test]
 async fn pty_batch_prompts_are_answered() {
     devlanes_sys_windows::console::set_ctrl_c_ignored(false).expect("accept Ctrl-C");
@@ -601,8 +599,14 @@ async fn pty_batch_prompts_are_answered() {
             .await
             .expect("stop");
         assert_stopped(&report, StopSignal::Terminate, false);
-        // `cmd.exe` exits 255 after the answer, which is not the program's code.
-        assert_eq!(report.outcome.code, Some(CONTROL_C_EXIT), "{report:?}");
+        assert_eq!(
+            report.outcome,
+            ExitOutcome {
+                code: Some(0),
+                signal: None
+            },
+            "{report:?}"
+        );
         let rest = text(&rest.await.expect("join"), OutputStream::Terminal);
         assert!(plain(&rest).contains("Terminate batch job"), "{rest:?}");
     })
@@ -774,6 +778,7 @@ async fn run_strings_find_git_tools() {
 
 /// `/bin/sh -c` runs through Git's `sh.exe`, which receives the script
 /// intact (backslashes and quotes included) and MSYS path conversion off.
+/// Its exit reads as on Unix: a code, or the signal that killed the shell.
 #[tokio::test]
 async fn run_strings_go_through_git_sh() {
     bounded(async {
@@ -784,7 +789,7 @@ async fn run_strings_go_through_git_sh() {
         let script = r#"printf '[%s]\n' 'a\b' "q\"q" "$MSYS_NO_PATHCONV" /c/x
 exit 4"#;
         let unit = runner()
-            .with_shell(Some(shell))
+            .with_shell(Some(shell.clone()))
             .spawn_unit(spec("/bin/sh", &["-c", script], dir.path(), env(&[])))
             .await
             .expect("spawn");
@@ -792,42 +797,77 @@ exit 4"#;
         let output = text(&drain(unit.output()).await, OutputStream::Stdout);
         assert_eq!(output, "[a\\b]\n[q\"q]\n[1]\n[/c/x]\n");
         assert_eq!(unit.wait().await.expect("exit").code, Some(4));
+
+        let unit = runner()
+            .with_shell(Some(shell))
+            .spawn_unit(spec(
+                "/bin/sh",
+                &["-c", "kill -INT $$"],
+                dir.path(),
+                env(&[]),
+            ))
+            .await
+            .expect("spawn");
+        let _cleanup = Cleanup(unit.clone());
+        assert_eq!(
+            unit.wait().await.expect("exit"),
+            ExitOutcome {
+                code: None,
+                signal: Some(2)
+            }
+        );
     })
     .await;
 }
 
-/// SIGTERM is Ctrl-C to the console of a unit with no MSYS shell, which
+/// SIGTERM is Ctrl-C to the console of a unit with no MSYS program, which
 /// Node and most servers handle as a graceful stop; the fixture shuts down on
-/// it without escalation, and its port is reported while it runs.
+/// it without escalation, and its port is reported while it runs. A program
+/// with no console handler, which the event ends, reports SIGINT as on Unix.
 #[tokio::test]
 async fn sigterm_sends_ctrl_c() {
     devlanes_sys_windows::console::set_ctrl_c_ignored(false).expect("accept Ctrl-C");
     bounded(async {
         let dir = tempfile::tempdir().expect("tempdir");
-        let unit = runner()
-            .spawn_unit(fixture_spec(&["--port", "0"], dir.path()))
-            .await
-            .expect("spawn");
-        let _cleanup = Cleanup(unit.clone());
-        let mut output = unit.output();
-        let port = listening_port(&read_until(&mut output, "LISTENING").await);
-        assert!(
-            unit.listening_ports()
+        let handled = ExitOutcome {
+            code: Some(0),
+            signal: None,
+        };
+        let ended = ExitOutcome {
+            code: None,
+            signal: Some(2),
+        };
+        for (args, expected) in [
+            (&["--port", "0"][..], handled),
+            (&["--port", "0", "--default-ctrl-handler"][..], ended),
+        ] {
+            let unit = runner()
+                .spawn_unit(fixture_spec(args, dir.path()))
                 .await
-                .expect("ports")
-                .iter()
-                .any(|socket| socket.addr.port() == port)
-        );
-        let rest = tokio::spawn(drain(output));
-        let report = unit
-            .stop_with_report(policy(StopSignal::Terminate, GRACE))
-            .await
-            .expect("stop");
-        assert_stopped(&report, StopSignal::Terminate, false);
-        assert_eq!(report.outcome.code, Some(0), "{report:?}");
-        let rest = text(&rest.await.expect("join"), OutputStream::Stdout);
-        assert!(rest.contains("STOPPING ctrl-c"), "{rest:?}");
-        assert!(!any_alive(&[unit.identity()]));
+                .expect("spawn");
+            let _cleanup = Cleanup(unit.clone());
+            let mut output = unit.output();
+            let port = listening_port(&read_until(&mut output, "LISTENING").await);
+            assert!(
+                unit.listening_ports()
+                    .await
+                    .expect("ports")
+                    .iter()
+                    .any(|socket| socket.addr.port() == port)
+            );
+            let rest = tokio::spawn(drain(output));
+            let report = unit
+                .stop_with_report(policy(StopSignal::Terminate, GRACE))
+                .await
+                .expect("stop");
+            assert_stopped(&report, StopSignal::Terminate, false);
+            assert_eq!(report.outcome, expected, "{args:?}: {report:?}");
+            if expected == handled {
+                let rest = text(&rest.await.expect("join"), OutputStream::Stdout);
+                assert!(rest.contains("STOPPING ctrl-c"), "{rest:?}");
+            }
+            assert!(!any_alive(&[unit.identity()]));
+        }
     })
     .await;
 }
@@ -934,7 +974,13 @@ async fn ignored_events_escalate() {
             .await
             .expect("stop");
         assert_stopped(&report, StopSignal::Terminate, true);
-        assert_eq!(report.outcome.code, Some(1));
+        assert_eq!(
+            report.outcome,
+            ExitOutcome {
+                code: None,
+                signal: Some(9)
+            }
+        );
         assert!(!any_alive(&[unit.identity()]));
     })
     .await;
@@ -1342,9 +1388,4 @@ fn assert_stopped(report: &ExitReport, signal: StopSignal, escalated: bool) {
     assert_eq!(stop.escalated, escalated, "{report:?}");
     assert!(report.left_running.is_empty(), "{report:?}");
     assert!(report.escaped.is_empty(), "{report:?}");
-    // A Ctrl-Break that reached a default handler ends with this code; it
-    // stays a code rather than becoming a signal.
-    if report.outcome.code == Some(CONTROL_C_EXIT) {
-        assert_eq!(report.outcome.signal, None);
-    }
 }

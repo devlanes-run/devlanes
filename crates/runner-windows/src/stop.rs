@@ -71,7 +71,7 @@ impl StopPlan {
 
 /// Whether `process` runs a program that links the MSYS or Cygwin runtime;
 /// `false` when it is gone or its image cannot be read. Blocking.
-pub(crate) fn runs_msys(process: &ProcessEntry, runtimes: &Runtimes) -> bool {
+fn runs_msys(process: &ProcessEntry, runtimes: &Runtimes) -> bool {
     let image = match Held::open(process.pid, process.start_time) {
         Ok(Some(held)) => held.image_path(),
         Ok(None) => return false,
