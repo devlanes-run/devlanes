@@ -75,24 +75,26 @@ struct OpenLine {
 /// What happens to `started` and `progress` phase lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PhaseMode {
-    /// JSON, agent output, or human output not on a terminal: no started lines.
+    /// Human output not on a terminal: no started lines.
     Hide,
     /// A terminal: started lines are replaced when the phase ends.
     Replace,
     /// Lines stay as rendered: verbose output interleaves stderr, so lines are
-    /// never erased, and plain output has no started lines of its own, only the
-    /// CI log group a phase opens.
+    /// never erased; plain output has no started lines of its own, only the
+    /// CI log group a phase opens; JSON writes every event as one record, and
+    /// agent output renders none.
     Keep,
 }
 
 impl PhaseLines {
-    /// The policy for this invocation's stdout.
+    /// The policy for this invocation's stdout. Only human output has phase
+    /// lines to hide or replace.
     pub fn new(runtime: &Runtime) -> Self {
         let mode = match runtime.mode {
-            OutputMode::Plain => PhaseMode::Keep,
             OutputMode::Human if runtime.verbose > 0 => PhaseMode::Keep,
             OutputMode::Human if runtime.stdout_tty && runtime.ci.is_none() => PhaseMode::Replace,
-            _ => PhaseMode::Hide,
+            OutputMode::Human => PhaseMode::Hide,
+            OutputMode::Plain | OutputMode::Json | OutputMode::Agent => PhaseMode::Keep,
         };
         Self { mode, open: None }
     }
