@@ -2020,7 +2020,12 @@ fn start_progress_prints_finished_steps_once() {
         ),
         (
             "task",
-            json!({"lane": "acme@2", "task": "migrate", "state": "done", "exit_code": 0}),
+            json!({"lane": "acme@2", "task": "migrate", "state": "exited", "exit_code": 0}),
+        ),
+        // The start's deadline passed before this after-services task ran.
+        (
+            "task",
+            json!({"lane": "acme@2", "task": "seed", "state": "skipped", "reason": {"code": "timed_out"}}),
         ),
         ("unit.changed", json!({"unit": unit("api", "ready")})),
         (

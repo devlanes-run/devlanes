@@ -1444,13 +1444,12 @@ impl Inner {
                 sources.insert(file.to_owned());
             }
             // Never-run tasks get `null`, so clients can say so.
+            // A finished run keeps the word its end got; one without is still going.
             let last_run = runs.iter().find(|run| &run.task == name).map(|run| {
-                let state = match (run.ended_at, run.exit_code) {
-                    (None, _) => "running",
-                    (Some(_), Some(0)) => "done",
-                    (Some(_), Some(_)) => "failed",
-                    (Some(_), None) => "interrupted",
-                };
+                let state = run
+                    .state
+                    .as_deref()
+                    .unwrap_or(crate::units::UnitState::Running.word());
                 json!({
                     "state": state,
                     "trigger": run.trigger,

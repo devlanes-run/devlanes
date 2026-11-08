@@ -1803,7 +1803,7 @@ async fn run_confirm_and_interactive() {
         let items = tasks["items"].as_array().expect("items");
         assert_eq!(items.len(), 4);
         let last = |name: &str| items.iter().find(|t| t["name"] == name).expect(name)["last_run"].clone();
-        assert_eq!(last("reset")["state"], "done");
+        assert_eq!(last("reset")["state"], "exited");
         assert_eq!(last("reset")["exit_code"], 0);
         assert!(last("reset")["finished_at_ms"].as_i64().is_some());
         assert_eq!((last("broken")["state"].clone(), last("broken")["exit_code"].clone()), (json!("failed"), json!(3)));

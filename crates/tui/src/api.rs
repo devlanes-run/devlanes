@@ -768,7 +768,8 @@ pub struct TaskInfo {
 /// A task's newest run from `task.list`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct LastRun {
-    /// `running`, `done`, `failed` or `interrupted`.
+    /// `running`, `exited`, `failed` or `stopped` (`done` and `interrupted`
+    /// from older daemons).
     pub state: String,
     #[serde(default)]
     pub started_at_ms: Option<u64>,

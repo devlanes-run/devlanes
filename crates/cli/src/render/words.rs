@@ -117,8 +117,9 @@ fn log_failure(data: &Value) -> String {
     }
 }
 
-/// `stopped by its timeout of 1m`: a task that ran past its own `timeout:`.
-fn timed_out(data: &Value) -> String {
+/// `stopped by its timeout of 1m`: a task that ran past its own `timeout:`
+/// (`task_timeout`), for the CLI and the TUI.
+pub fn task_timeout(data: &Value) -> String {
     match data.get("timeout_ms").and_then(Value::as_u64) {
         Some(ms) => format!("stopped by its timeout of {}", super::duration(ms)),
         None => "stopped by its timeout".into(),
@@ -570,7 +571,7 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             },
             logs_hint(data),
         ),
-        "timed_out" => (timed_out(data), logs_hint(data)),
+        "task_timeout" => (task_timeout(data), logs_hint(data)),
         "git_failed" => (format!("git failed: {}", text(data, "message")), None),
         "unsupported" | "unsupported_method" => (
             format!(
@@ -2008,14 +2009,14 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
             "starting; waiting for its readiness check".into(),
             Some(Hint::command(["wait", &format!("{lane}:{unit}")])),
         ),
-        "ready_timeout" => (
+        "ready_timeout" | "timed_out" => (
             format!(
                 "did not become ready before the timeout{}",
                 last_answer(data)
             ),
             status_hint(data).or_else(|| Some(Hint::logs(lane, unit, 200))),
         ),
-        "timed_out" => (timed_out(data), Some(Hint::logs(lane, unit, 200))),
+        "task_timeout" => (task_timeout(data), Some(Hint::logs(lane, unit, 200))),
         "ready_log_failed" => (
             format!("its {}, so ready.log cannot match", log_failure(data)),
             Some(Hint::command(["daemon", "logs"])),

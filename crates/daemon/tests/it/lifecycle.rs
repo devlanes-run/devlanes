@@ -225,8 +225,8 @@ async fn run_timeout_stops_the_task_and_closes_its_run() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// A task stopped by its own `timeout:` failed, unlike a stopped one: its unit,
-/// `wait`, `debug why`, the `run` answer and the closing `task` event all say
-/// `failed` with `timed_out`.
+/// `wait`, `debug why`, the `run` answer, the closing `task` event and
+/// `task.list` all say `failed`, with `task_timeout` where a reason is given.
 async fn a_task_past_its_own_timeout_failed() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -238,13 +238,13 @@ async fn a_task_past_its_own_timeout_failed() {
             .call(Method::Run, json!({"task": "slow"}), cx(&main))
             .await
             .expect("run answers once the task is stopped");
-        let failed = (json!("failed"), json!("timed_out"));
+        let failed = (json!("failed"), json!("task_timeout"));
         assert_eq!(
             (ran["state"].clone(), ran["reason"]["code"].clone()),
             failed
         );
         let closed = task_event(&mut bus, "slow", "failed").expect("closing task event");
-        assert_eq!(closed.data["reason"]["code"], "timed_out");
+        assert_eq!(closed.data["reason"]["code"], "task_timeout");
         let unit = lane(&h, &main)
             .await
             .units
@@ -253,7 +253,7 @@ async fn a_task_past_its_own_timeout_failed() {
             .expect("slow");
         assert_eq!(
             (unit.state.as_str(), unit.reason.map(|r| r.code)),
-            ("failed", Some("timed_out".to_owned()))
+            ("failed", Some("task_timeout".to_owned()))
         );
         let waited = h
             .call(
@@ -275,6 +275,11 @@ async fn a_task_past_its_own_timeout_failed() {
             (why["state"].clone(), why["reasons"][0]["code"].clone()),
             failed
         );
+        let tasks = h
+            .call(Method::TaskList, json!({}), cx(&main))
+            .await
+            .expect("task list");
+        assert_eq!(tasks["items"][0]["last_run"]["state"], "failed", "{tasks}");
         h.close().await;
     })
     .await

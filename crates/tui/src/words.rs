@@ -481,6 +481,7 @@ pub fn rpc(error: &RpcError) -> Worded {
             rest,
             status_hint(data).or_else(|| logs_hint(data)),
         ),
+        "task_timeout" => (devlanes_cli::task_timeout(data), rest, logs_hint(data)),
         "container_not_ready" => (
             format!(
                 "container {} didn't pass its {} check in time{}",

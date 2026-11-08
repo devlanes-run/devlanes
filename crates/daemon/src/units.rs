@@ -58,7 +58,7 @@ pub enum StopCause {
     /// The run ends `Stopped`.
     Requested,
     /// The run's own time limit (a task's `timeout:`) passed. The run ends
-    /// `Failed` with a `timed_out` reason carrying the limit.
+    /// `Failed` with a `task_timeout` reason carrying the limit.
     TimedOut(Duration),
 }
 
@@ -1044,7 +1044,7 @@ impl Inner {
         let next = match cause {
             Some(StopCause::Requested) => UnitState::Stopped(outcome),
             Some(StopCause::TimedOut(limit)) => UnitState::Failed(Some(RpcError::new(
-                "timed_out",
+                "task_timeout",
                 json!({"timeout_ms": u64::try_from(limit.as_millis()).unwrap_or(u64::MAX)}),
                 1,
             ))),

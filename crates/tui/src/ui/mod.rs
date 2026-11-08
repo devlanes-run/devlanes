@@ -397,7 +397,10 @@ pub(crate) fn task_look(theme: &Theme, info: Option<&crate::api::TaskInfo>, spin
             Tone::Busy,
             String::new(),
         ),
-        Some("done") => look(theme.glyph(Glyph::Done), Tone::Ok, "done", Tone::Quiet, ago),
+        // Older daemons say `done`; a stopped run reads `ended` below.
+        Some("exited" | "done") => {
+            look(theme.glyph(Glyph::Done), Tone::Ok, "done", Tone::Quiet, ago)
+        }
         Some("failed") => {
             let exit = run
                 .and_then(|r| r.exit_code)

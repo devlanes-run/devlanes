@@ -3063,8 +3063,9 @@ impl Inner {
         })
     }
 
-    /// Finishes a task run row and emits its closing `task` event. `spec_hash` is the
-    /// task's [`declaration_hash`], kept with a success so an edit runs it again.
+    /// Finishes a task run row with `state`, how it ended, and emits its closing
+    /// `task` event with the same word. `spec_hash` is the task's
+    /// [`declaration_hash`], kept with a success so an edit runs it again.
     #[allow(clippy::too_many_arguments)]
     async fn close_task_run(
         &self,
@@ -3076,7 +3077,11 @@ impl Inner {
         reason: Option<Value>,
         spec_hash: Option<String>,
     ) {
-        if let Err(error) = self.store.finish_task_run(id, code, spec_hash).await {
+        let finished = self
+            .store
+            .finish_task_run(id, code, state.to_owned(), spec_hash)
+            .await;
+        if let Err(error) = finished {
             tracing::warn!(%error, task, "task run not recorded as finished");
         }
         self.task_event(reference, task, state, code, reason);
