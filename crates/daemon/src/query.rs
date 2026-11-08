@@ -481,9 +481,9 @@ impl Inner {
     }
 
     /// `wait`: returns once a unit or lane is ready or failed; `timeout` (exit 124)
-    /// otherwise. A task or exec unit is waited on until its command exits, and
-    /// exiting 0 on its own answers `exited` with `ready: true`; a timeout while
-    /// it still runs carries `state: running` and `timeout_ms`.
+    /// otherwise. A task or exec unit is never `ready`: it is waited on until its
+    /// command exits, and `exited` (on its own with 0) answers `ready: true`. A
+    /// timeout on a unit carries its `state` and `timeout_ms`.
     pub(crate) async fn wait_method(
         self: &Arc<Self>,
         value: Value,
@@ -537,18 +537,13 @@ impl Inner {
         let disconnected = session.disconnected();
         let wait = async {
             loop {
-                // A task or exec unit is waited on until its command exits.
-                let (hosts, busy, runs_to_exit): (Vec<(String, UnitHost)>, bool, bool) = {
+                let (hosts, busy): (Vec<(String, UnitHost)>, bool) = {
                     let st = lane.st();
-                    let mut runs_to_exit = false;
                     let hosts = match &unit {
                         Some(unit) => st
                             .units
                             .get(unit)
-                            .map(|rec| {
-                                runs_to_exit = matches!(rec.kind, Kind::Task | Kind::Exec);
-                                vec![(unit.clone(), rec.host.clone())]
-                            })
+                            .map(|rec| vec![(unit.clone(), rec.host.clone())])
                             .unwrap_or_default(),
                         None => st
                             .units
@@ -557,7 +552,7 @@ impl Inner {
                             .map(|(name, rec)| (name.clone(), rec.host.clone()))
                             .collect(),
                     };
-                    (hosts, st.busy.is_some(), runs_to_exit)
+                    (hosts, st.busy.is_some())
                 };
                 let states: Vec<UnitState> = hosts.iter().map(|(_, host)| host.state()).collect();
                 let failed: Vec<usize> = states
@@ -581,7 +576,7 @@ impl Inner {
                 }
                 let all_ready =
                     !states.is_empty() && states.iter().all(|s| matches!(s, UnitState::Ready));
-                if all_ready && !busy && !runs_to_exit {
+                if all_ready && !busy {
                     return Ok(
                         json!({"lane": reference, "unit": unit, "state": "ready", "ready": true}),
                     );
@@ -591,27 +586,23 @@ impl Inner {
                         json!({"lane": reference, "unit": unit, "state": "idle", "ready": false}),
                     );
                 }
-                if let Some((name, host)) = hosts
-                    .iter()
-                    .find(|(_, h)| matches!(h.state(), UnitState::Exited(_)))
-                    .filter(|_| unit.is_some())
+                let target = hosts.first().filter(|_| unit.is_some());
+                if let Some((name, host)) = target
+                    && let state @ (UnitState::Stopped(_) | UnitState::Exited(_)) = host.state()
                 {
                     let code = host.exit_outcome().and_then(|o| o.code);
-                    // Exited on its own with 0: the command the wait was for succeeded.
-                    if runs_to_exit && code == Some(0) && !host.stop_was_requested() {
-                        return Ok(
-                            json!({"lane": reference, "unit": name, "state": "exited", "ready": true, "exit_code": 0}),
-                        );
-                    }
+                    // Only a command that exited on its own with 0 did what the wait was for.
+                    let ready = matches!(state, UnitState::Exited(_));
                     return Ok(
-                        json!({"lane": reference, "unit": name, "state": host.state().word(), "ready": false, "exit_code": code}),
+                        json!({"lane": reference, "unit": name, "state": state.word(), "ready": ready, "exit_code": code}),
                     );
                 }
                 if Instant::now() >= deadline {
                     let mut data = json!({"lane": reference, "unit": unit});
-                    // Still running is not a readiness problem: the CLI says so.
-                    if runs_to_exit && hosts.iter().any(|(_, host)| host.is_alive()) {
-                        data["state"] = json!("running");
+                    // A unit's state says why it is not ready; `running` is a command
+                    // still at work, which the CLI words as such.
+                    if let Some((_, host)) = target {
+                        data["state"] = json!(host.state().word());
                         data["timeout_ms"] = json!(timeout_ms);
                     }
                     return Err(RpcError::new("timeout", data, 124));
@@ -833,7 +824,7 @@ impl Inner {
             match host.state() {
                 UnitState::Failed(Some(reason)) => push(&mut reasons, &reason.code, reason.data),
                 UnitState::Starting => push(&mut reasons, "starting", json!({})),
-                UnitState::Exited(outcome) => push(
+                UnitState::Stopped(outcome) | UnitState::Exited(outcome) => push(
                     &mut reasons,
                     "stopped",
                     json!({"exit_code": outcome.code, "signal": outcome.signal, "requested": host.stop_was_requested()}),
@@ -932,7 +923,7 @@ impl Inner {
                         .unwrap_or(route.port)
                 })
                 .collect();
-            if ports.is_empty() && matches!(rec.ready_check, Some("tcp" | "http")) {
+            if ports.is_empty() && matches!(rec.host.info().goal.check(), Some("tcp" | "http")) {
                 ports.extend(rec.ports.get("default").copied());
             }
             (ports, rec.managed.clone())

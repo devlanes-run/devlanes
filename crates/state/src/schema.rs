@@ -107,6 +107,7 @@ diesel::table! {
         actor_kind -> Text,
         actor_agent_id -> Nullable<Text>,
         actor_session_id -> Nullable<Text>,
+        state -> Nullable<Text>,
     }
 }
 diesel::table! {

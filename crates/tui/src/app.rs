@@ -3190,7 +3190,11 @@ impl App {
             matches!(lane.state.as_str(), "starting" | "stopping")
                 || lane.units.iter().any(|u| {
                     matches!(u.state.as_str(), "starting" | "stopping")
-                        || (u.state == "running" && tree::role(u) != tree::Role::Service)
+                        || (u.state == "running"
+                            && matches!(
+                                tree::role(u),
+                                tree::Role::Task | tree::Role::Setup | tree::Role::Teardown
+                            ))
                 })
         })
     }

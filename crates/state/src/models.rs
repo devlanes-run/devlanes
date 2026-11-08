@@ -157,6 +157,7 @@ pub(crate) struct TaskRow {
     pub actor_kind: String,
     pub actor_agent_id: Option<String>,
     pub actor_session_id: Option<String>,
+    pub state: Option<String>,
 }
 #[derive(Insertable)]
 #[diesel(table_name = task_runs)]
@@ -362,6 +363,7 @@ impl TryFrom<TaskRow> for TaskRun {
             started_at: row.started_at,
             ended_at: row.ended_at,
             exit_code: row.exit_code,
+            state: row.state,
             actor: actor(row.actor_kind, row.actor_agent_id, row.actor_session_id)?,
         })
     }

@@ -41,7 +41,7 @@ use crate::{
     registry::{internal, store_error},
     shared_infra::SharedInfraStop,
     stopping::StopSteps,
-    units::{UnitHost, UnitInfo, UnitState, now_ms},
+    units::{RunGoal, StopCause, UnitHost, UnitInfo, UnitState, now_ms},
 };
 
 /// Log lines attached to every failure (cli-design 3.4).
@@ -84,8 +84,7 @@ pub(crate) struct SpawnRequest {
     pub sync: Vec<devlanes_resolve::SyncSpec>,
     /// `services.<name>.name` (services only).
     pub display_name: Option<String>,
-    /// The readiness check word (services only).
-    pub ready_check: Option<&'static str>,
+    pub goal: RunGoal,
     /// `UnitSummary.role`: `service`, `task`, `setup`, `teardown` or `exec`.
     pub role: &'static str,
     /// `services.<name>.keep_awake`: the lane never goes idle while this runs.
@@ -129,7 +128,7 @@ impl SpawnRequest {
             color: Some(service.color.clone()),
             sync: service.sync.clone(),
             display_name: service.display_name.clone(),
-            ready_check: Some(ready_word(&service.ready.check)),
+            goal: RunGoal::Ready(Some(ready_word(&service.ready.check))),
             role: "service",
             keep_awake: service.keep_awake,
             fingerprint: Some(crate::drift::Fingerprint::of(service)),
@@ -167,7 +166,7 @@ impl SpawnRequest {
             color: None,
             sync: Vec::new(),
             display_name: None,
-            ready_check: None,
+            goal: RunGoal::Exit,
             role: kind.word(),
             keep_awake: false,
             fingerprint: None,
@@ -197,7 +196,7 @@ pub(crate) struct NotStartedRec {
     pub files: Vec<PreparedFile>,
     pub color: Option<String>,
     pub display_name: Option<String>,
-    pub ready_check: Option<&'static str>,
+    pub goal: RunGoal,
     pub keep_awake: bool,
     pub fingerprint: Option<crate::drift::Fingerprint>,
 }
@@ -232,7 +231,7 @@ impl NotStartedRec {
             files: Vec::new(),
             color: Some(service.color.clone()),
             display_name: service.display_name.clone(),
-            ready_check: None,
+            goal: RunGoal::Ready(None),
             keep_awake: false,
             fingerprint: None,
         }
@@ -474,11 +473,12 @@ fn recordable(process: &devlanes_core::ProcessIdentity) -> bool {
     process.pid > 0
 }
 
-/// True once the state no longer moves toward ready on its own.
+/// True once the state no longer moves toward ready on its own. `Running` is
+/// left out: only services are waited on here, and they never reach it.
 fn settled(state: &UnitState) -> bool {
     matches!(
         state,
-        UnitState::Ready | UnitState::Failed(_) | UnitState::Exited(_)
+        UnitState::Ready | UnitState::Failed(_) | UnitState::Stopped(_) | UnitState::Exited(_)
     )
 }
 
@@ -1169,15 +1169,23 @@ impl LanePhase for SetupPhase {
         results.sort_by_key(|(name, _)| pending.iter().position(|(entry, _)| entry == name));
         let mut failed = Vec::new();
         for (name, result) in results {
-            if let Ok((_, host)) = &result {
+            if let Ok(TaskOutcome {
+                host: Some(host), ..
+            }) = &result
+            {
                 cx.leftovers
                     .extend(ended_leftovers(&cx.lane, &format!("setup.{name}"), host));
             }
-            // An entry a stop interrupted did not run, whatever `ignore_errors` says.
-            let ignore = resolved.setup.get(&name).is_some_and(|c| c.ignore_errors)
-                && !cx.cancel.is_cancelled();
-            let ok = matches!(&result, Ok((outcome, _)) if outcome.code == Some(0));
-            if ok || ignore {
+            let done = match &result {
+                Ok(outcome) => outcome.counts_done(),
+                // It never ran; `ignore_errors` lets the start go on unless a stop
+                // interrupted the start meanwhile.
+                Err(_) => {
+                    resolved.setup.get(&name).is_some_and(|c| c.ignore_errors)
+                        && !cx.cancel.is_cancelled()
+                }
+            };
+            if done {
                 let started_at = pending
                     .iter()
                     .find(|(n, _)| *n == name)
@@ -1195,9 +1203,17 @@ impl LanePhase for SetupPhase {
             }
             let unit = format!("setup.{name}");
             match result {
-                Ok((_, host)) => cx
-                    .failures
-                    .push(failure_of(&cx.reference, &unit, &host).await),
+                Ok(outcome) => {
+                    let failure = match &outcome.host {
+                        Some(host) => failure_of(&cx.reference, &unit, host).await,
+                        None => UnitFailureData {
+                            lane: cx.reference.clone(),
+                            unit,
+                            ..UnitFailureData::default()
+                        },
+                    };
+                    cx.failures.push(failure);
+                }
                 Err(error) => cx.failures.push(UnitFailureData {
                     lane: cx.reference.clone(),
                     unit,
@@ -1357,7 +1373,7 @@ impl LanePhase for TasksPhase {
                 cx.leftovers.extend(outcome.leftovers.iter().cloned());
             }
             match outcome {
-                Ok(TaskOutcome { code: Some(0), .. }) => cx.ran.push(name),
+                Ok(outcome) if outcome.counts_done() => cx.ran.push(name),
                 Ok(TaskOutcome { code, host, .. }) => {
                     let mut failure = match &host {
                         Some(host) => failure_of(&cx.reference, &name, host).await,
@@ -1621,16 +1637,45 @@ impl ServicesPhase {
     }
 }
 
-/// Exit of a task: its code (`None` when killed or timed out) and its last unit.
+/// Exit of a task, setup or teardown entry: its code (`None` when killed or
+/// timed out) and its last unit.
 pub(crate) struct TaskOutcome {
+    /// The last unit's own exit code.
     pub code: Option<i32>,
-    /// The last unit's own exit code. It differs from `code` only for an infra
-    /// entry with `ignore_errors`, which counts a failure as done for starts
-    /// and steps; a `run` of that one entry reports what really happened.
-    pub raw_code: Option<i32>,
+    /// How the run ended, for `run` and the closing `task` event: the last
+    /// unit's state, `Exited` for steps that all succeeded, `Stopped` for steps
+    /// cancelled between two units.
+    pub state: UnitState,
+    /// An infra entry's `ignore_errors`: its failure still counts as done.
+    pub ignore_errors: bool,
     pub host: Option<UnitHost>,
     /// Every unit of the task (steps included) that left processes behind.
     pub leftovers: Vec<Leftovers>,
+}
+
+impl TaskOutcome {
+    /// Whether the run counts as done for whatever ran it (the next step, a
+    /// start's setup or tasks phase, an entry's done-record): it exited 0, or
+    /// failed with `ignore_errors`. A stopped run never does, whatever its exit
+    /// code or `ignore_errors`: a stop, a cancel or a clean interrupted it.
+    pub(crate) fn counts_done(&self) -> bool {
+        !matches!(self.state, UnitState::Stopped(_)) && (self.code == Some(0) || self.ignore_errors)
+    }
+
+    /// The result of a hook task or teardown entry `name` under `key` (`task`,
+    /// `entry`): `{<key>, exit_code, state, reason?}`, so clients word its end
+    /// by `state` and the failure's `reason`.
+    pub(crate) fn result(&self, key: &str, name: &str) -> Value {
+        let mut result = json!({
+            key: name,
+            "exit_code": self.code,
+            "state": self.state.word(),
+        });
+        if let UnitState::Failed(Some(reason)) = &self.state {
+            result["reason"] = json!(reason);
+        }
+        result
+    }
 }
 
 /// Saved names a start brought back without, because the config no longer has them.
@@ -2253,7 +2298,7 @@ impl Inner {
                         files: request.files,
                         color: Some(color),
                         display_name: request.display_name,
-                        ready_check: request.ready_check,
+                        goal: request.goal,
                         keep_awake: request.keep_awake,
                         fingerprint: request.fingerprint,
                     };
@@ -2269,6 +2314,7 @@ impl Inner {
             name: request.name.clone(),
             lane: reference.clone(),
             kind: request.kind.word(),
+            goal: request.goal,
             actor: request.actor.clone(),
             started_at_ms: now_ms(),
             log_dir: log_dir.clone(),
@@ -2341,7 +2387,6 @@ impl Inner {
                 managed: managed.clone(),
                 syncs: Vec::new(),
                 display_name: request.display_name,
-                ready_check: request.ready_check,
                 role: request.role,
                 keep_awake: request.keep_awake,
                 fingerprint: request.fingerprint.map(Arc::new),
@@ -2404,6 +2449,7 @@ impl Inner {
             name: rec.name.clone(),
             lane: reference,
             kind: Kind::Service.word(),
+            goal: rec.goal,
             actor: rec.actor.clone(),
             started_at_ms: now_ms(),
             log_dir: rec.log_dir.clone(),
@@ -2451,7 +2497,6 @@ impl Inner {
                     managed,
                     syncs: Vec::new(),
                     display_name: rec.display_name,
-                    ready_check: rec.ready_check,
                     role: "service",
                     keep_awake: rec.keep_awake,
                     fingerprint: rec.fingerprint.map(Arc::new),
@@ -2527,7 +2572,8 @@ impl Inner {
                     }
                 }
                 engine.emit_unit(&project, &lane, &name, &host);
-                if matches!(state, UnitState::Exited(_)) || !host.is_alive() {
+                if matches!(state, UnitState::Stopped(_) | UnitState::Exited(_)) || !host.is_alive()
+                {
                     break;
                 }
                 // A run that failed its ready check keeps that state when it
@@ -2670,7 +2716,7 @@ impl Inner {
         if let Some(reason) = reason {
             data["reason"] = reason;
         }
-        if matches!(state, "done" | "failed") {
+        if !matches!(state, "started" | "skipped") {
             data["finished_at_ms"] = json!(now_ms());
         }
         self.bus.emit(events::TASK, data);
@@ -2932,7 +2978,7 @@ impl Inner {
         actor: &Actor,
         cancel: &CancellationToken,
         session: Option<&Session>,
-    ) -> Result<(ExitOutcome, UnitHost), RpcError> {
+    ) -> Result<TaskOutcome, RpcError> {
         let extra = lane.st().setup_env.clone();
         let name = format!("{phase}.{}", command.name);
         let mut request =
@@ -2951,7 +2997,13 @@ impl Inner {
             }
             None => finish(&host, command.timeout, cancel).await,
         };
-        Ok((outcome, host))
+        Ok(TaskOutcome {
+            code: outcome.code,
+            state: host.state(),
+            ignore_errors: command.ignore_errors,
+            host: Some(host),
+            leftovers: Vec::new(),
+        })
     }
 
     /// Runs a task (or its steps) to completion, recording `task_runs`. When
@@ -3020,7 +3072,11 @@ impl Inner {
             let result: Result<TaskOutcome, RpcError> = async {
                 let mut outcome = TaskOutcome {
                     code: Some(0),
-                    raw_code: Some(0),
+                    state: UnitState::Exited(ExitOutcome {
+                        code: Some(0),
+                        signal: None,
+                    }),
+                    ignore_errors: false,
                     host: None,
                     leftovers: Vec::new(),
                 };
@@ -3030,7 +3086,10 @@ impl Inner {
                         for step in &task.steps {
                             if cancel.is_cancelled() {
                                 outcome.code = None;
-                                outcome.raw_code = None;
+                                outcome.state = UnitState::Stopped(ExitOutcome {
+                                    code: None,
+                                    signal: None,
+                                });
                                 break;
                             }
                             let step_outcome = if let Some(entry) =
@@ -3061,7 +3120,8 @@ impl Inner {
                                 .await?
                             };
                             leftovers.extend(step_outcome.leftovers.iter().cloned());
-                            if step_outcome.code != Some(0) {
+                            // A failed or stopped step ends the task the same way.
+                            if !step_outcome.counts_done() {
                                 outcome = step_outcome;
                                 break;
                             }
@@ -3091,7 +3151,8 @@ impl Inner {
                         leftovers.extend(ended_leftovers(lane, name, &host));
                         outcome = TaskOutcome {
                             code: exit.code,
-                            raw_code: exit.code,
+                            state: host.state(),
+                            ignore_errors: false,
                             host: Some(host),
                             leftovers: Vec::new(),
                         };
@@ -3103,9 +3164,15 @@ impl Inner {
             .await;
             let code = result.as_ref().ok().and_then(|outcome| outcome.code);
             let (state, reason) = match &result {
-                Ok(outcome) if outcome.code == Some(0) => ("done", None),
-                Ok(_) if cancel.is_cancelled() => ("failed", Some(json!({"code": "cancelled"}))),
-                Ok(_) => ("failed", None),
+                Ok(outcome) => (
+                    outcome.state.word(),
+                    match &outcome.state {
+                        UnitState::Failed(Some(reason)) => {
+                            Some(json!({"code": reason.code, "data": reason.data}))
+                        }
+                        _ => None,
+                    },
+                ),
                 Err(error) => (
                     "failed",
                     Some(json!({"code": error.code, "data": error.data})),
@@ -3118,8 +3185,9 @@ impl Inner {
         })
     }
 
-    /// Finishes a task run row and emits its closing `task` event. `spec_hash` is the
-    /// task's [`declaration_hash`], kept with a success so an edit runs it again.
+    /// Finishes a task run row with `state`, how it ended, and emits its closing
+    /// `task` event with the same word. `spec_hash` is the task's
+    /// [`declaration_hash`], kept with a success so an edit runs it again.
     #[allow(clippy::too_many_arguments)]
     async fn close_task_run(
         &self,
@@ -3131,7 +3199,11 @@ impl Inner {
         reason: Option<Value>,
         spec_hash: Option<String>,
     ) {
-        if let Err(error) = self.store.finish_task_run(id, code, spec_hash).await {
+        let finished = self
+            .store
+            .finish_task_run(id, code, state.to_owned(), spec_hash)
+            .await;
+        if let Err(error) = finished {
             tracing::warn!(%error, task, "task run not recorded as finished");
         }
         self.task_event(reference, task, state, code, reason);
@@ -3188,11 +3260,10 @@ impl Inner {
             )
         })?;
         let hash = loaded_config(lane).and_then(|config| setup_hash(&config, entry));
-        let (outcome, host) = self
+        let mut outcome = self
             .run_command(project, lane, phase, command, actor, cancel, session)
             .await?;
-        // An interrupted entry did not do its work, whatever `ignore_errors` says.
-        let ok = !cancel.is_cancelled() && (outcome.code == Some(0) || command.ignore_errors);
+        let ok = outcome.counts_done();
         let lane_id = lane.st().record.as_ref().map(|r| r.id);
         if let Some(lane_id) = lane_id {
             if phase == "setup" && ok {
@@ -3221,15 +3292,12 @@ impl Inner {
                     .await;
             }
         }
-        let leftovers = ended_leftovers(lane, &format!("{phase}.{entry}"), &host)
-            .into_iter()
-            .collect();
-        Ok(TaskOutcome {
-            code: if ok { Some(0) } else { outcome.code },
-            raw_code: outcome.code,
-            host: Some(host),
-            leftovers,
-        })
+        if let Some(host) = &outcome.host {
+            outcome.leftovers = ended_leftovers(lane, &format!("{phase}.{entry}"), host)
+                .into_iter()
+                .collect();
+        }
+        Ok(outcome)
     }
 
     /// Brings a lane up (decision 5), or adds units to a lane that runs or is
@@ -4134,7 +4202,7 @@ impl Inner {
                 )
                 .await;
             results.push(match outcome {
-                Ok(outcome) => json!({"task": name, "exit_code": outcome.code}),
+                Ok(outcome) => outcome.result("task", name),
                 Err(error) => {
                     json!({"task": name, "error": {"code": error.code, "data": error.data}})
                 }
@@ -4459,7 +4527,11 @@ impl Inner {
                         .run_command(project, lane, "teardown", command, &actor, &cancel, None)
                         .await;
                     teardown.push(match result {
-                        Ok((outcome, _)) => json!({"entry": name, "exit_code": outcome.code, "ignored": command.ignore_errors}),
+                        Ok(outcome) => {
+                            let mut result = outcome.result("entry", name);
+                            result["ignored"] = json!(command.ignore_errors);
+                            result
+                        }
                         Err(error) => json!({"entry": name, "error": {"code": error.code}}),
                     });
                 }
@@ -4772,7 +4844,7 @@ impl Inner {
                 results
                     .into_iter()
                     .map(|mut result| {
-                        if result.get("exit_code").and_then(Value::as_i64) != Some(0) {
+                        if result.get("state").and_then(Value::as_str) != Some("exited") {
                             tracing::warn!(lane = %reference, task = %result["task"], result = %result, "lane.stop task failed during daemon shutdown");
                         }
                         result["lane"] = json!(reference);
@@ -5120,13 +5192,15 @@ async fn finish(
     }
 }
 
-/// Waits for a one-shot unit, stopping it after `timeout`.
+/// Waits for a one-shot unit, stopping it after `timeout`, which fails it.
 async fn finish_within(host: &UnitHost, timeout: Option<Duration>) -> ExitOutcome {
     match timeout {
         Some(limit) => match tokio::time::timeout(limit, host.wait_exit()).await {
             Ok(outcome) => outcome,
             Err(_) => {
-                let _ = host.stop(StopPolicy::default()).await;
+                let _ = host
+                    .stop_for(StopPolicy::default(), StopCause::TimedOut(limit))
+                    .await;
                 ExitOutcome {
                     code: None,
                     signal: host.exit_outcome().and_then(|o| o.signal),

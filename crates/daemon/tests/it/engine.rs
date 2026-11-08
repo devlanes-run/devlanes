@@ -1452,7 +1452,7 @@ async fn stop_mine_filters_by_actor() {
             .iter()
             .find(|u| u.name == "human-job")
             .expect("human job");
-        assert_eq!(human.state, "ready");
+        assert_eq!(human.state, "running");
         h.close().await;
     })
     .await
@@ -1523,7 +1523,7 @@ async fn stop_mine_stays_in_the_project() {
             .expect_err("unloadable project");
         assert_eq!(error.code, "config_error");
         let all = status(&h, cx(&root), json!({"all": true})).await;
-        assert_eq!(job_state(all, "beta@0").as_deref(), Some("ready"));
+        assert_eq!(job_state(all, "beta@0").as_deref(), Some("running"));
         let named = Context {
             project: Some("beta".into()),
             ..mine(&alpha)
@@ -1793,7 +1793,7 @@ async fn run_confirm_and_interactive() {
         let items = tasks["items"].as_array().expect("items");
         assert_eq!(items.len(), 4);
         let last = |name: &str| items.iter().find(|t| t["name"] == name).expect(name)["last_run"].clone();
-        assert_eq!(last("reset")["state"], "done");
+        assert_eq!(last("reset")["state"], "exited");
         assert_eq!(last("reset")["exit_code"], 0);
         assert!(last("reset")["finished_at_ms"].as_i64().is_some());
         assert_eq!((last("broken")["state"].clone(), last("broken")["exit_code"].clone()), (json!("failed"), json!(3)));

@@ -201,8 +201,6 @@ pub(crate) struct UnitRec {
     pub syncs: Vec<crate::local_sync::LocalSync>,
     /// `services.<name>.name` of a service run.
     pub display_name: Option<String>,
-    /// The readiness check word of a service run (`started`, `tcp`, ...).
-    pub ready_check: Option<&'static str>,
     /// `UnitSummary.role`.
     pub role: &'static str,
     /// `services.<name>.keep_awake`: the lane never goes idle while this runs.
@@ -1377,15 +1375,6 @@ pub(crate) fn apply_order(lane: &LaneSt, summary: &mut UnitSummary) {
 pub(crate) fn unit_summary(lane: &str, name: &str, unit: &UnitRec) -> UnitSummary {
     let state = unit.host.state();
     let exit = unit.host.exit_outcome();
-    let word = match (&state, unit.kind) {
-        // One-shot units that finished on their own read as `exited`.
-        (UnitState::Exited(outcome), Kind::Task | Kind::Exec)
-            if !unit.host.stop_was_requested() && outcome.code == Some(0) =>
-        {
-            "exited"
-        }
-        _ => state.word(),
-    };
     let reason = match &state {
         UnitState::Failed(reason) => reason.clone(),
         _ => None,
@@ -1395,7 +1384,7 @@ pub(crate) fn unit_summary(lane: &str, name: &str, unit: &UnitRec) -> UnitSummar
     UnitSummary {
         name: name.to_owned(),
         lane: lane.to_owned(),
-        state: word.into(),
+        state: state.word().into(),
         pid: unit.host.identity().map(|id| id.pid),
         exit_code: exit.and_then(|outcome| outcome.code),
         ports: unit.ports.clone(),
@@ -1415,7 +1404,7 @@ pub(crate) fn unit_summary(lane: &str, name: &str, unit: &UnitRec) -> UnitSummar
         left_running: leftovers.left_running,
         escaped: leftovers.escaped,
         display_name: unit.display_name.clone(),
-        ready_check: unit.ready_check.map(str::to_owned),
+        ready_check: info.goal.check().map(str::to_owned),
         pty: info.pty,
         role: Some(unit.role.to_owned()),
         order: None,

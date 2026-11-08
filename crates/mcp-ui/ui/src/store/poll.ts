@@ -4,6 +4,7 @@
 // for good once a newer card for the same lane is in the chat.
 
 import type { Snapshot } from '../types/results';
+import { inProgress } from '../utils/lanes';
 import { isBusy } from '../utils/state';
 import {
   bridge,
@@ -73,7 +74,7 @@ function isFast(): boolean {
   if (starting() || Object.keys(card.busy).length) return true;
   const busy = (ref: string) => {
     const lane = snapshotLanes().find((l) => l.reference === ref);
-    return !!lane && (isBusy(lane.state) || lane.units.some((unit) => isBusy(unit.state)));
+    return !!lane && (isBusy(lane.state) || lane.units.some(inProgress));
   };
   if (currentView() === 'lane') {
     const ref = resultLane(structured());
