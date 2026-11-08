@@ -3,7 +3,7 @@ use devlanes_run_script_npm::{
     Detection, DetectionSource, NpmError, NpmScripts, PackageManager, ScriptRequest,
     detect_package_manager, plan,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -474,9 +474,32 @@ async fn adapter_resolves_through_core_trait() {
     );
 }
 
+/// `name` as given: std's `Command` searches `PATH` like the Unix runner.
+#[cfg(unix)]
+fn program(name: &str) -> PathBuf {
+    PathBuf::from(name)
+}
+
+/// The first `PATH` directory's `name` with a `PATHEXT` extension, as the
+/// Windows runner finds it, or `name` as given when there is none. std's
+/// `Command` only tries `.exe`, so it never finds `npm.cmd`.
+#[cfg(windows)]
+fn program(name: &str) -> PathBuf {
+    let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .flat_map(|dir| {
+            extensions
+                .split(';')
+                .filter(|extension| !extension.is_empty())
+                .map(move |extension| dir.join(format!("{name}{extension}")))
+        })
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
 /// Runs `argv` in `dir` with a deadline, returning stdout on success.
 fn run_with_timeout(argv: &[String], dir: &Path, timeout: Duration) -> String {
-    let mut child = Command::new(&argv[0])
+    let mut child = Command::new(program(&argv[0]))
         .args(&argv[1..])
         .current_dir(dir)
         .env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
@@ -508,7 +531,7 @@ fn run_with_timeout(argv: &[String], dir: &Path, timeout: Duration) -> String {
 
 /// Returns the manager behind `program` if it is installed.
 fn installed(program: &str) -> Option<PackageManager> {
-    let output = Command::new(program)
+    let output = Command::new(self::program(program))
         .arg("--version")
         .stdin(Stdio::null())
         .output()
