@@ -144,11 +144,12 @@ pub enum Method {
     #[serde(rename = "resume")]
     Resume,
     /// Lane summaries of the request's scope: a [`Page`] of [`LaneSummary`].
-    /// Without `all`, the reply also has `here`, the reference of the request's own
-    /// lane as the command named by the `here_for` param (a method name, default
+    /// With a `here_for` param (a method name), or without `all`, the reply also
+    /// has `here`, the reference of the request's own lane as that method (default
     /// `status`) would resolve it, or `here_error` with the error it would give
     /// (`no_config`, `project_ambiguous`, `project_not_started`, `not_found`,
-    /// `lane_required`). Advertised as [`features::STATUS_HERE`].
+    /// `lane_required`). Finding `here` registers and claims nothing, so with
+    /// `all` the request changes nothing. Advertised as [`features::STATUS_HERE`].
     #[serde(rename = "status")]
     Status,
     #[serde(rename = "lane.list")]

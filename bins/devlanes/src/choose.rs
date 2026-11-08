@@ -56,10 +56,14 @@ pub async fn choose(
             (lane_options(&data), String::new())
         }
         ChoiceKind::Task => {
-            let data = client
-                .request(Method::TaskList, json!({}), query)
-                .await
-                .map_err(rpc_error)?;
+            let data = match client.request(Method::TaskList, json!({}), query).await {
+                Ok(data) => data,
+                Err(devlanes_client::Error::Rpc(error)) if error.code == "no_config" => {
+                    emit(&no_options(choice, &NoOptions::NoConfig { cwd }, runtime));
+                    return Ok(Chosen::Exit(devlanes_cli::exit::NOT_FOUND));
+                }
+                Err(error) => return Err(rpc_error(error)),
+            };
             // `null` in a project nobody started.
             let lane = data["lane"].as_str().unwrap_or("this lane").to_owned();
             (task_options(&data), lane)
@@ -69,21 +73,34 @@ pub async fn choose(
             if !client.supports(features::STATUS_HERE) {
                 return Err(client.daemon_outdated("choosing a unit"));
             }
+            // `all` with `here_for` registers and claims nothing, as the command
+            // run without the argument would not.
             let data = client
-                .request(Method::Status, json!({"here_for": choice.method}), query)
+                .request(
+                    Method::Status,
+                    json!({"all": true, "here_for": choice.method}),
+                    query,
+                )
                 .await
                 .map_err(rpc_error)?;
             let here = data["here"].as_str().map(str::to_owned);
-            let no_config = data["here_error"]["code"] == "no_config";
+            let here_error: Option<RpcError> =
+                serde_json::from_value(data["here_error"].clone()).ok();
             let lanes: Vec<LaneSummary> = serde_json::from_value::<Page<LaneSummary>>(data)
                 .map(|page| page.items)
                 .unwrap_or_default();
             let found = here.and_then(|here| lanes.into_iter().find(|lane| lane.reference == here));
             let Some(lane) = found else {
-                let why = if no_config {
-                    NoOptions::NoConfig { cwd }
-                } else {
-                    NoOptions::NoLane { cwd }
+                let why = match here_error {
+                    Some(error) if error.code == "no_config" => NoOptions::NoConfig { cwd },
+                    // Several projects or `-p` without a lane: the daemon's words
+                    // say what to name.
+                    Some(error)
+                        if matches!(error.code.as_str(), "project_ambiguous" | "lane_required") =>
+                    {
+                        return Err(error);
+                    }
+                    _ => NoOptions::NoLane { cwd },
                 };
                 emit(&no_options(choice, &why, runtime));
                 return Ok(Chosen::Exit(devlanes_cli::exit::NOT_FOUND));

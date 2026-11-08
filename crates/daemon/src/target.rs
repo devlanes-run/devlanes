@@ -154,6 +154,17 @@ struct Located {
     by_cwd: bool,
 }
 
+/// Where a lane reference resolves ([`Inner::reference_projects`]).
+pub(crate) enum RefProjects {
+    /// Among these projects; every project when empty.
+    In(Vec<Arc<ProjectRt>>),
+    /// In the project `file` names, which nobody registered.
+    Unregistered {
+        file: PathBuf,
+        config: Arc<ProjectConfig>,
+    },
+}
+
 /// A lane-targeting read that can answer from the project file alone.
 pub(crate) enum LaneOrFile {
     Lane(LanePair),
@@ -575,32 +586,18 @@ impl Inner {
         policy: Policy,
     ) -> Result<Option<LanePair>, RpcError> {
         let parsed: LaneRef = reference.parse().map_err(reference_error)?;
-        let scope = match &parsed.project {
-            Some(name) => match self.known_project(name) {
-                Some(project) => vec![project],
-                None => match self.find(context).await {
-                    Ok(Found::Unregistered { file, config }) if config.project == *name => {
-                        if policy.register {
-                            vec![self.register_file(&file, &config).await?]
-                        } else if policy.absent_is_empty {
-                            return Ok(None);
-                        } else {
-                            return Err(project_not_started(name, &file));
-                        }
-                    }
-                    // Whatever else is at the cwd, a broken file included, says
-                    // nothing about a project the reference names.
-                    _ => return Err(self.unknown_project(name)),
-                },
-            },
-            None => match self.projects(context, policy).await? {
-                Found::Projects { projects, .. } => narrow(projects, context),
-                Found::Nothing { .. } => Vec::new(),
-                Found::Unregistered { .. } if policy.absent_is_empty => return Ok(None),
-                Found::Unregistered { file, config } => {
-                    return Err(project_not_started(&config.project, &file));
-                }
-            },
+        let scope = match self
+            .reference_projects(&parsed, context, Some(policy))
+            .await?
+        {
+            RefProjects::In(scope) => scope,
+            RefProjects::Unregistered { file, config } if policy.register => {
+                vec![self.register_file(&file, &config).await?]
+            }
+            RefProjects::Unregistered { .. } if policy.absent_is_empty => return Ok(None),
+            RefProjects::Unregistered { file, config } => {
+                return Err(project_not_started(&config.project, &file));
+            }
         };
         if policy.relist {
             for project in &scope {
@@ -643,17 +640,41 @@ impl Inner {
         })
     }
 
-    /// The projects a short reference resolves in when nothing is registered on the
-    /// way: [`Self::find`]'s, `None` for a project nobody registered. Only for
-    /// `note_lane_selector`, and removed with it (ws-resolution PR 3).
-    pub(crate) async fn reference_scope(
+    /// The projects `parsed` resolves in. A reference naming its project never
+    /// resolves through the cwd; one naming a project the daemon does not know
+    /// reaches it only when the request's `--file` or the cwd's file names it, so a
+    /// mistyped name cannot bring back a project `lane clean` forgot. A short one
+    /// resolves among the request's projects, found under `policy` (which may
+    /// register them), or with no policy without registering anything.
+    pub(crate) async fn reference_projects(
         self: &Arc<Self>,
+        parsed: &LaneRef,
         context: &Context,
-    ) -> Result<Option<Vec<Arc<ProjectRt>>>, RpcError> {
-        Ok(match self.find(context).await? {
-            Found::Projects { projects, .. } => Some(narrow(projects, context)),
-            Found::Nothing { .. } => Some(Vec::new()),
-            Found::Unregistered { .. } => None,
+        policy: Option<Policy>,
+    ) -> Result<RefProjects, RpcError> {
+        let found = match &parsed.project {
+            Some(name) => {
+                if let Some(project) = self.known_project(name) {
+                    return Ok(RefProjects::In(vec![project]));
+                }
+                match self.find(context).await {
+                    Ok(Found::Unregistered { file, config }) if config.project == *name => {
+                        return Ok(RefProjects::Unregistered { file, config });
+                    }
+                    // Whatever else is at the cwd, a broken file included, says
+                    // nothing about a project the reference names.
+                    _ => return Err(self.unknown_project(name)),
+                }
+            }
+            None => match policy {
+                Some(policy) => self.projects(context, policy).await?,
+                None => self.find(context).await?,
+            },
+        };
+        Ok(match found {
+            Found::Projects { projects, .. } => RefProjects::In(narrow(projects, context)),
+            Found::Nothing { .. } => RefProjects::In(Vec::new()),
+            Found::Unregistered { file, config } => RefProjects::Unregistered { file, config },
         })
     }
 
@@ -729,29 +750,17 @@ impl Inner {
         all: bool,
         policy: Policy,
     ) -> Result<ReadScope, RpcError> {
-        Ok(self.read_scope_found(context, all, policy).await?.0)
-    }
-
-    /// [`Self::read_scope`] with the [`Found`] it resolved, after any registration;
-    /// `None` for `all` and for a `--lane`.
-    pub(crate) async fn read_scope_found(
-        self: &Arc<Self>,
-        context: &Context,
-        all: bool,
-        policy: Policy,
-    ) -> Result<(ReadScope, Option<Found>), RpcError> {
         // Never registers a project: completion and the TUI's monitor ask `all`.
         if all {
-            return Ok((ReadScope::All(self.all_lanes()), None));
+            return Ok(ReadScope::All(self.all_lanes()));
         }
         if context.lane.is_some() {
-            return Ok((ReadScope::Lane(self.lane(context, policy).await?), None));
+            return Ok(ReadScope::Lane(self.lane(context, policy).await?));
         }
-        let found = self.projects(context, policy).await?;
-        let scope = match &found {
+        match self.projects(context, policy).await? {
             Found::Projects { projects, .. } => {
                 if policy.relist {
-                    for project in projects {
+                    for project in &projects {
                         let _ = self.relist(project).await;
                     }
                 }
@@ -764,31 +773,47 @@ impl Inner {
                 {
                     self.claim_lane(project, &lane).await;
                 }
-                ReadScope::Projects(projects.clone())
+                Ok(ReadScope::Projects(projects))
             }
-            Found::Unregistered { config, .. } => ReadScope::Unregistered(config.project.clone()),
+            Found::Unregistered { config, .. } => {
+                Ok(ReadScope::Unregistered(config.project.clone()))
+            }
             Found::Nothing { .. } => {
                 if policy.relist {
                     for project in self.all_projects() {
                         let _ = self.relist(&project).await;
                     }
                 }
-                ReadScope::All(self.all_lanes())
+                Ok(ReadScope::All(self.all_lanes()))
             }
-        };
-        Ok((scope, Some(found)))
+        }
     }
 
-    /// The reference of the request's own lane as `method` resolves it from `found`,
-    /// which an earlier step of the same request resolved. Registers, relists and
-    /// claims nothing, so it agrees with `method` run in the same context.
-    pub(crate) fn here(
-        &self,
-        found: &Found,
+    /// The reference of the request's own lane as `method` would resolve it, for a
+    /// client that completes `method` (`status`'s `here`). It registers, relists
+    /// and claims nothing, whatever `method` would, so a project nobody started
+    /// (or one `lane clean` forgot) answers `project_not_started` and stays as it
+    /// is.
+    pub(crate) async fn here(
+        self: &Arc<Self>,
         context: &Context,
         method: Method,
     ) -> Result<String, RpcError> {
-        let (project, lane) = self.locate(found, context, Policy::of(method))?.lane;
+        let (project, lane) = match &context.lane {
+            Some(reference) => {
+                let parsed: LaneRef = reference.parse().map_err(reference_error)?;
+                match self.reference_projects(&parsed, context, None).await? {
+                    RefProjects::In(scope) => self.match_reference(&parsed, &scope, context)?,
+                    RefProjects::Unregistered { file, config } => {
+                        return Err(project_not_started(&config.project, &file));
+                    }
+                }
+            }
+            None => {
+                let found = self.find(context).await?;
+                self.locate(&found, context, Policy::of(method))?.lane
+            }
+        };
         let reference = lane.st().reference(&project.name());
         Ok(reference)
     }

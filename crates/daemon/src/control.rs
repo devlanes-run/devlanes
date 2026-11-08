@@ -198,7 +198,9 @@ impl Inner {
         let Ok(parsed) = unit.parse::<devlanes_core::refs::LaneRef>() else {
             return error;
         };
-        let Ok(Some(scope)) = self.reference_scope(context).await else {
+        let Ok(crate::target::RefProjects::In(scope)) =
+            self.reference_projects(&parsed, context, None).await
+        else {
             return error;
         };
         let Ok((project, lane)) = self.match_reference(&parsed, &scope, context) else {

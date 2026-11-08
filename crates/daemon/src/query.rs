@@ -15,7 +15,7 @@ use crate::{
     model::{ConfigState, Kind, is_mine, lane_summary},
     registry::internal,
     stream::LaneEvents,
-    target::{Policy, ReadScope},
+    target::Policy,
     units::{UnitHost, UnitState, now_ms, query_log_dir},
 };
 
@@ -230,16 +230,15 @@ impl Inner {
         session: &Session,
     ) -> Result<Value, RpcError> {
         let args: StatusParams = params(value)?;
-        let (scope, found) = self
-            .read_scope_found(context, args.all, Policy::of(Method::Status))
+        let scope = self
+            .read_scope(context, args.all, Policy::of(Method::Status))
             .await?;
-        // The request's own lane as the command the client completes resolves it.
-        let here_for = args.here_for.unwrap_or(Method::Status);
-        let here = match (&scope, &found) {
-            (ReadScope::Lane((project, lane)), _) => Some(Ok(lane.st().reference(&project.name()))),
-            (_, Some(found)) => Some(self.here(found, context, here_for)),
-            // `all`.
-            (_, None) => None,
+        // The request's own lane as the command the client completes would resolve
+        // it, after this status's own registration (none with `all`).
+        let here = match args.here_for {
+            Some(method) => Some(self.here(context, method).await),
+            None if !args.all => Some(self.here(context, Method::Status).await),
+            None => None,
         };
         let lanes = scope.lanes();
         let mine = args.mine.then_some(&context.actor);
