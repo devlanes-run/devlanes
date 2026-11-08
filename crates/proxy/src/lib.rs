@@ -15,6 +15,7 @@ mod activity;
 mod health;
 mod lane;
 mod listener;
+mod loopback;
 mod pool;
 mod routes;
 mod scoped;

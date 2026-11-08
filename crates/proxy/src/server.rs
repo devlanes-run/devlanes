@@ -1,7 +1,7 @@
 use std::{
     convert::Infallible,
     fmt, io,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     sync::{Arc, PoisonError},
     time::Duration,
 };
@@ -37,6 +37,7 @@ use crate::{
     activity::{ActiveBody, Activity},
     health::{Health, ListenerGuard, ListenerHealth},
     lane::{ClientReads, LaneActivity},
+    loopback::connect_loopback,
     pool::{Connection, Pool, PoolKey},
 };
 
@@ -785,8 +786,8 @@ impl Proxy {
                 _ = tokio::time::sleep(delay) => {}
             }
             delay = (delay * 2).min(Duration::from_secs(1));
-            // A refused loopback connect takes about 2 s per address on Windows,
-            // so a retry is cut at the deadline; it keeps the last refusal.
+            // A refused loopback connect takes about 2 s on Windows, so a retry is
+            // cut at the deadline; it keeps the last refusal.
             match tokio::time::timeout_at(deadline, self.connect(target, shutdown.clone())).await {
                 Ok(Ok(connection)) => return Ok(connection),
                 Ok(Err(next)) => error = next,
@@ -1040,10 +1041,7 @@ fn header_has_token(headers: &HeaderMap, name: header::HeaderName, token: &str) 
 /// Retries only failed TCP connections, so POST/upload bodies are never replayed.
 async fn dial(target: &Upstream, timeout: Duration) -> io::Result<TcpStream> {
     let addresses = match target {
-        Upstream::Local(port) => vec![
-            SocketAddr::new(Ipv4Addr::LOCALHOST.into(), *port),
-            SocketAddr::new(Ipv6Addr::LOCALHOST.into(), *port),
-        ],
+        Upstream::Local(port) => return connect_loopback(*port, timeout).await,
         Upstream::Address(address) => vec![*address],
         Upstream::Host { hostname, port } => {
             let mut addresses: Vec<_> =

@@ -353,6 +353,7 @@ async fn ipv6_fallback_and_sse_streaming() -> Result {
             None,
         )
         .await?;
+        let sent = std::time::Instant::now();
         let mut response = request(
             TcpStream::connect(running.address).await?,
             "app.lane.localhost",
@@ -361,6 +362,13 @@ async fn ipv6_fallback_and_sse_streaming() -> Result {
         )
         .await?;
         assert_eq!(response.status(), 200);
+        // Windows takes 2 s to report the refused 127.0.0.1 port; dialing ::1 after it
+        // would show up here. Elsewhere the refusal is immediate.
+        assert!(
+            sent.elapsed() < Duration::from_secs(1),
+            "took {:?}",
+            sent.elapsed()
+        );
         let frame = response.body_mut().frame().await.ok_or("no SSE frame")??;
         assert_eq!(frame.data_ref().ok_or("not data")?.as_ref(), b"data: 1\n\n");
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
