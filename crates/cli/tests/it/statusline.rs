@@ -59,9 +59,8 @@ fn a_failed_unit_comes_first_with_the_ready_count() {
 fn the_sessions_own_units_come_first() {
     let mut mailer = unit("mailer", "failed");
     mailer["actor"] = json!({"kind": "agent", "agent_id": "claude-code", "session_id": "s1"});
-    let mut probe = unit("probe", "ready");
-    probe["kind"] = json!("exec");
-    probe["actor"] = mailer["actor"].clone();
+    let mut web = unit("web", "ready");
+    web["actor"] = mailer["actor"].clone();
     let failed = summary(lane(
         Some(1),
         "feat/billing",
@@ -80,12 +79,15 @@ fn the_sessions_own_units_come_first() {
         Some(1),
         "feat/billing",
         "running",
-        vec![unit("api", "ready"), probe],
+        vec![unit("api", "ready"), web],
     ));
     assert_eq!(
+        statusline(&running, None, false),
+        "acme@1 2/2 ready · api api.acme2.localhost:8443"
+    );
+    assert_eq!(
         statusline(&running, Some("s1"), false),
-        "acme@1 1/1 ready · probe probe.acme2.localhost:8443",
-        "the exec unit is not a service but its URL is the session's"
+        "acme@1 2/2 ready · web web.acme2.localhost:8443"
     );
 }
 

@@ -107,8 +107,8 @@ Failures come first, each with its last log lines and the command that shows mor
 |---|---|
 | `ready` | Up and passing its ready check. Use it. |
 | `frozen`, `throttled` | A ready service in a lane that had no activity for a while (agent output shows `ready` with `power=frozen` or `power=throttled`, JSON `state: ready` with a `power` field). Any request, connection or devlanes command on the lane resumes it; no action needed. |
-| `starting`, `queued` | Starting, or waiting for a start slot; a task in progress also shows `starting`. `devlanes wait UNIT --timeout 180s`. |
-| `running` | An exec command still running (JSON: `state: ready`). Read its logs; `devlanes wait UNIT` waits for it to exit, so do not wait on one that serves. |
+| `starting`, `queued` | Starting, or waiting for a start slot. `devlanes wait UNIT --timeout 180s`. |
+| `running` | An exec command, task or infra command still running. Read its logs; `devlanes wait UNIT` waits for it to exit, so do not wait on one that serves. |
 | `external` | An `infra.external` entry: devlanes routes its port and hostnames but runs nothing there, so it has no logs and `start` or `stop` do not apply. Whatever listens on the port is yours to run. |
 | `failed` | Exited or never got ready. Read the printed tail, then `devlanes logs UNIT --tail 200` and `devlanes debug why UNIT`; fix the code and `devlanes restart UNIT`, or fix the config and `devlanes reload`. A service that keeps failing its ready check usually has the wrong port or check: see references/configuration.md. `devlanes stop NAME` clears a failed service or exec command; a failed task stays failed until it runs again. |
 | `exited` | A task or exec that ended. `devlanes logs UNIT --tail 50` shows how. |

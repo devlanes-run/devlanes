@@ -4,4 +4,5 @@ expression: output
 ---
 ok infra
 ok migrate
+skipped seed: the start timed out
 failed services: acme@2:admin failed

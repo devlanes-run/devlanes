@@ -81,11 +81,15 @@ async fn a_detached_run_over_a_running_one_is_refused() {
         h.call(Method::Run, detached.clone(), cx(&main))
             .await
             .expect("first run");
-        let (first, _) = crate::eventually(Duration::from_secs(5), || async {
+        let (first, state) = crate::eventually(Duration::from_secs(5), || async {
             run_of(&h, &main, "hello").await
         })
         .await
         .expect("first run listed");
+        assert_eq!(
+            state, "running",
+            "a task has no ready check to start toward"
+        );
         let refused = h
             .call(Method::Run, detached, cx(&main))
             .await

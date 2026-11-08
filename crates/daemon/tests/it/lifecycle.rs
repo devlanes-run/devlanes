@@ -163,8 +163,7 @@ async fn stop_interrupts_a_hung_start() {
         assert_eq!(error.code, "start_cancelled", "{error:?}");
         assert!(alive(&lane(&h, &main).await).is_empty());
         assert_eq!(h.runner.journal.entries(), ["sleep"], "web never spawned");
-        let closed = task_event(&mut bus, "hang", "failed").expect("closing task event");
-        assert_eq!(closed.data["reason"]["code"], "cancelled");
+        task_event(&mut bus, "hang", "stopped").expect("closing task event");
 
         let started: StartResult = serde_json::from_value(
             h.call(Method::Start, json!({"profiles": ["default"]}), cx(&main))
@@ -205,8 +204,7 @@ async fn run_timeout_stops_the_task_and_closes_its_run() {
         .expect_err("timeout");
         assert_eq!((error.code.as_str(), error.exit_code), ("timeout", 124));
         assert!(alive(&lane(&h, &main).await).is_empty(), "the task unit stopped");
-        let closed = task_event(&mut bus, "slow", "failed").expect("closing task event");
-        assert_eq!(closed.data["reason"]["code"], "cancelled");
+        task_event(&mut bus, "slow", "stopped").expect("closing task event");
         let cleaned = h
             .call(
                 Method::LaneClean,
@@ -220,6 +218,160 @@ async fn run_timeout_stops_the_task_and_closes_its_run() {
             .expect("no active run blocks the clean");
         assert_eq!(cleaned["lane"], "slow@0");
         h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A task stopped by its own `timeout:` failed, unlike a stopped one: its unit,
+/// `wait`, `debug why`, the `run` answer, the closing `task` event and
+/// `task.list` all say `failed`, with `task_timeout` where a reason is given.
+async fn a_task_past_its_own_timeout_failed() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: slow\ntasks:\n  slow: { run: sleep, timeout: 300ms }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let mut bus = h.engine.subscribe();
+        let ran = h
+            .call(Method::Run, json!({"task": "slow"}), cx(&main))
+            .await
+            .expect("run answers once the task is stopped");
+        let failed = (json!("failed"), json!("task_timeout"));
+        assert_eq!(
+            (ran["state"].clone(), ran["reason"]["code"].clone()),
+            failed
+        );
+        let closed = task_event(&mut bus, "slow", "failed").expect("closing task event");
+        assert_eq!(closed.data["reason"]["code"], "task_timeout");
+        let unit = lane(&h, &main)
+            .await
+            .units
+            .into_iter()
+            .find(|unit| unit.name == "slow")
+            .expect("slow");
+        assert_eq!(
+            (unit.state.as_str(), unit.reason.map(|r| r.code)),
+            ("failed", Some("task_timeout".to_owned()))
+        );
+        let waited = h
+            .call(
+                Method::Wait,
+                json!({"target": "slow", "timeout_ms": 5_000}),
+                cx(&main),
+            )
+            .await
+            .expect("wait");
+        assert_eq!(
+            (waited["state"].clone(), waited["reason"]["code"].clone()),
+            failed
+        );
+        let why = h
+            .call(Method::Why, json!({"unit": "slow"}), cx(&main))
+            .await
+            .expect("why");
+        assert_eq!(
+            (why["state"].clone(), why["reasons"][0]["code"].clone()),
+            failed
+        );
+        let tasks = h
+            .call(Method::TaskList, json!({}), cx(&main))
+            .await
+            .expect("task list");
+        assert_eq!(tasks["items"][0]["last_run"]["state"], "failed", "{tasks}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A teardown entry past its own `timeout:` reads `failed` in the clean's
+/// result, with the reason the client words, not as a success without a code.
+async fn lane_clean_reports_a_teardown_entry_past_its_timeout() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: tidyup\ninfra:\n  containers:\n    db: { image: \"postgres:16\", ports: { pg: 5432 }, per_lane: true }\n  teardown:\n    database: { run: sleep, timeout: 300ms }\nservices:\n  api: { run: sleep }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let yes = Context {
+            yes: true,
+            ..cx(&main)
+        };
+        let cleaned = h
+            .call(Method::LaneClean, json!({}), yes)
+            .await
+            .expect("clean");
+        let entry = &cleaned["teardown"][0];
+        assert_eq!(
+            (&entry["entry"], &entry["state"], &entry["reason"]["code"]),
+            (&json!("database"), &json!("failed"), &json!("task_timeout")),
+            "{cleaned}"
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A step stopped by name ends its task `stopped` even when its process exits
+/// 0 on the signal: the next step never runs and the task is not marked done.
+async fn a_step_stopped_by_name_stops_its_task() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: steps\ntasks:\n  pipeline: { steps: [first, second] }\n  first: { run: \"graceful; sleep\" }\n  second: { run: \"echo second\" }\n";
+        let main = repo(&tmp.path, "r", config);
+        let home = tmp.path.join("home");
+        let h = harness(&home, Setup::default()).await;
+        let (_session, _frames, running) =
+            spawn_call(&h, Method::Run, json!({"task": "pipeline"}), cx(&main));
+        let first = eventually(SETTLE, || async {
+            alive(&lane(&h, &main).await)
+                .contains(&"first".to_owned())
+                .then_some(())
+        })
+        .await;
+        assert!(first.is_some(), "the first step runs");
+        h.call(Method::Stop, json!({"units": ["first"]}), cx(&main))
+            .await
+            .expect("stop");
+        let ran = running.await.expect("join").expect("run answers");
+        assert_eq!(ran["state"], "stopped", "{ran}");
+        assert!(
+            !h.runner.journal.entries().contains(&"echo second".to_owned()),
+            "the second step never spawned"
+        );
+        let tasks = h
+            .call(Method::TaskList, json!({}), cx(&main))
+            .await
+            .expect("task list");
+        let pipeline = tasks["items"]
+            .as_array()
+            .and_then(|items| items.iter().find(|task| task["name"] == "pipeline"))
+            .expect("pipeline");
+        assert_eq!(pipeline["last_run"]["state"], "stopped", "{tasks}");
+        h.close().await;
+        let store = devlanes_state::Store::open(home.join("state.db"))
+            .await
+            .expect("store");
+        let lane_id = store.lanes(None).await.expect("lanes")[0].id;
+        let marker = store
+            .task_completion(lane_id, "pipeline".into())
+            .await
+            .expect("marker");
+        assert_eq!(marker, None, "a stopped task never succeeded");
     })
     .await
     .expect("timeout");
@@ -287,7 +439,7 @@ async fn clean_closes_the_lane_to_exec_and_run() {
         assert_eq!(cleaned["lane"], "tidy@0");
 
         let ran = running.await.expect("join").expect("run answers");
-        assert_eq!(ran["state"], "failed", "{ran}");
+        assert_eq!(ran["state"], "stopped", "{ran}");
         assert_eq!(ran["exit_code"], Value::Null);
         assert_eq!(h.engine.managed_processes(), 0);
         h.close().await;

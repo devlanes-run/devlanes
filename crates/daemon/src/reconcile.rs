@@ -129,7 +129,16 @@ impl Inner {
     /// unrelated processes and so are never probed. Returns the current boot ID,
     /// `None` when the platform cannot tell.
     async fn end_stale_runs(&self) -> Option<String> {
-        match self.store.abandon_task_runs().await {
+        // Nothing can wait for these runs any more, so they ended as stopped ones do.
+        let stopped = crate::units::UnitState::Stopped(devlanes_core::ExitOutcome {
+            code: None,
+            signal: None,
+        });
+        match self
+            .store
+            .abandon_task_runs(stopped.word().to_owned())
+            .await
+        {
             Ok(0) => {}
             Ok(abandoned) => tracing::info!(abandoned, "ended task runs of a previous daemon"),
             Err(error) => tracing::warn!(%error, "unfinished task runs not ended"),

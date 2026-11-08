@@ -156,7 +156,7 @@ pub async fn run_with<D: WithDriver + ?Sized>(
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                 };
-                if matches!(field("state"), "done" | "exited" | "failed") {
+                if matches!(field("state"), "done" | "exited" | "failed" | "stopped") {
                     tasks.push((field("lane").to_owned(), field("task").to_owned()));
                 }
             }

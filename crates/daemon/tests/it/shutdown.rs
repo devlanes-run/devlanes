@@ -253,8 +253,9 @@ async fn explicit_shutdown_runs_lane_stop_tasks() {
         assert_eq!(
             report["tasks"],
             json!([
-                {"lane": "bye@0", "task": "first", "exit_code": 1},
-                {"lane": "bye@0", "task": "second", "exit_code": 0},
+                {"lane": "bye@0", "task": "first", "exit_code": 1, "state": "failed",
+                 "reason": {"code": "exited", "data": {"code": 1, "signal": null}, "exit_code": 1}},
+                {"lane": "bye@0", "task": "second", "exit_code": 0, "state": "exited"},
             ]),
             "{report}"
         );
