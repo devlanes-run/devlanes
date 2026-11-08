@@ -144,6 +144,9 @@ pub(crate) struct Remotes {
     /// Held while the assignment is computed and stored, so one computed
     /// from older inputs never replaces a newer one.
     assigning: Mutex<()>,
+    /// Held while [`Inner::announce_findings`] computes, compares and stores,
+    /// so a call that read older state never stores its findings last.
+    announcing: Mutex<()>,
     /// Every box port's listener and relay, whichever box they lead to.
     listeners: listeners::Listeners,
 }
@@ -195,7 +198,13 @@ impl Remotes {
     /// hostname is never routed to two boxes.
     /// A box's routes kept ready for its skipped lanes count too: in a switch,
     /// the lane's routes move to the new box in this one publish.
-    pub(crate) fn routes(&self, assignment: &assign::Assignment) -> Vec<RouteEntry> {
+    ///
+    /// Each route's `pool_key` is the box and the assignment `version`
+    /// (`alpha#3`). A box's connections stay open for a while after a switch
+    /// away, so their answers get through. Keyed by the box alone, a switch
+    /// back within that while would hand a request one of them, and it would
+    /// be reset under the request.
+    pub(crate) fn routes(&self, version: u64, assignment: &assign::Assignment) -> Vec<RouteEntry> {
         self.all()
             .iter()
             .flat_map(|conn| {
@@ -204,7 +213,10 @@ impl Remotes {
                     .iter()
                     .chain(&view.standby)
                     .filter(|route| assignment.mirrors(&conn.name, &route.lane))
-                    .cloned()
+                    .map(|route| RouteEntry {
+                        pool_key: Some(format!("{}#{version}", conn.name)),
+                        ..route.clone()
+                    })
                     .collect::<Vec<_>>()
             })
             .collect()
@@ -473,13 +485,15 @@ pub(crate) struct HostConn {
     syncs: Mutex<BTreeMap<String, Value>>,
     /// Destination hashes by sync key, reused while files keep size and mtime.
     hashes: Mutex<HashMap<String, HashCache>>,
-    /// Version, linger and port range findings about the box, by code.
+    /// The [`HostConn::findings`] messages last sent as `remote.warning`
+    /// events, by code ([`Inner::announce_findings`]).
     warnings: Mutex<BTreeMap<&'static str, String>>,
     /// Place in connect order: a box with a lower serial connected earlier and
     /// keeps the hostnames a later box also claims.
     serial: u64,
     /// What the box said about itself in its latest handshake, kept while it
-    /// reconnects.
+    /// reconnects. Read only through [`HostConn::handshake`], which takes a
+    /// connected box's from its session.
     info: Mutex<BoxInfo>,
     /// The box's version label (`devlanes 0.5.0 (linger off)`) from its latest
     /// handshake, kept while it reconnects like `info`.
@@ -696,16 +710,55 @@ impl HostConn {
         value
     }
 
+    /// The box's handshake info and version label: the live session's as soon
+    /// as the link state is connected, else the latest session's, kept while
+    /// it reconnects. Read from the session itself, so nothing that reads a
+    /// connected box's handshake waits for [`watch_link`] to copy it. The only
+    /// reader of `info` and `label`.
+    fn handshake(&self) -> (BoxInfo, String) {
+        if let LinkState::Connected(session) = &*self.state.borrow() {
+            return (session.box_info().clone(), session.server().to_owned());
+        }
+        (lock(&self.info).clone(), lock(&self.label).clone())
+    }
+
+    /// Version, linger and port range findings about the box by code, from
+    /// its handshake and the ranges of the other `boxes`, each as message and
+    /// the extra fields of its `remote.warning` event. What `remote ls` shows
+    /// and [`Inner::announce_findings`] sends.
+    fn findings(&self, boxes: &[Arc<HostConn>]) -> BTreeMap<&'static str, (String, Value)> {
+        let (_, label) = self.handshake();
+        // Before its first handshake nothing is known about the box.
+        let mut findings: BTreeMap<&'static str, (String, Value)> = if label.is_empty() {
+            BTreeMap::new()
+        } else {
+            label_warnings(&label)
+                .into_iter()
+                .map(|(code, message)| (code, (message, json!({}))))
+                .collect()
+        };
+        if let Some(finding) = range_overlap(self, boxes) {
+            findings.insert(RANGE_OVERLAP, finding);
+        }
+        findings
+    }
+
     /// State plus what is mirrored, for `connect`, `remote ls` and `status`.
-    fn status_json(&self) -> Value {
+    /// `boxes` are the connections to every box, whose `ports.range` this
+    /// box's may overlap.
+    fn status_json(&self, boxes: &[Arc<HostConn>]) -> Value {
         let mut value = self.state_json();
         let lanes = self.registry.current().lanes().count();
         let view = lock(&self.view).clone();
         let syncs: Vec<Value> = lock(&self.syncs).values().cloned().collect();
-        let mut warnings: Vec<String> = lock(&self.warnings).values().cloned().collect();
+        let mut warnings: Vec<String> = self
+            .findings(boxes)
+            .into_values()
+            .map(|(message, _)| message)
+            .collect();
         warnings.extend(lock(&self.proxy_port).clone());
         warnings.extend(view.warnings());
-        let https_port = lock(&self.info).https_port;
+        let https_port = self.handshake().0.https_port;
         if let Some(map) = value.as_object_mut() {
             map.insert("transport".into(), json!(self.kind));
             map.insert("https_port".into(), json!(https_port));
@@ -759,18 +812,21 @@ impl HostConn {
     /// The `host.list` entry: [`HostConn::status_json`] plus what a client
     /// needs to show the box without asking anything else. Routes get the
     /// `url` to open here (`https_port` is this machine's proxy port) and their
-    /// `state`, and while the link has not ended the entry carries the box's
+    /// `state`, `daemon_version` is the handshake label once there was a
+    /// handshake, and while the link has not ended the entry carries the box's
     /// `registry` (lanes and units with states, ports and hostnames), its
     /// handshake info under `box`, `connected_since_ms`, the name `suffixes`
     /// box hostnames must end in and the extra HTTPS port opened for the box
-    /// (`proxy.box_port`, `open` when it is served).
+    /// (`proxy.box_port`, `open` when it is served). `boxes` as in
+    /// [`HostConn::status_json`].
     fn list_json(
         &self,
+        boxes: &[Arc<HostConn>],
         https_port: Option<u16>,
         suffixes: &[String],
         box_port_open: bool,
     ) -> Value {
-        let mut value = self.status_json();
+        let mut value = self.status_json(boxes);
         let routes: Vec<Value> = lock(&self.view)
             .routes
             .iter()
@@ -788,8 +844,7 @@ impl HostConn {
                 })
             })
             .collect();
-        let info = lock(&self.info).clone();
-        let label = lock(&self.label).clone();
+        let (info, label) = self.handshake();
         let version = label_version(&label).map(str::to_owned);
         let box_port = info.https_port.filter(|port| Some(*port) != https_port);
         let Some(map) = value.as_object_mut() else {
@@ -800,6 +855,11 @@ impl HostConn {
             "connected_since_ms".into(),
             json!(*lock(&self.connected_since)),
         );
+        // `remote_hosts` gets it only after the handshake, which may be a
+        // newer release than the row.
+        if !label.is_empty() {
+            map.insert("daemon_version".into(), json!(label));
+        }
         if self.ended() {
             return value;
         }
@@ -1147,7 +1207,7 @@ impl Inner {
                 return Err(error);
             }
             conn.record_written().await;
-            return Ok(conn.status_json());
+            return Ok(conn.status_json(&self.remote.all()));
         }
         // Later `connected` events come from `watch_link` after the record.
         conn.record_written().await;
@@ -1157,7 +1217,7 @@ impl Inner {
             data: conn.state_json(),
         };
         if session.event(first).await.is_err() {
-            return Ok(conn.status_json());
+            return Ok(conn.status_json(&self.remote.all()));
         }
         let host = conn.name.clone();
         let mine = move |event: &Event| {
@@ -1171,8 +1231,8 @@ impl Inner {
             conn.finished().await
         };
         tokio::select! {
-            () = self.bus.forward(session, mine) => Ok(conn.status_json()),
-            finished = finished => finished.map(|()| conn.status_json()),
+            () = self.bus.forward(session, mine) => Ok(conn.status_json(&self.remote.all())),
+            finished = finished => finished.map(|()| conn.status_json(&self.remote.all())),
         }
     }
 
@@ -1226,7 +1286,7 @@ impl Inner {
         if let Some(old) = old {
             old.close().await;
             self.remote.wake_others(old.serial);
-            self.refresh_range_overlaps();
+            self.announce_findings();
         }
         let (conn, guard) = self
             .open_host(host, identity, watcher, connected_before, recorded, code)
@@ -1403,7 +1463,7 @@ impl Inner {
         }
         drop(connecting);
         let names: Vec<String> = names.into_iter().collect();
-        self.refresh_range_overlaps();
+        self.announce_findings();
         self.reconcile_box_ports().await;
         self.reassign();
         self.publish_routes();
@@ -1446,15 +1506,19 @@ impl Inner {
             }
             items.insert(host.name.clone(), item);
         }
-        for conn in self.remote.all() {
-            let box_port_open = lock(&conn.info)
+        let boxes = self.remote.all();
+        for conn in &boxes {
+            let box_port_open = conn
+                .handshake()
+                .0
                 .https_port
                 .is_some_and(|port| open_ports.contains(&port));
-            let mut status = conn.list_json(https_port, &suffixes, box_port_open);
+            let mut status = conn.list_json(&boxes, https_port, &suffixes, box_port_open);
             if let (Some(stored), Some(map)) = (items.get(&conn.name), status.as_object_mut()) {
+                // The live entry's own `daemon_version` wins over the row's.
                 for key in ["address", "daemon_version", "last_connected_ms"] {
                     if let Some(value) = stored.get(key) {
-                        map.insert(key.into(), value.clone());
+                        map.entry(key).or_insert_with(|| value.clone());
                     }
                 }
             }
@@ -1466,6 +1530,7 @@ impl Inner {
         let yielded: Vec<Value> = self
             .remote
             .assignment()
+            .1
             .yielded
             .iter()
             .map(|(lane, winner)| json!({"lane": lane, "winner": winner}))
@@ -1752,7 +1817,7 @@ impl Inner {
         let own = self.integ.routes.https_port();
         let mut wanted: BTreeMap<u16, Vec<Arc<HostConn>>> = BTreeMap::new();
         for conn in self.remote.all() {
-            let port = lock(&conn.info).https_port;
+            let port = conn.handshake().0.https_port;
             match (port, own) {
                 (Some(port), Some(own)) if port != own && !conn.ended() => {
                     wanted.entry(port).or_default().push(conn);
@@ -1866,38 +1931,31 @@ impl Inner {
         BoxPortProblem { holder, pid }
     }
 
-    /// Updates the `ports_range_overlap` finding of every live box, after a box
-    /// connected, reconnected or went away, and emits it where it appeared or
-    /// changed. Only boxes are compared: local allocations already keep clear
-    /// of box ports, while two boxes know nothing of each other's.
-    fn refresh_range_overlaps(&self) {
-        let (live, ended): (Vec<Arc<HostConn>>, Vec<Arc<HostConn>>) = self
-            .remote
-            .all()
-            .into_iter()
-            .partition(|conn| !conn.ended());
-        for conn in ended {
-            lock(&conn.warnings).remove(RANGE_OVERLAP);
-        }
-        for conn in &live {
-            let finding = range_overlap(conn, &live);
-            let changed = {
-                let mut warnings = lock(&conn.warnings);
-                match &finding {
-                    Some((message, _)) => {
-                        warnings.insert(RANGE_OVERLAP, message.clone()).as_ref() != Some(message)
-                    }
-                    None => {
-                        warnings.remove(RANGE_OVERLAP);
-                        false
-                    }
+    /// Sends a `remote.warning` for each [`HostConn::findings`] of every box
+    /// that is new or changed since the last one sent, and records what was
+    /// sent, after a box connected, reconnected or went away. A reconnect or
+    /// another box's connect repeats nothing, and a finding that went away
+    /// only leaves `remote ls`.
+    fn announce_findings(&self) {
+        let _announcing = lock(&self.remote.announcing);
+        let boxes = self.remote.all();
+        for conn in &boxes {
+            let findings = conn.findings(&boxes);
+            let sent = std::mem::replace(
+                &mut *lock(&conn.warnings),
+                findings
+                    .iter()
+                    .map(|(code, (message, _))| (*code, message.clone()))
+                    .collect(),
+            );
+            for (code, (message, mut data)) in findings {
+                if sent.get(code) == Some(&message) {
+                    continue;
                 }
-            };
-            if let (true, Some((message, mut data))) = (changed, finding) {
-                tracing::warn!(host = %conn.name, code = RANGE_OVERLAP, %message, "box warning");
+                tracing::warn!(host = %conn.name, code, %message, "box warning");
                 if let Some(fields) = data.as_object_mut() {
                     fields.insert("host".into(), json!(conn.name));
-                    fields.insert("code".into(), json!(RANGE_OVERLAP));
+                    fields.insert("code".into(), json!(code));
                     fields.insert("message".into(), json!(message));
                 }
                 self.bus.emit(wire::WARNING_EVENT, data);
@@ -1928,20 +1986,27 @@ fn retry_box_ports(engine: std::sync::Weak<Inner>) -> futures_util::future::BoxF
     })
 }
 
-/// The `ports_range_overlap` finding for `conn` among the `live` boxes, as
-/// message and event fields: its box's `ports.range` overlaps another box's.
-/// Forks of one image always share theirs, and a lane both run is mirrored
-/// from one box at a time anyway. Different lanes allocated on both can get
-/// the same ports, and only one box's can be mirrored.
-fn range_overlap(conn: &HostConn, live: &[Arc<HostConn>]) -> Option<(String, Value)> {
-    let range = lock(&conn.info).ports_range.clone()?;
+/// The `ports_range_overlap` finding for `conn` among the `boxes` whose link
+/// has not ended, as message and event fields: its box's `ports.range`
+/// overlaps another box's. None for a box that is not among them. Only boxes
+/// are compared: local allocations already keep clear of box ports, while two
+/// boxes know nothing of each other's. Forks of one image always share
+/// theirs, and a lane both run is mirrored from one box at a time anyway.
+/// Different lanes allocated on both can get the same ports, and only one
+/// box's can be mirrored.
+fn range_overlap(conn: &HostConn, boxes: &[Arc<HostConn>]) -> Option<(String, Value)> {
+    let live: Vec<&Arc<HostConn>> = boxes.iter().filter(|other| !other.ended()).collect();
+    if !live.iter().any(|other| other.serial == conn.serial) {
+        return None;
+    }
+    let range = conn.handshake().0.ports_range?;
     let theirs = parse_range(&range)?;
     let mut overlaps = Vec::new();
     for other in live {
         if other.serial == conn.serial {
             continue;
         }
-        let Some(other_range) = lock(&other.info).ports_range.clone() else {
+        let Some(other_range) = other.handshake().0.ports_range else {
             continue;
         };
         if parse_range(&other_range).is_some_and(|bounds| ranges_overlap(bounds, theirs)) {
@@ -2044,29 +2109,8 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
         if let Some(session) = session {
             *lock(&conn.info) = session.box_info().clone();
             *lock(&conn.label) = session.server().to_owned();
-            let findings = label_warnings(session.server());
-            let known = {
-                let mut warnings = lock(&conn.warnings);
-                let known = warnings.clone();
-                warnings.retain(|code, _| *code == RANGE_OVERLAP);
-                warnings.extend(findings.iter().cloned());
-                known
-            };
-            // A reconnect repeats a finding only in `remote ls`, not as an event.
-            for (code, message) in findings {
-                if known.get(code) == Some(&message) {
-                    continue;
-                }
-                tracing::warn!(host = %conn.name, code, %message, "box warning");
-                inner.bus.emit(
-                    wire::WARNING_EVENT,
-                    json!({"host": conn.name, "code": code, "message": message}),
-                );
-            }
-            inner.refresh_range_overlaps();
+            inner.announce_findings();
             inner.reconcile_box_ports().await;
-            // The mirror stamps the box's HTTPS port on its routes.
-            conn.wake.notify_one();
             // A new session's box has no report of this mirror yet.
             conn.mark_changed();
             if let Some(task) = syncing.take() {
@@ -2078,7 +2122,7 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
                 session,
             )));
         } else if conn.ended() {
-            inner.refresh_range_overlaps();
+            inner.announce_findings();
             inner.reconcile_box_ports().await;
         }
         drop(inner);
@@ -2136,7 +2180,7 @@ impl Inner {
     /// serves the box's: the same port, or the box's extra port opened here.
     async fn mirror_report_of(&self, conn: &HostConn) -> wire::MirrorReport {
         let own = self.integ.routes.https_port();
-        let theirs = lock(&conn.info).https_port;
+        let theirs = conn.handshake().0.https_port;
         let serves = match (theirs, own) {
             (Some(theirs), Some(own)) if theirs != own => {
                 self.remote.box_ports.lock().await.open.contains(&theirs)

@@ -288,6 +288,18 @@ async fn answers(client: &ClientSide, host: &str, body: &str) -> bool {
         .is_some_and(|response| response.contains(body))
 }
 
+/// The pool keys the client published `host`'s box route with, oldest first.
+fn pool_keys(client: &ClientSide, host: &str) -> Vec<Option<String>> {
+    client
+        .pool_keys
+        .lock()
+        .expect("pool keys")
+        .iter()
+        .filter(|(routed, _)| routed == host)
+        .map(|(_, key)| key.clone())
+        .collect()
+}
+
 /// The status line's code and the body of one GET through the proxy.
 async fn status_and_body(proxy: u16, host: &str) -> (u16, String) {
     let response = http_get(proxy, host).await.unwrap_or_default();
@@ -514,6 +526,9 @@ async fn remote_use_switches_a_lane_between_boxes() {
             first.clone(),
         );
         first.notified().await;
+        // The keys the proxy pooled alpha's connections by in its first turn.
+        let first_turn = pool_keys(&client, FORK_HOSTS[0]);
+        assert!(!first_turn.is_empty());
         client.published.lock().expect("published").clear();
         let reply = use_lane(&client, "forkapp@0", Some("beta")).await;
         assert_eq!(
@@ -603,6 +618,14 @@ async fn remote_use_switches_a_lane_between_boxes() {
         assert_eq!(
             reply.map(|reply| reply["previous"].clone()),
             Ok(json!("beta"))
+        );
+        // Alpha's connections from its first turn close only once their
+        // answers are through, so the proxy must not find them under the key
+        // of its second.
+        let second_turn = pool_keys(&client, FORK_HOSTS[0]).pop().flatten();
+        assert!(
+            second_turn.is_some() && !first_turn.contains(&second_turn),
+            "{second_turn:?} after {first_turn:?}"
         );
         assert!(answers(&client, FORK_HOSTS[0], "web-from-alpha").await);
         assert!(
