@@ -197,6 +197,10 @@ pub struct UnitHost {
 
 struct Inner {
     info: UnitInfo,
+    /// When the host started watching the spawned unit, on the monotonic
+    /// clock the readiness window is measured with; `info.started_at_ms` is
+    /// the wall-clock time shown to users.
+    spawned: tokio::time::Instant,
     unit: Arc<dyn Unit>,
     identity: Option<ProcessIdentity>,
     state: watch::Sender<UnitState>,
@@ -363,6 +367,7 @@ impl UnitHost {
         state: UnitState,
         first_seq: Option<u64>,
     ) -> Result<Self, RpcError> {
+        let spawned = tokio::time::Instant::now();
         let log = open_log(
             info.log_dir.clone(),
             info.name.replace('#', "_"),
@@ -394,6 +399,7 @@ impl UnitHost {
         let host = Self {
             inner: Arc::new(Inner {
                 info,
+                spawned,
                 unit,
                 identity,
                 state: watch::channel(state).0,
@@ -419,6 +425,11 @@ impl UnitHost {
     /// Run facts for summaries.
     pub fn info(&self) -> &UnitInfo {
         &self.inner.info
+    }
+
+    /// When the host started watching the spawned unit, on tokio's monotonic clock.
+    pub fn spawned(&self) -> tokio::time::Instant {
+        self.inner.spawned
     }
 
     /// The process identity recorded in `unit_runs`, if the runner reported one.
@@ -1366,16 +1377,11 @@ mod tests {
 
     /// A PTY host for `unit` logging into its own directory under `dir`.
     async fn host(unit: Arc<ScriptedUnit>, dir: &tempfile::TempDir) -> UnitHost {
-        host_with(unit, dir, true, 0).await
+        host_with(unit, dir, true).await
     }
 
-    /// [`host`] for a PTY (`pty`) or pipe unit spawned at `started_at_ms`.
-    async fn host_with(
-        unit: Arc<ScriptedUnit>,
-        dir: &tempfile::TempDir,
-        pty: bool,
-        started_at_ms: u64,
-    ) -> UnitHost {
+    /// [`host`] for a PTY (`pty`) or pipe unit.
+    async fn host_with(unit: Arc<ScriptedUnit>, dir: &tempfile::TempDir, pty: bool) -> UnitHost {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let run = NEXT.fetch_add(1, Ordering::Relaxed);
         let info = UnitInfo {
@@ -1383,7 +1389,7 @@ mod tests {
             lane: "0".into(),
             kind: "service",
             actor: Actor::default(),
-            started_at_ms,
+            started_at_ms: 0,
             log_dir: dir.path().join(run.to_string()),
             retention: LogRetention::default(),
             pty,
@@ -1436,7 +1442,7 @@ mod tests {
     /// A check that passed leaves the unit `starting` until the early-exit
     /// window ends, so an exit inside the window fails it instead of
     /// following a `ready` that `after: services` tasks would trust.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_passed_check_waits_out_the_early_exit_window() {
         let dir = tempfile::tempdir().expect("tempdir");
         let unit = ScriptedUnit::start(None, gone_identity_cached());
@@ -1446,10 +1452,7 @@ mod tests {
             .expect("output lock")
             .clone()
             .expect("output open");
-        // The window counts from the wall-clock spawn. A spawn a minute ahead
-        // keeps it open however slow the real steps below are; the paused
-        // clock alone decides when it ends.
-        let host = host_with(unit.clone(), &dir, true, now_ms() + 60_000).await;
+        let host = host(unit.clone(), &dir).await;
         let mut logged = host.watch_logged();
         output
             .send(OutputChunk {
@@ -1457,19 +1460,16 @@ mod tests {
                 bytes: Bytes::from_static(b"up\r\n"),
             })
             .expect("send");
-        // Logged before the check begins, so its first read passes.
-        tokio::time::timeout(STEP, async {
-            loop {
-                let page = host.read_log(LogQuery::default()).await.expect("read");
-                if page.items.iter().any(|line| line.text == "up") {
-                    break;
-                }
-                logged.changed().await.expect("log writer runs");
+        // Logged before the check begins, so its first read passes. No timer
+        // bounds this wait: the paused clock would jump to it while the log
+        // thread writes. nextest's limit ends a hang.
+        loop {
+            let page = host.read_log(LogQuery::default()).await.expect("read");
+            if page.items.iter().any(|line| line.text == "up") {
+                break;
             }
-        })
-        .await
-        .expect("up is logged");
-        tokio::time::pause();
+            logged.changed().await.expect("log writer runs");
+        }
         let check = tokio::spawn({
             let host = host.clone();
             async move {
@@ -1482,7 +1482,8 @@ mod tests {
         });
         // The paused clock moves only once nothing runs or reads the log, so
         // by then the check has passed and waits out the window.
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        let last = host.spawned() + crate::ready::EARLY_EXIT - Duration::from_millis(1);
+        tokio::time::sleep_until(last).await;
         assert_eq!(host.state(), UnitState::Starting);
         drop(output);
         unit.end(Some(1), None);
@@ -1671,7 +1672,7 @@ mod tests {
             .expect("output lock")
             .clone()
             .expect("output open");
-        let host = host_with(unit, &dir, false, 0).await;
+        let host = host_with(unit, &dir, false).await;
         let mut logged = host.watch_logged();
         let Logged::Through(first) = *logged.borrow() else {
             panic!("the log thread is running");
