@@ -583,30 +583,54 @@ impl LaneSt {
         self.identity.rsplit_once(ALIAS_MARK)
     }
 
-    /// Whether `selector` names a unit of this lane: a unit that ran, an orphan,
-    /// or a configured service by its unit or service name.
-    pub(crate) fn knows_unit(&self, selector: &str) -> bool {
-        self.units.contains_key(selector)
-            || self.orphans.contains_key(selector)
-            || self.view.as_ref().is_some_and(|view| {
-                view.services
-                    .iter()
-                    .any(|service| service.unit == selector || service.name == selector)
-            })
+    /// The units a selector can name in this lane, with their tags: units that
+    /// ran, the task units of starts in flight (one may run before the lane
+    /// records it), configured services and orphans. `stop`, `restart`, `reload`
+    /// and the lane check of a lone selector all decide by this list.
+    pub(crate) fn unit_candidates(&self) -> Vec<(String, Vec<String>)> {
+        let mut candidates: Vec<(String, Vec<String>)> = self
+            .units
+            .iter()
+            .map(|(name, rec)| (name.clone(), rec.tags.clone()))
+            .collect();
+        let tasks: BTreeSet<String> = self
+            .starts
+            .iter()
+            .flat_map(|start| start.task_units())
+            .collect();
+        let services = self
+            .view
+            .iter()
+            .flat_map(|view| view.services.iter())
+            .map(|service| (service.unit.clone(), service.tags.clone()));
+        let others = tasks
+            .into_iter()
+            .map(|name| (name, Vec::new()))
+            .chain(services)
+            .chain(self.orphans.keys().map(|name| (name.clone(), Vec::new())));
+        for (name, tags) in others {
+            if !candidates.iter().any(|(known, _)| *known == name) {
+                candidates.push((name, tags));
+            }
+        }
+        candidates
     }
 
-    /// The units a `not_found` for a name [`Self::knows_unit`] refuses lists: the
-    /// ones that ran and the configured services, sorted.
-    pub(crate) fn unit_candidates(&self) -> Vec<String> {
-        let mut candidates: Vec<String> = self.units.keys().cloned().collect();
-        candidates.extend(
-            self.view
+    /// The units of this lane `selectors` match, with a service name standing for
+    /// its replicas; `not_found` names the first selector that matches none and
+    /// lists the candidates as `<reference>:<unit>`.
+    pub(crate) fn match_units(
+        &self,
+        reference: &str,
+        selectors: &[String],
+    ) -> Result<Vec<String>, RpcError> {
+        let services = self.view.iter().flat_map(|view| {
+            view.services
                 .iter()
-                .flat_map(|view| view.services.iter().map(|s| s.unit.clone())),
-        );
-        candidates.sort();
-        candidates.dedup();
-        candidates
+                .map(|s| (s.name.as_str(), s.unit.as_str()))
+        });
+        let selectors = crate::engine::expand_replicas(selectors, services);
+        crate::engine::match_units(&selectors, &self.unit_candidates(), reference)
     }
 
     /// Whether status, lane lists and events show this lane: it has a lane

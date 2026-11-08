@@ -479,12 +479,8 @@ impl Inner {
                 ));
             }
             // Names the lane does not have are a typo, not "nothing to reload".
-            if let Some(unknown) = selectors.iter().find(|selector| !st.knows_unit(selector)) {
-                return Err(RpcError::new(
-                    "not_found",
-                    json!({"reference": unknown, "candidates": st.unit_candidates()}),
-                    3,
-                ));
+            if !selectors.is_empty() {
+                st.match_units(&reference, &selectors)?;
             }
             // A plan that failed has no per-unit answer; its error is the answer.
             if st.drift.is_empty()

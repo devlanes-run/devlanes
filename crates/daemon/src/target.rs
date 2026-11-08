@@ -666,12 +666,14 @@ impl Inner {
         context: &Context,
     ) -> Option<RpcError> {
         let plain = !selector.starts_with('+') && !selector.contains(['*', '?', '[', '{']);
-        let candidates = {
+        // The same answer the command gives a name the lane does not have.
+        let mut error = {
             let st = lane.st();
-            if !plain || st.view.is_none() || st.knows_unit(selector) {
+            if !plain || st.view.is_none() {
                 return None;
             }
-            st.unit_candidates()
+            st.match_units(&st.reference(&project.name()), &[selector.to_owned()])
+                .err()?
         };
         let parsed = LaneRef {
             project: None,
@@ -681,18 +683,15 @@ impl Inner {
             .match_reference(&parsed, std::slice::from_ref(project), context)
             .ok()?;
         let st = other.st();
-        let names_lane = matches!(by, LaneMatch::Index | LaneMatch::Name) && st.record.is_some();
-        names_lane.then(|| {
-            RpcError::new(
-                "not_found",
-                json!({
-                    "reference": selector,
-                    "candidates": candidates,
-                    "names_lane": st.reference(&other_project.name()),
-                }),
-                3,
-            )
-        })
+        if !matches!(by, LaneMatch::Index | LaneMatch::Name) || st.record.is_none() {
+            return None;
+        }
+        let data = error.data.as_object_mut()?;
+        data.insert(
+            "names_lane".into(),
+            json!(st.reference(&other_project.name())),
+        );
+        Some(error)
     }
 
     /// Splits `[lane:]unit` selectors and resolves their lane. All selectors that
