@@ -521,6 +521,7 @@ impl Inner {
             start_id: Some(start_id),
             arrival,
             restoring: false,
+            accepted: selection.accepted.then(|| session.clone()),
         };
         let start_id = self.new_start_id();
         let stream = selection

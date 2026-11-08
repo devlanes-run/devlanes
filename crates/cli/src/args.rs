@@ -1239,6 +1239,8 @@ impl Cli {
                     events: start_events,
                     // What `--keep` leaves running stays, like a plain start's.
                     transient: !args.keep,
+                    // The start's id, so a Ctrl-C can end it in every output mode.
+                    accepted: true,
                     ..Selection::default()
                 })?;
                 return Ok(Action::With(crate::WithPlan {

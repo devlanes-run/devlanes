@@ -2,7 +2,8 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use devlanes_proto::{ContainerPhase, Event, Method, PhaseContainer, StartResult, events};
+use devlanes_ipc::Frame;
+use devlanes_proto::{ContainerPhase, Control, Event, Method, PhaseContainer, StartResult, events};
 use serde_json::{Value, json};
 
 use crate::{LIMIT, Setup, cx, drain_events, harness, repo, temp, worktree};
@@ -390,6 +391,79 @@ async fn running_phases_report_their_detail() {
             })
             .collect();
         assert_eq!(tasks, [r#""build" 1/2"#, r#""migrate" 2/2"#]);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A request without events (agent `with`) still learns its start's id, and
+/// `start.cancel` with it ends the start in its readiness wait. The start's
+/// error says what it brought up, which is still running for `with` to stop.
+async fn a_cancelled_start_reports_what_it_started() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: demo\ntasks:\n  prep: { run: \"echo prep\", when: lane.start }\n\
+                      services:\n  web: { run: sleep, ready: { log: never } }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let mut bus = h.engine.subscribe();
+        let (session, mut frames) = h.session();
+        // Only the cancel ends this start; `LIMIT` bounds the test.
+        let params =
+            json!({"events": false, "accepted": true, "timeout_ms": LIMIT.as_secs() * 1000});
+        let start = h.call_on(Method::Start, params, cx(&main), &session);
+        let cancel = async {
+            let Some(Frame::Control(Control::Event(accepted))) = frames.recv().await else {
+                panic!("the start's first frame is an event");
+            };
+            assert_eq!(accepted.event, events::START_ACCEPTED, "{accepted:?}");
+            assert_eq!(accepted.data["lane"], "demo@0");
+            // `web` spawned and the start waits for it to be ready.
+            loop {
+                let event = bus.recv().await.expect("bus");
+                let unit = &event.data["unit"];
+                if event.event == events::UNIT_CHANGED
+                    && unit["name"] == "web"
+                    && unit["state"] == "starting"
+                {
+                    break;
+                }
+            }
+            let start_id = accepted.data["start_id"].clone();
+            h.call(
+                Method::StartCancel,
+                json!({"start_id": start_id}),
+                cx(&main),
+            )
+            .await
+            .expect("start.cancel")
+        };
+        let (answer, cancelled) = tokio::join!(start, cancel);
+        assert_eq!(cancelled, json!({"cancelled": true}));
+        let error = answer.expect_err("a cancelled start fails");
+        assert_eq!(error.code, "start_cancelled", "{error:?}");
+        assert_eq!(error.data["lane"], "demo@0");
+        assert_eq!(error.data["started"], json!(["demo@0:web"]));
+        assert_eq!(error.data["ran"], json!(["demo@0:prep"]));
+        assert_eq!(error.data["whole_lane"], true);
+        // What `with` stops for a start that brought the lane up.
+        let lane = devlanes_proto::Context {
+            lane: Some("demo@0".into()),
+            ..cx(&main)
+        };
+        let stopped = h
+            .call(Method::Stop, json!({"transient": true}), lane)
+            .await
+            .expect("stop");
+        let names: Vec<&str> = stopped["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|unit| unit["name"].as_str())
+            .collect();
+        assert_eq!(names, ["web"], "{stopped:?}");
         h.close().await;
     })
     .await

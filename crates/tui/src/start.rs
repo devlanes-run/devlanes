@@ -33,6 +33,9 @@ pub enum StartFrame {
 pub struct StartHandoff {
     /// The command's verb: `start`, `restart`, `reload`, `resume` or `new lane`.
     pub label: String,
+    /// The lane the daemon started, from `start.accepted` when the request
+    /// asked for it and it came before the TUI opened.
+    pub accepted: Option<String>,
     /// Frames that arrived before the TUI opened.
     pub frames: Vec<StartFrame>,
     /// The rest of the request.
@@ -79,7 +82,8 @@ pub fn follow_start(mut client: Client, id: u64) -> mpsc::Receiver<StartFrame> {
 /// Waits until the start is underway: its first phase, task or unit event,
 /// its result, or `wait` without an answer. A failure before that is returned
 /// as the error a CLI would print. A `lane.changed` alone does not count: the
-/// daemon sends the lane's snapshot before it checks the config.
+/// daemon sends the lane's snapshot before it checks the config. Neither does
+/// `start.accepted`, whose lane the handoff keeps.
 pub async fn await_start(
     label: String,
     mut stream: mpsc::Receiver<StartFrame>,
@@ -87,6 +91,7 @@ pub async fn await_start(
 ) -> Result<StartHandoff, ApiError> {
     let deadline = Instant::now() + wait;
     let mut frames = Vec::new();
+    let mut accepted = None;
     loop {
         let frame = match tokio::time::timeout_at(deadline, stream.recv()).await {
             Err(_) => break,
@@ -99,6 +104,10 @@ pub async fn await_start(
         };
         let frame = match frame {
             StartFrame::Done(Err(error)) => return Err(error),
+            StartFrame::Event(event) if event.event == events::START_ACCEPTED => {
+                accepted = event.data["lane"].as_str().map(str::to_owned);
+                continue;
+            }
             frame => frame,
         };
         let underway = match &frame {
@@ -115,6 +124,7 @@ pub async fn await_start(
     }
     Ok(StartHandoff {
         label,
+        accepted,
         frames,
         stream,
     })
