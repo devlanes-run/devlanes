@@ -555,6 +555,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                     {"code": "port_in_use", "data": {"port": 20102, "pid": 911}},
                     {"code": "waiting_after_services", "data": {}},
                     {"code": "ready_timeout", "data": {}},
+                    {"code": "ready_log_failed", "data": {"check": "log", "message": "the log writer stopped"}},
                     {"code": "exited", "data": {"code": 1, "signal": null}},
                     {"code": "stopped", "data": {"exit_code": 0, "signal": null, "requested": true}},
                     {"code": "autostart_off", "data": {}},
@@ -1398,103 +1399,6 @@ fn doctor_words_the_logon_start() {
 }
 
 #[test]
-/// On Windows a process ended by a console Ctrl-C or Ctrl-Break
-/// (`STATUS_CONTROL_C_EXIT`) reads as interrupted; elsewhere every code stays
-/// a number.
-fn ctrl_c_exits_read_as_interrupted() {
-    let code = i64::from(0xC000_013A_u32.cast_signed());
-    let exited = RpcError::new(
-        "exited",
-        json!({"lane": "acme@1", "unit": "web", "code": code}),
-        1,
-    );
-    let task = RpcError::new(
-        "task_failed",
-        json!({"lane": "acme@1", "task": "seed", "exit_code": code}),
-        1,
-    );
-    let render = |error: &RpcError| {
-        runtime(OutputMode::Plain)
-            .reporter()
-            .error(error, None)
-            .stderr
-    };
-    if cfg!(windows) {
-        assert_eq!(
-            exit::words(code),
-            Some("interrupted by Ctrl-C or Ctrl-Break")
-        );
-        assert_eq!(
-            exit::words(code + (1 << 32)),
-            Some("interrupted by Ctrl-C or Ctrl-Break")
-        );
-        assert!(
-            render(&exited).contains("interrupted by Ctrl-C or Ctrl-Break"),
-            "{}",
-            render(&exited)
-        );
-        assert!(
-            render(&task).contains("task seed was interrupted by Ctrl-C or Ctrl-Break"),
-            "{}",
-            render(&task)
-        );
-    } else {
-        assert_eq!(exit::words(code), None);
-        assert!(
-            render(&exited).contains(&format!("exited with code {code}")),
-            "{}",
-            render(&exited)
-        );
-    }
-    for other in [0, 1, 130, 255] {
-        assert_eq!(exit::words(other), None);
-    }
-}
-
-#[test]
-/// Agent lines leave `exit=` off a unit that a Windows stop ended, as a Unix
-/// stop by signal carries no code; a failure or another code keeps it.
-fn stopped_ctrl_c_exits_drop_the_code() {
-    let interrupted = i64::from(0xC000_013A_u32.cast_signed());
-    let agent = |method: Method, data: &Value| {
-        runtime(OutputMode::Agent)
-            .reporter()
-            .result(&Report::new(method, data))
-            .expect("render")
-            .stdout
-    };
-    let with_code = |state: &str, code: i64| {
-        let mut unit = unit("api", state);
-        unit["exit_code"] = json!(code);
-        unit
-    };
-    for (state, code, kept) in [
-        ("stopped", interrupted, !cfg!(windows)),
-        ("failed", interrupted, true),
-        ("stopped", 3, true),
-    ] {
-        let field = format!("exit={code}");
-        let items = json!({"items": [with_code(state, code)]});
-        let status =
-            json!({"items": [lane(Some(2), "main", "running", vec![with_code(state, code)])]});
-        let wait = json!({"lane": "acme@2", "unit": "api", "state": state, "exit_code": code});
-        for (method, data) in [
-            (Method::Stop, &items),
-            (Method::Status, &status),
-            (Method::Wait, &wait),
-        ] {
-            let text = agent(method, data);
-            assert_eq!(
-                text.contains(&field),
-                kept,
-                "{state} {code} {method:?}: {text}"
-            );
-            assert!(text.contains("acme@2"), "{text}");
-        }
-    }
-}
-
-#[test]
 /// A human terminal with colors gets a unit's colors back, each line ending in a
 /// reset and nothing but SGR kept; every other output gets plain text.
 fn logs_keep_colors_only_where_they_show() {
@@ -2313,6 +2217,11 @@ fn daemon_errors_are_worded_with_hints() {
             json!({"lane": "acme@2", "unit": "job", "state": "running", "timeout_ms": 5000}),
             124,
         ),
+        RpcError::new(
+            "ready_log_failed",
+            json!({"lane": "acme@2", "unit": "worker", "check": "log", "message": "the log writer stopped"}),
+            1,
+        ),
         RpcError::new("not_supported_yet", json!({"feature": "remote unlock"}), 1),
         RpcError::new(
             "config_error",
@@ -2321,7 +2230,7 @@ fn daemon_errors_are_worded_with_hints() {
         ),
         RpcError::new("needs_env", json!({"lane": "acme@2"}), 1),
         RpcError::new(
-            "lane_env_unresolved",
+            "unresolved_value",
             json!({"lane": "acme@2", "path": "global_env.API_TOKEN", "message": "undefined value (devlanes.yaml:4:14)"}),
             1,
         ),

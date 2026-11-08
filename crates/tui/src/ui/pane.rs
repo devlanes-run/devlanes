@@ -594,8 +594,7 @@ fn failure_card(
     let red = theme.tone(Tone::Failure);
     let plain = Style::new();
     let mut what = match unit.exit_code {
-        Some(code) => devlanes_cli::exit::words(code.into())
-            .map_or_else(|| format!("exited with code {code}"), str::to_owned),
+        Some(code) => format!("exited with code {code}"),
         None => "failed".to_owned(),
     };
     if let Some(finished) = unit.finished_at_ms {
@@ -828,8 +827,7 @@ fn task_lines(app: &App, lane: &LaneSummary, name: &str, width: usize) -> Vec<Li
     if let Some(run) = info.and_then(|i| i.last_run.as_ref()) {
         let mut last = run.state.clone();
         if let Some(code) = run.exit_code.filter(|code| *code != 0) {
-            last.push_str(", ");
-            last.push_str(&super::exit_words(code));
+            last.push_str(&format!(", exit {code}"));
         }
         if let Some(finished) = run.finished_at_ms {
             last.push_str(&format!(", {}", super::ago(finished)));
@@ -1124,6 +1122,40 @@ fn lane_lines(app: &App, lane: &LaneSummary, width: usize) -> Vec<Line<'static>>
             "devlanes config check in that folder lists every problem",
             width,
             theme.quiet(),
+        ));
+        lines.push(Line::from(""));
+    } else if let Some(reason) = lane
+        .reason
+        .as_ref()
+        .filter(|r| r.code == "unresolved_value")
+    {
+        // The file loads; one of its values has nothing to read in this lane.
+        let data = &reason.data;
+        let text = |key: &str| data.get(key).and_then(serde_json::Value::as_str).map(clean);
+        lines.extend(sentence(
+            &format!(
+                "{} has no value in this lane",
+                text("path").unwrap_or_default()
+            ),
+            width,
+            Vec::new(),
+            plain,
+        ));
+        lines.push(Line::from(""));
+        let message = text("message").unwrap_or_else(|| words::rpc(reason).summary);
+        lines.extend(field(
+            theme,
+            "error",
+            &message,
+            width,
+            theme.tone(Tone::Attention),
+        ));
+        lines.extend(field(
+            theme,
+            "next",
+            "set it in the shell or .env, then s starts the lane",
+            width,
+            plain,
         ));
         lines.push(Line::from(""));
     } else if let Some(reason) = lane.reason.as_ref().filter(|_| !missing) {

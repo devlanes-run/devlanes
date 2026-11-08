@@ -33,7 +33,8 @@ templates:
 lanes:
   # Branch whose worktree is lane 0.
   primary: main
-  # A worktree gets its lane when devlanes first runs in it. register only reserves the lane;
+  # A worktree gets its lane when start, status or another lane command first runs in it.
+  # register only reserves the lane;
   # setup also runs infra and lane.create tasks, start also starts services.
   new_worktrees: register
   # Stop a deleted worktree's processes and keep its lane until devlanes lane gc --yes.

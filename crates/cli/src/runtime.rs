@@ -57,7 +57,7 @@ pub struct Signals {
     /// false on Unix.
     pub no_escapes: bool,
     /// `DEVLANES_JSON_OUT`, set by `devlanes mcp` for the commands it runs: the
-    /// file that also gets what `--output json` would print.
+    /// file or pipe that also gets what `--output json` would print.
     pub json_out: Option<PathBuf>,
     /// `DEVLANES_ENV_FROM_LANE=1`, set by `devlanes mcp`: send no shell
     /// environment, so the daemon uses the one the lane already has.
@@ -161,7 +161,7 @@ pub struct Runtime {
     /// ([`Runtime::detect_terminal`]).
     pub terminal: devlanes_term::Features,
     /// See [`Signals::json_out`].
-    pub json_out: Option<PathBuf>,
+    pub json_out: Option<crate::JsonOut>,
     /// See [`Signals::env_from_lane`].
     pub env_from_lane: bool,
     /// Environment values in `env` results are shown hidden, on stdout and in
@@ -219,7 +219,7 @@ impl Runtime {
             no_ui: signals.no_ui,
             verbose: cli.verbose.max(signals.env_verbose).min(2),
             terminal: devlanes_term::Features::default(),
-            json_out: signals.json_out,
+            json_out: signals.json_out.map(crate::JsonOut::new),
             env_from_lane: signals.env_from_lane,
             hide_env_values: cli.hides_env_values(),
         })

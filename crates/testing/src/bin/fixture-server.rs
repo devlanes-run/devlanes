@@ -22,8 +22,9 @@ struct Args {
     port: u16,
     #[arg(long)]
     ignore_sigterm: bool,
-    /// Windows only: leaves Ctrl-C and Ctrl-Break to the default handler, as
-    /// a Node server without a `SIGBREAK` listener does.
+    /// Windows only: a program with no console handler, such as Node without
+    /// a `SIGINT` listener; Ctrl-C and Ctrl-Break end it with
+    /// `STATUS_CONTROL_C_EXIT`.
     #[arg(long)]
     default_ctrl_handler: bool,
     #[arg(long)]

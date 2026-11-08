@@ -9,14 +9,14 @@ use std::{
     },
 };
 
-use devlanes_proto::{Context, LaneWarning, RpcError};
+use devlanes_proto::{Context, LaneWarning, Method, RpcError};
 use serde_json::{Value, json};
 
 use crate::{
     engine::Inner,
     integrations::{RouteEntry, RouteStatus},
     model::{LaneRt, LaneSt, ProjectRt},
-    query::ReadScope,
+    target::{Policy, ReadScope},
     units::UnitState,
 };
 
@@ -82,16 +82,17 @@ impl Inner {
     /// mirrored from connected boxes, and the first claim of a host keeps it.
     pub(crate) fn route_entries(&self) -> Vec<RouteEntry> {
         let local = self.local_routes().entries;
-        let assignment = self.remote.assignment();
-        self.with_remote_routes(local, &assignment)
+        let (version, assignment) = self.remote.assignment();
+        self.with_remote_routes(local, version, &assignment)
     }
 
     /// Drops the routes of local lanes a chosen box lane is in use instead of, and
-    /// appends the mirrored routes of the box lanes `assignment` mirrors whose
-    /// hostnames no local route claims, in connect order.
+    /// appends the mirrored routes of the box lanes `assignment` (assignment
+    /// `version`) mirrors whose hostnames no local route claims, in connect order.
     fn with_remote_routes(
         &self,
         mut routes: Vec<RouteEntry>,
+        version: u64,
         assignment: &crate::remote::Assignment,
     ) -> Vec<RouteEntry> {
         routes.retain(|route| !assignment.yielded.contains_key(&route.lane));
@@ -100,7 +101,7 @@ impl Inner {
             (host, route.fallback)
         };
         let mut seen: BTreeSet<(String, bool)> = routes.iter().map(key).collect();
-        for route in self.remote.routes(assignment) {
+        for route in self.remote.routes(version, assignment) {
             if seen.insert(key(&route)) {
                 routes.push(route);
             }
@@ -259,7 +260,7 @@ impl Inner {
                         .iter()
                         .find(|external| external.name == *unit)
                         .map(|external| external.address.ip()),
-                    upstream_box: None,
+                    pool_key: None,
                 });
             }
         }
@@ -341,8 +342,8 @@ impl Inner {
         }
         // Local routes or lane states may have changed what clashes. A change
         // marks the snapshot dirty again, so the next pass publishes it.
-        let (_, assignment) = self.reassign_with(&local.entries);
-        let routes = self.with_remote_routes(local.entries, &assignment);
+        let (version, assignment) = self.reassign_with(&local.entries);
+        let routes = self.with_remote_routes(local.entries, version, &assignment);
         self.sync_hosts(&routes);
         self.integ.routes.publish(routes);
     }
@@ -405,7 +406,7 @@ impl Inner {
         context: &Context,
     ) -> Result<Value, RpcError> {
         let scope = self
-            .read_scope(context, false, crate::query::Strictness::Lenient)
+            .read_scope(context, false, Policy::of(Method::Hosts))
             .await?;
         let references: Option<BTreeSet<String>> = match &scope {
             ReadScope::All(_) => None,

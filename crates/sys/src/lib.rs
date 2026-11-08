@@ -310,6 +310,12 @@ pub fn new_session(command: &mut std::process::Command) -> &mut std::process::Co
     }
 }
 
+/// Creates a FIFO at `path` that only this user can read and write.
+#[cfg(unix)]
+pub fn make_fifo(path: &std::path::Path) -> std::io::Result<()> {
+    os::make_fifo(path)
+}
+
 /// An open file to look for in other processes' descriptor tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenFile {

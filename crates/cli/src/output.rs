@@ -385,14 +385,36 @@ reporter!(PlainReporter, Plain);
 reporter!(AgentReporter, Agent);
 reporter!(JsonReporter, Json);
 
+/// Where [`Runtime::json_out`] points: a file, or the pipe `devlanes mcp`
+/// reads while the command runs. Opened on the first write and kept open by
+/// every reporter of the invocation, so a pipe has one writer from first line
+/// to exit. The path must be new, a fresh pipe or file: writing starts at
+/// offset 0 without truncating, so an existing file would keep a stale tail.
+/// Cheap to clone; clones share the handle.
+#[derive(Debug, Clone)]
+pub struct JsonOut {
+    path: std::path::PathBuf,
+    file: std::sync::Arc<std::sync::Mutex<Option<std::fs::File>>>,
+}
+
+impl JsonOut {
+    /// The copy at `path`, not opened yet.
+    pub fn new(path: std::path::PathBuf) -> Self {
+        Self {
+            path,
+            file: std::sync::Arc::default(),
+        }
+    }
+}
+
 /// Renders like `inner` and also appends what `--output json` would print to
-/// `path` ([`Runtime::json_out`]): one document per result, an NDJSON line per
-/// event, and `{"error": ...}` for an error. `devlanes mcp` reads the file into
-/// the tool result's structured content.
+/// [`Runtime::json_out`]: one document per result, an NDJSON line per event,
+/// and `{"error": ...}` for an error. `devlanes mcp` reads it into the tool
+/// result's structured content, and a start's `lane.phase` lines into progress.
 struct JsonTee {
     inner: Box<dyn Reporter>,
     json: JsonReporter,
-    path: std::path::PathBuf,
+    out: JsonOut,
 }
 
 impl JsonTee {
@@ -405,11 +427,23 @@ impl JsonTee {
             return;
         }
         let write = || {
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.path)
-            {
+            let mut file = self
+                .out
+                .file
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if file.is_none() {
+                // Write access, not append: a Windows named pipe takes writes
+                // only through `FILE_WRITE_DATA`, which append access leaves out.
+                // One handle writes from the start, so a file still grows in order.
+                *file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(&self.out.path)
+                    .ok();
+            }
+            if let Some(file) = file.as_mut() {
                 let _ = file.write_all(text.as_bytes());
             }
         };
@@ -466,14 +500,14 @@ impl Runtime {
     pub fn reporter(&self) -> Box<dyn Reporter> {
         let reporter = self.mode_reporter();
         match &self.json_out {
-            Some(path) => Box::new(JsonTee {
+            Some(out) => Box::new(JsonTee {
                 inner: reporter,
                 json: JsonReporter(Runtime {
                     mode: OutputMode::Json,
                     json_out: None,
                     ..self.clone()
                 }),
-                path: path.clone(),
+                out: out.clone(),
             }),
             None => reporter,
         }
@@ -520,10 +554,7 @@ impl Render for UnitSummary {
         };
         let mut line = format!("{label} {}:{}", clean(&self.lane), clean(&self.name));
         if let Some(code) = self.exit_code {
-            line.push_str(&crate::render::exit_field(
-                &self.state.to_lowercase(),
-                code.into(),
-            ));
+            line.push_str(&format!(" exit={code}"));
         }
         for url in &self.urls {
             line.push(' ');

@@ -465,7 +465,8 @@ async fn windows_device_project_names_get_encoded_folders() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// Cleaning every lane of a project forgets it: a restarted daemon does not bring
-/// it back, and the next command in its folder registers it again.
+/// it back, reads in its folder leave it forgotten, and `status` there registers it
+/// again.
 async fn a_project_whose_lanes_were_all_cleaned_is_forgotten() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -497,8 +498,36 @@ async fn a_project_whose_lanes_were_all_cleaned_is_forgotten() {
             status(&h, cx(&tmp.path)).await.is_empty(),
             "a restart does not bring it back"
         );
+        for (method, params) in [(Method::Hosts, json!({})), (Method::Metrics, json!({}))] {
+            h.call(method, params, cx(&main)).await.expect("a read");
+        }
+        let shown = h
+            .call(Method::ConfigShow, json!({}), cx(&main))
+            .await
+            .expect("the file alone");
+        assert_eq!(
+            (&shown["project"], &shown["lane"]),
+            (&json!("demo"), &Value::Null)
+        );
+        for unit in ["worker", "demo@0:worker"] {
+            let error = h
+                .call(Method::Logs, json!({"units": [unit]}), cx(&main))
+                .await
+                .expect_err(unit);
+            assert_eq!(error.code, "project_not_started", "{unit}");
+        }
+        let stopped = h
+            .call(Method::Stop, json!({"units": ["worker"]}), cx(&main))
+            .await
+            .expect("nothing to stop");
+        assert_eq!(stopped["items"], json!([]));
+        assert!(
+            status(&h, cx(&tmp.path)).await.is_empty(),
+            "reads in the folder do not bring it back"
+        );
+        assert!(!home.join("data/demo").exists());
         let lanes = status(&h, cx(&main)).await;
-        assert_eq!(lanes.len(), 1, "a command in the folder does");
+        assert_eq!(lanes.len(), 1, "status in the folder does");
         assert_eq!(lanes[0].reference, "demo@0");
         h.close().await;
     })
@@ -590,6 +619,9 @@ async fn worktrees_become_lanes_when_devlanes_runs_in_them() {
             .await
             .expect("a worktree without a lane can be named");
         assert_eq!(stopped["items"], json!([]));
+        h.call(Method::Status, json!({}), on_lane(&main, "demo@wt-feature"))
+            .await
+            .expect("status of a worktree without a lane");
         assert_eq!(
             status(&h, cx(&main)).await.len(),
             1,

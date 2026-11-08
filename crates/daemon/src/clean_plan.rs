@@ -4,11 +4,14 @@
 use std::{collections::BTreeSet, path::Path, sync::Arc};
 
 use devlanes_config::{InfraCommand, ProjectConfig, Run, TaskWhen};
-use devlanes_proto::{Context, RpcError};
+use devlanes_proto::{Context, Method, RpcError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::engine::{Inner, params};
+use crate::{
+    engine::{Inner, params},
+    target::Policy,
+};
 
 /// `lane.clean.plan` parameters, the same as `lane.clean`'s.
 #[derive(Debug, Default, Deserialize)]
@@ -28,14 +31,14 @@ impl Inner {
         context: &Context,
     ) -> Result<Value, RpcError> {
         let args: PlanParams = params(value)?;
-        let (project, lane) = match args.lane.or_else(|| context.lane.clone()) {
-            Some(reference) => self.resolve_lane_ref(&reference, context).await?,
-            // As `lane clean` resolves it: never the main lane by guess.
-            None => {
-                self.cwd_lane_with(context, crate::engine::MainLane::Refused, false)
-                    .await?
-            }
+        let context = &Context {
+            lane: args.lane.or_else(|| context.lane.clone()),
+            ..context.clone()
         };
+        // As `lane clean` resolves it, under the same policy.
+        let (project, lane) = self
+            .lane(context, Policy::of(Method::LaneCleanPlan))
+            .await?;
         let name = project.name();
         let (mut plan, record, index, runnable, config) = {
             let st = lane.st();

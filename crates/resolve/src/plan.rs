@@ -1212,16 +1212,11 @@ fn ready(
     })
 }
 
-/// Adds the `stop_signal_mapped` note when a Windows stop sends something other
-/// than the configured signal. Only a `run:` string runs through the shell, whose
-/// programs ignore Ctrl-C, so SIGINT is mapped for those alone.
+/// Adds the `stop_signal_mapped` note when the config names a signal that
+/// Windows always sends as Ctrl-Break.
 #[cfg(windows)]
 fn with_windows_stop_note(mut launch: Launch, signal: StopSignal) -> Launch {
-    let through_shell =
-        launch.program == "/bin/sh" && launch.args.first().is_some_and(|a| a == "-c");
-    launch
-        .notes
-        .extend(signal.windows_launch_note(through_shell));
+    launch.notes.extend(signal.windows_launch_note());
     launch
 }
 

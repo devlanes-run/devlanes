@@ -168,6 +168,7 @@ async fn ssh_box_mirrors_routes_and_syncs() {
                 None,
                 proxy_stop.clone(),
                 Default::default(),
+                Default::default(),
             ))),
         )
         .await;
