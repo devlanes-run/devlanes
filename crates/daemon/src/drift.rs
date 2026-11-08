@@ -478,29 +478,28 @@ impl Inner {
                     1,
                 ));
             }
-            // Names the lane does not have are a typo, not "nothing to reload".
-            if !selectors.is_empty() {
-                st.match_units(&reference, &selectors)?;
-            }
+            // The units the selectors name, as `stop` picks them (names, globs,
+            // `+tag`s, a service for its replicas); names the lane does not have
+            // are a typo, not "nothing to reload".
+            let picked: Option<BTreeSet<String>> = if selectors.is_empty() {
+                None
+            } else {
+                Some(
+                    st.match_units(&reference, &selectors)?
+                        .into_iter()
+                        .collect(),
+                )
+            };
             // A plan that failed has no per-unit answer; its error is the answer.
             if st.drift.is_empty()
                 && let Some(error) = &st.drift_error
             {
                 return Err(error.clone());
             }
-            let picked = |unit: &str| {
-                selectors.is_empty()
-                    || selectors.iter().any(|selector| {
-                        selector == unit
-                            || unit
-                                .rsplit_once('.')
-                                .is_some_and(|(base, _)| base == selector)
-                    })
-            };
             let drift: BTreeMap<String, UnitDrift> = st
                 .drift
                 .iter()
-                .filter(|(unit, _)| picked(unit))
+                .filter(|(unit, _)| picked.as_ref().is_none_or(|picked| picked.contains(*unit)))
                 .map(|(unit, drift)| (unit.clone(), drift.clone()))
                 .collect();
             (

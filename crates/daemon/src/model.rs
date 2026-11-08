@@ -617,18 +617,30 @@ impl LaneSt {
     }
 
     /// The units of this lane `selectors` match, with a service name standing for
-    /// its replicas; `not_found` names the first selector that matches none and
-    /// lists the candidates as `<reference>:<unit>`.
+    /// its replicas, including one the file no longer has that still ran (`api.3`
+    /// after `replicas: 2`); `not_found` names the first selector that matches none
+    /// and lists the candidates as `<reference>:<unit>`.
     pub(crate) fn match_units(
         &self,
         reference: &str,
         selectors: &[String],
     ) -> Result<Vec<String>, RpcError> {
-        let services = self.view.iter().flat_map(|view| {
+        let configured = self.view.iter().flat_map(|view| {
             view.services
                 .iter()
                 .map(|s| (s.name.as_str(), s.unit.as_str()))
         });
+        let leftover = self.units.keys().filter_map(|unit| {
+            let (base, _) = unit.rsplit_once('.')?;
+            let service = self
+                .view
+                .as_ref()?
+                .services
+                .iter()
+                .find(|s| s.name == base && s.unit != s.name)?;
+            Some((service.name.as_str(), unit.as_str()))
+        });
+        let services = configured.chain(leftover);
         let selectors = crate::engine::expand_replicas(selectors, services);
         crate::engine::match_units(&selectors, &self.unit_candidates(), reference)
     }
