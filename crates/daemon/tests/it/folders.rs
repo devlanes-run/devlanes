@@ -442,6 +442,7 @@ async fn a_unit_selector_that_names_a_lane_says_so() {
             (Method::Stop, "1", Some("demo@1")),
             (Method::Stop, "review", Some("demo@1")),
             (Method::Start, "review", Some("demo@1")),
+            (Method::Reload, "1", Some("demo@1")),
             (Method::Stop, "main", None),
             (Method::Stop, "r", None),
             (Method::Stop, "nope", None),

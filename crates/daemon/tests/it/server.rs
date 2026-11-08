@@ -336,7 +336,7 @@ async fn daemon_shutdown_reports_units_and_tasks() {
         );
         assert_eq!(
             data["tasks"],
-            json!([{"lane": "bye@0", "task": "bye", "exit_code": 0}]),
+            json!([{"lane": "bye@0", "task": "bye", "exit_code": 0, "state": "exited"}]),
             "{data}"
         );
         running.await.expect("join").expect("clean shutdown");

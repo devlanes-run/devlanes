@@ -6,8 +6,8 @@
 //! every request on `$PORT` with `<body>`), `http-keep <body>` (the same on
 //! kept-alive connections, and WebSockets that greet with `<body>` and echo),
 //! `sleep` (stays up), `exit <code>`, `killed <signal>` (ends by that signal
-//! on its own), `onstop <code>` (a later stop ends it with that exit code
-//! instead of the signal, as a shutdown handler would),
+//! on its own), `onstop <code>` (read at spawn: a stop ends it with that
+//! exit code instead of the signal, as a shutdown handler would),
 //! `fail` (prints `boom`, exits 1), `nap <ms>` (waits, then goes on),
 //! `hold` (waits until the test calls [`FakeRunner::release`]),
 //! `deaf` (stops reading input: writes block
@@ -198,6 +198,12 @@ impl UnitRunner for FakeRunner {
             .split(';')
             .any(|command| command.trim() == "stubborn");
         let renders = script.split(';').any(|command| command.trim() == "render");
+        let stop_code = script.split(';').find_map(|command| {
+            command
+                .trim()
+                .strip_prefix("onstop ")
+                .and_then(|code| code.trim().parse().ok())
+        });
         let real = if stubborn {
             self.stubborn_identity
                 .lock()
@@ -213,7 +219,7 @@ impl UnitRunner for FakeRunner {
                 start_time: 1,
             }),
             stubborn: AtomicBool::new(stubborn),
-            stop_code: Mutex::new(None),
+            stop_code,
             renders,
             sender: Mutex::new(Some(sender)),
             first: Mutex::new(Some(first)),
@@ -238,7 +244,7 @@ pub struct FakeUnit {
     /// Set by `stubborn`: the next stop request is ignored.
     stubborn: AtomicBool,
     /// Set by `onstop`: the exit code a stop ends the unit with.
-    stop_code: Mutex<Option<i32>>,
+    stop_code: Option<i32>,
     /// Set by `render`.
     renders: bool,
     sender: Mutex<Option<broadcast::Sender<OutputChunk>>>,
@@ -317,7 +323,7 @@ impl FakeUnit {
                 }
                 "deaf" => self.deaf.store(true, Ordering::SeqCst),
                 // Read at spawn.
-                "render" => {}
+                "render" | "onstop" => {}
                 "printenv" => self.print(env.get(rest).map_or("", String::as_str)),
                 "daemonize" | "escape" => {
                     let process = LeftProcess {
@@ -346,11 +352,6 @@ impl FakeUnit {
                         signal: rest.trim().parse().ok(),
                     });
                     return;
-                }
-                "onstop" => {
-                    if let Ok(mut code) = self.stop_code.lock() {
-                        *code = rest.trim().parse().ok();
-                    }
                 }
                 "fail" => {
                     self.print("boom");
@@ -540,10 +541,12 @@ impl Unit for FakeUnit {
             return Ok(());
         }
         self.stop.send_replace(true);
-        let code = self.stop_code.lock().ok().and_then(|code| *code);
         self.end(ExitOutcome {
-            code,
-            signal: code.is_none().then(|| signal_number(policy.signal)),
+            code: self.stop_code,
+            signal: self
+                .stop_code
+                .is_none()
+                .then(|| signal_number(policy.signal)),
         });
         Ok(())
     }

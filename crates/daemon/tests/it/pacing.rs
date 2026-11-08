@@ -198,6 +198,54 @@ async fn window_of_three_across_two_lanes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A start whose deadline passes while a service still waits for a slot runs
+/// no `after: services` task and sends no `services:ready`, though the
+/// service that did spawn is ready.
+async fn a_timed_out_start_skips_after_services_tasks() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = r#"project: paced
+tasks:
+  seed: { run: "echo seed", when: lane.create, after: services }
+services:
+  a: { run: "echo a; sleep", ready: started }
+  b: { run: "echo b; sleep", ready: started }
+"#;
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                gate: Some(gate(1, Duration::from_secs(30))),
+                metrics: busy_metrics(),
+                ..Setup::default()
+            },
+        )
+        .await;
+        let mut bus = h.engine.subscribe();
+        // Past `a`'s half second, so `a` is ready while `b` stays queued.
+        let started: StartResult = serde_json::from_value(
+            h.call(Method::Start, json!({"timeout_ms": 1500}), cx(&main))
+                .await
+                .expect("start"),
+        )
+        .expect("start result");
+        assert!(started.timed_out, "b is still waiting: {started:?}");
+        assert_eq!(started.skipped_tasks, ["seed"]);
+        assert!(!h.runner.journal.entries().iter().any(|e| e == "echo seed"));
+        let mut services = Vec::new();
+        while let Ok(event) = bus.try_recv() {
+            if event.event == devlanes_proto::events::PHASE && event.data["phase"] == "services" {
+                services.push(event.data["state"].as_str().unwrap_or("").to_owned());
+            }
+        }
+        assert_eq!(services, ["started", "done"]);
+        h.close().await;
+    })
+    .await
+    .expect("test timed out");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// A unit waiting for a slot is `queued` in status and why, `stop` withdraws
 /// it, `all_at_once` bypasses a full gate, and a restart queues like a start.
 async fn queued_units_stop_bypass_and_restart() {

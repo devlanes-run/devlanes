@@ -164,6 +164,9 @@ pub struct Runtime {
     pub json_out: Option<crate::JsonOut>,
     /// See [`Signals::env_from_lane`].
     pub env_from_lane: bool,
+    /// Environment values in `env` results are shown hidden, on stdout and in
+    /// the [`Runtime::json_out`] copy ([`Cli::hides_env_values`]).
+    pub hide_env_values: bool,
 }
 
 impl Runtime {
@@ -218,6 +221,7 @@ impl Runtime {
             terminal: devlanes_term::Features::default(),
             json_out: signals.json_out.map(crate::JsonOut::new),
             env_from_lane: signals.env_from_lane,
+            hide_env_values: cli.hides_env_values(),
         })
     }
 

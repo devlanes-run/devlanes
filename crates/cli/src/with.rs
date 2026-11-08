@@ -156,15 +156,12 @@ pub async fn run_with<D: WithDriver + ?Sized>(
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                 };
-                if matches!(field("state"), "done" | "exited" | "failed") {
+                if matches!(field("state"), "done" | "exited" | "failed" | "stopped") {
                     tasks.push((field("lane").to_owned(), field("task").to_owned()));
                 }
             }
             if let Ok(mut rendered) = reporter.event(Method::Start, &event) {
-                // `with --json` streams every event as it came.
-                if runtime.mode != crate::OutputMode::Json {
-                    phases.rewrite(&event, &mut rendered.stdout);
-                }
+                phases.rewrite(&event, &mut rendered.stdout);
                 emit(rendered);
             }
         })

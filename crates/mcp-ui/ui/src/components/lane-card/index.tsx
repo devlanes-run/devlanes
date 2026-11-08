@@ -21,6 +21,7 @@ import { reasonText, unitRef } from '../../utils/format';
 import {
   actorsOf,
   domainService,
+  isUp,
   laneState,
   laneWords,
   progressOf,
@@ -190,8 +191,7 @@ export function LaneCard() {
           <>
             {services.length > 0 && (
               <span class="caption num">
-                {services.filter((unit) => unit.state === 'ready').length} of {services.length}{' '}
-                running
+                {services.filter(isUp).length} of {services.length} running
               </span>
             )}
             {lanePill(lane, now)}

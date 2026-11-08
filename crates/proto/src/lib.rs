@@ -775,8 +775,10 @@ pub struct LogLine {
 }
 
 /// Public service state is separate from an OS-specific process handle.
-/// States: `idle`, `queued`, `starting`, `ready`, `failed`, `stopping`, `stopped`, `exited`.
-/// `queued` units wait for a start slot; their `reason` has code `queued` with
+/// States: `idle`, `queued`, `starting`, `ready`, `running`, `failed`, `stopping`,
+/// `stopped`, `exited`. `running` is an exec command, task or infra command whose
+/// process runs; it has no ready check. `exited` is one of those that ended on its
+/// own with 0. `queued` units wait for a start slot; their `reason` has code `queued` with
 /// `{position, queued, in_flight, window, hold, memory_need_bytes,
 /// available_memory_bytes?, cpu_percent?, memory_pressure?}`; `hold` is
 /// `window_full`, `memory_critical` or `memory` (waiting for memory to fit).
@@ -1754,14 +1756,20 @@ pub mod events {
     pub const LANE_REMOVED: &str = "lane.removed";
     /// `{unit: UnitSummary}` on every unit state transition.
     pub const UNIT_CHANGED: &str = "unit.changed";
-    /// `{lane, phase, state: started|progress|done|failed|skipped, reason?, start_id?,
-    /// units?, containers?, step?}` for start pipeline progress. `start_id` tells
-    /// concurrent starts of one lane apart; `services:started` lists in `units` the
-    /// units this start spawns. `progress` comes while a phase runs, each time its
-    /// detail changes: [`super::PhaseContainer`]s during infra, the running
-    /// [`super::PhaseStep`] during setup and tasks.
+    /// `{lane, phase, state: started|progress|ready|done|failed|skipped, reason?,
+    /// start_id?, units?, containers?, step?}` for start pipeline progress.
+    /// `start_id` tells concurrent starts of one lane apart; `services:started`
+    /// lists in `units` the units this start spawns. `progress` comes while a
+    /// phase runs, each time its detail changes: [`super::PhaseContainer`]s during
+    /// infra, the running [`super::PhaseStep`] during setup and tasks.
+    /// `services:ready` comes once every unit the start brought up is ready, after
+    /// a `lane.changed` showing them ready and before `services:done`; a start that
+    /// timed out, had a failed unit or brought nothing up sends none, and
+    /// `after: services` tasks run only after it.
     pub const PHASE: &str = "lane.phase";
-    /// `{lane, task, state, exit_code?}` for task runs.
+    /// `{lane, task, state, exit_code?, reason?, finished_at_ms?}` for task runs.
+    /// `state` is `started`, `skipped`, or how the run ended in unit state words:
+    /// `exited`, `failed` (with the unit's `reason`) or `stopped`.
     pub const TASK: &str = "task";
     /// `{unit, line: LogLine}` for followed logs.
     pub const LOG: &str = "log";

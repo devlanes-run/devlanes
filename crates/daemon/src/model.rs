@@ -201,8 +201,6 @@ pub(crate) struct UnitRec {
     pub syncs: Vec<crate::local_sync::LocalSync>,
     /// `services.<name>.name` of a service run.
     pub display_name: Option<String>,
-    /// The readiness check word of a service run (`started`, `tcp`, ...).
-    pub ready_check: Option<&'static str>,
     /// `UnitSummary.role`.
     pub role: &'static str,
     /// `services.<name>.keep_awake`: the lane never goes idle while this runs.
@@ -602,6 +600,68 @@ impl LaneSt {
     /// base worktree's identity and this lane's name.
     pub(crate) fn alias(&self) -> Option<(&str, &str)> {
         self.identity.rsplit_once(ALIAS_MARK)
+    }
+
+    /// The units a selector can name in this lane, with their tags: units that
+    /// ran, the task units of starts in flight (one may run before the lane
+    /// records it), configured services and orphans. `stop`, `restart`, `reload`
+    /// and the lane check of a lone selector all decide by this list.
+    pub(crate) fn unit_candidates(&self) -> Vec<(String, Vec<String>)> {
+        let mut candidates: Vec<(String, Vec<String>)> = self
+            .units
+            .iter()
+            .map(|(name, rec)| (name.clone(), rec.tags.clone()))
+            .collect();
+        let tasks: BTreeSet<String> = self
+            .starts
+            .iter()
+            .flat_map(|start| start.task_units())
+            .collect();
+        let services = self
+            .view
+            .iter()
+            .flat_map(|view| view.services.iter())
+            .map(|service| (service.unit.clone(), service.tags.clone()));
+        let others = tasks
+            .into_iter()
+            .map(|name| (name, Vec::new()))
+            .chain(services)
+            .chain(self.orphans.keys().map(|name| (name.clone(), Vec::new())));
+        for (name, tags) in others {
+            if !candidates.iter().any(|(known, _)| *known == name) {
+                candidates.push((name, tags));
+            }
+        }
+        candidates
+    }
+
+    /// The units of this lane `selectors` match, with a service name standing for
+    /// its replicas, including one the file no longer has that still ran (`api.3`
+    /// after `replicas: 2`); `not_found` names the first selector that matches none
+    /// and lists the candidates as `<reference>:<unit>`.
+    pub(crate) fn match_units(
+        &self,
+        reference: &str,
+        selectors: &[String],
+    ) -> Result<Vec<String>, RpcError> {
+        let configured = self.view.iter().flat_map(|view| {
+            view.services
+                .iter()
+                .map(|s| (s.name.as_str(), s.unit.as_str()))
+        });
+        let leftover = self.units.keys().filter_map(|unit| {
+            let (base, _) = unit.rsplit_once('.')?;
+            let service = self
+                .view
+                .as_ref()?
+                .services
+                .iter()
+                .find(|s| s.name == base && s.unit != s.name)?;
+            Some((service.name.as_str(), unit.as_str()))
+        });
+        let services = configured.chain(leftover);
+        let selectors = crate::engine::expand_replicas(selectors, services);
+        crate::engine::match_units(&selectors, &self.unit_candidates(), reference)
     }
 
     /// Whether status, lane lists and events show this lane: it has a lane
@@ -1315,15 +1375,6 @@ pub(crate) fn apply_order(lane: &LaneSt, summary: &mut UnitSummary) {
 pub(crate) fn unit_summary(lane: &str, name: &str, unit: &UnitRec) -> UnitSummary {
     let state = unit.host.state();
     let exit = unit.host.exit_outcome();
-    let word = match (&state, unit.kind) {
-        // One-shot units that finished on their own read as `exited`.
-        (UnitState::Exited(outcome), Kind::Task | Kind::Exec)
-            if !unit.host.stop_was_requested() && outcome.code == Some(0) =>
-        {
-            "exited"
-        }
-        _ => state.word(),
-    };
     let reason = match &state {
         UnitState::Failed(reason) => reason.clone(),
         _ => None,
@@ -1333,7 +1384,7 @@ pub(crate) fn unit_summary(lane: &str, name: &str, unit: &UnitRec) -> UnitSummar
     UnitSummary {
         name: name.to_owned(),
         lane: lane.to_owned(),
-        state: word.into(),
+        state: state.word().into(),
         pid: unit.host.identity().map(|id| id.pid),
         exit_code: exit.and_then(|outcome| outcome.code),
         ports: unit.ports.clone(),
@@ -1353,7 +1404,7 @@ pub(crate) fn unit_summary(lane: &str, name: &str, unit: &UnitRec) -> UnitSummar
         left_running: leftovers.left_running,
         escaped: leftovers.escaped,
         display_name: unit.display_name.clone(),
-        ready_check: unit.ready_check.map(str::to_owned),
+        ready_check: info.goal.check().map(str::to_owned),
         pty: info.pty,
         role: Some(unit.role.to_owned()),
         order: None,

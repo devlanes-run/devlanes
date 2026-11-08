@@ -88,6 +88,17 @@ pub trait Reporter: Send + Sync {
 
     /// JSON is serialized unchanged; text modes shape data on the client only.
     fn result(&self, report: &Report<'_>) -> Result<Rendered, serde_json::Error> {
+        let hidden;
+        let report = if report.method == Method::Env && self.runtime().hide_env_values {
+            hidden = render::hide_env_values(report.data);
+            &Report {
+                method: report.method,
+                data: &hidden,
+                more: report.more.clone(),
+            }
+        } else {
+            report
+        };
         let exit_code = if report.method == Method::Doctor {
             u8::from(crate::render::doctor_failed(report.data, self.runtime()))
         } else {
@@ -778,9 +789,20 @@ fn continuation(report: &Report<'_>) -> String {
 /// - wait: 0 only when ready;
 /// - stop, status, lane ls, url ls: 1 only for a failed unit, lane or route, never
 ///   for a leftover nonzero exit code of a unit that stopped normally;
-/// - run: the task's exit code.
+/// - run: 0 when the task `exited` (or was only handed over, detached or
+///   interactive), else its exit code or 1, so a stopped or timed-out task fails.
 pub(crate) fn result_exit_code(method: Method, data: &Value) -> u8 {
     match method {
+        Method::Run => match data.get("state").and_then(Value::as_str) {
+            None | Some("exited") => generic_exit_code(data),
+            Some(_) => data
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .filter(|code| *code != 0)
+                .map_or(exit::FAILED, |code| {
+                    u8::try_from(code).unwrap_or(exit::FAILED)
+                }),
+        },
         Method::Start | Method::Restart | Method::Reload => start_exit_code(data),
         Method::LaneNew => data.get("start").map_or(exit::OK, start_exit_code),
         Method::Resume => data

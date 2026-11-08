@@ -69,6 +69,71 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
 }
 
 #[tokio::test]
+/// Migration `task_run_state` names how earlier task runs ended from their exit
+/// code: 0 `exited`, another code `failed`, none `stopped`; a run still going
+/// has none.
+async fn migration_names_how_earlier_task_runs_ended() {
+    use devlanes_core::LaneId;
+    use diesel::{connection::SimpleConnection, migration::MigrationSource, prelude::*};
+    use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+    const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+    let dir = tempfile::tempdir().expect("directory");
+    let path = dir.path().join("tasks.db");
+    let mut c = SqliteConnection::establish(path.to_str().expect("path")).expect("connection");
+    c.applied_migrations().expect("ledger");
+    let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
+        .expect("migrations");
+    // Every migration before this one, by name, so a migration added ahead of
+    // it does not leave the rows below on the wrong schema.
+    let earlier: Vec<_> = migrations
+        .into_iter()
+        .take_while(|migration| !migration.name().to_string().ends_with("_task_run_state"))
+        .collect();
+    c.run_migrations(&earlier).expect("earlier migrations");
+    let runs = [
+        ("ok", Some(5_i64), Some(0)),
+        ("bad", Some(5), Some(3)),
+        ("killed", Some(5), None),
+        ("going", None, None),
+    ];
+    // The rows need no lane: only the migration reads them.
+    c.batch_execute("PRAGMA foreign_keys = OFF")
+        .expect("connection settings");
+    for (task, ended_at, exit_code) in runs {
+        diesel::insert_into(schema::task_runs::table)
+            .values((
+                schema::task_runs::lane_id.eq(1_i64),
+                schema::task_runs::task.eq(task),
+                schema::task_runs::trigger.eq("manual"),
+                schema::task_runs::started_at.eq(1_i64),
+                schema::task_runs::ended_at.eq(ended_at),
+                schema::task_runs::exit_code.eq(exit_code),
+                schema::task_runs::actor_kind.eq("human"),
+            ))
+            .execute(&mut c)
+            .expect("earlier run");
+    }
+    let store = Store::open(&path).await.expect("upgrade");
+    let states: Vec<(String, Option<String>)> = store
+        .last_task_runs(LaneId(1))
+        .await
+        .expect("runs")
+        .into_iter()
+        .map(|run| (run.task, run.state))
+        .collect();
+    let word = |task: &str, state: Option<&str>| (task.to_owned(), state.map(str::to_owned));
+    assert_eq!(
+        states,
+        [
+            word("bad", Some("failed")),
+            word("going", None),
+            word("killed", Some("stopped")),
+            word("ok", Some("exited")),
+        ]
+    );
+}
+
+#[tokio::test]
 /// A box keeps a client's pairings side by side, the newest `keep` of them,
 /// and drops the oldest beyond that; a connection updates the name and last
 /// seen time of the pairing it used, and deleting a client removes all of
@@ -558,27 +623,31 @@ async fn setup_and_task_history() {
     assert_eq!(completion(&store).await, None);
     let failed = seed(&store).await;
     store
-        .finish_task_run(failed.id, Some(1), Some("seed-1".into()))
+        .finish_task_run(failed.id, Some(1), "failed".into(), Some("seed-1".into()))
         .await
         .expect("finish");
     assert_eq!(completion(&store).await, None, "a failure leaves no marker");
     let ok = seed(&store).await;
     store
-        .finish_task_run(ok.id, Some(0), Some("seed-1".into()))
+        .finish_task_run(ok.id, Some(0), "exited".into(), Some("seed-1".into()))
         .await
         .expect("finish");
     store
-        .finish_task_run(ok.id, Some(9), Some("other".into()))
+        .finish_task_run(ok.id, Some(9), "failed".into(), Some("other".into()))
         .await
         .expect("idempotent");
     let first = completion(&store).await.expect("marker");
     assert_eq!(first.spec_hash.as_deref(), Some("seed-1"));
     let runs = store.task_runs(lane.id, 10).await.expect("runs");
-    assert_eq!(runs[0].exit_code, Some(0));
+    assert_eq!(
+        (runs[0].exit_code, runs[0].state.as_deref()),
+        (Some(0), Some("exited")),
+        "a second finish changes nothing"
+    );
     // An edited task that runs again replaces the marker's hash.
     let edited = seed(&store).await;
     store
-        .finish_task_run(edited.id, Some(0), Some("seed-2".into()))
+        .finish_task_run(edited.id, Some(0), "exited".into(), Some("seed-2".into()))
         .await
         .expect("finish edited");
     let second = completion(&store).await.expect("marker");
@@ -586,7 +655,7 @@ async fn setup_and_task_history() {
     assert!(second.succeeded_at >= first.succeeded_at);
     let unhashed = seed(&store).await;
     store
-        .finish_task_run(unhashed.id, Some(0), None)
+        .finish_task_run(unhashed.id, Some(0), "exited".into(), None)
         .await
         .expect("finish unhashed");
     assert!(matches!(
@@ -596,6 +665,17 @@ async fn setup_and_task_history() {
             ..
         })
     ));
+    // A run stopped by request whose process exited 0 on the signal did not succeed.
+    let stopped = seed(&store).await;
+    store
+        .finish_task_run(stopped.id, Some(0), "stopped".into(), Some("seed-3".into()))
+        .await
+        .expect("finish stopped");
+    assert_eq!(
+        completion(&store).await.and_then(|marker| marker.spec_hash),
+        None,
+        "the marker keeps the last success"
+    );
 
     // A clean refused for an unfinished task changes nothing.
     let pending = store
@@ -617,11 +697,23 @@ async fn setup_and_task_history() {
     );
     assert!(completion(&store).await.is_some());
     // A restarted daemon cannot finish a task it did not start.
-    assert_eq!(store.abandon_task_runs().await.expect("abandon"), 1);
+    assert_eq!(
+        store
+            .abandon_task_runs("stopped".into())
+            .await
+            .expect("abandon"),
+        1
+    );
     let abandoned = store.task_runs(lane.id, 1).await.expect("runs");
     assert_eq!(abandoned[0].id, pending.id);
     assert!(abandoned[0].ended_at.is_some() && abandoned[0].exit_code.is_none());
-    assert_eq!(store.abandon_task_runs().await.expect("abandon"), 0);
+    assert_eq!(
+        store
+            .abandon_task_runs("stopped".into())
+            .await
+            .expect("abandon"),
+        0
+    );
 
     store.clean_lane(crate::clean(&lane)).await.expect("clean");
     assert!(

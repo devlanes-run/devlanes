@@ -17,6 +17,7 @@ use std::{
     time::Instant,
 };
 
+use devlanes_core::redact::{REDACTED, secret_field};
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 use tracing::{Level, Metadata, Subscriber, field::Field, span};
@@ -28,9 +29,6 @@ use tracing_subscriber::{
 
 /// Records a slow client may leave queued before newer ones are dropped.
 const QUEUE: usize = 4096;
-
-/// Field names whose values are never forwarded, whatever the call site logged.
-const REDACTED: [&str; 4] = ["secret", "password", "token", "value"];
 
 /// One request's subscription.
 struct Tap {
@@ -327,12 +325,12 @@ struct Fields {
 }
 
 impl Fields {
-    /// Stores `value` under the field's name unless the name asks for redaction.
+    /// Stores `value` under the field's name unless the name asks for
+    /// redaction, whatever the call site logged.
     fn put(&mut self, field: &Field, value: Value) {
         let name = field.name();
-        let lower = name.to_ascii_lowercase();
-        let value = if REDACTED.iter().any(|word| lower.contains(word)) {
-            json!("[redacted]")
+        let value = if secret_field(name) {
+            json!(REDACTED)
         } else {
             value
         };

@@ -34,7 +34,7 @@ use crate::{
     registry::{PrimaryWorktree, internal, store_error},
     stream::LaneEvents,
     target::{Found, LaneOrFile, Policy},
-    units::UnitHost,
+    units::{RunGoal, UnitHost},
 };
 
 /// `resume` parameters.
@@ -150,15 +150,18 @@ async fn await_spawn(
 /// with `ignore_errors` still answers with its real exit code: it was run on
 /// its own, to see whether it works.
 fn run_result(task: &str, lane: &str, unit: Option<&str>, outcome: &TaskOutcome) -> Value {
-    let code = outcome.raw_code;
+    let code = outcome.code;
     let mut result = json!({
         "task": task,
         "lane": lane,
         "unit": unit,
         "interactive": false,
         "exit_code": code,
-        "state": if code == Some(0) { "exited" } else { "failed" },
+        "state": outcome.state.word(),
     });
+    if let crate::units::UnitState::Failed(Some(reason)) = &outcome.state {
+        result["reason"] = json!(reason);
+    }
     // Daemons the task started (`pg_ctl start`) outlive it on purpose; say so.
     if !outcome.leftovers.is_empty() {
         result["leftovers"] = json!(outcome.leftovers);
@@ -170,50 +173,6 @@ impl Inner {
     /// Wait limit of a request.
     pub(crate) fn timeout(&self, timeout_ms: Option<u64>) -> Duration {
         timeout_ms.map_or(self.opts.start_timeout, Duration::from_millis)
-    }
-
-    /// A lone unit selector that matched nothing but is a lane number or an
-    /// extra lane's name (`stop 1`, `stop review`): the error names that lane
-    /// under `names_lane`, so the client can suggest `--lane` instead of acting
-    /// on a guess. Branch, folder and path matches are left out, since those
-    /// are often a mistyped unit.
-    async fn note_lane_selector(
-        self: &Arc<Self>,
-        mut error: RpcError,
-        units: &[String],
-        context: &Context,
-    ) -> RpcError {
-        let [unit] = units else { return error };
-        let plain = !unit.is_empty()
-            && !unit.starts_with('+')
-            && !unit.contains([':', '@', '*', '?', '[', '{']);
-        if error.code != "not_found"
-            || context.lane.is_some()
-            || !plain
-            || error.data.get("reference").and_then(Value::as_str) != Some(unit.as_str())
-        {
-            return error;
-        }
-        // Looked up without registering, relisting or claiming anything.
-        let Ok(parsed) = unit.parse::<devlanes_core::refs::LaneRef>() else {
-            return error;
-        };
-        let Ok(crate::target::RefProjects::In(scope)) =
-            self.reference_projects(&parsed, context, None).await
-        else {
-            return error;
-        };
-        let Ok((project, lane)) = self.match_reference(&parsed, &scope, context) else {
-            return error;
-        };
-        let st = lane.st();
-        let names_lane = st.record.is_some()
-            && (unit.bytes().all(|b| b.is_ascii_digit())
-                || st.alias().is_some_and(|(_, name)| name == unit));
-        if names_lane && let Some(data) = error.data.as_object_mut() {
-            data.insert("names_lane".into(), json!(st.reference(&project.name())));
-        }
-        error
     }
 
     /// `start`: the lane pipeline, then waits for ready/failed (StartResult).
@@ -255,14 +214,7 @@ impl Inner {
                 restoring: false,
             },
         );
-        let mut result = match self.with_lane_events(session, stream, start).await {
-            Ok(result) => result,
-            Err(error) => {
-                return Err(self
-                    .note_lane_selector(error, &selection.units, context)
-                    .await);
-            }
-        };
+        let mut result = self.with_lane_events(session, stream, start).await?;
         // Only this lane came back; the shell's env may not suit the others, so this
         // project's other lanes are named for `lane resume` instead of started too.
         // `others` counts the other projects' lanes, which `lane resume` also starts;
@@ -334,17 +286,9 @@ impl Inner {
             Self::refuse_external(&project, &lane, &selectors)?;
             let selectors = (!selectors.is_empty()).then_some(selectors);
             let mine = selection.mine.then_some(&context.actor);
-            stopped = match self
+            stopped = self
                 .stop_lane(&project, &lane, selectors, mine, selection.transient)
-                .await
-            {
-                Ok(stopped) => stopped,
-                Err(error) => {
-                    return Err(self
-                        .note_lane_selector(error, &selection.units, context)
-                        .await);
-                }
-            };
+                .await?;
             // A stopped unit has no drift left to report.
             self.prune_drift(&lane);
         }
@@ -426,14 +370,7 @@ impl Inner {
             self.with_lane_events(session, stream, restart).await?
         } else {
             let restart = self.restart_units(&project, &lane, &selectors, options);
-            match self.with_lane_events(session, stream, restart).await {
-                Ok(result) => result,
-                Err(error) => {
-                    return Err(self
-                        .note_lane_selector(error, &selection.units, context)
-                        .await);
-                }
-            }
+            self.with_lane_events(session, stream, restart).await?
         };
         serde_json::to_value(result).map_err(|e| internal("encode", e))
     }
@@ -1076,8 +1013,7 @@ impl Inner {
             color: None,
             sync: Vec::new(),
             display_name: None,
-            // An exec unit has no readiness probe: alive is ready.
-            ready_check: Some("started"),
+            goal: RunGoal::Exit,
             role: "exec",
             keep_awake: false,
             fingerprint: None,
@@ -1086,9 +1022,8 @@ impl Inner {
         // Held until the unit is recorded, so a clean or reset that begins meanwhile
         // waits and then stops it, or refuses it once the lane is released.
         let (adhoc, _) = lane.enter_adhoc(&self.shutdown).await;
-        let (host, _) = self.spawn_unit(&project, &lane, request).await?;
+        self.spawn_unit(&project, &lane, request).await?;
         drop(adhoc);
-        host.set_state(crate::units::UnitState::Ready);
         let mut st = lane.st();
         let summary = match st.units.get_mut(&args.name) {
             Some(rec) => {
@@ -1357,7 +1292,10 @@ impl Inner {
         }
         // A clean, reset or shutdown that fired the token is no timeout, and a task
         // that succeeded just as the limit fired still succeeded.
-        let succeeded = matches!(&outcome, Ok(outcome) if outcome.code == Some(0));
+        let succeeded = matches!(
+            &outcome,
+            Ok(outcome) if matches!(outcome.state, crate::units::UnitState::Exited(_))
+        );
         let expired = expired.load(std::sync::atomic::Ordering::SeqCst);
         if expired && !self.shutdown.is_cancelled() && !succeeded {
             return Err(RpcError::new("timeout", json!({"task": task}), 124));
@@ -1434,13 +1372,12 @@ impl Inner {
                 sources.insert(file.to_owned());
             }
             // Never-run tasks get `null`, so clients can say so.
+            // A finished run keeps the word its end got; one without is still going.
             let last_run = runs.iter().find(|run| &run.task == name).map(|run| {
-                let state = match (run.ended_at, run.exit_code) {
-                    (None, _) => "running",
-                    (Some(_), Some(0)) => "done",
-                    (Some(_), Some(_)) => "failed",
-                    (Some(_), None) => "interrupted",
-                };
+                let state = run
+                    .state
+                    .as_deref()
+                    .unwrap_or(crate::units::UnitState::Running.word());
                 json!({
                     "state": state,
                     "trigger": run.trigger,

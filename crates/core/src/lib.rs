@@ -7,6 +7,7 @@ pub mod env;
 pub mod gate;
 pub mod paths;
 pub mod ports;
+pub mod redact;
 pub mod refs;
 pub mod runtime;
 mod stop;

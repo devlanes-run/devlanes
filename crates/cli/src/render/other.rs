@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use devlanes_core::redact::Redactor;
 use devlanes_proto::{Event, LogLine, Method, RpcError, events};
 use serde_json::{Value, json};
 
@@ -166,15 +167,25 @@ pub(super) fn run(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .unwrap_or_else(|| task.clone());
     let target = format!("{lane}:{unit}");
     if data.get("exit_code").is_some() || data.get("state").is_some() {
-        let failed = text(data, "state") == "failed";
-        let mut line = format!(
-            "{} {lane}:{task}",
-            cx.state(if failed { "failed" } else { "exited" })
-        );
+        let state = match text(data, "state") {
+            // Daemons before `state` answered with the exit code alone.
+            state if state.is_empty() => "exited".to_owned(),
+            state => clean(&state),
+        };
+        let failed = state == "failed";
+        let mut line = format!("{} {lane}:{task}", cx.state(&state));
         if let Some(code) = int(data, "exit_code") {
             line.push_str(&format!(" exit={code}"));
         }
         let mut lines = vec![line];
+        // `exit=N` already says why a run with a code failed.
+        if let Some(reason) = data
+            .get("reason")
+            .filter(|_| int(data, "exit_code").is_none())
+            .and_then(|reason| serde_json::from_value::<RpcError>(reason.clone()).ok())
+        {
+            lines.push(format!("  {}", words::error_message(&reason).0));
+        }
         for leftovers in list(data, "leftovers") {
             // Steps run as their own units; name them, but not the task itself.
             let prefix = match text(leftovers, "unit") {
@@ -319,6 +330,38 @@ pub(super) fn tasks(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 /// Escapes line breaks so one variable stays on one line.
 fn one_line(value: &str) -> String {
     clean(&value.replace('\r', "\\r").replace('\n', "\\n"))
+}
+
+/// `data`, an `env` result in either shape (`env` map or `--explain` items),
+/// with each value as [`Redactor::screen`] of the same variables shows it.
+pub(crate) fn hide_env_values(data: &Value) -> Value {
+    let mut data = data.clone();
+    if let Some(env) = data.get_mut("env").and_then(Value::as_object_mut) {
+        let redactor = Redactor::screen(
+            env.iter()
+                .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned()))),
+        );
+        for (key, value) in env.iter_mut() {
+            if let Some(text) = value.as_str() {
+                *value = redactor.value(key, text).into();
+            }
+        }
+    }
+    if let Some(items) = data.get_mut("items").and_then(Value::as_array_mut) {
+        let pair = |item: &Value| {
+            Some((
+                item.get("key")?.as_str()?.to_owned(),
+                item.get("value")?.as_str()?.to_owned(),
+            ))
+        };
+        let redactor = Redactor::screen(items.iter().filter_map(pair));
+        for item in items.iter_mut() {
+            if let Some((key, value)) = pair(item) {
+                item["value"] = redactor.value(&key, &value).into();
+            }
+        }
+    }
+    data
 }
 
 /// `env`: `KEY=VALUE` lines, or with `--explain` a `KEY VALUE LAYER` table.
@@ -632,6 +675,8 @@ pub(super) fn phase_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
         // What the phase waits on now; replaces the line above the same way.
         "progress" if cx.human() => devlanes_term::phase_detail(data)
             .map(|detail| cx.paint(&format!("… {phase}: {}", clean(&detail)), "2")),
+        // Sent once every unit the start brought up is ready.
+        "ready" => Some(format!("{} {phase} ready", cx.mark(Outcome::Ok))),
         "done" if matches!(phase.as_str(), "tasks" | "services" | "after-services") => None,
         "done" => Some(format!("{} {phase}", cx.mark(Outcome::Ok))),
         "failed" => Some(format!(
@@ -654,26 +699,12 @@ pub(super) fn phase_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
     }
 }
 
-/// `✓ services ready` on the first step of the `after-services` phase. The
-/// daemon sends that step only once every unit of the start is ready (it skips
-/// the phase on a timeout or a failed unit), and the result's services line
-/// comes after the stream, so without this the phase's task lines read as if
-/// they ran before the services were up.
-pub(super) fn services_ready_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
-    let step = data
-        .get("step")
-        .and_then(|step| serde_json::from_value::<devlanes_proto::PhaseStep>(step.clone()).ok())?;
-    (text(data, "phase") == "after-services"
-        && text(data, "state") == "progress"
-        && step.index == 1)
-        .then(|| format!("{} services ready", cx.mark(Outcome::Ok)))
-}
-
 /// A finished task during a start: `✓ migrate` or `✗ migrate exit=1`.
 pub(super) fn task_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
     let task = text(data, "task");
     match text(data, "state").as_str() {
         "done" | "exited" => Some(format!("{} {task}", cx.mark(Outcome::Ok))),
+        "stopped" => Some(format!("{} {task} stopped", cx.mark(Outcome::Fail))),
         "failed" => Some(format!(
             "{} {task}{}",
             cx.mark(Outcome::Fail),
@@ -2627,6 +2658,43 @@ pub(super) fn daemon_status(data: &Value) -> Vec<String> {
     lines
 }
 
+/// How a `lane.stop` or `lane.clean` task, or a teardown entry, ended.
+pub(super) enum HookTaskEnd {
+    /// It ran and exited on its own with 0.
+    Exited,
+    /// It ended `state` (`failed`, `stopped`), with its reason in words or its
+    /// exit code (`exit 3`) when it has either.
+    Ended(String, Option<String>),
+    /// It could not run: the daemon's error code.
+    Error(String),
+    /// A daemon before `state` sent only the exit code.
+    Unnamed,
+}
+
+/// How result `task` (`{task|entry, exit_code, state, reason?}` or `{task|entry,
+/// error}`) ended.
+pub(super) fn hook_task_end(task: &Value) -> HookTaskEnd {
+    if let Some(code) = task.get("error").and_then(|error| error.get("code")) {
+        return HookTaskEnd::Error(display_value(code));
+    }
+    match task.get("state").and_then(Value::as_str) {
+        None => HookTaskEnd::Unnamed,
+        Some("exited") => HookTaskEnd::Exited,
+        Some(state) => {
+            let reason = task
+                .get("reason")
+                .and_then(|reason| serde_json::from_value::<RpcError>(reason.clone()).ok());
+            let detail = match reason {
+                Some(reason) => Some(words::error_message(&reason).0),
+                None => int(task, "exit_code")
+                    .filter(|code| *code != 0)
+                    .map(|code| format!("exit {code}")),
+            };
+            HookTaskEnd::Ended(clean(state), detail)
+        }
+    }
+}
+
 /// `daemon stop`: the stopped units and the `lane.stop` tasks it ran, each
 /// failed task on its own line. A daemon from before the report answered
 /// before stopping, with the process count alone.
@@ -2649,11 +2717,17 @@ pub(super) fn daemon_shutdown(data: &Value) -> Vec<String> {
         lines.push(format!("ran {}", plural(tasks.len(), "lane.stop task")));
     }
     for task in tasks {
-        let outcome = match (int(task, "exit_code"), task["error"].get("code")) {
-            (Some(0), _) => continue,
-            (Some(code), _) => format!("exit {code}"),
-            (None, Some(code)) => display_value(code),
-            (None, None) => "interrupted".to_owned(),
+        let outcome = match hook_task_end(task) {
+            HookTaskEnd::Exited => continue,
+            HookTaskEnd::Ended(state, Some(detail)) => format!("{state}, {detail}"),
+            HookTaskEnd::Ended(state, None) => state,
+            HookTaskEnd::Error(code) => code,
+            // Daemons before `state` named nothing; the exit code says it.
+            HookTaskEnd::Unnamed => match int(task, "exit_code") {
+                Some(0) => continue,
+                Some(code) => format!("exit {code}"),
+                None => "interrupted".to_owned(),
+            },
         };
         lines.push(format!(
             "  {} {}: {outcome}",
