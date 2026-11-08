@@ -96,7 +96,6 @@ impl Call {
                     }
                     | Command::Env {
                         command: EnvCommand::Show { unit: Some(_), .. }
-                            | EnvCommand::Export { unit: Some(_), .. }
                     }
             )
         )

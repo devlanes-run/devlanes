@@ -489,7 +489,7 @@ devlanes env [OPTIONS] <COMMAND>
 
 ### devlanes env show
 
-Print the environment of the lane or of one unit as KEY=VALUE lines
+Print the environment of the lane or of one unit as KEY=VALUE lines; agent output hides secret-looking values
 
 ```text
 devlanes env show [OPTIONS] [UNIT]

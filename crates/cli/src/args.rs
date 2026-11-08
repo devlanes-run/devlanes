@@ -592,7 +592,7 @@ them anyway.",
 
 #[derive(Debug, Subcommand)]
 pub enum EnvCommand {
-    /// Print the environment of the lane or of one unit as KEY=VALUE lines
+    /// Print the environment of the lane or of one unit as KEY=VALUE lines; agent output hides secret-looking values
     Show {
         /// Unit whose environment to print ([lane:]unit, such as api or 2:api) [default: the lane's variables]
         #[arg(value_name = "UNIT")]
@@ -1750,22 +1750,25 @@ impl Cli {
             || matches!(&self.command, Some(Command::Status(args)) if args.watch)
     }
 
-    /// Whether the result of this command shows environment values hidden by
-    /// [`devlanes_core::redact::Redactor::screen`]: `env show --explain`, whose
-    /// table ends up in transcripts and bug reports. Plain `env show`, `--json`
-    /// and `env export` keep real values for scripts and `eval`.
-    pub fn hides_env_values(&self) -> bool {
-        matches!(
-            &self.command,
+    /// Whether the result of this command, printed in `mode`, shows environment
+    /// values hidden by [`devlanes_core::redact::Redactor::screen`]: `env show
+    /// --explain`, whose table ends up in transcripts and bug reports, and
+    /// `env show` in agent output, which `devlanes mcp` always uses. Plain
+    /// `env show`, `--json` and `env export` keep real values for scripts and
+    /// `eval`.
+    pub fn hides_env_values(&self, mode: OutputMode) -> bool {
+        match &self.command {
             Some(Command::Env {
-                command: EnvCommand::Show { explain: true, .. }
-            })
-        )
+                command: EnvCommand::Show { explain, .. },
+            }) => *explain || mode == OutputMode::Agent,
+            _ => false,
+        }
     }
 
-    /// Why this command cannot run without a terminal, for callers that have none
-    /// (`devlanes mcp`): it opens a screen, reads a password or answer, or follows
-    /// output until interrupted because it has no `--timeout`. `None` when it can.
+    /// Why this command cannot run for a caller without a terminal or shell
+    /// (`devlanes mcp`): it opens a screen, reads a password or answer, follows
+    /// output until interrupted because it has no `--timeout`, or prints lines
+    /// only a shell can use. `None` when it can.
     pub fn terminal_only(&self) -> Option<&'static str> {
         let unbounded = self.timeout.is_none();
         let follow = "it follows output until interrupted; add --timeout, such as --timeout 30s";
@@ -1815,7 +1818,10 @@ impl Cli {
                 EnvCommand::Shell { .. } => {
                     Some("it opens a subshell; read the variables with devlanes env show")
                 }
-                EnvCommand::Show { .. } | EnvCommand::Export { .. } => None,
+                EnvCommand::Export { .. } => Some(
+                    "it prints export lines for eval in a shell; read the variables with devlanes env show",
+                ),
+                EnvCommand::Show { .. } => None,
             },
             Command::Infra { command } => match command {
                 InfraCommand::Logs { follow: true, .. } if unbounded => Some(follow),
@@ -1895,7 +1901,6 @@ impl Command {
                 | DebugCommand::Thaw { .. }
                 | DebugCommand::Bundle { .. } => false,
             },
-            // Values as `env show` prints them, which hides nothing `export` would not.
             Self::Env { command } => match command {
                 EnvCommand::Show { .. } | EnvCommand::Export { .. } => true,
                 EnvCommand::Shell { .. } => false,
