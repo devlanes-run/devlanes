@@ -447,10 +447,15 @@ impl Inner {
         let local = self.local_route_entries();
         let (_, before) = self.reassign_with(&local);
         let (_, boxes) = self.assign_inputs(&local);
-        let mut pending = false;
+        let mut waits_for = None;
         let (previous, replaced) = match &args.host {
             Some(host) => {
-                pending = !self.check_box_lane(host, &lane, &local).await? || !built;
+                if !self.check_box_lane(host, &lane, &local).await? {
+                    waits_for = Some(wire::WaitsFor::Connect);
+                } else if !built {
+                    waits_for = Some(wire::WaitsFor::Mirror);
+                }
+                let pending = waits_for.is_some();
                 let hosts = boxes
                     .iter()
                     .find(|other| other.host == *host)
@@ -548,15 +553,17 @@ impl Inner {
         };
         // A pending choice is announced by the reassignment that applies it,
         // which may have been the one above.
-        if mirrored && !pending && previous != args.host {
+        if mirrored && waits_for.is_none() && previous != args.host {
             self.announce_switch(&lane, args.host.as_deref(), previous.as_deref());
         }
+        let waits_for = waits_for.filter(|_| !mirrored);
         Ok(json!({
             "lane": lane,
             "host": args.host,
             "previous": previous,
             "mirrored": mirrored,
-            "pending": pending && !mirrored,
+            "pending": waits_for.is_some(),
+            "waits_for": waits_for,
             // The lane's own choice, which `--local` deletes, is `previous`.
             "replaced": replaced
                 .iter()

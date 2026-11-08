@@ -535,7 +535,7 @@ async fn remote_use_switches_a_lane_between_boxes() {
             reply,
             Ok(
                 json!({"lane": "forkapp@0", "host": "beta", "previous": "alpha",
-                      "mirrored": true, "pending": false, "replaced": []})
+                      "mirrored": true, "pending": false, "waits_for": null, "replaced": []})
             )
         );
         // The pooled connection to alpha is not reused for the next request.
@@ -659,7 +659,8 @@ async fn remote_use_switches_a_lane_between_boxes() {
             reply,
             Ok(
                 json!({"lane": "forkapp@0", "host": "beta", "previous": "alpha",
-                      "mirrored": false, "pending": true, "replaced": []})
+                      "mirrored": false, "pending": true, "waits_for": "connect",
+                      "replaced": []})
             )
         );
         assert!(answers(&client, FORK_HOSTS[0], "web-from-alpha").await);
@@ -956,7 +957,7 @@ async fn a_choice_and_this_machines_own_lane() {
         assert_eq!(
             reply,
             Ok(json!({"lane": "boxapp@0", "host": "box", "previous": null,
-                      "mirrored": true, "pending": false, "replaced": []}))
+                      "mirrored": true, "pending": false, "waits_for": null, "replaced": []}))
         );
         assert!(answers(&client, "web.boxapp.localhost", "hello-from-box").await);
         let list = client
@@ -974,7 +975,7 @@ async fn a_choice_and_this_machines_own_lane() {
         assert_eq!(
             reply,
             Ok(json!({"lane": "boxapp@0", "host": null, "previous": "box",
-                      "mirrored": true, "pending": false, "replaced": []}))
+                      "mirrored": true, "pending": false, "waits_for": null, "replaced": []}))
         );
         assert!(!answers(&client, "web.boxapp.localhost", "hello-from-box").await);
         assert_eq!(client.host().await["chosen_lanes"], json!([]));
@@ -1301,7 +1302,7 @@ async fn local_takes_its_hostnames_back_from_another_projects_choice() {
         assert_eq!(
             reply,
             Ok(json!({"lane": "shop@0", "host": null, "previous": "box",
-                      "mirrored": true, "pending": false,
+                      "mirrored": true, "pending": false, "waits_for": null,
                       "replaced": [{"lane": "boxapp@0", "host": "box"}]}))
         );
         assert_eq!(client.host().await["chosen_lanes"], json!([]));

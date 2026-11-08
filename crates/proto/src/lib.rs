@@ -306,7 +306,7 @@ pub enum Method {
     /// choice wins: choices of other lanes it clashes with are deleted.
     ///
     /// Replies once the routes and listeners lead to the chosen lane:
-    /// `{lane, host, previous, mirrored, pending, replaced}`, where
+    /// `{lane, host, previous, mirrored, pending, waits_for, replaced}`, where
     /// `previous` is the box that served the hostnames before (null for this
     /// machine), `mirrored` whether the chosen lane serves them now and
     /// `replaced` the deleted choices as `[{lane, host}]`. For `host: null`
@@ -314,8 +314,11 @@ pub enum Method {
     /// but not connected keeps the choice until it connects, and a connected
     /// box whose lane this machine has not mirrored yet, such as right after
     /// `connect`, until it is: the reply then has `mirrored: false`,
-    /// `pending: true` and as `previous` the box that serves the hostnames
-    /// meanwhile. A switch emits one `remote.warning` notice with code
+    /// `pending: true`, `waits_for` `connect` or `mirror`
+    /// ([`remote::WaitsFor`], null when not pending) and as `previous` the
+    /// box that serves the hostnames meanwhile. A daemon from before
+    /// `waits_for` leaves it out, and only a box that is not connected made
+    /// its choices pending. A switch emits one `remote.warning` notice with code
     /// `lane_switched`, a pending choice once it applies (unless the daemon
     /// restarted meanwhile). Errors, each with a
     /// `message`: `box_unknown`, `lane_not_on_box` (the connected box has no
@@ -1439,6 +1442,17 @@ pub mod remote {
         /// gives a box's hostnames back by accident.
         #[serde(deserialize_with = "nullable")]
         pub host: Option<String>,
+    }
+
+    /// What a pending `remote.use` choice waits for, as its reply's
+    /// `waits_for`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum WaitsFor {
+        /// The chosen box to connect.
+        Connect,
+        /// This machine to mirror the lane of the connected box.
+        Mirror,
     }
 
     /// Reads a field that must be present but may be `null`. Serde lets an

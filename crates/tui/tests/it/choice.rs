@@ -941,24 +941,30 @@ async fn a_switch_refused_for_a_running_lane_offers_to_stop_it() -> TestResult {
     Ok(())
 }
 
-/// A box that is not connected keeps the choice for when it connects.
+/// A box that is not connected keeps the choice for when it connects, and a
+/// connected one for when its lane is mirrored here.
 #[tokio::test]
-async fn a_choice_for_a_box_that_is_not_connected_waits_for_it() {
-    let mut app = with_forks(120, 30).await;
-    let effects = app.update(Msg::LaneUsed {
-        lane: "acme@1".into(),
-        host: Some("fork-b".into()),
-        result: Ok(
-            json!({"lane": "acme@1", "host": "fork-b", "previous": "fork-a",
-                          "mirrored": false, "pending": true}),
+async fn a_pending_choice_says_what_it_waits_for() {
+    for (waits_for, notice) in [
+        ("connect", "acme@1 will come from fork-b once it connects"),
+        (
+            "mirror",
+            "acme@1 will come from fork-b once this machine mirrors it",
         ),
-    });
-    let shown = app.notice.as_ref().map(|n| (n.text.as_str(), n.error));
-    assert_eq!(
-        shown,
-        Some(("acme@1 will come from fork-b once it connects", false))
-    );
-    assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
+    ] {
+        let mut app = with_forks(120, 30).await;
+        let effects = app.update(Msg::LaneUsed {
+            lane: "acme@1".into(),
+            host: Some("fork-b".into()),
+            result: Ok(
+                json!({"lane": "acme@1", "host": "fork-b", "previous": "fork-a",
+                       "mirrored": false, "pending": true, "waits_for": waits_for}),
+            ),
+        });
+        let shown = app.notice.as_ref().map(|n| (n.text.as_str(), n.error));
+        assert_eq!(shown, Some((notice, false)), "{waits_for}");
+        assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
+    }
 }
 
 /// A local lane that starts and clears a choice says so in one notice.

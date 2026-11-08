@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use devlanes_core::redact::Redactor;
-use devlanes_proto::{Event, LogLine, Method, RpcError, events};
+use devlanes_proto::{Event, LogLine, Method, RpcError, events, remote::WaitsFor};
 use serde_json::{Value, json};
 
 use super::{
@@ -2236,16 +2236,32 @@ pub(super) fn remote_use(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let previous = data.get("previous").and_then(Value::as_str);
     let mirrored = data.get("mirrored").and_then(Value::as_bool) != Some(false);
     let pending = data.get("pending").and_then(Value::as_bool) == Some(true);
+    // A daemon from before `waits_for` made only a disconnected box's choice pending.
+    let waits_for = data
+        .get("waits_for")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<WaitsFor>(value).ok())
+        .unwrap_or(WaitsFor::Connect);
     if cx.agent() {
+        let waits = match (pending, waits_for) {
+            (false, _) => "",
+            (true, WaitsFor::Connect) => " waits_for=connect",
+            (true, WaitsFor::Mirror) => " waits_for=mirror",
+        };
         return vec![format!(
-            "remote use lane={lane} from={} previous={} mirrored={mirrored} pending={pending}",
+            "remote use lane={lane} from={} previous={} mirrored={mirrored} pending={pending}{waits}",
             host.unwrap_or("local"),
             previous.unwrap_or("local")
         )];
     }
     let from = host.map_or_else(|| "this machine".to_owned(), str::to_owned);
     if pending {
-        return vec![format!("{lane} will come from {from} once it connects.")];
+        return vec![match waits_for {
+            WaitsFor::Connect => format!("{lane} will come from {from} once it connects."),
+            WaitsFor::Mirror => {
+                format!("{lane} will come from {from} once this machine mirrors it.")
+            }
+        }];
     }
     if !mirrored {
         let owner = host.map_or_else(|| "this machine's".to_owned(), |host| format!("{host}'s"));

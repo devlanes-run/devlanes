@@ -11,7 +11,7 @@ use std::sync::Arc;
 use devlanes_client::restart::{self, Steps};
 use devlanes_proto::{
     ActorKind, AttachResult, Event, LaneSummary, LogLine, LogQuery, Method, ORPHANED, Page,
-    RpcError, RunParams, Selection, UnitSummary, events,
+    RpcError, RunParams, Selection, UnitSummary, events, remote::WaitsFor,
 };
 use devlanes_term::{Progress, StartTracker};
 
@@ -4937,9 +4937,22 @@ impl App {
             Ok(reply) => {
                 let flag = |key: &str| reply.get(key).and_then(Value::as_bool);
                 let previous = reply.get("previous").and_then(Value::as_str);
-                // A box that is not connected gets the choice when it connects.
                 if flag("pending") == Some(true) {
-                    self.set_notice(format!("{lane} will come from {from} once it connects"));
+                    // A daemon from before `waits_for` made only a
+                    // disconnected box's choice pending.
+                    let waits_for = reply
+                        .get("waits_for")
+                        .cloned()
+                        .and_then(|value| serde_json::from_value::<WaitsFor>(value).ok())
+                        .unwrap_or(WaitsFor::Connect);
+                    self.set_notice(match waits_for {
+                        WaitsFor::Connect => {
+                            format!("{lane} will come from {from} once it connects")
+                        }
+                        WaitsFor::Mirror => {
+                            format!("{lane} will come from {from} once this machine mirrors it")
+                        }
+                    });
                 } else if flag("mirrored") == Some(false) {
                     let notice = format!("{} is chosen but not mirrored yet", lane_of(host, lane));
                     self.set_notice(notice);

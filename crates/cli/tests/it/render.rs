@@ -3091,9 +3091,27 @@ fn remote_use_says_where_the_lane_comes_from() {
     );
     let mut offline = reply(json!("fork-b"), json!("fork-a"), false);
     offline["pending"] = json!(true);
+    offline["waits_for"] = json!("connect");
     assert_eq!(
         human(offline),
         "acme@0 will come from fork-b once it connects.\n"
+    );
+    // Connected, but the box's lane is not mirrored here yet.
+    let mut unmirrored = reply(json!("fork-b"), json!("fork-a"), false);
+    unmirrored["pending"] = json!(true);
+    unmirrored["waits_for"] = json!("mirror");
+    assert_eq!(
+        human(unmirrored.clone()),
+        "acme@0 will come from fork-b once this machine mirrors it.\n"
+    );
+    let agent = runtime(OutputMode::Agent)
+        .reporter()
+        .result(&Report::new(Method::RemoteUse, &unmirrored))
+        .expect("render")
+        .stdout;
+    assert_eq!(
+        agent,
+        "remote use lane=acme@0 from=fork-b previous=fork-a mirrored=false pending=true waits_for=mirror\n"
     );
     let data = reply(json!("fork-b"), json!("fork-a"), true);
     let agent = runtime(OutputMode::Agent)
