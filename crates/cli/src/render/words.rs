@@ -273,7 +273,7 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             // daemon's `hint` only marks that case; the wording stays here.
             if data.get("hint").is_some_and(|hint| !hint.is_null()) {
                 message.push_str(
-                    "; a project from a file other than devlanes.yaml is known once a command names it with --file",
+                    "; a project from a file other than devlanes.yaml is known once `start` or `status` names it with --file",
                 );
             }
             // A unit selector that is a lane's number or name (`stop 1`).
@@ -493,6 +493,14 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             None,
         ),
         "no_config" => no_config(data),
+        // A read in a project nobody started (or one `lane clean` forgot).
+        "project_not_started" => (
+            match text(data, "project") {
+                project if project.is_empty() => "this project has not been started here".into(),
+                project => format!("{project} has not been started here"),
+            },
+            Some(Hint::command(["start"])),
+        ),
         "units_required" => (
             "name at least one unit".into(),
             Some(match data.get("lane").and_then(Value::as_str) {

@@ -76,24 +76,39 @@ fn main() -> ExitCode {
         });
         append(&log, &record.to_string());
     }
-    let json_out = |value: Value| {
-        if let Some(path) = var("DEVLANES_JSON_OUT") {
-            append(&path, &value.to_string());
+    // One handle with write access, as the CLI opens it: the server reads a
+    // pipe of one writer, and a Windows named pipe takes no append-only writes.
+    let mut json_file = None;
+    let mut json_out = |value: Value| {
+        let Some(path) = var("DEVLANES_JSON_OUT") else {
+            return;
+        };
+        if json_file.is_none() {
+            json_file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(path)
+                .ok();
+        }
+        if let Some(file) = json_file.as_mut() {
+            let _ = file.write_all(format!("{value}\n").as_bytes());
         }
     };
-    // `--output json debug events -f`: the phases of a start, then waits to be killed.
-    if has("events") {
-        for (phase, state) in [
-            ("infra", "started"),
-            ("infra", "done"),
-            ("services", "started"),
-        ] {
-            let event = json!({"event": "lane.phase", "seq": 1, "data": {"lane": "acme@1", "phase": phase, "state": state}});
-            println!("{event}");
+    // A start's phase events, as the CLI streams them into the JSON copy: the
+    // first, then the rest once the test writes a byte to the address in
+    // `FAKE_PHASES_GATE`.
+    if has("start")
+        && let Some(gate) = var("FAKE_PHASES_GATE")
+    {
+        let phase = |seq: u64, phase: &str, state: &str| json!({"seq": seq, "event": "lane.phase", "data": {"lane": "acme@1", "phase": phase, "state": state}});
+        json_out(phase(1, "infra", "started"));
+        let mut released = [0];
+        if let Ok(mut gate) = std::net::TcpStream::connect(gate) {
+            let _ = std::io::Read::read_exact(&mut gate, &mut released);
         }
-        let _ = std::io::stdout().flush();
-        std::thread::sleep(Duration::from_secs(60));
-        return ExitCode::SUCCESS;
+        json_out(phase(2, "infra", "done"));
+        json_out(phase(3, "services", "started"));
     }
     if has("--dry-run") {
         println!("would delete the data of lane 2");
@@ -213,9 +228,9 @@ fn main() -> ExitCode {
 /// Appends one line to the file at `path`.
 fn append(path: &str, line: &str) {
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        // One write per line: a start's events child appends to the same log at
-        // the same time, and `writeln!` may split the line and its newline into
-        // two writes that the other process's line can land between.
+        // One write per line: concurrent runs append to the same log, and
+        // `writeln!` may split the line and its newline into two writes that
+        // the other process's line can land between.
         let _ = file.write_all(format!("{line}\n").as_bytes());
     }
 }

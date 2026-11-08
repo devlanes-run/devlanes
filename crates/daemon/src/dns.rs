@@ -5,14 +5,11 @@
 
 use std::sync::Arc;
 
-use devlanes_config::Resolver;
+use devlanes_config::{ProjectConfig, Resolver};
 use devlanes_resolver_dns::{DnsServer, Zone};
 use serde_json::{Value, json};
 
-use crate::{
-    engine::Inner,
-    model::{ConfigState, lock},
-};
+use crate::{engine::Inner, model::lock};
 
 impl Inner {
     /// The TLD when the user config selects the `resolver` strategy.
@@ -35,13 +32,10 @@ impl Inner {
     /// project that sets `lanes.vars.domain` or a `matrix` keeps `localhost`
     /// for both, so its names stay in one mode. An invalid TLD changes
     /// nothing, so the raw user value never reaches a hostname.
-    pub(crate) fn domain_suffix(&self, config: &ConfigState) -> String {
-        let explicit = match config {
-            ConfigState::Loaded(config) => {
-                config.lanes.matrix.is_some() || config.lanes.vars.contains_key("domain")
-            }
-            _ => false,
-        };
+    pub(crate) fn domain_suffix(&self, config: Option<&ProjectConfig>) -> String {
+        let explicit = config.is_some_and(|config| {
+            config.lanes.matrix.is_some() || config.lanes.vars.contains_key("domain")
+        });
         match self.resolver_zone() {
             Some(zone) if !explicit => zone.name().to_owned(),
             _ => devlanes_config::DEFAULT_DOMAIN_SUFFIX.to_owned(),

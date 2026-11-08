@@ -102,7 +102,8 @@ pub struct LanesConfig {
     pub primary: Option<String>,
     /// What devlanes does when a worktree gets its lane: only reserve it, also set it up,
     /// or also start it. Defaults to `register`. A worktree gets a lane the first time
-    /// devlanes runs in it, not merely because it exists.
+    /// `start`, `status` or another command that acts on lanes runs in it, not merely
+    /// because it exists.
     pub new_worktrees: Option<NewWorktrees>,
     /// What happens to a lane whose worktree folder is deleted, for example by `git worktree
     /// remove` after a merge. Defaults to `stop`, which stops its processes and keeps its

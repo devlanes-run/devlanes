@@ -4,7 +4,7 @@
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use devlanes_core::env::EnvLayer;
-use devlanes_proto::{Context, LaneSummary, LogLine, LogQuery, Page, RpcError, events};
+use devlanes_proto::{Context, LaneSummary, LogLine, LogQuery, Method, Page, RpcError, events};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::Instant;
@@ -12,9 +12,10 @@ use tokio::time::Instant;
 use crate::{
     Session,
     engine::{Inner, LanePair, params, required},
-    model::{ConfigState, Kind, ProjectRt, is_mine, lane_summary},
+    model::{ConfigState, Kind, is_mine, lane_summary},
     registry::internal,
     stream::LaneEvents,
+    target::Policy,
     units::{UnitHost, UnitState, now_ms, query_log_dir},
 };
 
@@ -184,138 +185,7 @@ async fn process_name(pid: u32) -> Option<String> {
     .flatten()
 }
 
-/// What a read request covers ([`Inner::read_scope`]).
-pub(crate) enum ReadScope {
-    /// Every project; its lanes as of the request.
-    All(Vec<LanePair>),
-    /// The `-p` or `--file` project, the cwd's, or every project sharing the cwd's
-    /// folder, with lanes they gain later.
-    Projects(Vec<Arc<ProjectRt>>),
-    /// The `--lane`.
-    Lane(LanePair),
-}
-
-impl ReadScope {
-    /// The lanes covered now.
-    pub(crate) fn lanes(&self) -> Vec<LanePair> {
-        match self {
-            Self::All(lanes) => lanes.clone(),
-            Self::Projects(projects) => projects
-                .iter()
-                .flat_map(|project| {
-                    project
-                        .lanes()
-                        .into_iter()
-                        .map(move |lane| (project.clone(), lane))
-                })
-                .collect(),
-            Self::Lane(pair) => vec![pair.clone()],
-        }
-    }
-
-    /// Whether the lane `reference` of `project` is covered, including lanes created
-    /// after the scope was built (a `status --watch` that outlives a `lane new`).
-    pub(crate) fn covers(&self, project: &str, reference: &str) -> bool {
-        match self {
-            Self::All(_) => true,
-            Self::Projects(projects) => projects.iter().any(|p| p.name() == project),
-            Self::Lane((p, lane)) => reference == lane.st().reference(&p.name()),
-        }
-    }
-}
-
-/// How [`Inner::read_scope`] treats a cwd whose project fails to resolve.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Strictness {
-    /// Every project instead, except for a project name another file or repository
-    /// holds: `status`, `lane ls`, `debug errors`, `url ls`, `debug top`.
-    Lenient,
-    /// The error, so `stop --mine` never widens to every project by accident.
-    Strict,
-}
-
 impl Inner {
-    /// What a read request covers: every project for `all`, the `--lane`, the `--file`
-    /// or `-p` project, else the cwd's project or every project sharing the cwd's
-    /// folder (a repository root holding several), else every project.
-    pub(crate) async fn read_scope(
-        self: &Arc<Self>,
-        context: &Context,
-        all: bool,
-        strictness: Strictness,
-    ) -> Result<ReadScope, RpcError> {
-        // Never registers a project: completion and the TUI's monitor ask `all`.
-        if all {
-            return Ok(ReadScope::All(self.all_lanes()));
-        }
-        if context.lane.is_some() {
-            return Ok(ReadScope::Lane(self.target_lane(context).await?));
-        }
-        let named = context.file.is_some() || context.project.is_some();
-        let projects = if named {
-            // A `--file` names the project outright, and fails loudly when it cannot load.
-            self.project_for(context).await?.into_iter().collect()
-        } else if context.cwd.as_os_str().is_empty() {
-            Vec::new()
-        } else {
-            match self.projects_here(context).await {
-                Ok(projects) => projects,
-                Err(error) if strictness == Strictness::Strict => return Err(error),
-                // A name another file or repository holds is the answer, not every lane.
-                Err(error)
-                    if matches!(
-                        error.code.as_str(),
-                        "project_name_taken" | "duplicate_project_name"
-                    ) =>
-                {
-                    return Err(error);
-                }
-                Err(_) => Vec::new(),
-            }
-        };
-        if projects.is_empty() {
-            return Ok(ReadScope::All(self.all_lanes()));
-        }
-        Ok(ReadScope::Projects(projects))
-    }
-
-    /// Claims the cwd's lane when `scope` is the cwd's one project, as running
-    /// devlanes in a worktree makes it a lane. `-p` from elsewhere and a folder
-    /// shared by several projects say nothing about which lane.
-    async fn claim_here(self: &Arc<Self>, context: &Context, scope: &ReadScope) {
-        if context.project.is_none()
-            && let ReadScope::Projects(projects) = scope
-            && let [project] = projects.as_slice()
-            && let Some(lane) = Self::lane_at(project, &context.cwd)
-        {
-            self.claim_lane(project, &lane).await;
-        }
-    }
-
-    /// Lanes `status`, `lane ls` and `debug errors` cover ([`Self::read_scope`],
-    /// lenient), claiming the cwd's lane.
-    pub(crate) async fn scope_lanes(
-        self: &Arc<Self>,
-        context: &Context,
-        all: bool,
-    ) -> Result<Vec<LanePair>, RpcError> {
-        let scope = self.read_scope(context, all, Strictness::Lenient).await?;
-        self.claim_here(context, &scope).await;
-        Ok(scope.lanes())
-    }
-
-    /// Lanes `stop --mine` without units and `status --mine` cover
-    /// ([`Self::read_scope`], strict).
-    pub(crate) async fn mine_scope(
-        self: &Arc<Self>,
-        context: &Context,
-    ) -> Result<Vec<LanePair>, RpcError> {
-        Ok(self
-            .read_scope(context, false, Strictness::Strict)
-            .await?
-            .lanes())
-    }
-
     /// Lane summaries with the sampler's latest CPU and memory.
     pub(crate) fn summaries(
         &self,
@@ -356,16 +226,9 @@ impl Inner {
         session: &Session,
     ) -> Result<Value, RpcError> {
         let args: StatusParams = params(value)?;
-        // `--mine` lists what a unit-less `stop --mine` would stop.
-        let strictness = if args.mine && !args.all {
-            Strictness::Strict
-        } else {
-            Strictness::Lenient
-        };
-        let scope = self.read_scope(context, args.all, strictness).await?;
-        if strictness == Strictness::Lenient {
-            self.claim_here(context, &scope).await;
-        }
+        let scope = self
+            .read_scope(context, args.all, Policy::of(Method::Status))
+            .await?;
         let lanes = scope.lanes();
         let mine = args.mine.then_some(&context.actor);
         let items = self.summaries(&lanes, mine);
@@ -401,13 +264,10 @@ impl Inner {
 
     /// `lane.list`: re-lists worktrees first so new ones show immediately.
     pub(crate) async fn lane_list(self: &Arc<Self>, context: &Context) -> Result<Value, RpcError> {
-        let lanes = self.scope_lanes(context, false).await?;
-        let mut projects: Vec<_> = lanes.iter().map(|(p, _)| p.clone()).collect();
-        projects.dedup_by_key(|p| p.id);
-        for project in &projects {
-            let _ = self.relist(project).await;
-        }
-        let lanes = self.scope_lanes(context, false).await?;
+        let lanes = self
+            .read_scope(context, false, Policy::of(Method::LaneList))
+            .await?
+            .lanes();
         serde_json::to_value(Page::complete(self.summaries(&lanes, None)))
             .map_err(|e| internal("encode", e))
     }
@@ -445,10 +305,11 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let args: LogsParams = params(value)?;
         let mut query = args.query;
+        let policy = Policy::of(Method::Logs);
         let (pair, selectors) = if query.units.is_empty() {
-            (self.target_lane(context).await?, Vec::new())
+            (self.lane(context, policy).await?, Vec::new())
         } else {
-            self.lane_for_units(&query.units, context).await?
+            self.lane_for_units(&query.units, context, policy).await?
         };
         let (project, lane) = &pair;
         Self::refuse_external(project, lane, &selectors)?;
@@ -617,8 +478,9 @@ impl Inner {
             .map_or(self.opts.start_timeout, Duration::from_millis);
         let deadline = Instant::now() + timeout;
         let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+        let policy = Policy::of(Method::Wait);
         let as_unit = self
-            .lane_for_units(std::slice::from_ref(&args.target), context)
+            .lane_for_units(std::slice::from_ref(&args.target), context, policy)
             .await;
         // A unit added by an edit just now must be known before it is looked up.
         if let Ok(((project, lane), _)) = &as_unit {
@@ -640,7 +502,11 @@ impl Inner {
         let (project, lane, unit) = match (as_unit, unit_target) {
             (Ok(((project, lane), _)), Some(unit)) => (project, lane, Some(unit)),
             _ => {
-                let (project, lane) = self.resolve_lane_ref(&args.target, context).await?;
+                let as_lane = Context {
+                    lane: Some(args.target.clone()),
+                    ..context.clone()
+                };
+                let (project, lane) = self.lane(&as_lane, policy).await?;
                 (project, lane, None)
             }
         };
@@ -759,7 +625,10 @@ impl Inner {
                 now_ms().saturating_sub(u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
             });
         let mut items = Vec::new();
-        for (project, lane) in self.scope_lanes(context, false).await? {
+        let scope = self
+            .read_scope(context, false, Policy::of(Method::Errors))
+            .await?;
+        for (project, lane) in scope.lanes() {
             let (reference, lane_id, units) = {
                 let st = lane.st();
                 let units: Vec<_> = st
@@ -869,7 +738,11 @@ impl Inner {
             .unit
             .ok_or_else(|| RpcError::new("units_required", json!({}), 2))?;
         let ((project, lane), selectors) = self
-            .lane_for_units(std::slice::from_ref(&unit), context)
+            .lane_for_units(
+                std::slice::from_ref(&unit),
+                context,
+                Policy::of(Method::Why),
+            )
             .await?;
         let name = selectors.into_iter().next().unwrap_or_default();
         let reference = lane.st().reference(&project.name());
@@ -1077,8 +950,9 @@ impl Inner {
         context: &Context,
     ) -> Result<Value, RpcError> {
         let args: EnvParams = params(value)?;
+        let policy = Policy::of(Method::Env);
         if args.lane_env || args.unit.is_none() {
-            let (project, lane) = self.target_lane(context).await?;
+            let (project, lane) = self.lane(context, policy).await?;
             let (resolved, layers) = self
                 .resolve_lane_env(
                     &project,
@@ -1112,7 +986,7 @@ impl Inner {
         }
         let unit = args.unit.unwrap_or_default();
         let ((project, lane), selectors) = self
-            .lane_for_units(std::slice::from_ref(&unit), context)
+            .lane_for_units(std::slice::from_ref(&unit), context, policy)
             .await?;
         let name = selectors.into_iter().next().unwrap_or_default();
         let reference = lane.st().reference(&project.name());
@@ -1204,7 +1078,11 @@ impl Inner {
             .unit
             .ok_or_else(|| RpcError::new("units_required", json!({}), 2))?;
         let ((project, lane), selectors) = self
-            .lane_for_units(std::slice::from_ref(&unit), context)
+            .lane_for_units(
+                std::slice::from_ref(&unit),
+                context,
+                Policy::of(Method::Url),
+            )
             .await?;
         let name = selectors.into_iter().next().unwrap_or_default();
         let (reference, found) = {

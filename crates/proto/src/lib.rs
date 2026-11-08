@@ -88,8 +88,10 @@ pub struct Context {
     /// project's lane folders or in no project. Older daemons ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane_project: Option<String>,
-    /// Absolute path of a project file given with `--file`, which registers the project
-    /// it names; otherwise the nearest `devlanes.yaml` above the cwd is used.
+    /// Absolute path of a project file given with `--file`; otherwise the nearest
+    /// `devlanes.yaml` above the cwd is used. Commands that act on lanes (`start`,
+    /// `status`, ...) register the project it names; reads in a project nobody
+    /// registered answer `project_not_started`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<PathBuf>,
     #[serde(default)]
