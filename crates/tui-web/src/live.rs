@@ -192,7 +192,7 @@ impl State {
                     .chain(starting())
                     .chain([
                         vec![Msg::DaemonRestarted(Ok(status))],
-                        vec![Msg::Subscribed(Ok(()))],
+                        vec![Msg::Subscribed(Ok(Vec::new()))],
                     ])
                     .collect()
             }
@@ -203,7 +203,7 @@ impl State {
                     .into_iter()
                     .chain([
                         vec![Msg::DaemonStarted(Ok(status))],
-                        vec![Msg::Subscribed(Ok(()))],
+                        vec![Msg::Subscribed(Ok(Vec::new()))],
                     ])
                     .collect()
             }

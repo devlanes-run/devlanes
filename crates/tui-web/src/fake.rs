@@ -127,7 +127,8 @@ impl Fake {
                 .to_owned()
         };
         let reply = match effect {
-            Effect::Subscribe => vec![Msg::Subscribed(Ok(()))],
+            // It sends no `start.ended`, so it advertises no feature.
+            Effect::Subscribe => vec![Msg::Subscribed(Ok(Vec::new()))],
             Effect::Refresh => vec![Msg::Status(Ok(self.changes.lanes()))],
             Effect::Attach {
                 generation,
