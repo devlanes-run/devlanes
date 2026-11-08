@@ -963,7 +963,6 @@ async fn migration_drops_cleaned_lanes() {
 /// knowing whether a stop ended them, so their exit codes count as no crash.
 async fn migration_leaves_earlier_runs_without_ended_by_request() {
     use diesel::migration::MigrationSource;
-    use schema::{lanes as l, projects as p, worktrees as w};
     const MIGRATIONS: diesel_migrations::EmbeddedMigrations = embed_migrations!("migrations");
     let dir = tempfile::tempdir().expect("dir");
     let path = dir.path().join("runs.db");
@@ -986,49 +985,21 @@ async fn migration_leaves_earlier_runs_without_ended_by_request() {
         .expect("the unit_run_ended_by_request migration");
     c.run_migrations(&migrations[..ended_by_request])
         .expect("the migrations before it");
-    let project: i64 = diesel::insert_into(p::table)
-        .values((
-            p::name.eq("acme"),
-            p::identity.eq(b"acme".to_vec()),
-            p::root_path.eq(native("/test/acme")),
-            p::primary_branch.eq("main"),
-        ))
-        .returning(p::id)
-        .get_result(&mut c)
-        .expect("project");
-    let worktree: i64 = diesel::insert_into(w::table)
-        .values((
-            w::project_id.eq(project),
-            w::identity.eq("main"),
-            w::path.eq(native("/test/acme")),
-            w::present.eq(1),
-            w::first_seen.eq(1_i64),
-            w::last_seen.eq(1_i64),
-        ))
-        .returning(w::id)
-        .get_result(&mut c)
-        .expect("worktree");
-    let lane: i64 = diesel::insert_into(l::table)
-        .values((
-            l::project_id.eq(project),
-            l::worktree_id.eq(worktree),
-            l::lane_index.eq(0_i64),
-            l::name.eq("lane0"),
-            l::desired_state.eq("stopped"),
-            l::created_at.eq(1_i64),
-        ))
-        .returning(l::id)
-        .get_result(&mut c)
-        .expect("lane");
-    c.batch_execute(&format!(
-        "INSERT INTO unit_runs (lane_id, unit, pid, sid, process_start_time, started_at, ended_at, exit_code, actor_kind)
-         VALUES ({lane}, 'web', 10, 10, '1', 1, 2, 1, 'human');"
-    ))
+    c.batch_execute(
+        "INSERT INTO projects (id, name, identity, root_path, primary_branch)
+         VALUES (1, 'acme', X'61', X'61', 'main');
+         INSERT INTO worktrees (id, project_id, identity, path, present, first_seen, last_seen)
+         VALUES (1, 1, 'main', X'61', 1, 1, 1);
+         INSERT INTO lanes (id, project_id, worktree_id, lane_index, name, desired_state, created_at)
+         VALUES (1, 1, 1, 0, 'lane0', 'stopped', 1);
+         INSERT INTO unit_runs (lane_id, unit, pid, sid, process_start_time, started_at, ended_at, exit_code, actor_kind)
+         VALUES (1, 'web', 10, 10, '1', 1, 2, 1, 'human');",
+    )
     .expect("a finished run");
 
     let store = Store::open(&path).await.expect("upgrade");
     let runs = store
-        .unit_runs(devlanes_core::LaneId(lane), 10)
+        .unit_runs(devlanes_core::LaneId(1), 10)
         .await
         .expect("runs");
     assert_eq!(
