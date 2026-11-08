@@ -1259,7 +1259,7 @@ async fn exec_leaves_out_values_that_wait_on_infra() {
             )
             .await
             .expect_err("env.MISSING has no value");
-        assert_eq!(refused.code, "lane_env_unresolved", "{refused:?}");
+        assert_eq!(refused.code, "unresolved_value", "{refused:?}");
         assert_eq!(refused.data["path"], "global_env.GREETING");
         h.close().await;
     })

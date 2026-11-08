@@ -4493,6 +4493,7 @@ impl Inner {
             st.wanted = false;
             st.allocation = None;
             st.view = None;
+            st.view_error = None;
             st.units.clear();
             st.started_at_ms = None;
             st.infra_ns = None;

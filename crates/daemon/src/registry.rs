@@ -2055,7 +2055,9 @@ impl Inner {
         for lane in lanes {
             let index = lane.st().index();
             if index.is_none() {
-                lane.st().view = None;
+                let mut st = lane.st();
+                st.view = None;
+                st.view_error = None;
                 continue;
             }
             let owned = held.is_some_and(|held| Arc::ptr_eq(held, &lane));
@@ -2099,23 +2101,16 @@ impl Inner {
                     }
                     let mut st = lane.st();
                     st.view = Some(Arc::new(view));
-                    if st
-                        .last_error
-                        .as_ref()
-                        .is_some_and(|e| e.code == "config_error")
-                    {
-                        st.last_error = None;
-                    }
+                    st.view_error = None;
                 }
                 Err(error) => {
                     let mut st = lane.st();
                     st.view = None;
-                    if !matches!(
+                    st.view_error = (!matches!(
                         st.config,
                         ConfigState::Missing | ConfigState::Invalid(_) | ConfigState::Elsewhere(_)
-                    ) {
-                        st.last_error = Some(error);
-                    }
+                    ))
+                    .then_some(error);
                 }
             }
         }
