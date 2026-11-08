@@ -57,11 +57,11 @@ pub async fn run(
     let mut params = request.params.clone();
     params["events"] = json!(true);
     // The lane the daemon started, for the TUI's scope.
-    if matches!(
+    let accepted = matches!(
         request.method,
         Method::Start | Method::Restart | Method::Reload
-    ) && client.supports(devlanes_proto::features::START_ACCEPTED)
-    {
+    ) && client.supports(devlanes_proto::features::START_ACCEPTED);
+    if accepted {
         params["accepted"] = json!(true);
     }
     let id = client
@@ -69,8 +69,9 @@ pub async fn run(
         .await
         .map_err(rpc_error)?;
     let stream = follow_start(client, id);
+    let verb = label(request.method).into();
     let waited = tokio::select! {
-        waited = await_start(label(request.method).into(), stream, OPEN_AFTER) => waited,
+        waited = await_start(verb, stream, OPEN_AFTER, accepted) => waited,
         _ = tokio::signal::ctrl_c() => {
             keeps_running();
             return Ok(DETACHED);
@@ -90,8 +91,10 @@ pub async fn run(
     }
     // Scoped to the lane the daemon started: a cwd-only first `status` would
     // register the cwd's project when the start named another project's lane.
+    // Without `start.accepted` (an older daemon, `resume`, `lane new`) the
+    // request's own context.
     let scope = Context {
-        lane: handoff.accepted.clone().or(request.context.lane),
+        lane: handoff.lane.clone().or(request.context.lane),
         ..request.context
     };
     let options = devlanes_tui::Options {
@@ -161,7 +164,7 @@ mod tests {
     fn a_reload_that_started_nothing_skips_the_tui() {
         let handoff = |data: Value| StartHandoff {
             label: "reload".into(),
-            accepted: None,
+            lane: None,
             frames: vec![StartFrame::Done(Ok(data))],
             stream: tokio::sync::mpsc::channel(1).1,
         };
