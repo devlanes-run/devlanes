@@ -303,17 +303,19 @@ async fn refusals_run_nothing() {
 }
 
 #[tokio::test]
-/// A start with a progress token reports the lane's phases from the events child.
-async fn starts_report_progress() {
+/// A start with a progress token reports each phase its own command writes
+/// while the command still runs, and the phase events stay out of the
+/// result's data.
+async fn starts_report_progress_from_their_command() {
     tokio::time::timeout(LIMIT, async {
+        let gate = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("gate");
+        let address = gate.local_addr().expect("gate address").to_string();
         let client = TestClient::new();
         let progress = client.progress.clone();
-        let marker = tempfile::tempdir().expect("tempdir");
-        let marker = marker.path().join("seen");
         let harness = connect(client, Lifecycle::Initialize, |config| {
-            config
-                .env
-                .insert("FAKE_WAIT_FOR".into(), marker.display().to_string());
+            config.env.insert("FAKE_PHASES_GATE".into(), address);
         })
         .await;
         let mut params = CallToolRequestParams::new("start");
@@ -321,40 +323,35 @@ async fn starts_report_progress() {
             NumberOrString::String("start-1".into()),
         )));
         let seen = || progress.lock().map(|seen| seen.clone()).unwrap_or_default();
-        // The start ends only once the client has every phase, so none is lost
-        // to the follow ending with the start.
+        // The command wrote its first phase and waits on the gate until the
+        // client has it.
         let release = async {
-            while seen().len() < 3 {
+            let (mut command, _) = gate.accept().await.expect("the command waits");
+            while seen().is_empty() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            std::fs::write(&marker, "").expect("marker");
+            assert_eq!(seen(), ["acme@1 infra started"]);
+            tokio::io::AsyncWriteExt::write_all(&mut command, b"1")
+                .await
+                .expect("release");
         };
         let (result, ()) = tokio::join!(harness.client.call_tool(params), release);
         let result = result.expect("call");
         assert!(!failed(&result), "{}", text(&result));
-        let seen = seen();
         assert_eq!(
-            seen,
+            seen(),
             [
                 "acme@1 infra started",
                 "acme@1 infra done",
                 "acme@1 services started"
             ]
         );
-        assert!(
-            harness.all_runs().iter().any(|run| run["args"]
-                == json!([
-                    "--output",
-                    "json",
-                    "debug",
-                    "events",
-                    "-f",
-                    "--timeout",
-                    "175s"
-                ])),
-            "{:?}",
-            harness.all_runs()
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(
+            structured["data"],
+            json!({"ran": ["--output", "agent", "start", "--timeout", "170s"]})
         );
+        assert_eq!(harness.lines(), ["--output agent start --timeout 170s"]);
     })
     .await
     .expect("in time");

@@ -285,22 +285,8 @@ impl Harness {
             .expect("tool call")
     }
 
-    /// Every run of the fake so far, `{args, cwd, from_lane, ai_agent, json_out}`,
-    /// without the `debug events` runs that follow a start for progress (rmcp's
-    /// client asks for progress on every call).
+    /// Every run of the fake so far, `{args, cwd, from_lane, ai_agent, json_out}`.
     pub fn runs(&self) -> Vec<Value> {
-        self.all_runs()
-            .into_iter()
-            .filter(|run| {
-                !run["args"]
-                    .as_array()
-                    .is_some_and(|args| args.contains(&json!("events")))
-            })
-            .collect()
-    }
-
-    /// Every run of the fake so far.
-    pub fn all_runs(&self) -> Vec<Value> {
         std::fs::read_to_string(&self.log)
             .unwrap_or_default()
             .lines()

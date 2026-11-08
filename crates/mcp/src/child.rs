@@ -10,7 +10,10 @@ use std::{
 };
 
 use serde_json::Value;
-use tokio::io::AsyncReadExt;
+use tokio::{
+    io::{AsyncBufReadExt as _, AsyncReadExt},
+    sync::mpsc::UnboundedSender,
+};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 /// How long a cancelled command gets to stop what it started, such as the
@@ -94,19 +97,23 @@ impl Runner {
     /// Runs `exe --output agent ARGS` in `cwd` until it exits or `cancel` fires,
     /// which interrupts it. With `from_lane` the child sends the daemon no env.
     /// Stdin is closed and stdout piped, so the child never touches the MCP stream.
+    /// With `phases`, for a command that starts a lane, the events it streams
+    /// stay out of [`Output::data`] and the progress message of each
+    /// `lane.phase` goes to `phases` as the command writes it.
     pub async fn run(
         &self,
         cwd: &Path,
         args: &[String],
         from_lane: bool,
         cancel: &CancellationToken,
+        phases: Option<UnboundedSender<String>>,
     ) -> std::io::Result<Output> {
         let mut command = self.command(cwd);
         command.args(["--output", "agent"]).args(args);
         if from_lane {
             command.env(devlanes_proto::ENV_FROM_LANE_ENV, "1");
         }
-        self.teed(command, cancel).await
+        self.teed(command, cancel, phases).await
     }
 
     /// Runs `exe --output json ARGS` for the app-only tools; an error the
@@ -125,34 +132,25 @@ impl Runner {
         if !spawn {
             command.env(devlanes_proto::NO_SPAWN_ENV, "1");
         }
-        self.teed(command, cancel).await
+        self.teed(command, cancel, None).await
     }
 
-    /// Runs `command` with [`devlanes_proto::JSON_OUT_ENV`] naming a temporary
-    /// file, whose JSON becomes [`Output::data`].
+    /// Runs `command` with [`devlanes_proto::JSON_OUT_ENV`] naming a pipe
+    /// that a task reads while the command runs; its JSON becomes
+    /// [`Output::data`], and `phases` gets what [`Runner::run`] says.
     async fn teed(
         &self,
         mut command: tokio::process::Command,
         cancel: &CancellationToken,
+        phases: Option<UnboundedSender<String>>,
     ) -> std::io::Result<Output> {
-        let json = tokio::task::spawn_blocking(|| {
-            tempfile::Builder::new()
-                .prefix("devlanes-mcp-")
-                .suffix(".json")
-                .tempfile()
-                .map(tempfile::NamedTempFile::into_temp_path)
-        })
-        .await
-        .map_err(std::io::Error::other)??;
-        command.env(devlanes_proto::JSON_OUT_ENV, &*json);
-        let mut output = self.collect(command, cancel).await;
-        if let Ok(output) = &mut output {
-            let written = tokio::fs::read_to_string(&*json).await.unwrap_or_default();
-            output.data = parse_json(&written);
-        }
-        // The temporary file goes on a blocking thread too.
-        let _ = tokio::task::spawn_blocking(move || json.close()).await;
-        output
+        let tee = Tee::open(phases).await?;
+        command.env(devlanes_proto::JSON_OUT_ENV, tee.path());
+        let output = self.collect(command, cancel).await;
+        let written = tee.finish().await;
+        let mut output = output?;
+        output.data = parse_json(&written);
+        Ok(output)
     }
 
     /// A command for the devlanes executable with the server's environment.
@@ -401,6 +399,192 @@ impl Drop for Pipe {
             task.abort();
         }
     }
+}
+
+/// The pipe a command writes its JSON copy to ([`devlanes_proto::JSON_OUT_ENV`]),
+/// read by a task while the command runs. The CLI opens it once, without
+/// letting the processes it starts inherit it, so once the command exited no
+/// writer is left and the reader ends at the pipe's end, without a timeout.
+struct Tee {
+    /// A FIFO in a directory of its own.
+    #[cfg(unix)]
+    dir: Option<tempfile::TempDir>,
+    #[cfg(unix)]
+    path: PathBuf,
+    /// The server's own write end, held until the command ended: the reader
+    /// sees no end before the command opened the FIFO, or between its writes.
+    #[cfg(unix)]
+    writer: Option<tokio::net::unix::pipe::Sender>,
+    /// A named pipe of one instance that only this machine can open.
+    #[cfg(windows)]
+    name: String,
+    reader: Option<tokio::task::JoinHandle<String>>,
+}
+
+/// What opening a named pipe whose one instance a client took answers:
+/// `ERROR_FILE_NOT_FOUND` once that client closed its end, `ERROR_PIPE_BUSY`
+/// while it holds it.
+#[cfg(windows)]
+const PIPE_TAKEN: [i32; 2] = [2, 231];
+
+impl Tee {
+    /// Creates the FIFO and opens its read end, then a write end of the
+    /// server's own; both non-blocking, reader first, since a FIFO takes a
+    /// non-blocking writer only once it has a reader.
+    #[cfg(unix)]
+    async fn open(phases: Option<UnboundedSender<String>>) -> std::io::Result<Self> {
+        let (dir, path) = tokio::task::spawn_blocking(|| {
+            use std::os::unix::fs::PermissionsExt as _;
+            let dir = tempfile::Builder::new()
+                .prefix("devlanes-mcp-")
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()?;
+            let path = dir.path().join("json");
+            devlanes_sys::make_fifo(&path)?;
+            Ok::<_, std::io::Error>((dir, path))
+        })
+        .await
+        .map_err(std::io::Error::other)??;
+        let options = tokio::net::unix::pipe::OpenOptions::new();
+        let receiver = options.open_receiver(&path)?;
+        let writer = options.open_sender(&path)?;
+        Ok(Self {
+            dir: Some(dir),
+            path,
+            writer: Some(writer),
+            reader: Some(tokio::spawn(read(receiver, phases))),
+        })
+    }
+
+    /// Creates the named pipe and asks Windows to connect it before the
+    /// command starts: a command that writes and exits before the reader task
+    /// runs still finds a connected reader, and its lines are kept.
+    #[cfg(windows)]
+    async fn open(phases: Option<UnboundedSender<String>>) -> std::io::Result<Self> {
+        use std::{
+            sync::atomic::{AtomicU64, Ordering},
+            task::Poll,
+        };
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let name = format!(
+            r"\\.\pipe\devlanes-mcp-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .max_instances(1)
+            .reject_remote_clients(true)
+            .access_outbound(false)
+            .create(&name)?;
+        let mut connected = Box::pin(async move { server.connect().await.map(|()| server) });
+        // The first poll issues the connect; the spawn does not wait for a client.
+        let early = std::future::poll_fn(|cx| Poll::Ready(connected.as_mut().poll(cx))).await;
+        let reader = tokio::spawn(async move {
+            let server = match early {
+                Poll::Ready(server) => server,
+                Poll::Pending => connected.await,
+            };
+            match server {
+                Ok(server) => read(server, phases).await,
+                Err(error) => {
+                    tracing::debug!(%error, "the command's JSON pipe did not connect");
+                    String::new()
+                }
+            }
+        });
+        Ok(Self {
+            name,
+            reader: Some(reader),
+        })
+    }
+
+    /// The path to give the command.
+    fn path(&self) -> &std::ffi::OsStr {
+        #[cfg(unix)]
+        {
+            self.path.as_os_str()
+        }
+        #[cfg(windows)]
+        {
+            std::ffi::OsStr::new(&self.name)
+        }
+    }
+
+    /// Once the command ended: what it wrote, read to the pipe's end.
+    async fn finish(mut self) -> String {
+        #[cfg(unix)]
+        drop(self.writer.take());
+        #[cfg(windows)]
+        self.end_unconnected();
+        let written = match self.reader.take() {
+            Some(reader) => reader.await.unwrap_or_default(),
+            None => String::new(),
+        };
+        #[cfg(unix)]
+        if let Some(dir) = self.dir.take() {
+            let _ = tokio::task::spawn_blocking(move || dir.close()).await;
+        }
+        written
+    }
+
+    /// Ends the reader of a pipe the command never opened by connecting and
+    /// closing a client end in its place. A pipe that is taken had the
+    /// command's end, which closed when the command exited.
+    #[cfg(windows)]
+    fn end_unconnected(&mut self) {
+        let client = tokio::net::windows::named_pipe::ClientOptions::new()
+            .read(false)
+            .write(true)
+            .open(&self.name);
+        match client {
+            Ok(client) => drop(client),
+            Err(error)
+                if error
+                    .raw_os_error()
+                    .is_some_and(|code| PIPE_TAKEN.contains(&code)) => {}
+            Err(error) => {
+                tracing::debug!(%error, "the command's JSON pipe could not be closed");
+                if let Some(reader) = self.reader.take() {
+                    reader.abort();
+                }
+            }
+        }
+    }
+}
+
+impl Drop for Tee {
+    /// Stops reading when the call is dropped before the command ended.
+    fn drop(&mut self) {
+        if let Some(reader) = self.reader.take() {
+            reader.abort();
+        }
+    }
+}
+
+/// Reads the JSON lines of `pipe` to its end and returns them as text. With
+/// `phases`, lines that are daemon events stay out of the text, and each
+/// `lane.phase` among them sends its progress message.
+async fn read(
+    pipe: impl tokio::io::AsyncRead + Unpin,
+    phases: Option<UnboundedSender<String>>,
+) -> String {
+    let mut lines = tokio::io::BufReader::new(pipe).split(b'\n');
+    let mut written = String::new();
+    while let Ok(Some(line)) = lines.next_segment().await {
+        let line = String::from_utf8_lossy(&line);
+        if let Some(phases) = &phases
+            && let Ok(event) = serde_json::from_str::<devlanes_proto::Event>(&line)
+        {
+            if let Some(message) = crate::progress::message(&event) {
+                let _ = phases.send(message);
+            }
+            continue;
+        }
+        written.push_str(&line);
+        written.push('\n');
+    }
+    written
 }
 
 /// The code a shell would report for `status`.

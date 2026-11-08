@@ -1190,9 +1190,10 @@ impl Cli {
         let timeout_ms = self
             .timeout
             .map(|v| u64::try_from(v.as_millis()).unwrap_or(u64::MAX));
-        // Starts stream their lane events for phase lines, NDJSON and CI groups;
-        // agent output prints none of them. `wait` streams them only for the bar.
-        let start_events = runtime.mode != OutputMode::Agent;
+        // Starts stream their lane events for phase lines, NDJSON and CI groups.
+        // Agent output prints none of them, but the JSON copy `devlanes mcp`
+        // reads takes them for its progress. `wait` streams them only for the bar.
+        let start_events = runtime.mode != OutputMode::Agent || runtime.json_out.is_some();
         let wait_events =
             runtime.mode == OutputMode::Human && runtime.stdout_tty && runtime.ci.is_none();
         let selection =
