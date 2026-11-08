@@ -49,6 +49,8 @@ impl ScriptRunner for DenoTasks {
             body: planned.body,
             notes: Vec::new(),
             detail: None,
+            env: Default::default(),
+            path: Vec::new(),
         })
     }
 }

@@ -87,6 +87,8 @@ export function PlanRow({ lane, plan, result, checked, ro, onToggle }: PlanRowPr
       goes.push(`${volumeName(good, v.name)} ${size(v.bytes)}`.trim());
     if (good.data_dir) goes.push(`data ${size(good.data_dir.bytes)}`.trim());
     if (good.logs_bytes) goes.push(`logs ${size(good.logs_bytes)}`);
+    if (good.history) goes.push('history');
+    if (good.shared_infra === 'stop') goes.push('shared containers stop');
     const containers = good.containers?.length ?? 0;
     if (containers) goes.push(`${containers} ${containers === 1 ? 'container' : 'containers'}`);
   }

@@ -44,6 +44,7 @@ mod routes;
 mod sampler;
 mod screen;
 mod setup;
+mod shared_infra;
 mod spawn_error;
 mod stopping;
 mod stream;
@@ -1023,6 +1024,7 @@ async fn serve_client(
             devlanes_proto::features::START_EVENTS,
             devlanes_proto::features::PROJECT_FILE,
             devlanes_proto::features::RELOAD,
+            devlanes_proto::features::STATUS_HERE,
         ]
         .map(String::from),
     );

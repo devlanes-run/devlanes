@@ -21,4 +21,8 @@ export interface CleanPlan {
   data_dir?: { path: string; bytes: number | null } | null;
   logs_bytes?: number | null;
   ports?: { start: number; size: number } | null;
+  /** The lane's run and task history goes with it. */
+  history?: boolean;
+  /** The project's last lane: `stop` its shared containers, or why it cannot tell what to stop. */
+  shared_infra?: 'stop' | { skipped: string; message?: string | null };
 }

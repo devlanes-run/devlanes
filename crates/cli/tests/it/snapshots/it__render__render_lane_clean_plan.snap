@@ -15,6 +15,7 @@ would clean acme@4 (chore/deps):
   remove    volume devlanes-acme-lane4-cache (size unknown)
   delete    data /home/dev/.devlanes/data/acme/7 (310.0 MiB)
   delete    logs (12.1 KiB)
+  delete    run and task history
   free      ports 20040-20049
 next: devlanes lane clean acme@4 --yes
 --- plain (exit 0)
@@ -30,6 +31,7 @@ would clean acme@4 (chore/deps):
   remove    volume devlanes-acme-lane4-cache (size unknown)
   delete    data /home/dev/.devlanes/data/acme/7 (310.0 MiB)
   delete    logs (12.1 KiB)
+  delete    run and task history
   free      ports 20040-20049
 next: devlanes lane clean acme@4 --yes
 --- agent (exit 0)
@@ -45,5 +47,6 @@ would clean acme@4 (chore/deps):
   remove volume devlanes-acme-lane4-cache (size unknown)
   delete data /home/dev/.devlanes/data/acme/7 (310.0 MiB)
   delete logs (12.1 KiB)
+  delete run and task history
   free ports 20040-20049
 next: devlanes lane clean acme@4 --yes

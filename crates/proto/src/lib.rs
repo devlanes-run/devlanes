@@ -51,6 +51,9 @@ pub mod features {
     /// The daemon answers [`super::Method::Reload`] and restarts the whole lane for a
     /// `restart` without units, which an older one refuses as `units_required`.
     pub const RELOAD: &str = "reload";
+    /// `status` answers the request's own lane as `here` or `here_error`, for the
+    /// command named by its `here_for` param ([`super::Method::Status`]).
+    pub const STATUS_HERE: &str = "status_here";
 }
 
 /// Attribution is supplied by clients and never inferred by the daemon.
@@ -140,6 +143,13 @@ pub enum Method {
     Reload,
     #[serde(rename = "resume")]
     Resume,
+    /// Lane summaries of the request's scope: a [`Page`] of [`LaneSummary`].
+    /// With a `here_for` param (a method name), or without `all`, the reply also
+    /// has `here`, the reference of the request's own lane as that method (default
+    /// `status`) would resolve it, or `here_error` with the error it would give
+    /// (`no_config`, `project_ambiguous`, `project_not_started`, `not_found`,
+    /// `lane_required`). Finding `here` registers and claims nothing, so with
+    /// `all` the request changes nothing. Advertised as [`features::STATUS_HERE`].
     #[serde(rename = "status")]
     Status,
     #[serde(rename = "lane.list")]
@@ -165,7 +175,9 @@ pub enum Method {
     /// message when the containers could not be listed; `data_dir` `{path,
     /// bytes}` or `null` without a lane record; `logs_bytes` the size of the
     /// logs it deletes; `ports` the block it frees as `{start, size}`. Sizes are
-    /// `null` when unknown.
+    /// `null` when unknown. Optional: `history: true` when the lane's run and
+    /// task history goes with it; `shared_infra`, for the project's last lane,
+    /// `"stop"` or `{skipped, message}` when what to stop is unknown.
     #[serde(rename = "lane.clean.plan")]
     LaneCleanPlan,
     #[serde(rename = "lane.gc")]
@@ -174,6 +186,8 @@ pub enum Method {
     Exec,
     #[serde(rename = "run")]
     Run,
+    /// Tasks of the lane's project: `{lane, items, sources}`, with `lane` `null` in
+    /// a project nobody started.
     #[serde(rename = "task.list")]
     TaskList,
     /// Profiles of the lane's project: `{lane, items: [ProfileSummary]}`.

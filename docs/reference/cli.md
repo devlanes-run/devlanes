@@ -344,11 +344,13 @@ devlanes lane new [OPTIONS]
 
 Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes).
 
-The worktree gets a lane again, with an empty data folder and possibly other ports,
-the next time `start`, `status` or another command that acts on lanes runs in it. The
-primary worktree's lane comes back on the next such command for its project. Reads such
-as `logs` and `url ls` leave it cleaned. A lane added with `lane new` does not come back;
-`lane new --name <name>` creates it again.
+The worktree gets a new lane, with a new, empty data folder, no run history and possibly
+other ports, the next time `start`, `status` or another command that acts on lanes runs in
+it. The primary worktree's lane comes back on the next such command for its project. Reads
+such as `logs` and `url ls` leave it cleaned. A lane added with `lane new` does not come
+back; `lane new --name <name>` creates a new one. A `lane new` lane that waits for
+`lanes.max` is cleaned by its name. Cleaning a project's last lane also stops its shared
+containers, keeping their data.
 
 ```text
 devlanes lane clean [OPTIONS] [LANE]
@@ -359,7 +361,7 @@ devlanes lane clean [OPTIONS] [LANE]
 
 ### devlanes lane gc
 
-Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
+Clean lanes whose worktree or project file is gone or names another project, drop unused port offsets, and delete lane data folders a clean could not (needs --yes)
 
 ```text
 devlanes lane gc [OPTIONS]

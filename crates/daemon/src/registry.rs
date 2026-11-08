@@ -992,7 +992,7 @@ impl Inner {
             );
             st.record = lanes
                 .iter()
-                .find(|lane| lane.worktree_id == worktree.id && lane.cleaned_at.is_none())
+                .find(|lane| lane.worktree_id == worktree.id)
                 .cloned();
             if let Some(record) = &st.record {
                 st.allocation = self
@@ -1007,7 +1007,7 @@ impl Inner {
         let project = Arc::new(ProjectRt {
             id,
             sync: tokio::sync::Mutex::new(()),
-            lane_new: tokio::sync::Mutex::new(()),
+            shared_infra: tokio::sync::RwLock::new(()),
             st: std::sync::Mutex::new(ProjectSt {
                 name,
                 root,
@@ -1048,13 +1048,23 @@ impl Inner {
     /// The loaded config of the primary worktree's lane, whose project-wide settings
     /// (`lanes.primary`, `lanes.max`) apply to every lane.
     pub(crate) fn primary_config(&self, project: &ProjectRt) -> Option<Arc<ProjectConfig>> {
+        self.primary_lane(project)
+            .and_then(|lane| lane.st().config.loaded().cloned())
+    }
+
+    /// The runtime of the primary worktree ([`Self::primary_path`]), not one of
+    /// its extra lanes; a present one before a removed worktree that had the
+    /// same folder.
+    pub(crate) fn primary_lane(&self, project: &ProjectRt) -> Option<Arc<LaneRt>> {
         let primary = self.primary_path(project);
-        project.lanes().into_iter().find_map(|lane| {
-            let st = lane.st();
-            (st.alias().is_none() && same_path(&st.path, &primary))
-                .then(|| st.config.loaded().cloned())
-                .flatten()
-        })
+        project
+            .lanes()
+            .into_iter()
+            .filter(|lane| {
+                let st = lane.st();
+                st.alias().is_none() && same_path(&st.path, &primary)
+            })
+            .min_by_key(|lane| !lane.st().present)
     }
 
     /// Re-lists worktrees from git and applies the diff, then cleans idle lanes
@@ -1302,10 +1312,12 @@ impl Inner {
                 if !st.present || st.record.is_some() {
                     continue;
                 }
-                // Only the primary worktree gets a lane by existing; any other
-                // gets one once devlanes runs in it.
+                // The primary worktree and extra lanes (`lane new`, whose
+                // worktree row exists only for its lane) get a lane by existing;
+                // any other worktree gets one once devlanes runs in it.
                 let is_primary = primary_identity.as_deref() == Some(st.identity.as_str());
-                if !is_primary && !st.wanted {
+                let by_existing = is_primary || st.alias().is_some();
+                if !by_existing && !st.wanted {
                     continue;
                 }
                 let Some(config) = st.config.loaded().cloned() else {
@@ -1838,12 +1850,12 @@ impl Inner {
         })
     }
 
-    /// Deletes the lane's data folder (`lane clean`), then the project's folder once no
-    /// lane folder is left in it. A missing folder is not an error. Returns the
-    /// folder when it could not be deleted, so the caller can name it to the user.
-    pub(crate) async fn remove_lane_data(&self, project: &str, lane: LaneId) -> Option<PathBuf> {
-        let path = self.lane_data_path(project, lane);
-        let parent = self.project_data_path(project);
+    /// Deletes a cleaned lane's data folder `path`, which the store holds as a
+    /// pending delete, then its project's folder once no lane folder is left in
+    /// it, and forgets the pending delete. A missing folder is not an error.
+    /// Returns the folder when it could not be deleted; it stays pending, and
+    /// [`Self::delete_pending_data`] tries again.
+    pub(crate) async fn delete_data(&self, path: PathBuf) -> Option<PathBuf> {
         let result = tokio::task::spawn_blocking({
             let path = path.clone();
             move || {
@@ -1854,28 +1866,51 @@ impl Inner {
                     _ => {}
                 }
                 // Fails while other lanes' folders remain, which is the point.
-                let _ = std::fs::remove_dir(&parent);
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::remove_dir(parent);
+                }
                 Ok(())
             }
         })
         .await;
         match result {
-            Ok(Ok(())) => return None,
+            Ok(Ok(())) => {
+                if let Err(error) = self.store.data_deleted(path.clone()).await {
+                    tracing::warn!(path = %path.display(), %error, "cannot forget a deleted lane data folder");
+                }
+                return None;
+            }
             #[cfg(windows)]
             Ok(Err(error)) if devlanes_sys_windows::file::is_held(&error) => {
                 tracing::warn!(
-                    project,
-                    lane = lane.0,
+                    path = %path.display(),
                     %error,
-                    "cannot delete the lane data folder: a program still has a file in it open; close that program and delete the folder by hand"
+                    "cannot delete the lane data folder: a program still has a file in it open; `devlanes lane gc` deletes it once that program closed it"
                 );
             }
             Ok(Err(error)) => {
-                tracing::warn!(project, lane = lane.0, %error, "cannot delete the lane data folder");
+                tracing::warn!(path = %path.display(), %error, "cannot delete the lane data folder");
             }
             Err(error) => tracing::warn!(%error, "lane data folder task failed"),
         }
         Some(path)
+    }
+
+    /// Deletes the data folders of cleaned lanes that a clean could not delete
+    /// (`lane gc` and the state maintenance pass). Returns the ones still there.
+    pub(crate) async fn delete_pending_data(&self) -> Vec<PathBuf> {
+        let pending = match self.store.data_deletes().await {
+            Ok(pending) => pending,
+            Err(error) => {
+                tracing::warn!(%error, "cannot list lane data folders to delete");
+                return Vec::new();
+            }
+        };
+        let mut left = Vec::new();
+        for path in pending {
+            left.extend(self.delete_data(path).await);
+        }
+        left
     }
 
     /// Deletes the logs of lane `index` (`lane clean`), then the project's log
@@ -2535,9 +2570,11 @@ impl Inner {
                         .clean_lane(&project, &lane, None, crate::lifecycle::Logs::Keep)
                         .await
                     {
-                        Ok(_) => {
+                        Ok(crate::lifecycle::Cleaned::Done(_)) => {
                             tracing::info!(lane = %reference, "cleaned a lane whose worktree is gone")
                         }
+                        // Another clean got there first.
+                        Ok(crate::lifecycle::Cleaned::Gone) => {}
                         Err(error) => {
                             tracing::warn!(lane = %reference, code = %error.code, "cleaning a lane whose worktree is gone failed")
                         }

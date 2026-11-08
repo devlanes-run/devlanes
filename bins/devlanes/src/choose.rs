@@ -5,7 +5,7 @@
 //! and the TUI use it), rather than a picker crate: one screen of lines with a
 //! cursor needs no more, and the selection logic lives in `devlanes_cli::Picker`.
 
-use std::{io::Write, path::Path};
+use std::io::Write;
 
 use crossterm::{
     cursor,
@@ -14,10 +14,10 @@ use crossterm::{
 };
 use devlanes_cli::{
     Choice, ChoiceKind, NoOptions, OutputMode, Picker, PickerKey, PickerStep, Runtime,
-    lane_for_cwd, lane_options, missing_argument, no_options, task_options, unit_options,
+    lane_options, missing_argument, no_options, task_options, unit_options,
 };
 use devlanes_client::{Client, Paths};
-use devlanes_proto::{Context, LaneSummary, Method, Page, RpcError};
+use devlanes_proto::{Context, LaneSummary, Method, Page, RpcError, features};
 use serde_json::json;
 
 use crate::{driver::rpc_error, output::emit};
@@ -42,16 +42,6 @@ pub async fn choose(
     args: &[String],
 ) -> Result<Chosen, RpcError> {
     let cwd = context.cwd.display().to_string();
-    // Without --lane, --project, --file or a lane's project the lane comes from the
-    // directory; with no devlanes.yaml above it there is nothing to ask the daemon.
-    let scoped = context.lane.is_some()
-        || context.project.is_some()
-        || context.lane_project.is_some()
-        || context.file.is_some();
-    if choice.kind != ChoiceKind::Lane && !scoped && !has_config(&context.cwd).await {
-        emit(&no_options(choice, &NoOptions::NoConfig { cwd }, runtime));
-        return Ok(Chosen::Exit(devlanes_cli::exit::NOT_FOUND));
-    }
     let mut client = Client::connect_or_spawn(paths).await.map_err(rpc_error)?;
     let query = Context {
         env: None,
@@ -66,30 +56,59 @@ pub async fn choose(
             (lane_options(&data), String::new())
         }
         ChoiceKind::Task => {
-            let data = client
-                .request(Method::TaskList, json!({}), query)
-                .await
-                .map_err(rpc_error)?;
-            (task_options(&data), lane_name(&mut client, context).await)
+            let data = match client.request(Method::TaskList, json!({}), query).await {
+                Ok(data) => data,
+                Err(devlanes_client::Error::Rpc(error)) if error.code == "no_config" => {
+                    emit(&no_options(choice, &NoOptions::NoConfig { cwd }, runtime));
+                    return Ok(Chosen::Exit(devlanes_cli::exit::NOT_FOUND));
+                }
+                Err(error) => return Err(rpc_error(error)),
+            };
+            // `null` in a project nobody started.
+            let lane = data["lane"].as_str().unwrap_or("this lane").to_owned();
+            (task_options(&data), lane)
         }
         kind => {
+            // The daemon says which lane the command would use; an older one cannot.
+            if !client.supports(features::STATUS_HERE) {
+                return Err(client.daemon_outdated("choosing a unit"));
+            }
+            // `all` with `here_for` registers and claims nothing, as the command
+            // run without the argument would not.
             let data = client
-                .request(Method::Status, json!({}), query)
+                .request(
+                    Method::Status,
+                    json!({"all": true, "here_for": choice.method}),
+                    query,
+                )
                 .await
                 .map_err(rpc_error)?;
+            let here = data["here"].as_str().map(str::to_owned);
+            let here_error: Option<RpcError> =
+                serde_json::from_value(data["here_error"].clone()).ok();
             let lanes: Vec<LaneSummary> = serde_json::from_value::<Page<LaneSummary>>(data)
                 .map(|page| page.items)
                 .unwrap_or_default();
-            let found = if context.lane.is_some() {
-                lanes.first()
-            } else {
-                lane_for_cwd(&lanes, &context.cwd)
-            };
+            let found = here.and_then(|here| lanes.into_iter().find(|lane| lane.reference == here));
             let Some(lane) = found else {
-                emit(&no_options(choice, &NoOptions::NoLane { cwd }, runtime));
+                let why = match here_error {
+                    Some(error) if error.code == "no_config" => NoOptions::NoConfig { cwd },
+                    // Several projects, `-p` without a lane, or a project nobody
+                    // started: the daemon's words say what to name or run.
+                    Some(error)
+                        if matches!(
+                            error.code.as_str(),
+                            "project_ambiguous" | "lane_required" | "project_not_started"
+                        ) =>
+                    {
+                        return Err(error);
+                    }
+                    _ => NoOptions::NoLane { cwd },
+                };
+                emit(&no_options(choice, &why, runtime));
                 return Ok(Chosen::Exit(devlanes_cli::exit::NOT_FOUND));
             };
-            (unit_options(kind, lane), lane.reference.clone())
+            (unit_options(kind, &lane), lane.reference.clone())
         }
     };
     drop(client);
@@ -135,42 +154,6 @@ fn interactive(runtime: &Runtime) -> bool {
         && runtime.stdin_tty
         && runtime.stdout_tty
         && std::io::stderr().is_terminal()
-}
-
-/// The lane name for messages about tasks: `--lane` as given, else the cwd's.
-async fn lane_name(client: &mut Client, context: &Context) -> String {
-    if let Some(lane) = &context.lane {
-        return lane.clone();
-    }
-    let Ok(data) = client
-        .request(
-            Method::Status,
-            json!({}),
-            Context {
-                env: None,
-                ..context.clone()
-            },
-        )
-        .await
-    else {
-        return "this lane".into();
-    };
-    let lanes: Vec<LaneSummary> = serde_json::from_value::<Page<LaneSummary>>(data)
-        .map(|page| page.items)
-        .unwrap_or_default();
-    lane_for_cwd(&lanes, &context.cwd)
-        .map_or_else(|| "this lane".into(), |lane| lane.reference.clone())
-}
-
-/// Whether `dir` or a parent up to the repository root holds a devlanes.yaml, as the
-/// daemon looks for it.
-async fn has_config(dir: &Path) -> bool {
-    let dir = dir.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        devlanes_config::find_project_file(&dir).map_or(true, |found| found.is_some())
-    })
-    .await
-    .unwrap_or(true)
 }
 
 /// Runs the picker on stderr in raw mode; `None` when cancelled. Blocking.
@@ -272,32 +255,5 @@ mod tests {
         let text = String::from_utf8_lossy(&again);
         assert!(text.starts_with("\x1b[2F"), "{text:?}");
         assert!(text.ends_with("c\r\n"), "{text:?}");
-    }
-
-    /// The config search walks up through parent directories.
-    #[tokio::test]
-    async fn config_is_found_in_a_parent() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let nested = temp.path().join("a/b");
-        std::fs::create_dir_all(&nested).expect("dirs");
-        assert!(!has_config(&nested).await);
-        std::fs::write(temp.path().join("devlanes.yaml"), "project: acme\n").expect("config");
-        assert!(has_config(&nested).await);
-    }
-
-    /// A devlanes.yaml above the repository root belongs to another project, so
-    /// a repository below it has no config of its own.
-    #[tokio::test]
-    async fn config_search_stops_at_the_repository_root() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(temp.path().join("devlanes.yaml"), "project: outer\n").expect("config");
-        let repo = temp.path().join("repo");
-        let nested = repo.join("apps/web");
-        std::fs::create_dir_all(repo.join(".git")).expect("git");
-        std::fs::create_dir_all(&nested).expect("dirs");
-        assert!(!has_config(&nested).await);
-        assert!(!has_config(&repo).await);
-        std::fs::write(repo.join("devlanes.yaml"), "project: acme\n").expect("config");
-        assert!(has_config(&nested).await);
     }
 }

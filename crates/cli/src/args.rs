@@ -890,11 +890,13 @@ this shell's environment and --env, as start does."
     /// Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes)
     #[command(
         long_about = "Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes).\n\n\
-The worktree gets a lane again, with an empty data folder and possibly other ports,\n\
-the next time `start`, `status` or another command that acts on lanes runs in it. The\n\
-primary worktree's lane comes back on the next such command for its project. Reads such\n\
-as `logs` and `url ls` leave it cleaned. A lane added with `lane new` does not come back;\n\
-`lane new --name <name>` creates it again."
+The worktree gets a new lane, with a new, empty data folder, no run history and possibly\n\
+other ports, the next time `start`, `status` or another command that acts on lanes runs in\n\
+it. The primary worktree's lane comes back on the next such command for its project. Reads\n\
+such as `logs` and `url ls` leave it cleaned. A lane added with `lane new` does not come\n\
+back; `lane new --name <name>` creates a new one. A `lane new` lane that waits for\n\
+`lanes.max` is cleaned by its name. Cleaning a project's last lane also stops its shared\n\
+containers, keeping their data."
     )]
     Clean {
         // Own id: `lane` would collide with the global `--lane`.
@@ -905,7 +907,7 @@ as `logs` and `url ls` leave it cleaned. A lane added with `lane new` does not c
         #[arg(long)]
         dry_run: bool,
     },
-    /// Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
+    /// Clean lanes whose worktree or project file is gone or names another project, drop unused port offsets, and delete lane data folders a clean could not (needs --yes)
     Gc,
     /// Start the lanes that were running before a reboot or daemon restart
     #[command(
@@ -1679,27 +1681,31 @@ impl Cli {
     /// commands with a default (stop, env) never ask.
     pub fn missing_choice(&self) -> Option<crate::Choice> {
         use crate::ChoiceKind as K;
-        let (command, kind, multi): (Vec<&'static str>, K, bool) = match &self.command {
+        let (command, kind, multi, method): (Vec<&'static str>, K, bool, Method) = match &self
+            .command
+        {
             Some(Command::Url {
                 command: UrlCommand::Print { unit: None },
-            }) => (vec!["url", "print"], K::Url, false),
+            }) => (vec!["url", "print"], K::Url, false, Method::Url),
             Some(Command::Url {
                 command: UrlCommand::Open { unit: None },
-            }) => (vec!["url", "open"], K::Url, false),
-            Some(Command::Attach { unit: None }) => (vec!["attach"], K::Running, false),
-            Some(Command::Wait { target: None }) => (vec!["wait"], K::Target, false),
+            }) => (vec!["url", "open"], K::Url, false, Method::Url),
+            Some(Command::Attach { unit: None }) => {
+                (vec!["attach"], K::Running, false, Method::Attach)
+            }
+            Some(Command::Wait { target: None }) => (vec!["wait"], K::Target, false, Method::Wait),
             Some(Command::Debug {
                 command: DebugCommand::Why { unit: None },
-            }) => (vec!["debug", "why"], K::Unit, false),
+            }) => (vec!["debug", "why"], K::Unit, false, Method::Why),
             Some(Command::Logs(args)) if args.units.is_empty() && !args.mine && !args.all => {
-                (vec!["logs"], K::Unit, true)
+                (vec!["logs"], K::Unit, true, Method::Logs)
             }
             Some(Command::Run(args)) if args.task.is_none() && !args.list => {
-                (vec!["run"], K::Task, false)
+                (vec!["run"], K::Task, false, Method::Run)
             }
             Some(Command::Lane {
                 command: LaneCommand::Clean { lane: None, .. },
-            }) => (vec!["lane", "clean"], K::Lane, false),
+            }) => (vec!["lane", "clean"], K::Lane, false, Method::LaneClean),
             _ => return None,
         };
         Some(crate::Choice {
@@ -1707,6 +1713,7 @@ impl Cli {
             command,
             kind,
             multi,
+            method,
         })
     }
 

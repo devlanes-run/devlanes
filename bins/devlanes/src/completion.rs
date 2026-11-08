@@ -1,7 +1,7 @@
 //! Dynamic completion that asks an already-running daemon and never spawns one.
 //! User config keys come from the config schema instead.
 
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use devlanes_cli::{CompletionKind, CompletionSource, complete_environment};
 use devlanes_client::{Client, Paths};
@@ -42,21 +42,10 @@ fn item_names(data: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
-/// The known lane whose worktree contains `cwd` (the deepest, for nested worktrees).
-fn worktree_lane<'a>(lanes: &'a [LaneSummary], cwd: &Path) -> Option<&'a str> {
-    lanes
-        .iter()
-        .filter(|lane| {
-            !lane.path.as_os_str().is_empty()
-                && devlanes_core::paths::path_starts_with(cwd, &lane.path)
-        })
-        .max_by_key(|lane| lane.path.as_os_str().len())
-        .map(|lane| lane.reference.as_str())
-}
-
-/// Status (with `all` and no cwd) knows every lane and unit name; tasks come from the
-/// lane of the current worktree, named by reference. No request carries a cwd, so
-/// completing in a new repository never registers it as a project.
+/// Status with `all` knows every lane and unit name; tasks and profiles come from
+/// the lane the daemon answers as the directory's own (`here`), named by
+/// reference. `all` and `here` register nothing, so completing in a new
+/// repository never adds it as a project.
 async fn candidates(kind: CompletionKind) -> Option<Vec<String>> {
     let paths = Paths::discover().ok()?;
     let mut client = Client::connect(&paths).await.ok()?;
@@ -67,24 +56,31 @@ async fn candidates(kind: CompletionKind) -> Option<Vec<String>> {
             .ok()?;
         item_names(&data, "host")
     } else {
+        let method = match kind {
+            CompletionKind::Task => Some(Method::TaskList),
+            CompletionKind::Profile => Some(Method::ProfileList),
+            _ => None,
+        };
+        let context = Context {
+            cwd: std::env::current_dir().ok()?,
+            ..Context::default()
+        };
         let data = client
-            .request(Method::Status, json!({"all": true}), Context::default())
+            .request(
+                Method::Status,
+                json!({"all": true, "here_for": method}),
+                context,
+            )
             .await
             .ok()?;
+        let here = data["here"].as_str().map(str::to_owned);
         let page: Page<LaneSummary> = serde_json::from_value(data).ok()?;
         let mut names = Vec::new();
-        // Tasks and profiles belong to the worktree's lane, named by reference.
-        if matches!(kind, CompletionKind::Task | CompletionKind::Profile) {
-            let cwd = std::env::current_dir().ok()?;
-            let lane = worktree_lane(&page.items, &cwd)?.to_owned();
+        // Tasks and profiles belong to the directory's lane, named by reference.
+        if let Some(method) = method {
             let context = Context {
-                lane: Some(lane),
+                lane: Some(here?),
                 ..Context::default()
-            };
-            let method = if kind == CompletionKind::Task {
-                Method::TaskList
-            } else {
-                Method::ProfileList
             };
             let data = client.request(method, json!({}), context).await.ok()?;
             names = item_names(&data, "name");
@@ -115,34 +111,4 @@ async fn candidates(kind: CompletionKind) -> Option<Vec<String>> {
 /// Installs the hook; returns normally unless the shell is asking for completions.
 pub fn install() {
     complete_environment(Arc::new(DaemonCandidates));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Tasks complete from the lane whose worktree holds the cwd.
-    #[test]
-    fn task_completion_uses_the_worktree_lane() {
-        let lane = |reference: &str, path: &str| LaneSummary {
-            reference: reference.into(),
-            path: path.into(),
-            ..LaneSummary::default()
-        };
-        let lanes = [
-            lane("acme@0", "/work/acme"),
-            lane("acme@1", "/work/acme/.wt/one"),
-        ];
-        assert_eq!(
-            worktree_lane(&lanes, Path::new("/work/acme/.wt/one/src")),
-            Some("acme@1")
-        );
-        assert_eq!(
-            worktree_lane(&lanes, Path::new("/work/acme/src")),
-            Some("acme@0")
-        );
-        assert_eq!(worktree_lane(&lanes, Path::new("/elsewhere")), None);
-        let hosts = json!({"items": [{"host": "box"}, {"host": "gpu"}]});
-        assert_eq!(item_names(&hosts, "host"), ["box", "gpu"]);
-    }
 }

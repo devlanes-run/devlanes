@@ -87,8 +87,11 @@ impl Fake {
         app.version = data::VERSION;
         // Step times count from here, so they draw the same on every run.
         app.clock = Some(std::time::Instant::now());
-        // Opened from the monorepo's main worktree.
-        app.prefer_path("/work/acme".into());
+        // Opened from the monorepo's main worktree, whose lane the daemon answers.
+        app.update(Msg::Home(devlanes_tui::api::Home {
+            lanes: Vec::new(),
+            here: Some("acme@0".into()),
+        }));
         let mut fake = Self {
             app,
             queue: VecDeque::new(),
