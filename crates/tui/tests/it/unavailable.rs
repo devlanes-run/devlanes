@@ -27,7 +27,7 @@ async fn app_on(width: u16, height: u16, view: View) -> App {
     let mut app = App::new(width, height);
     app.clock = Some(Instant::now());
     app.update(Msg::Status(api.status().await));
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     app.update(Msg::DaemonInfo {
         status: api.daemon_status().await,
         doctor: api.doctor().await,
@@ -187,7 +187,7 @@ async fn an_own_restart_shows_its_steps_until_the_new_daemon_answers() -> TestRe
     assert_eq!(count(&effects, |e| matches!(e, Effect::Subscribe)), 1);
     // The retry that was waiting finds nothing left to do.
     assert!(app.update(Msg::Reconnect).is_empty());
-    let effects = app.update(Msg::Subscribed(Ok(())));
+    let effects = app.update(Msg::Subscribed(Ok(Vec::new())));
     assert_eq!(app.daemon_state, DaemonState::Online);
     assert!(effects.iter().any(|e| matches!(e, Effect::Refresh)));
     assert!(effects.iter().any(|e| matches!(e, Effect::FetchDaemon)));
@@ -242,7 +242,7 @@ async fn a_restart_someone_else_ran_follows_its_events() -> TestResult {
     ))));
     assert!(app.errors.is_empty(), "{:?}", app.errors);
     app.update(Msg::Reconnect);
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     assert_eq!(app.daemon_state, DaemonState::Online);
     assert_eq!(app.view, View::Project);
     assert!(screen(&render(&app)?).contains("┌ @0 · "));
@@ -292,7 +292,7 @@ async fn a_stop_someone_else_asked_for_ends_stopped() -> TestResult {
     ));
     let effects = app.update(Msg::DaemonStarted(Ok(daemon_status())));
     assert_eq!(count(&effects, |e| matches!(e, Effect::Subscribe)), 1);
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     assert_eq!(app.daemon_state, DaemonState::Online);
     assert_eq!(app.view, View::Monitor);
     Ok(())
@@ -313,7 +313,7 @@ async fn an_unannounced_loss_waits_one_tick() -> TestResult {
         "{text}"
     );
     app.update(Msg::Reconnect);
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     app.update(Msg::Tick);
     assert_eq!(app.daemon_state, DaemonState::Online);
     assert!(!app.unavailable());
@@ -376,7 +376,7 @@ async fn an_own_stop_then_start() -> TestResult {
     assert!(app.update(key(KeyCode::Char('s'))).is_empty());
     let effects = app.update(Msg::DaemonStarted(Ok(daemon_status())));
     assert_eq!(count(&effects, |e| matches!(e, Effect::Subscribe)), 1);
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     assert_eq!(app.daemon_state, DaemonState::Online);
     assert_eq!(
         app.notice.as_ref().map(|n| n.text.as_str()),

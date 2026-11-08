@@ -44,7 +44,7 @@ pub async fn daemon_app(width: u16, height: u16) -> Result<App, Box<dyn std::err
     let api = FakeApi::with_lanes(mixed_lanes());
     let mut app = App::new(width, height);
     app.update(Msg::Status(api.status().await));
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     let effects = app.update(shifted('D'));
     assert_eq!(app.view, View::Daemon);
     assert!(

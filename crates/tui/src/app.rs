@@ -193,6 +193,10 @@ pub struct LanePhases {
     pub steps: Vec<PhaseStep>,
     /// Ticks since the start began.
     pub seconds: u64,
+    /// Starts of the lane that have not ended, by `start_id`, each with when
+    /// this TUI saw its first `lane.phase` event. Filled only from a daemon
+    /// that sends `start.ended`; several starts of one lane can run at once.
+    pub running: BTreeMap<u64, web_time::Instant>,
 }
 
 /// Lines of the daemon log kept client-side.
@@ -731,7 +735,8 @@ pub enum Msg {
     /// ([`crate::api::DaemonApi::home_scope`]).
     Home(crate::api::Home),
     Status(Result<Vec<LaneSummary>, ApiError>),
-    Subscribed(Result<(), ApiError>),
+    /// The subscription is open; the features its daemon advertised.
+    Subscribed(Result<Vec<String>, ApiError>),
     Event(Event),
     /// The subscription ended, with the reason when there is one.
     EventsEnded(Option<ApiError>),
@@ -1404,8 +1409,10 @@ pub struct App {
     pub focused: bool,
     /// A start must run this long before its end is worth a notification.
     pub notify_after: std::time::Duration,
-    /// Each lane's state when last seen, and since when it is starting.
-    watched: HashMap<String, (String, Option<web_time::Instant>)>,
+    /// The daemon of the subscription sends `start.ended`, so this TUI tracks
+    /// which starts run ([`LanePhases::running`]). Without it, no crash is
+    /// held back as a start's and no start's end notifies.
+    tracks_starts: bool,
     /// Each service's state when last seen, by `(lane, unit)`.
     watched_units: HashMap<(String, String), String>,
     /// Units this TUI shows `queued` because it just sent their start, by
@@ -1532,7 +1539,7 @@ impl App {
             quitting: false,
             focused: true,
             notify_after: devlanes_term::LONG_START,
-            watched: HashMap::new(),
+            tracks_starts: false,
             watched_units: HashMap::new(),
             optimistic: HashMap::new(),
             last_action: 0,
@@ -1592,41 +1599,17 @@ impl App {
         title
     }
 
-    /// Compares every lane and service with how it was last seen, and asks
-    /// for a notification while the terminal is not focused when a start
-    /// that ran at least [`App::notify_after`] ended, or a running service
+    /// Compares every service with how it was last seen, and asks for a
+    /// notification while the terminal is not focused when a running service
     /// failed outside a start.
     fn watch(&mut self, effects: &mut Vec<Effect>) {
-        let now = web_time::Instant::now();
         let mut notes = Vec::new();
         let mut seen_units = HashMap::new();
         for lane in &self.lanes {
-            let before = self.watched.get(&lane.reference);
-            let was_starting = before.is_some_and(|(state, _)| state == "starting");
-            let since = if lane.state == "starting" {
-                Some(before.and_then(|(_, since)| *since).unwrap_or(now))
-            } else {
-                None
-            };
-            if was_starting
-                && lane.state != "starting"
-                && before
-                    .and_then(|(_, since)| *since)
-                    .is_some_and(|since| now.duration_since(since) >= self.notify_after)
-            {
-                let counts = tree::counts(lane);
-                notes.push(if counts.failed > 0 {
-                    (
-                        format!("start of {} failed", lane.reference),
-                        format!("{} failed", counts.failed),
-                    )
-                } else {
-                    (
-                        format!("{} is up", lane.reference),
-                        format!("{} of {} ready", counts.up, counts.total),
-                    )
-                });
-            }
+            let in_start = self
+                .phases
+                .get(&lane.reference)
+                .is_some_and(|phases| !phases.running.is_empty());
             for unit in lane
                 .units
                 .iter()
@@ -1638,7 +1621,7 @@ impl App {
                     .get(&key)
                     .is_some_and(|state| matches!(state.as_str(), "ready" | "running"));
                 // A failure during a start is the start's, reported when it ends.
-                if was_up && unit.state == "failed" && lane.state != "starting" && !was_starting {
+                if was_up && unit.state == "failed" && !in_start {
                     let body = unit
                         .exit_code
                         .map(|code| format!("exited {code}"))
@@ -1647,12 +1630,7 @@ impl App {
                 }
                 seen_units.insert(key, unit.state.clone());
             }
-            self.watched
-                .insert(lane.reference.clone(), (lane.state.clone(), since));
         }
-        let lanes: HashSet<&str> = self.lanes.iter().map(|l| l.reference.as_str()).collect();
-        self.watched
-            .retain(|reference, _| lanes.contains(reference.as_str()));
         self.watched_units = seen_units;
         if !self.focused {
             effects.extend(
@@ -1661,6 +1639,45 @@ impl App {
                     .map(|(title, body)| Effect::Notify { title, body }),
             );
         }
+    }
+
+    /// Takes the start `start_id` of `lane` out of the running ones, and asks
+    /// for a notification while the terminal is not focused when it ran at
+    /// least [`App::notify_after`], counting from its first event this TUI saw.
+    fn start_ended(&mut self, data: &Value, effects: &mut Vec<Effect>) {
+        let (Some(lane), Some(id)) = (
+            data.get("lane").and_then(Value::as_str).map(text::clean),
+            data.get("start_id").and_then(Value::as_u64),
+        ) else {
+            return;
+        };
+        let Some(began) = self
+            .phases
+            .get_mut(&lane)
+            .and_then(|phases| phases.running.remove(&id))
+        else {
+            return;
+        };
+        if self.focused || began.elapsed() < self.notify_after {
+            return;
+        }
+        // The start's last `lane.changed` came before its end.
+        let Some(summary) = self.lane(&lane) else {
+            return;
+        };
+        let counts = tree::counts(summary);
+        let (title, body) = if counts.failed > 0 {
+            (
+                format!("start of {lane} failed"),
+                format!("{} failed", counts.failed),
+            )
+        } else {
+            (
+                format!("{lane} is up"),
+                format!("{} of {} ready", counts.up, counts.total),
+            )
+        };
+        effects.push(Effect::Notify { title, body });
     }
 
     /// Follows a start sent before the TUI opened; its frames arrive as
@@ -1846,12 +1863,16 @@ impl App {
             }
             Msg::Status(Err(error)) => self.api_error("daemon status", None, error, &mut effects),
             Msg::Start(frame) => self.start_frame(frame, &mut effects),
-            Msg::Subscribed(Ok(())) => {
+            Msg::Subscribed(Ok(features)) => {
                 let reconnected = matches!(self.connection, Connection::Reconnecting { .. });
                 if reconnected {
                     // The daemon may be a new one, numbering its starts from 1.
                     self.starts.reset();
+                    self.forget_running_starts();
                 }
+                self.tracks_starts = features
+                    .iter()
+                    .any(|feature| feature == devlanes_proto::features::START_ENDED);
                 self.connection = Connection::Online;
                 // Whoever started the daemon, it answers now.
                 self.daemon_moved(Cause::Subscribed, &mut effects);
@@ -2771,8 +2792,11 @@ impl App {
         let start = data.get("start_id").and_then(Value::as_u64);
         let phases = self.phases.entry(lane).or_default();
         if start.is_some() && phases.start_id != start {
+            // Another start of the lane may still run.
+            let running = std::mem::take(&mut phases.running);
             *phases = LanePhases {
                 start_id: start,
+                running,
                 ..LanePhases::default()
             };
         }
@@ -2801,10 +2825,41 @@ impl App {
         }
     }
 
+    /// Forgets every running start after events may have been lost, so a
+    /// missed `start.ended` holds no crash back. A start still running is
+    /// counted again from its next `lane.phase` event.
+    fn forget_running_starts(&mut self) {
+        for phases in self.phases.values_mut() {
+            phases.running.clear();
+        }
+    }
+
+    /// Counts the start of a subscription's `lane.phase` event as running,
+    /// when the daemon sends `start.ended`. Events of the start's own request
+    /// do not count: one can arrive after the subscription brought its end.
+    fn track_start(&mut self, data: &Value) {
+        if !self.tracks_starts {
+            return;
+        }
+        let (Some(lane), Some(id)) = (
+            data.get("lane").and_then(Value::as_str).map(text::clean),
+            data.get("start_id").and_then(Value::as_u64),
+        ) else {
+            return;
+        };
+        self.phases
+            .entry(lane)
+            .or_default()
+            .running
+            .entry(id)
+            .or_insert_with(web_time::Instant::now);
+    }
+
     /// Applies a subscription event to the cached lanes.
     fn event(&mut self, event: Event, effects: &mut Vec<Effect>) {
         if event.event == events::PHASE {
             self.track_phase(&event.data);
+            self.track_start(&event.data);
         }
         let clients = event.event == devlanes_proto::remote::CLIENTS_EVENT;
         // Link states, warnings and `remote.mirror.changed` all change what
@@ -2817,7 +2872,11 @@ impl App {
             self.fetch_clients(effects);
         }
         match event.event.as_str() {
-            events::RESYNC => effects.push(Effect::Refresh),
+            events::RESYNC => {
+                self.forget_running_starts();
+                effects.push(Effect::Refresh);
+            }
+            events::START_ENDED => self.start_ended(&event.data, effects),
             // A local lane that starts takes its hostnames back from the box
             // chosen for it, which deletes that choice.
             devlanes_proto::remote::WARNING_EVENT
@@ -7652,12 +7711,8 @@ impl App {
         }
         // Phase timings and the spinner on terminals that only redraw per tick.
         self.spin = self.spin.wrapping_add(1);
-        for (lane, phases) in &mut self.phases {
-            let starting = self
-                .lanes
-                .iter()
-                .any(|l| l.reference == *lane && l.state == "starting");
-            if starting {
+        for phases in self.phases.values_mut() {
+            if !phases.running.is_empty() {
                 phases.seconds += 1;
                 if let Some(step) = phases
                     .steps
