@@ -583,6 +583,32 @@ impl LaneSt {
         self.identity.rsplit_once(ALIAS_MARK)
     }
 
+    /// Whether `selector` names a unit of this lane: a unit that ran, an orphan,
+    /// or a configured service by its unit or service name.
+    pub(crate) fn knows_unit(&self, selector: &str) -> bool {
+        self.units.contains_key(selector)
+            || self.orphans.contains_key(selector)
+            || self.view.as_ref().is_some_and(|view| {
+                view.services
+                    .iter()
+                    .any(|service| service.unit == selector || service.name == selector)
+            })
+    }
+
+    /// The units a `not_found` for a name [`Self::knows_unit`] refuses lists: the
+    /// ones that ran and the configured services, sorted.
+    pub(crate) fn unit_candidates(&self) -> Vec<String> {
+        let mut candidates: Vec<String> = self.units.keys().cloned().collect();
+        candidates.extend(
+            self.view
+                .iter()
+                .flat_map(|view| view.services.iter().map(|s| s.unit.clone())),
+        );
+        candidates.sort();
+        candidates.dedup();
+        candidates
+    }
+
     /// Whether status, lane lists and events show this lane: it has a lane
     /// record, or devlanes ran in its present worktree and it waits for one
     /// (`lanes.max`, a full port pool, a config error). A worktree that merely

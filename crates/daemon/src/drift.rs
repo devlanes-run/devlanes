@@ -479,27 +479,10 @@ impl Inner {
                 ));
             }
             // Names the lane does not have are a typo, not "nothing to reload".
-            let known = |selector: &str| {
-                st.units.contains_key(selector)
-                    || st.orphans.contains_key(selector)
-                    || st.view.as_ref().is_some_and(|view| {
-                        view.services
-                            .iter()
-                            .any(|service| service.unit == selector || service.name == selector)
-                    })
-            };
-            if let Some(unknown) = selectors.iter().find(|selector| !known(selector)) {
-                let mut candidates: Vec<String> = st.units.keys().cloned().collect();
-                candidates.extend(
-                    st.view
-                        .iter()
-                        .flat_map(|view| view.services.iter().map(|s| s.unit.clone())),
-                );
-                candidates.sort();
-                candidates.dedup();
+            if let Some(unknown) = selectors.iter().find(|selector| !st.knows_unit(selector)) {
                 return Err(RpcError::new(
                     "not_found",
-                    json!({"reference": unknown, "candidates": candidates}),
+                    json!({"reference": unknown, "candidates": st.unit_candidates()}),
                     3,
                 ));
             }

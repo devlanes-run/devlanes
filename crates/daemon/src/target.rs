@@ -14,7 +14,7 @@ use devlanes_core::{
     WorktreeId,
     paths::same_path,
     ports::{PortBlock, allocate_offsets, block_size},
-    refs::{LaneCandidate, LaneRef, ReferenceError, ResolveContext, UnitRef},
+    refs::{LaneCandidate, LaneMatch, LaneRef, ReferenceError, ResolveContext, UnitRef},
 };
 use devlanes_proto::{Context, Method, RpcError};
 use devlanes_resolve::LaneFacts;
@@ -45,6 +45,10 @@ pub(crate) struct Policy {
     /// units, `--mine` too) answers an empty page and `lane gc` relists nothing.
     /// Without it, such a request is `project_not_started`.
     pub absent_is_empty: bool,
+    /// A lone unit selector that names no unit but names a lane by its number or
+    /// name fails as that lane, under `names_lane` (`stop 1`), instead of the
+    /// command acting on the cwd's lane.
+    pub selector_lanes: bool,
 }
 
 /// Which worktree a request makes a lane.
@@ -76,6 +80,7 @@ impl Policy {
             main_lane: true,
             relist: false,
             absent_is_empty: false,
+            selector_lanes: false,
         };
         let acts = Self {
             register: true,
@@ -90,11 +95,14 @@ impl Policy {
         match method {
             Method::Start => Self {
                 relist: true,
+                selector_lanes: true,
                 ..acts
             },
-            Method::Restart
-            | Method::Reload
-            | Method::InfraUp
+            Method::Restart | Method::Reload => Self {
+                selector_lanes: true,
+                ..acts
+            },
+            Method::InfraUp
             | Method::InfraDown
             | Method::InfraStatus
             | Method::InfraLogs
@@ -111,6 +119,7 @@ impl Policy {
             },
             Method::Stop => Self {
                 absent_is_empty: true,
+                selector_lanes: true,
                 ..read
             },
             Method::LaneGc => Self {
@@ -607,7 +616,7 @@ impl Inner {
                 let _ = self.relist(project).await;
             }
         }
-        let (project, lane) = self.match_reference(&parsed, &scope, context)?;
+        let ((project, lane), _) = self.match_reference(&parsed, &scope, context)?;
         if policy.claim == Claim::Target {
             self.claim_lane(&project, &lane).await;
         }
@@ -615,13 +624,13 @@ impl Inner {
     }
 
     /// The lane `parsed` names among the candidates of `scope` (every project when
-    /// empty), from memory only.
-    pub(crate) fn match_reference(
+    /// empty), and what matched it, from memory only.
+    fn match_reference(
         &self,
         parsed: &LaneRef,
         scope: &[Arc<ProjectRt>],
         context: &Context,
-    ) -> Result<LanePair, RpcError> {
+    ) -> Result<(LanePair, LaneMatch), RpcError> {
         let (candidates, map) = self.candidates();
         let resolve = ResolveContext {
             projects: scope.iter().map(|project| project.id).collect(),
@@ -635,25 +644,54 @@ impl Inner {
         };
         let found = devlanes_core::refs::resolve_lane(parsed, &candidates, &resolve)
             .map_err(reference_error)?;
-        map.get(&found.worktree).cloned().ok_or_else(|| {
+        let pair = map.get(&found.lane.worktree).cloned().ok_or_else(|| {
             reference_error(ReferenceError::NotFound {
                 reference: parsed.selector.clone(),
                 candidates: Vec::new(),
             })
-        })
+        })?;
+        Ok((pair, found.by))
     }
 
-    /// The projects a short reference resolves in when nothing is registered on the
-    /// way: [`Self::find`]'s, `None` for a project nobody registered. Only for
-    /// `note_lane_selector`, and removed with it (ws-resolution PR 3).
-    pub(crate) async fn reference_scope(
-        self: &Arc<Self>,
+    /// `not_found` for a lone unit `selector` of `lane` that names no unit of it but
+    /// names a lane with a record of the same project by its number or name (`stop
+    /// 1`, `stop review`): the error carries that lane under `names_lane`, so the
+    /// client suggests `--lane` instead of acting on a guess. Branch and folder
+    /// names are left out, since those are often a mistyped unit. `None` when the
+    /// selector is a unit, a glob or a tag, or names no such lane.
+    fn selector_names_lane(
+        &self,
+        (project, lane): &LanePair,
+        selector: &str,
         context: &Context,
-    ) -> Result<Option<Vec<Arc<ProjectRt>>>, RpcError> {
-        Ok(match self.find(context).await? {
-            Found::Projects { projects, .. } => Some(narrow(projects, context)),
-            Found::Nothing { .. } => Some(Vec::new()),
-            Found::Unregistered { .. } => None,
+    ) -> Option<RpcError> {
+        let plain = !selector.starts_with('+') && !selector.contains(['*', '?', '[', '{']);
+        let candidates = {
+            let st = lane.st();
+            if !plain || st.view.is_none() || st.knows_unit(selector) {
+                return None;
+            }
+            st.unit_candidates()
+        };
+        let parsed = LaneRef {
+            project: None,
+            selector: selector.to_owned(),
+        };
+        let ((other_project, other), by) = self
+            .match_reference(&parsed, std::slice::from_ref(project), context)
+            .ok()?;
+        let st = other.st();
+        let names_lane = matches!(by, LaneMatch::Index | LaneMatch::Name) && st.record.is_some();
+        names_lane.then(|| {
+            RpcError::new(
+                "not_found",
+                json!({
+                    "reference": selector,
+                    "candidates": candidates,
+                    "names_lane": st.reference(&other_project.name()),
+                }),
+                3,
+            )
         })
     }
 
@@ -682,6 +720,7 @@ impl Inner {
             }
             selectors.push(parsed.selector);
         }
+        let lane_named = lane_ref.is_some() || context.lane.is_some();
         let by = if lane_ref.is_some() {
             "unit reference"
         } else if context.lane.is_some() {
@@ -696,6 +735,14 @@ impl Inner {
         let Some(pair) = pair else {
             return Ok(None);
         };
+        // A lone selector with no lane named may be a lane meant as `--lane`.
+        if policy.selector_lanes
+            && !lane_named
+            && let [selector] = selectors.as_slice()
+            && let Some(error) = self.selector_names_lane(&pair, selector, context)
+        {
+            return Err(error);
+        }
         tracing::debug!(
             lane = %pair.1.st().reference(&pair.0.name()),
             by,
