@@ -93,6 +93,7 @@ pub(crate) fn lane_clean_plan() -> Value {
         "data_dir": {"path": "/home/dev/.devlanes/data/acme/7", "bytes": 325_058_560_u64},
         "logs_bytes": 12_345,
         "ports": {"start": 20040, "size": 10},
+        "history": true,
     })
 }
 
@@ -469,6 +470,15 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "infra": {"compose": "acme-2"},
             }),
         ),
+        // The last lane of a Compose project without the Docker CLI.
+        (
+            "lane_clean_docker_unavailable",
+            Method::LaneClean,
+            json!({
+                "lane": "acme@0", "stopped": [], "tasks": [], "teardown": [], "infra": null,
+                "shared_infra": {"skipped": "docker_unavailable", "message": "no Docker engine is reachable"},
+            }),
+        ),
         ("lane_clean_plan", Method::LaneCleanPlan, lane_clean_plan()),
         // A gone worktree runs no hooks, and Docker did not answer.
         ("lane_clean_plan_missing", Method::LaneCleanPlan, {
@@ -489,7 +499,10 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
         (
             "lane_gc",
             Method::LaneGc,
-            json!({"cleaned": ["acme@5"], "offsets_removed": 3}),
+            json!({
+                "cleaned": ["acme@5"], "offsets_removed": 3,
+                "shared_infra": {"acme@5": {"compose": "acme", "containers": ["acme-postgres-1"]}},
+            }),
         ),
         (
             "lane_gc_kept",

@@ -214,7 +214,7 @@ A Windows machine can be a box that other machines connect to with `devlanes rem
 
 - Each unit runs in a job object it cannot leave. A program that insists on starting a child outside its job fails with access denied there.
 - When a unit's main process exits, everything left in its job is ended, for tasks too. A setup task cannot start a background daemon that outlives it; make that program a service.
-- Windows cannot delete or rename a folder that a running process works in or holds a file open in. Run `devlanes stop` in a worktree before `git worktree remove` or `git worktree move`. `devlanes lane clean` leaves a lane data folder that another program still holds, with a warning in the daemon's log; delete it by hand afterwards.
+- Windows cannot delete or rename a folder that a running process works in or holds a file open in. Run `devlanes stop` in a worktree before `git worktree remove` or `git worktree move`. `devlanes lane clean` leaves a lane data folder that another program still holds and says so; once that program closed it, `devlanes lane gc` deletes it, and the daemon tries again every hour.
 - `pty: true` units stop with the daemon (see [terminals in units](#terminals-in-units)).
 - The DNS server for the resolver strategy always listens on `127.53.0.1:53`, because an NRPT rule cannot name a port.
 - Unit names that differ only in case (`web` and `Web`) would share a log folder, so `devlanes config check` rejects them on Windows.

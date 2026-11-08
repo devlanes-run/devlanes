@@ -1139,7 +1139,6 @@ pub(super) fn lane_new(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         lines.push(format!("  {note}"));
     }
     lines.extend(lane_warning_lines(&lane, cx));
-    lines.extend(data_left_line(data));
     match data.get("start") {
         Some(start) => lines.extend(start_like(start, cx)),
         None => lines.push(format!(
@@ -1196,8 +1195,44 @@ pub(super) fn lane_clean(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     if let Some(error) = data.get("infra").and_then(|infra| infra.get("error")) {
         lines.push(format!("  infra: {}", text(error, "message")));
     }
+    if let Some(shared) = data.get("shared_infra") {
+        lines.push(format!("  {}", shared_infra_line(shared)));
+    }
     lines.extend(data_left_line(data));
     lines
+}
+
+/// What the clean of a project's last lane did to its shared containers, from
+/// its `shared_infra` field (`lane clean`, and per lane in `lane gc`).
+fn shared_infra_line(shared: &Value) -> String {
+    let infra_down = Hint::command(["infra", "down"]).0;
+    if let Some(error) = shared.get("error") {
+        format!(
+            "could not stop the shared containers: {}; {infra_down} in the project's folder stops them",
+            clean(&text(error, "message"))
+        )
+    } else if shared.get("skipped").is_some() {
+        let when = match text(shared, "skipped").as_str() {
+            "docker_unavailable" => "once it is",
+            _ => "once the file loads",
+        };
+        format!(
+            "shared containers not stopped: {}; {infra_down} stops them {when}",
+            shared_skipped(shared)
+        )
+    } else {
+        "stopped shared containers (data kept)".into()
+    }
+}
+
+/// Why `lane clean` would not or did not stop the shared containers, from a
+/// `shared_infra: {skipped, message}` field, worded by its code.
+fn shared_skipped(shared: &Value) -> String {
+    match (text(shared, "skipped").as_str(), text(shared, "message")) {
+        ("docker_unavailable", _) => "Docker is not available".into(),
+        (_, message) if message.is_empty() => "the project file does not load".into(),
+        (_, message) => clean(&message),
+    }
 }
 
 /// `lane clean --dry-run`: one row per thing the clean would stop, run, remove,
@@ -1269,6 +1304,13 @@ pub(super) fn lane_clean_plan(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
             format!("logs ({})", size(&data["logs_bytes"])),
         ]);
     }
+    if data.get("history").and_then(Value::as_bool) == Some(true) {
+        rows.push(vec!["delete".into(), "run and task history".into()]);
+    }
+    let shared = data.get("shared_infra");
+    if shared.and_then(Value::as_str) == Some("stop") {
+        rows.push(vec!["stop".into(), "shared containers (data kept)".into()]);
+    }
     if let (Some(start), Some(count)) = (
         data.pointer("/ports/start").and_then(Value::as_u64),
         data.pointer("/ports/size").and_then(Value::as_u64),
@@ -1302,6 +1344,12 @@ pub(super) fn lane_clean_plan(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     if let Some(error) = data.get("infra_error").and_then(Value::as_str) {
         lines.push(cx.warning(&format!("containers unknown: {}", clean(error))));
     }
+    if let Some(shared) = shared.filter(|shared| shared.get("skipped").is_some()) {
+        lines.push(cx.warning(&format!(
+            "shared containers: not stopped, {}",
+            shared_skipped(shared)
+        )));
+    }
     lines.push(format!(
         "next: {}",
         Hint::command(["lane", "clean", lane.as_str(), "--yes"]).0
@@ -1309,14 +1357,19 @@ pub(super) fn lane_clean_plan(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
-/// The note for a lane data folder `lane clean` or `lane new` could not delete.
+/// The note for a lane data folder `lane clean` could not delete.
 fn data_left_line(data: &Value) -> Option<String> {
     let path = text(data, "data_left");
-    (!path.is_empty()).then(|| {
-        format!(
-            "  could not delete the old lane data folder {path}; delete it by hand once no program has a file in it open"
-        )
-    })
+    (!path.is_empty()).then(|| format!("  {}", data_left_note(&path)))
+}
+
+/// What to do about a lane data folder a clean could not delete.
+fn data_left_note(path: &str) -> String {
+    format!(
+        "could not delete the lane data folder {}; once no program has a file in it open, {} deletes it",
+        clean(path),
+        Hint::command(["lane", "gc"]).0
+    )
 }
 
 /// `debug freeze`: `frozen acme@2`, and what thaws it.
@@ -1362,6 +1415,14 @@ pub(super) fn lane_gc(data: &Value) -> Vec<String> {
             Hint::command(["stop", "--lane", lane.as_str()]).0,
             Hint::command(["lane", "gc"]).0
         ));
+    }
+    if let Some(shared) = data.get("shared_infra").and_then(Value::as_object) {
+        for (lane, stop) in shared {
+            lines.push(format!("{}: {}", clean(lane), shared_infra_line(stop)));
+        }
+    }
+    for path in list(data, "data_left").iter().map(display_value) {
+        lines.push(data_left_note(&path));
     }
     lines
 }

@@ -198,9 +198,9 @@ async fn profiles_round_trip_and_compatibility_setter() {
 }
 
 #[tokio::test]
-/// Saved services survive a reopen and a re-registration; the profiles setter
-/// and a clean leave them alone and empty them.
-async fn services_round_trip_and_clean_empties_them() {
+/// Saved services survive a reopen and a re-registration, and the profiles
+/// setter leaves them alone.
+async fn services_round_trip() {
     let dir = tempfile::tempdir().expect("directory");
     let path = dir.path().join("state.db");
     let store = Store::open(&path).await.expect("store");
@@ -239,7 +239,4 @@ async fn services_round_trip_and_clean_empties_them() {
         .await
         .expect("re-register");
     assert_eq!(registered.services, services);
-    store.clean_lane(row.id).await.expect("clean");
-    let cleaned = store.lane(row.id).await.expect("query").expect("lane");
-    assert!(cleaned.services.is_empty());
 }

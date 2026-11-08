@@ -230,7 +230,7 @@ impl Inner {
             let st = lane.st();
             let listed = st.listed();
             let alias = st.alias().map(|(_, alias)| alias.to_owned());
-            // A cleaned extra lane that nobody uses again is nothing to name.
+            // An extra lane without a lane whose folder is gone is nothing to name.
             if alias.is_some() && !listed {
                 continue;
             }

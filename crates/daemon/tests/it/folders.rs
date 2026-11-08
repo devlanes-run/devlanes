@@ -248,10 +248,10 @@ async fn lanes_of_one_folder_have_their_own_data_folders() {
     .expect("timeout");
 }
 
-/// `DEVLANES_LANE_DATA` of `lane`.
-async fn data_path(h: &crate::Harness, main: &Path, lane: &str) -> std::path::PathBuf {
+/// `DEVLANES_LANE_DATA` of the lane `context` names.
+async fn data_path(h: &crate::Harness, context: Context) -> std::path::PathBuf {
     let env = h
-        .call(Method::Env, json!({"lane_env": true}), on_lane(main, lane))
+        .call(Method::Env, json!({"lane_env": true}), context)
         .await
         .expect("env");
     env["env"]["DEVLANES_LANE_DATA"]
@@ -260,13 +260,13 @@ async fn data_path(h: &crate::Harness, main: &Path, lane: &str) -> std::path::Pa
         .into()
 }
 
-/// Whether `env --explain` for `worker` on `lane` lists `key`.
-async fn explains(h: &crate::Harness, main: &Path, lane: &str, key: &str) -> bool {
+/// Whether `env --explain` for `worker` on the lane `context` names lists `key`.
+async fn explains(h: &crate::Harness, context: Context, key: &str) -> bool {
     let explained = h
         .call(
             Method::Env,
             json!({"unit": "worker", "explain": true}),
-            on_lane(main, lane),
+            context,
         )
         .await
         .expect("explain");
@@ -277,50 +277,85 @@ async fn explains(h: &crate::Harness, main: &Path, lane: &str, key: &str) -> boo
         .any(|item| item["key"] == key)
 }
 
+/// `lane clean --yes` of the lane `context` names, or of `lane` when given.
+async fn clean(
+    h: &crate::Harness,
+    context: Context,
+    lane: Option<&str>,
+) -> Result<Value, devlanes_proto::RpcError> {
+    let params = lane.map_or_else(|| json!({}), |lane| json!({"lane": lane}));
+    h.call(
+        Method::LaneClean,
+        params,
+        Context {
+            yes: true,
+            ..context
+        },
+    )
+    .await
+}
+
 #[tokio::test(flavor = "multi_thread")]
-/// A cleaned `lane new` lane's name can be used again and gives a new lane:
-/// none of the old lane's `--env` overrides, and a new data folder, so files
-/// the clean could not delete (held open on Windows) never reach it, and that
-/// delete is retried.
-async fn a_cleaned_lane_name_gets_a_fresh_lane() {
+/// A cleaned lane comes back as a new lane, whatever its kind: a new data
+/// folder and none of the old lane's `--env` overrides. Cleaning the primary
+/// lane assigns it nothing until a command claims it, a `lane new` lane that
+/// waits for `lanes.max` can be cleaned by its name, and cleaning the lanes
+/// around a waiting lane keeps the project and the waiting lane.
+async fn a_cleaned_lane_comes_back_as_a_new_lane() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let main = repo(&tmp.path, "r", CONFIG);
+        let config = CONFIG.replacen("project: demo\n", "project: demo\nlanes: { max: 2 }\n", 1);
+        let main = repo(&tmp.path, "r", &config);
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
         h.call(Method::LaneNew, json!({"name": "review"}), cx(&main))
             .await
             .expect("lane new");
-        start(
-            &h,
-            on_lane(&main, "review"),
-            json!({"units": ["worker"], "env": {"FROM_FLAG": "old"}}),
-        )
-        .await;
-        assert!(explains(&h, &main, "review", "FROM_FLAG").await);
-        let old = data_path(&h, &main, "review").await;
-        h.call(
-            Method::LaneClean,
-            json!({}),
-            Context {
-                yes: true,
-                ..on_lane(&main, "review")
-            },
-        )
-        .await
-        .expect("clean");
-        std::fs::create_dir_all(&old).expect("old folder");
-        std::fs::write(old.join("marker.txt"), "old").expect("marker");
+        let references = |lanes: Vec<LaneSummary>| -> Vec<String> {
+            lanes.into_iter().map(|lane| lane.reference).collect()
+        };
 
-        let created = h
-            .call(Method::LaneNew, json!({"name": "review"}), cx(&main))
+        // The primary lane.
+        let flag = json!({"units": ["worker"], "env": {"FROM_FLAG": "old"}});
+        start(&h, cx(&main), flag.clone()).await;
+        let old = data_path(&h, cx(&main)).await;
+        clean(&h, cx(&main), None).await.expect("clean lane 0");
+        // Reads the files the way the config poller does, without a claim.
+        h.call(Method::ConfigShow, json!({}), cx(&main))
+            .await
+            .expect("config show");
+        assert_eq!(references(status(&h, cx(&tmp.path)).await), ["demo@1"]);
+        assert_ne!(data_path(&h, cx(&main)).await, old);
+        assert!(!explains(&h, cx(&main), "FROM_FLAG").await);
+
+        // A `lane new` lane.
+        start(&h, on_lane(&main, "review"), flag).await;
+        let old = data_path(&h, on_lane(&main, "review")).await;
+        clean(&h, cx(&main), Some("review")).await.expect("clean");
+        h.call(Method::LaneNew, json!({"name": "review"}), cx(&main))
             .await
             .expect("the name is free again");
-        assert_eq!(created["lane"]["name"], "review", "{created}");
-        assert!(!explains(&h, &main, "review", "FROM_FLAG").await);
-        let new = data_path(&h, &main, "review").await;
-        assert_ne!(new, old);
-        assert!(!new.join("marker.txt").exists());
-        assert!(!old.exists(), "the old folder's delete is retried");
+        assert_ne!(data_path(&h, on_lane(&main, "review")).await, old);
+        assert!(!explains(&h, on_lane(&main, "review"), "FROM_FLAG").await);
+
+        // A `lane new` lane waiting for `lanes.max`.
+        let new_extra = || h.call(Method::LaneNew, json!({"name": "extra"}), cx(&main));
+        let waiting = new_extra().await.expect_err("lanes.max");
+        assert_eq!(waiting.code, "unassigned", "{waiting:?}");
+        assert_eq!(new_extra().await.expect_err("taken").code, "name_taken");
+        clean(&h, cx(&main), Some("extra"))
+            .await
+            .expect("clean a waiting lane");
+        assert_eq!(new_extra().await.expect_err("waits").code, "unassigned");
+
+        // Cleaning the assigned lanes keeps the waiting one and its project.
+        clean(&h, cx(&main), Some("review")).await.expect("clean");
+        clean(&h, cx(&main), Some("0")).await.expect("clean");
+        let extra = status(&h, cx(&main))
+            .await
+            .into_iter()
+            .find(|lane| lane.name.as_deref() == Some("extra"))
+            .expect("extra listed");
+        assert!(extra.index.is_some(), "{extra:?}");
         h.close().await;
     })
     .await

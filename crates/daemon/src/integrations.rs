@@ -2,7 +2,12 @@
 //! them over concrete crates (PTY runner, Compose/Docker, the proxy, metrics
 //! collectors); tests implement them with in-memory fakes.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -251,6 +256,44 @@ impl InfraSpec {
     pub fn is_empty(&self) -> bool {
         self.compose_files.is_empty() && self.containers.is_empty()
     }
+
+    /// The part of the spec that names and finds the project's shared containers.
+    pub fn shared(&self) -> SharedInfraSpec {
+        SharedInfraSpec {
+            project: self.project.clone(),
+            primary_dir: self.primary_dir.clone(),
+            compose_files: self.compose_files.clone(),
+            project_name: self.project_name.clone(),
+            exclude: self.exclude.clone(),
+            per_lane: self.per_lane.clone(),
+            profiles: self.profiles.clone(),
+            env: self.env.clone(),
+            containers: self
+                .containers
+                .iter()
+                .filter(|container| !container.per_lane)
+                .map(|container| container.name.clone())
+                .collect(),
+        }
+    }
+}
+
+/// What names and finds a project's shared Compose project and its shared plain
+/// containers, with expressions evaluated: what stopping them needs, without a
+/// lane or a port block. `env` values may come from `.env` files; never log them.
+#[derive(Debug, Clone)]
+pub struct SharedInfraSpec {
+    pub project: String,
+    /// Directory of `devlanes.yaml` in the primary worktree.
+    pub primary_dir: PathBuf,
+    pub compose_files: Vec<PathBuf>,
+    pub project_name: Option<String>,
+    pub exclude: Vec<String>,
+    pub per_lane: Vec<String>,
+    pub profiles: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    /// The plain containers of `infra.containers` whose `per_lane` is false.
+    pub containers: Vec<String>,
 }
 
 /// Which block a requested infra port comes from.
@@ -409,8 +452,16 @@ pub trait InfraProvider: Send + Sync {
     async fn container_states(&self, _spec: &InfraSpec, _containers: &mut [InfraContainer]) {}
     /// Health and endpoints of a project's infra.
     async fn status(&self, spec: &InfraSpec) -> Result<Value, InfraError>;
-    /// Stops the project's shared containers, keeping their data (`infra down`).
-    async fn down(&self, spec: &InfraSpec) -> Result<Value, InfraError>;
+    /// Stops the project's shared containers, keeping their data (`infra down`,
+    /// and the clean of a project's last lane).
+    async fn down(&self, spec: &SharedInfraSpec) -> Result<Value, InfraError>;
+    /// What `spec` declares as shared: the shared plain containers
+    /// (`spec.containers`) and, with Compose files, the services left after
+    /// `exclude` and `per_lane`. Read from the files, never from the engine.
+    /// [`InfraProvider::down`] stops more than this: every running plain
+    /// container with the project's shared label, including ones the file no
+    /// longer declares.
+    async fn shared_names(&self, spec: &SharedInfraSpec) -> Result<BTreeSet<String>, InfraError>;
     /// Removes the lane's own containers and volumes (`lane clean`).
     async fn remove_lane(&self, project: &str, lane: u32) -> Result<Value, InfraError>;
     /// What [`InfraProvider::remove_lane`] would remove, removing nothing
@@ -508,8 +559,15 @@ impl InfraProvider for NoInfra {
         Err(unavailable())
     }
     /// Reports the missing engine.
-    async fn down(&self, _: &InfraSpec) -> Result<Value, InfraError> {
+    async fn down(&self, _: &SharedInfraSpec) -> Result<Value, InfraError> {
         Err(unavailable())
+    }
+    /// The plain containers; Compose files need the provider that runs Compose.
+    async fn shared_names(&self, spec: &SharedInfraSpec) -> Result<BTreeSet<String>, InfraError> {
+        if !spec.compose_files.is_empty() {
+            return Err(unavailable());
+        }
+        Ok(spec.containers.iter().cloned().collect())
     }
     /// Nothing to remove without an engine.
     async fn remove_lane(&self, _: &str, _: u32) -> Result<Value, InfraError> {
