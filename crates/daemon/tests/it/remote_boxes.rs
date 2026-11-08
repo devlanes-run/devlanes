@@ -44,20 +44,29 @@ fn subscribe(client: &ClientSide, id: u64) -> (Session, mpsc::Receiver<Frame>, J
     (session, frames, task)
 }
 
-/// The `remote.warning` events received within a short while.
-async fn warnings(frames: &mut mpsc::Receiver<Frame>) -> Vec<Value> {
-    let mut found = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(2), async {
-        while let Some(frame) = frames.recv().await {
-            if let Frame::Control(Control::Event(event)) = frame
-                && event.event == "remote.warning"
-            {
-                found.push(event.data);
+/// A `remote.warning` a test waits for: what it is and whether an event is it.
+type Expected<'a> = (&'a str, &'a dyn Fn(&Value) -> bool);
+
+/// Reads `remote.warning` events until each of `expected` matched one, and
+/// fails naming the first that did not arrive within [`SOON`].
+async fn warnings_until_all(frames: &mut mpsc::Receiver<Frame>, expected: &[Expected<'_>]) {
+    let all_seen = |seen: &[Value]| expected.iter().all(|(_, matches)| seen.iter().any(matches));
+    let mut seen = Vec::new();
+    let _ = tokio::time::timeout(SOON, async {
+        while !all_seen(&seen) {
+            match frames.recv().await {
+                Some(Frame::Control(Control::Event(event))) if event.event == "remote.warning" => {
+                    seen.push(event.data);
+                }
+                Some(_) => {}
+                None => return,
             }
         }
     })
     .await;
-    found
+    for (what, matches) in expected {
+        assert!(seen.iter().any(matches), "{what}: {seen:?}");
+    }
 }
 
 /// Whether the `remote ls` entry `host` has a warning containing `text`.
@@ -177,28 +186,30 @@ async fn two_boxes_with_one_project() {
             "the first box keeps the hostname"
         );
 
-        let seen = warnings(&mut frames).await;
-        assert!(
-            seen.iter().any(|w| w["host"] == "beta"
-                && w["code"] == "lane_skipped"
-                && w["box"] == "alpha"
-                && w["lane"] == "boxapp@0"),
-            "{seen:?}"
-        );
-        assert!(
-            seen.iter().any(|w| w["host"] == "beta"
-                && w["code"] == "port_in_use"
-                && w["box"] == "alpha"
-                && w["held_by"] == "boxapp@0:echo"),
-            "{seen:?}"
-        );
-        for host in ["alpha", "beta"] {
-            assert!(
-                seen.iter()
-                    .any(|w| w["host"] == host && w["code"] == "ports_range_overlap"),
-                "{host}: {seen:?}"
-            );
-        }
+        warnings_until_all(
+            &mut frames,
+            &[
+                ("beta's lane is skipped for alpha's", &|w| {
+                    w["host"] == "beta"
+                        && w["code"] == "lane_skipped"
+                        && w["box"] == "alpha"
+                        && w["lane"] == "boxapp@0"
+                }),
+                ("beta's port is held by alpha's echo", &|w| {
+                    w["host"] == "beta"
+                        && w["code"] == "port_in_use"
+                        && w["box"] == "alpha"
+                        && w["held_by"] == "boxapp@0:echo"
+                }),
+                ("alpha's range overlaps", &|w| {
+                    w["host"] == "alpha" && w["code"] == "ports_range_overlap"
+                }),
+                ("beta's range overlaps", &|w| {
+                    w["host"] == "beta" && w["code"] == "ports_range_overlap"
+                }),
+            ],
+        )
+        .await;
 
         // Alpha drops the hostname from its config. The same lane on two
         // boxes still clashes, so beta's lane stays skipped until chosen.
@@ -370,13 +381,13 @@ async fn a_lane_this_machine_and_a_box_both_collide_with_names_this_machine() {
             json!(["local.mix.localhost", "shared.mix.localhost"]),
             "{skipped}"
         );
-        let seen = warnings(&mut frames).await;
-        assert!(
-            seen.iter().any(|w| w["host"] == "beta"
-                && w["code"] == "lane_skipped"
-                && w["box"].is_null()),
-            "{seen:?}"
-        );
+        warnings_until_all(
+            &mut frames,
+            &[("beta's lane is skipped for this machine's", &|w| {
+                w["host"] == "beta" && w["code"] == "lane_skipped" && w["box"].is_null()
+            })],
+        )
+        .await;
         for (host, body) in [
             ("shared.mix.localhost", "mixa-web"),
             ("local.mix.localhost", "mixl-web"),
