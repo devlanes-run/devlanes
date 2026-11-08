@@ -33,8 +33,8 @@ const AGENT_LANE: u16 = 3;
 /// The container each lane runs for itself: a mail catcher.
 const LANE_CONTAINER: &str = "mailpit";
 
-/// The worktree the TUI opens on.
-pub const PATH: &str = "/work/myapp";
+/// The lane the TUI opens on, which the daemon answers as the directory's own.
+pub const HERE: &str = "myapp@0";
 
 /// The fake daemon's clock at the start: every history ends here.
 pub const NOW_MS: u64 = 1_792_000_000_000;

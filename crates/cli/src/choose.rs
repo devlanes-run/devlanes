@@ -2,7 +2,7 @@
 //! missing, a terminal gets a picker; everything else gets the options and the
 //! command to run, never a bare "argument required".
 
-use devlanes_proto::{LaneSummary, UnitSummary};
+use devlanes_proto::{LaneSummary, Method, UnitSummary};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -50,6 +50,9 @@ pub struct Choice {
     pub kind: ChoiceKind,
     /// Whether several options may be chosen (logs).
     pub multi: bool,
+    /// The method the completed command runs; the daemon resolves the lane to
+    /// offer options from as that method would.
+    pub method: Method,
 }
 
 impl Choice {
@@ -162,20 +165,6 @@ fn items(data: &Value) -> impl Iterator<Item = &Value> {
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-}
-
-/// The lane of `lanes` whose worktree holds `cwd` (the deepest one).
-pub fn lane_for_cwd<'a>(
-    lanes: &'a [LaneSummary],
-    cwd: &std::path::Path,
-) -> Option<&'a LaneSummary> {
-    lanes
-        .iter()
-        .filter(|lane| {
-            !lane.path.as_os_str().is_empty()
-                && devlanes_core::paths::path_starts_with(cwd, &lane.path)
-        })
-        .max_by_key(|lane| lane.path.as_os_str().len())
 }
 
 /// `args` (the command line without the program) with `values` added before a

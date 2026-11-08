@@ -198,7 +198,9 @@ impl Inner {
         let Ok(parsed) = unit.parse::<devlanes_core::refs::LaneRef>() else {
             return error;
         };
-        let Ok(Some(scope)) = self.reference_scope(context).await else {
+        let Ok(crate::target::RefProjects::In(scope)) =
+            self.reference_projects(&parsed, context, None).await
+        else {
             return error;
         };
         let Ok((project, lane)) = self.match_reference(&parsed, &scope, context) else {
@@ -1409,7 +1411,7 @@ impl Inner {
 
     /// `task.list`: tasks plus the `run_script` files the config references.
     pub(crate) async fn task_list(self: &Arc<Self>, context: &Context) -> Result<Value, RpcError> {
-        let (config, path, lane_id) = match self
+        let (config, path, lane_id, reference) = match self
             .lane_or_file(context, Policy::of(Method::TaskList))
             .await?
         {
@@ -1422,12 +1424,13 @@ impl Inner {
                     .cloned()
                     .ok_or_else(|| RpcError::new("no_config", json!({"path": st.path}), 1))?;
                 let lane_id = st.record.as_ref().map(|record| record.id);
-                (config, st.path.join(config_dir), lane_id)
+                let reference = st.reference(&project.name());
+                (config, st.path.join(config_dir), lane_id, Some(reference))
             }
             // A project nobody started has run nothing.
             LaneOrFile::File { file, config } => {
                 let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
-                (config, dir, None)
+                (config, dir, None, None)
             }
         };
         let runs = match lane_id {
@@ -1489,7 +1492,9 @@ impl Inner {
                 json!({"file": file, "runner": runner})
             })
             .collect();
-        Ok(json!({"items": items, "sources": sources, "truncated": false, "next_cursor": null}))
+        Ok(
+            json!({"lane": reference, "items": items, "sources": sources, "truncated": false, "next_cursor": null}),
+        )
     }
 
     /// `daemon.reset-state` (requires `yes`): stops everything and empties state.db.
