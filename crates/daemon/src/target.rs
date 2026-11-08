@@ -806,6 +806,7 @@ impl Inner {
             allocate_offsets(&BTreeMap::new(), &needs.names, &needs.reserved, &[block]).ok()?;
         let dotenv = read_dotenv(facts.project_dir.clone(), facts.project_dir.clone()).await;
         let view = self.view_of(
+            &format!("{}@{}", facts.project, facts.index),
             config,
             facts,
             (block, &offsets),
