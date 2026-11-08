@@ -239,30 +239,31 @@ fn hide_url_passwords(text: &str) -> String {
     out
 }
 
-/// `NAME=value` with the value ([`assigned_value`]) hidden, when NAME is
-/// an upper-case variable name that passes [`secret_name`] or a lower-case
-/// field name that passes [`secret_field`]. So `env_keys=A,B` stays while
-/// `ACME_KEY=...` and `token=...` are hidden.
+/// Assignments with their value ([`assigned_value`]) hidden: `NAME=value` when
+/// NAME is an upper-case variable name that passes [`secret_name`] or a
+/// lower-case field name that passes [`secret_field`], so `env_keys=A,B` stays
+/// while `ACME_KEY=...` and `token=...` are hidden; and `"name": "value"`, JSON
+/// inside a line that is not JSON itself (often cut short), when the key
+/// passes [`secret_name`] as in [`Redactor::json`]. Unquoted `key: value`
+/// text (YAML, HTTP headers) is left alone.
 fn hide_assignments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(index) = rest.find('=') {
+    while let Some(index) = rest.find(['=', ':']) {
         let (before, after) = rest.split_at(index);
-        let name_start = before
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .map_or(0, |i| i + 1);
-        let name = &before[name_start..];
+        let (separator, after) = after.split_at(1);
         out.push_str(before);
-        out.push('=');
-        let after = &after[1..];
-        let made_of = |case: fn(&char) -> bool| {
-            !name.is_empty()
-                && name
-                    .chars()
-                    .all(|c| case(&c) || c.is_ascii_digit() || c == '_')
+        out.push_str(separator);
+        let (gap, after, secret) = if separator == "=" {
+            ("", after, secret_assignment(before))
+        } else {
+            // Spaces may follow a key; only string values are hidden, as in `json`.
+            let (gap, value) =
+                after.split_at(after.len() - after.trim_start_matches([' ', '\t']).len());
+            let secret = value.starts_with('"') && quoted_key(before).is_some_and(secret_name);
+            (gap, value, secret)
         };
-        let secret = (made_of(char::is_ascii_uppercase) && secret_name(name))
-            || (made_of(char::is_ascii_lowercase) && secret_field(name));
+        out.push_str(gap);
         if secret {
             let (opening, value, closing) = assigned_value(after);
             out.push_str(opening);
@@ -279,7 +280,30 @@ fn hide_assignments(text: &str) -> String {
     out
 }
 
-/// The value at the start of `after` (the text after an `=`), as its opening
+/// Whether the name that ends `before`, the text up to an `=`, is a secret
+/// variable or field name.
+fn secret_assignment(before: &str) -> bool {
+    let name_start = before
+        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .map_or(0, |i| i + 1);
+    let name = &before[name_start..];
+    let made_of = |case: fn(&char) -> bool| {
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| case(&c) || c.is_ascii_digit() || c == '_')
+    };
+    (made_of(char::is_ascii_uppercase) && secret_name(name))
+        || (made_of(char::is_ascii_lowercase) && secret_field(name))
+}
+
+/// The JSON key that ends `before`, the text up to a `:`, as in `"api_key"`.
+fn quoted_key(before: &str) -> Option<&str> {
+    let key = before.trim_end_matches([' ', '\t']).strip_suffix('"')?;
+    key.rfind('"').map(|start| &key[start + 1..])
+}
+
+/// The value at the start of `after` (the text after an `=` or `:`), as its opening
 /// quote, the value and its closing quote. A value quoted with `"` or `'` runs
 /// to the matching quote, past quotes escaped with `\` as tracing writes them,
 /// or to the end of the line when it is never closed. A bare value runs to
@@ -513,6 +537,15 @@ mod tests {
             both(
                 "token=\"abc def\nPORT=3000",
                 "token=\"[redacted]\nPORT=3000",
+            ),
+            // JSON pairs inside a log line, whole or cut short with `…`.
+            both(
+                r#"request failed data={"api_key":"k-123456","lane":"acme@0"}"#,
+                r#"request failed data={"api_key":"[redacted]","lane":"acme@0"}"#,
+            ),
+            both(
+                r#"request failed data={"lane":"acme@0", "api_key": "k-123…"#,
+                r#"request failed data={"lane":"acme@0", "api_key": "[redacted]"#,
             ),
             (
                 Call::Text(log.clone()),
