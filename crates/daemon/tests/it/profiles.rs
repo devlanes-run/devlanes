@@ -488,20 +488,84 @@ async fn a_removed_saved_profile_is_dropped_with_a_warning() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// A start naming other profiles than a running lane's leaves its running units
-/// alone and warns about the ones those profiles would start differently. A
-/// transient start (`with`) does not make its profiles the lane's, a plain one
-/// shows the difference as drift, and a start with the lane's own profiles does
-/// not warn about drift that has another cause.
+/// `with --profile` on a running lane whose profiles give units other settings
+/// is refused before anything on the lane changes, with or without `--keep`; a
+/// profile that only picks services runs, and its units get the lane's settings
+/// and `--env` values. A plain start naming other profiles leaves running units
+/// alone, warns about the ones those profiles would start differently and shows
+/// the difference as drift; a start with the lane's own profiles does not warn
+/// about drift that has another cause.
 async fn changing_profiles_of_a_running_lane_warns() {
-    const PROFILED: &str = "project: demo\nprofiles:\n  back: { include: [api], env: { MODE: back } }\nservices:\n  web: { run: sleep, ready: started }\n  api: { run: sleep, ready: started }\n";
+    // No `default` profile, so the lane's own profiles set nothing.
+    const PROFILED: &str = "project: demo\nprofiles:\n  back: { include: [api, worker], env: { MODE: back } }\n  front: [worker]\nservices:\n  web: { run: sleep, ready: started }\n  api: { run: sleep, ready: started }\n  worker: { run: sleep, ready: started, autostart: false }\n";
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", PROFILED);
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
-        h.call(Method::Start, json!({}), cx(&main))
+        h.call(Method::Start, json!({"env": {"EXTRA": "one"}}), cx(&main))
             .await
             .expect("start");
+        let unit_env = |unit: &'static str| {
+            let h = &h;
+            let main = &main;
+            async move {
+                h.call(Method::Env, json!({"unit": unit}), cx(main))
+                    .await
+                    .expect("env")["env"]
+                    .clone()
+            }
+        };
+
+        // Another shell's env would replace the lane's, if the refusal came late.
+        let mut other_shell = cx(&main);
+        if let Some(env) = other_shell.env.as_mut() {
+            env.insert("ACME_SHELL".into(), "refused".into());
+        }
+        let spawned = h.runner.journal.entries().len();
+        for params in [
+            json!({"profiles": ["back"], "transient": true, "needs_profile_settings": true}),
+            json!({"profiles": ["back"], "needs_profile_settings": true}),
+        ] {
+            let refused = h
+                .call(Method::Start, params.clone(), other_shell.clone())
+                .await
+                .expect_err("other settings");
+            assert_eq!(refused.code, "profile_not_applied", "{params}");
+            assert_eq!(refused.data["lane_profiles"], json!([]), "{refused:?}");
+            assert_eq!(refused.data["fields"], json!(["env MODE"]), "{refused:?}");
+        }
+        assert_eq!(h.runner.journal.entries().len(), spawned, "nothing started");
+        assert!(lane(&h, &main).await.profiles.is_empty());
+
+        let no_shell = devlanes_proto::Context {
+            env: None,
+            ..cx(&main)
+        };
+        let front: StartResult = serde_json::from_value(
+            h.call(
+                Method::Start,
+                json!({"profiles": ["front"], "transient": true, "needs_profile_settings": true}),
+                no_shell,
+            )
+            .await
+            .expect("a profile that only picks services"),
+        )
+        .expect("result");
+        assert_eq!(front.started, ["demo@0:worker"], "{front:?}");
+        assert!(lane(&h, &main).await.profiles.is_empty());
+        let worker = unit_env("worker").await;
+        assert_eq!(worker["EXTRA"], "one", "{worker}");
+        assert_eq!(worker.get("ACME_SHELL"), None, "{worker}");
+        assert_eq!(worker.get("MODE"), None, "{worker}");
+        // What `with`'s teardown does.
+        h.call(
+            Method::Stop,
+            json!({"units": ["worker"], "transient": true}),
+            cx(&main),
+        )
+        .await
+        .expect("stop worker");
+
         let start = |params: Value| {
             let h = &h;
             let main = &main;
@@ -521,31 +585,10 @@ async fn changing_profiles_of_a_running_lane_warns() {
                 .cloned()
         };
 
-        // `status` and `reload` see the difference only once the lane stores the
-        // profiles, so only then does the warning point at them.
-        let points_at_reload = |warning: &devlanes_proto::LaneWarning| {
-            warning.data["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("devlanes reload"))
-        };
-        let transient = start(json!({"profiles": ["back"], "transient": true})).await;
-        let warning = not_applied(&transient).expect("transient profile_not_applied");
-        assert!(!points_at_reload(&warning), "{warning:?}");
-        assert!(lane(&h, &main).await.profiles.is_empty());
-        // `with`'s command gets the lane env under the profiles its start named.
-        let env = h
-            .call(
-                Method::Env,
-                json!({"lane_env": true, "profiles": ["back"]}),
-                cx(&main),
-            )
-            .await
-            .expect("lane env");
-        assert_eq!(env["env"]["MODE"], "back", "{env}");
-
         let plain = start(json!({"profiles": ["back"]})).await;
         let warning = not_applied(&plain).expect("profile_not_applied");
-        assert!(points_at_reload(&warning), "{warning:?}");
+        let message = warning.data["message"].as_str().unwrap_or_default();
+        assert!(message.contains("devlanes reload"), "{warning:?}");
         assert_eq!(
             warning.data["units"],
             json!([{"unit": "api", "fields": ["env MODE"]}])

@@ -245,18 +245,6 @@ impl RunScript {
         }
         Ok((&self.file, &self.name))
     }
-
-    /// The file and script name with the name swapped by a profile's `run_scripts`.
-    pub fn file_and_name_for_profile<'a>(
-        &'a self,
-        profile: Option<&'a ProfileOptions>,
-    ) -> Result<(&'a str, &'a str), crate::ConfigError> {
-        let (file, name) = self.file_and_name()?;
-        Ok((
-            file,
-            profile.map_or(name, |profile| profile.remap_script(name)),
-        ))
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]

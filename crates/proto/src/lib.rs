@@ -546,6 +546,12 @@ pub struct Selection {
     /// start does not bring back what this request ran.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub transient: bool,
+    /// The caller runs something against the lane under these profiles
+    /// (`devlanes with`). On a lane that is up, the start refuses with
+    /// `profile_not_applied` before it changes anything when the lane's profiles
+    /// give units other settings than these. Older daemons ignore it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_profile_settings: bool,
 }
 
 /// Profile name that resets a lane to its default selection (see [`Selection::profiles`]).

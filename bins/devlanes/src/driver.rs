@@ -98,8 +98,6 @@ pub struct ClientDriver {
     context: Context,
     paths: Paths,
     ownership: WithOwnership,
-    /// Profiles the start named, for the command's lane env.
-    profiles: Vec<String>,
     signals: Option<Signals>,
     /// The tab progress bar during the start phase, when this invocation draws it.
     progress: Option<devlanes_term::Wrap>,
@@ -119,7 +117,6 @@ impl ClientDriver {
             context,
             paths,
             ownership,
-            profiles: Vec::new(),
             signals: None,
             progress: None,
             title: None,
@@ -529,13 +526,6 @@ impl WithDriver for ClientDriver {
         request: &Request,
         events: &mut (dyn FnMut(Event) + Send),
     ) -> Result<WithStart, RpcError> {
-        // A transient start on a running lane does not make its profiles the lane's,
-        // so `env` asks for the lane env under them.
-        self.profiles = request
-            .params
-            .get("profiles")
-            .and_then(|profiles| serde_json::from_value(profiles.clone()).ok())
-            .unwrap_or_default();
         // The tab's progress bar covers the start only; it is gone before the command runs.
         let progress = crate::progress::Follower::start_with(self.progress, request);
         let result: Result<WithStart, RpcError> = async {
@@ -672,11 +662,7 @@ impl WithDriver for ClientDriver {
     async fn env(&mut self, lane: &str) -> Result<BTreeMap<String, String>, RpcError> {
         let context = self.lane_context(lane);
         let data = self
-            .call(
-                Method::Env,
-                json!({"lane_env": true, "profiles": self.profiles}),
-                context,
-            )
+            .call(Method::Env, json!({"lane_env": true}), context)
             .await?;
         serde_json::from_value(data.get("env").cloned().unwrap_or_default()).map_err(|error| {
             RpcError::new("bad_response", json!({"message": error.to_string()}), 1)

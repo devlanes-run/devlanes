@@ -1287,26 +1287,6 @@ fn profile_script_remapping() {
     assert_eq!(profile.remap_script("dev"), "start");
     assert_eq!(profile.remap_script("watch"), "serve");
     assert_eq!(profile.remap_script("build"), "build");
-    let script = config.services["api"].run_script.as_ref().expect("script");
-    assert_eq!(
-        script
-            .file_and_name_for_profile(Some(profile))
-            .expect("remapped"),
-        ("apps/api/package.json", "start")
-    );
-    assert_eq!(
-        script.file_and_name_for_profile(None).expect("unmapped"),
-        ("apps/api/package.json", "dev")
-    );
-    let make = RunScript {
-        file: "Makefile".into(),
-        name: "dev".into(),
-    };
-    assert_eq!(
-        make.file_and_name_for_profile(Some(profile))
-            .expect("make remapped"),
-        ("Makefile", "start")
-    );
     assert_eq!(config.tasks["build"].when, Some(TaskWhen::Start));
     let validator = jsonschema::validator_for(&project_schema()).expect("schema");
     for remap in [

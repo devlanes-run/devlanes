@@ -511,6 +511,7 @@ impl Inner {
             selectors: Vec::new(),
             profiles: Vec::new(),
             transient: false,
+            needs_profile_settings: false,
             env: carries_env(context),
             overrides: None,
             actor: context.actor.clone(),
