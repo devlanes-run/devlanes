@@ -10,10 +10,9 @@ use std::{
 };
 
 use serde_json::Value;
-use tokio::{
-    io::{AsyncBufReadExt as _, AsyncReadExt},
-    sync::mpsc::UnboundedSender,
-};
+#[cfg(windows)]
+use tokio::io::AsyncBufReadExt as _;
+use tokio::{io::AsyncReadExt, sync::mpsc::UnboundedSender};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 /// How long a cancelled command gets to stop what it started, such as the
@@ -414,26 +413,32 @@ struct Tee {
     /// The server's own write end, held until the command ended: the reader
     /// sees no end before the command opened the FIFO, or between its writes.
     #[cfg(unix)]
-    writer: Option<tokio::net::unix::pipe::Sender>,
+    writer: Option<std::os::fd::OwnedFd>,
     /// A named pipe of one instance that only this machine can open.
     #[cfg(windows)]
     name: String,
     reader: Option<tokio::task::JoinHandle<String>>,
 }
 
-/// What opening a named pipe whose one instance a client took answers:
-/// `ERROR_FILE_NOT_FOUND` once that client closed its end, `ERROR_PIPE_BUSY`
-/// while it holds it.
+/// What opening the named pipe answers after the command, which had opened
+/// it, exited: `ERROR_PIPE_BUSY` while the reader still holds the server end
+/// and has not reached the end of the pipe, `ERROR_FILE_NOT_FOUND` once the
+/// reader reached it (or failed to connect) and dropped the server end, so
+/// no instance is left. Either way the reader ends on its own.
 #[cfg(windows)]
 const PIPE_TAKEN: [i32; 2] = [2, 231];
 
 impl Tee {
     /// Creates the FIFO and opens its read end, then a write end of the
-    /// server's own; both non-blocking, reader first, since a FIFO takes a
-    /// non-blocking writer only once it has a reader.
+    /// server's own. Both open non-blocking, reader first, since a FIFO takes
+    /// a non-blocking writer only once it has a reader; the read end then
+    /// turns blocking for a reader thread. The runtime's reactor cannot wait
+    /// on a FIFO: kqueue on macOS does not wake its reader when the last
+    /// writer closes, so the read would never end there.
     #[cfg(unix)]
     async fn open(phases: Option<UnboundedSender<String>>) -> std::io::Result<Self> {
-        let (dir, path) = tokio::task::spawn_blocking(|| {
+        use rustix::fs::{Mode, OFlags};
+        let (dir, path, reader, writer) = tokio::task::spawn_blocking(|| {
             use std::os::unix::fs::PermissionsExt as _;
             let dir = tempfile::Builder::new()
                 .prefix("devlanes-mcp-")
@@ -441,18 +446,34 @@ impl Tee {
                 .tempdir()?;
             let path = dir.path().join("json");
             devlanes_sys::make_fifo(&path)?;
-            Ok::<_, std::io::Error>((dir, path))
+            let open = |access: OFlags| {
+                rustix::fs::open(
+                    &path,
+                    access | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+            };
+            let reader = open(OFlags::RDONLY)?;
+            let writer = open(OFlags::WRONLY)?;
+            rustix::fs::fcntl_setfl(&reader, OFlags::empty())?;
+            Ok::<_, std::io::Error>((dir, path, std::fs::File::from(reader), writer))
         })
         .await
         .map_err(std::io::Error::other)??;
-        let options = tokio::net::unix::pipe::OpenOptions::new();
-        let receiver = options.open_receiver(&path)?;
-        let writer = options.open_sender(&path)?;
         Ok(Self {
             dir: Some(dir),
             path,
             writer: Some(writer),
-            reader: Some(tokio::spawn(read(receiver, phases))),
+            reader: Some(tokio::task::spawn_blocking(move || {
+                let mut lines = Lines::new(phases);
+                for line in std::io::BufRead::split(std::io::BufReader::new(reader), b'\n') {
+                    match line {
+                        Ok(line) => lines.push(&line),
+                        Err(_) => break,
+                    }
+                }
+                lines.written
+            })),
         })
     }
 
@@ -529,8 +550,9 @@ impl Tee {
     }
 
     /// Ends the reader of a pipe the command never opened by connecting and
-    /// closing a client end in its place. A pipe that is taken had the
-    /// command's end, which closed when the command exited.
+    /// closing a client end in its place. When the open fails with
+    /// [`PIPE_TAKEN`], the command had opened the pipe and its end closed when
+    /// it exited, so the reader reaches the end, or already did, by itself.
     #[cfg(windows)]
     fn end_unconnected(&mut self) {
         let client = tokio::net::windows::named_pipe::ClientOptions::new()
@@ -554,7 +576,9 @@ impl Tee {
 }
 
 impl Drop for Tee {
-    /// Stops reading when the call is dropped before the command ended.
+    /// Stops reading when the call is dropped before the command ended. A
+    /// Unix reader thread cannot be stopped; it ends once the server's write
+    /// end, dropped here, and the command, which its watcher stops, are gone.
     fn drop(&mut self) {
         if let Some(reader) = self.reader.take() {
             reader.abort();
@@ -562,29 +586,51 @@ impl Drop for Tee {
     }
 }
 
-/// Reads the JSON lines of `pipe` to its end and returns them as text. With
-/// `phases`, lines that are daemon events stay out of the text, and each
-/// `lane.phase` among them sends its progress message.
+/// Reads the JSON lines of `pipe` to its end and returns them as text.
+#[cfg(windows)]
 async fn read(
     pipe: impl tokio::io::AsyncRead + Unpin,
     phases: Option<UnboundedSender<String>>,
 ) -> String {
-    let mut lines = tokio::io::BufReader::new(pipe).split(b'\n');
-    let mut written = String::new();
-    while let Ok(Some(line)) = lines.next_segment().await {
-        let line = String::from_utf8_lossy(&line);
-        if let Some(phases) = &phases
+    let mut segments = tokio::io::BufReader::new(pipe).split(b'\n');
+    let mut lines = Lines::new(phases);
+    while let Ok(Some(line)) = segments.next_segment().await {
+        lines.push(&line);
+    }
+    lines.written
+}
+
+/// The lines a command wrote to its JSON copy. With `phases`, lines that are
+/// daemon events stay out of the text, and each `lane.phase` among them
+/// sends its progress message.
+struct Lines {
+    phases: Option<UnboundedSender<String>>,
+    written: String,
+}
+
+impl Lines {
+    /// No lines yet.
+    fn new(phases: Option<UnboundedSender<String>>) -> Self {
+        Self {
+            phases,
+            written: String::new(),
+        }
+    }
+
+    /// Takes one line, without its newline.
+    fn push(&mut self, line: &[u8]) {
+        let line = String::from_utf8_lossy(line);
+        if let Some(phases) = &self.phases
             && let Ok(event) = serde_json::from_str::<devlanes_proto::Event>(&line)
         {
             if let Some(message) = crate::progress::message(&event) {
                 let _ = phases.send(message);
             }
-            continue;
+            return;
         }
-        written.push_str(&line);
-        written.push('\n');
+        self.written.push_str(&line);
+        self.written.push('\n');
     }
-    written
 }
 
 /// The code a shell would report for `status`.
