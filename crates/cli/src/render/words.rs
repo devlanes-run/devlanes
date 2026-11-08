@@ -107,6 +107,16 @@ fn last_answer(data: &Value) -> String {
     }
 }
 
+/// `log cannot be read or written (the log writer stopped)` from a
+/// `ready_log_failed` reason's `{message}`, which names a stopped writer or
+/// the read error.
+fn log_failure(data: &Value) -> String {
+    match text(data, "message") {
+        message if message.is_empty() => "log cannot be read or written".into(),
+        message => format!("log cannot be read or written ({message})"),
+    }
+}
+
 /// The fix for an http check that timed out on a non-2xx answer without a
 /// configured `status`: probe a route that answers 2xx, sending the app's own
 /// hostname when it routes by host, or accept that code.
@@ -513,6 +523,18 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 found => format!("{found} wasn't ready in time{}", last_answer(data)),
             },
             status_hint(data).or_else(|| logs_hint(data)),
+        ),
+        "ready_log_failed" => (
+            match target(data) {
+                found if found.is_empty() => {
+                    format!("its {}, so ready.log cannot match", log_failure(data))
+                }
+                found => format!(
+                    "{found}'s {}, so its ready.log check cannot match",
+                    log_failure(data)
+                ),
+            },
+            Some(Hint::command(["daemon", "logs"])),
         ),
         "queued" => (
             queued(data),
@@ -1971,6 +1993,10 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
                 last_answer(data)
             ),
             status_hint(data).or_else(|| Some(Hint::logs(lane, unit, 200))),
+        ),
+        "ready_log_failed" => (
+            format!("its {}, so ready.log cannot match", log_failure(data)),
+            Some(Hint::command(["daemon", "logs"])),
         ),
         "exited" => (
             match int(data, "code") {

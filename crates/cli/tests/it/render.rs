@@ -555,6 +555,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                     {"code": "port_in_use", "data": {"port": 20102, "pid": 911}},
                     {"code": "waiting_after_services", "data": {}},
                     {"code": "ready_timeout", "data": {}},
+                    {"code": "ready_log_failed", "data": {"check": "log", "message": "the log writer stopped"}},
                     {"code": "exited", "data": {"code": 1, "signal": null}},
                     {"code": "stopped", "data": {"exit_code": 0, "signal": null, "requested": true}},
                     {"code": "autostart_off", "data": {}},
@@ -2312,6 +2313,11 @@ fn daemon_errors_are_worded_with_hints() {
             "timeout",
             json!({"lane": "acme@2", "unit": "job", "state": "running", "timeout_ms": 5000}),
             124,
+        ),
+        RpcError::new(
+            "ready_log_failed",
+            json!({"lane": "acme@2", "unit": "worker", "check": "log", "message": "the log writer stopped"}),
+            1,
         ),
         RpcError::new("not_supported_yet", json!({"feature": "remote unlock"}), 1),
         RpcError::new(

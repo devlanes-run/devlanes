@@ -3,12 +3,8 @@
 
 use std::{
     collections::BTreeMap,
-    io::Write,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{
-        Arc, Mutex, PoisonError,
-        atomic::{AtomicU16, Ordering},
-    },
+    sync::atomic::{AtomicU16, Ordering},
     time::Duration,
 };
 
@@ -20,7 +16,7 @@ use tokio::{
     time::{Instant, sleep, timeout},
 };
 
-use crate::units::{UnitHost, UnitState};
+use crate::units::{Logged, UnitHost, UnitState};
 
 /// What "ready" means for one unit, after config evaluation.
 #[derive(Clone)]
@@ -37,8 +33,7 @@ pub enum Readiness {
         /// Host header to send; `None` sends `127.0.0.1:<port>`.
         host: Option<String>,
     },
-    /// Regex over ANSI-stripped output lines. For a unit whose output renders
-    /// its screen (Windows with `pty: true`), over the lines its log shows.
+    /// Regex over the lines of this run's log, as `devlanes logs` shows them.
     Log {
         pattern: String,
     },
@@ -119,16 +114,20 @@ where
     }
     // A pattern that cannot compile never matches; waiting for the timeout would
     // only disguise a config mistake as a slow service.
-    if let Readiness::Log { pattern } = &check
-        && let Err(error) = regex::Regex::new(pattern)
-    {
-        host.set_state(UnitState::Failed(Some(RpcError::new(
-            "config_error",
-            json!({"path": "ready.log", "pattern": pattern, "message": error.to_string()}),
-            1,
-        ))));
-        return;
-    }
+    let log = match &check {
+        Readiness::Log { pattern } => match regex::Regex::new(pattern) {
+            Ok(regex) => Some(regex),
+            Err(error) => {
+                host.set_state(UnitState::Failed(Some(RpcError::new(
+                    "config_error",
+                    json!({"path": "ready.log", "pattern": pattern, "message": error.to_string()}),
+                    1,
+                ))));
+                return;
+            }
+        },
+        _ => None,
+    };
     // Without the shell no attempt can pass; failing now names the cause.
     #[cfg(windows)]
     if let Readiness::Cmd { shell: None, .. } = &check {
@@ -149,12 +148,13 @@ where
         "readiness check"
     );
     let last = LastStatus::default();
-    let probe = probe_until_ready(host, &check, deadline, &last);
+    let probe = probe_until_ready(host, &check, log.as_ref(), deadline, &last);
     let exited = host.wait_exit();
     tokio::select! {
         result = probe => match result {
             Ok(()) => host.set_state(UnitState::Ready),
-            Err(()) => {
+            Err(Missed::Failed(error)) => host.set_state(UnitState::Failed(Some(error))),
+            Err(Missed::Deadline) => {
                 let mut data = json!({"check": describe(&check), "timeout_ms": limit.as_millis()});
                 if let Readiness::Tcp { port } | Readiness::Http { port, .. } = &check {
                     data["expected_port"] = json!(port);
@@ -182,15 +182,23 @@ fn describe(check: &Readiness) -> &'static str {
     }
 }
 
-/// Returns `Err` only on timeout or an invalid check definition. An http probe
-/// records each status it receives in `last`.
+/// Why a probe ended without passing.
+enum Missed {
+    Deadline,
+    /// The probe cannot work for this run; the unit fails with this error.
+    Failed(RpcError),
+}
+
+/// Waits until `check` passes. `log` is the compiled pattern of a `log` check.
+/// An http probe records each status it receives in `last`.
 async fn probe_until_ready(
     host: &UnitHost,
     check: &Readiness,
+    log: Option<&regex::Regex>,
     deadline: Instant,
     last: &LastStatus,
-) -> Result<(), ()> {
-    match check {
+) -> Result<(), Missed> {
+    let polled = match check {
         Readiness::Started => Ok(()),
         Readiness::Tcp { port } => poll(deadline, || async move { tcp_open(*port).await }).await,
         Readiness::Http {
@@ -220,84 +228,54 @@ async fn probe_until_ready(
             shell,
         } => {
             // `run_check` fails a check without a shell before probing.
-            let Some(shell) = shell else { return Err(()) };
+            let Some(shell) = shell else {
+                return Err(Missed::Deadline);
+            };
             poll(deadline, || async move {
                 windows::cmd_succeeds(shell, command, cwd, env, deadline).await
             })
             .await
         }
-        Readiness::Log { pattern } => {
-            let Ok(regex) = regex::Regex::new(pattern) else {
-                return Err(());
+        Readiness::Log { .. } => {
+            // `run_check` passes the compiled pattern for a `log` check.
+            let Some(regex) = log else {
+                return Err(Missed::Deadline);
             };
-            if host.renders_screen() {
-                return logged_line_matches(host, &regex, deadline).await;
-            }
-            // Subscribe first, then scan history, so a line printed in between is not lost.
-            let mut output = host.subscribe_output();
-            if host.tail(200).await.iter().any(|line| regex.is_match(line)) {
-                return Ok(());
-            }
-            let mut stripper = Stripper::new();
-            let mut pending = String::new();
-            loop {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                match timeout(remaining, output.recv()).await {
-                    Err(_) => return Err(()),
-                    Ok(Ok(bytes)) => {
-                        pending.push_str(&stripper.feed(&bytes));
-                        while let Some(end) = pending.find(['\n', '\r']) {
-                            if regex.is_match(&pending[..end]) {
-                                return Ok(());
-                            }
-                            pending.drain(..=end);
-                        }
-                        // A partial line can also match (prompts without newline).
-                        if regex.is_match(&pending) {
-                            return Ok(());
-                        }
-                        if pending.len() > 64 * 1024 {
-                            pending.clear();
-                        }
-                    }
-                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
-                    Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => return Err(()),
-                }
-            }
+            return log_line_matches(host, regex, deadline).await;
         }
-    }
+    };
+    polled.map_err(|()| Missed::Deadline)
 }
 
-/// Waits for a line of this run's log that `regex` matches, for a unit whose
-/// output renders its screen (ConPTY): rows are placed with cursor moves, so
-/// the raw stream has no line starts, while the screen model logs whole rows,
-/// the lines `devlanes logs` shows. The log is read from where the last read
-/// stopped once per [`POLL`], also while output is quiet: the screen model logs
-/// the row output stopped on after a pause, and under load that row can reach
-/// the log well after the last output.
-async fn logged_line_matches(
+/// Waits for a line of this run's log that `regex` matches: the lines the
+/// screen model logged, as `devlanes logs` shows them. Reads from where the
+/// last read stopped each time the log thread stores lines. Fails at once when
+/// the log cannot be read or its writer stopped, since no later line can match.
+async fn log_line_matches(
     host: &UnitHost,
     regex: &regex::Regex,
     deadline: Instant,
-) -> Result<(), ()> {
-    use tokio::sync::broadcast::error::RecvError;
-    let mut output = host.subscribe_output();
+) -> Result<(), Missed> {
+    // Watching before the first read: a line stored after this marks the watch
+    // changed, and every line stored before it is in that read.
+    let mut logged = host.watch_logged();
     let mut cursor = host.run_cursor();
     loop {
+        let seen = *logged.borrow_and_update();
         loop {
             let query = devlanes_proto::LogQuery {
                 cursor: cursor.clone(),
                 max_bytes: Some(64 * 1024),
                 ..devlanes_proto::LogQuery::default()
             };
-            let page = match host.logs(query).await {
-                Ok(page) => page,
-                // Read again on the next tick; only the deadline fails the check.
-                Err(error) => {
-                    tracing::debug!(unit = %host.info().name, code = %error.code, "ready.log read failed");
-                    break;
-                }
-            };
+            // No read error clears up while the run lives: the lock stays
+            // poisoned, and a query or disk failure repeats on the same bytes.
+            let page = host.read_log(query).await.map_err(|error| {
+                let message = error.data["message"]
+                    .as_str()
+                    .map_or_else(|| error.code.clone(), str::to_owned);
+                Missed::Failed(ready_log_failed(&message))
+            })?;
             if page.items.iter().any(|line| regex.is_match(&line.text)) {
                 return Ok(());
             }
@@ -308,18 +286,27 @@ async fn logged_line_matches(
                 break;
             }
         }
-        let tick = (Instant::now() + POLL).min(deadline);
-        loop {
-            match tokio::time::timeout_at(tick, output.recv()).await {
-                Err(_) => break,
-                Ok(Ok(_) | Err(RecvError::Lagged(_))) => {}
-                Ok(Err(RecvError::Closed)) => return Err(()),
-            }
+        // Checked after the read: lines stored before the writer failed still count.
+        if seen == Logged::Failed {
+            return Err(Missed::Failed(ready_log_failed("the log writer stopped")));
         }
-        if Instant::now() >= deadline {
-            return Err(());
+        match tokio::time::timeout_at(deadline, logged.changed()).await {
+            Err(_) => return Err(Missed::Deadline),
+            Ok(Ok(())) => {}
+            // The writer closes the watch on `Through` only after finishing the
+            // log, which follows the published exit, so `run_check` ends on that.
+            Ok(Err(_)) => std::future::pending::<()>().await,
         }
     }
+}
+
+/// The failure of a `log` check whose log stopped being written or read.
+fn ready_log_failed(message: &str) -> RpcError {
+    RpcError::new(
+        "ready_log_failed",
+        json!({"check": "log", "message": message}),
+        1,
+    )
 }
 
 /// Runs one `cmd` attempt in the unit's environment. Each attempt is bounded by
@@ -347,83 +334,6 @@ async fn cmd_succeeds(
         .kill_on_drop(true)
         .status();
     matches!(timeout(limit, status).await, Ok(Ok(status)) if status.success())
-}
-
-/// ANSI stripping that keeps parser state across chunks, so an escape sequence or a
-/// UTF-8 character split between two reads is neither garbled nor leaked as text.
-struct Stripper {
-    writer: strip_ansi_escapes::Writer<Collected>,
-    collected: Arc<Mutex<Vec<u8>>>,
-    /// An incomplete UTF-8 sequence at the end of the last chunk. vte 0.14 keeps
-    /// escape state across writes but drops a byte after a split character.
-    carry: Vec<u8>,
-}
-
-/// The stripper's sink: bytes accumulate until [`Stripper::feed`] takes them.
-struct Collected(Arc<Mutex<Vec<u8>>>);
-
-impl Write for Collected {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Stripper {
-    /// Starts with an empty parser state.
-    fn new() -> Self {
-        let collected = Arc::new(Mutex::new(Vec::new()));
-        Self {
-            writer: strip_ansi_escapes::Writer::new(Collected(collected.clone())),
-            collected,
-            carry: Vec::new(),
-        }
-    }
-
-    /// Feeds one chunk and returns the text completed so far.
-    fn feed(&mut self, bytes: &[u8]) -> String {
-        let mut input = std::mem::take(&mut self.carry);
-        input.extend_from_slice(bytes);
-        let keep = incomplete_utf8_tail(&input);
-        self.carry = input.split_off(input.len() - keep);
-        // Writing into memory cannot fail; the flush pushes out partial lines.
-        let _ = self.writer.write_all(&input);
-        let _ = self.writer.flush();
-        let taken = std::mem::take(
-            &mut *self
-                .collected
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
-        String::from_utf8_lossy(&taken).into_owned()
-    }
-}
-
-/// Length of a UTF-8 sequence cut off at the end of `bytes`, or 0 when it ends on a
-/// character boundary (or in bytes that are not UTF-8 at all).
-fn incomplete_utf8_tail(bytes: &[u8]) -> usize {
-    for back in 1..=bytes.len().min(3) {
-        let byte = bytes[bytes.len() - back];
-        if byte & 0xC0 == 0x80 {
-            // A continuation byte; the lead byte is further back.
-            continue;
-        }
-        let needed = match byte {
-            0xF0.. => 4,
-            0xE0.. => 3,
-            0xC0.. => 2,
-            _ => 1,
-        };
-        return if needed > back { back } else { 0 };
-    }
-    0
 }
 
 /// Waits for `infra.containers.<name>.ready` once the container is up. `ports`
@@ -894,24 +804,6 @@ mod tests {
         assert_eq!(error.data["http_path"], "/302");
         assert_eq!(error.data["http_host"], format!("127.0.0.1:{port}"));
         Ok(())
-    }
-
-    /// An escape sequence and a multi-byte character split across chunks are stripped
-    /// as if they had arrived whole.
-    #[test]
-    fn stripping_keeps_state_across_chunks() {
-        let mut stripper = Stripper::new();
-        let mut text = String::new();
-        for chunk in [
-            &b"\x1b[3"[..],
-            b"2mread",
-            b"y \xc3",
-            b"\xa9t\xc3\xa9\x1b[0",
-            b"m\n",
-        ] {
-            text.push_str(&stripper.feed(chunk));
-        }
-        assert_eq!(text, "ready \u{e9}t\u{e9}\n");
     }
 
     /// `cmd` probes see the unit's environment only, and a hanging attempt is cut
