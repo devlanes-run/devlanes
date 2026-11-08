@@ -427,6 +427,7 @@ async fn all_lifecycle_write_models_round_trip_and_replace() {
                 code: None,
                 signal: Some(15),
             },
+            true,
         )
         .await
         .expect("finish");
@@ -716,6 +717,7 @@ async fn history_retention_and_reset() {
                 code: Some(0),
                 signal: None,
             },
+            false,
         )
         .await
         .expect("finish");

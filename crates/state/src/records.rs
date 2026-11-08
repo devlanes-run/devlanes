@@ -202,4 +202,9 @@ pub struct UnitRun {
     /// Boot the run was recorded in; `None` for rows from before boot tracking.
     #[serde(default)]
     pub boot_id: Option<String>,
+    /// Whether a stop asked for the run's end; `None` while unfinished, for
+    /// runs left unfinished by an earlier boot and for rows from before it
+    /// was recorded.
+    #[serde(default)]
+    pub ended_by_request: Option<bool>,
 }

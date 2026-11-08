@@ -629,6 +629,9 @@ impl Inner {
     }
 
     /// `errors`: exit codes, crash counts, last error lines and port conflicts.
+    /// A crash is a run that ended without a stop asking for it, with a
+    /// non-zero exit code or by a signal. Runs from before the daemon recorded
+    /// that fact are not counted.
     pub(crate) async fn errors_method(
         self: &Arc<Self>,
         value: Value,
@@ -677,7 +680,10 @@ impl Inner {
                     .filter(|run| {
                         run.unit == name
                             && u64::try_from(run.started_at).unwrap_or(0) >= since_ms
-                            && run.outcome.is_some_and(|o| o.code.is_some_and(|c| c != 0))
+                            && run.ended_by_request == Some(false)
+                            && run.outcome.is_some_and(|o| {
+                                o.code.is_some_and(|c| c != 0) || o.signal.is_some()
+                            })
                     })
                     .count();
                 let state = host.state();

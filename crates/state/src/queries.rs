@@ -439,8 +439,14 @@ impl Store {
         })
         .await
     }
-    /// Completes a run once; repeated calls retain the original outcome and time.
-    pub async fn finish_unit_run(&self, id: UnitRunId, outcome: ExitOutcome) -> Result<(), Error> {
+    /// Completes a run once with its outcome and whether a stop asked for its
+    /// end; repeated calls retain the original outcome, flag and time.
+    pub async fn finish_unit_run(
+        &self,
+        id: UnitRunId,
+        outcome: ExitOutcome,
+        by_request: bool,
+    ) -> Result<(), Error> {
         self.call(move |c| {
             let changed = diesel::update(
                 unit_runs::table
@@ -451,6 +457,7 @@ impl Store {
                 unit_runs::ended_at.eq(now()?),
                 unit_runs::exit_code.eq(outcome.code),
                 unit_runs::exit_signal.eq(outcome.signal),
+                unit_runs::ended_by_request.eq(i32::from(by_request)),
             ))
             .execute(c)?;
             if changed == 0

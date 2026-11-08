@@ -339,6 +339,48 @@ async fn ready_timeout_then_exit_is_recorded() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// `errors` counts a run that ended without a stop asking for it, by a signal
+/// too, and no run a stop ended, whatever its exit code.
+async fn crash_counts_ignore_requested_stops() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let home = tmp.path.join("home");
+        let config = "project: acme\nservices:\n  polite: { run: \"onstop 3; sleep\" }\n  dies: { run: \"killed 11\" }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&home, Setup::default()).await;
+        let _ = h.call(Method::Start, json!({}), cx(&main)).await;
+        h.call(Method::Stop, json!({"units": ["polite"]}), cx(&main))
+            .await
+            .expect("stop");
+        let store = devlanes_state::Store::open(home.join("state.db"))
+            .await
+            .expect("store");
+        let lane = store.lanes(None).await.expect("lanes")[0].id;
+        let finished = crate::eventually(std::time::Duration::from_secs(5), || async {
+            let runs = store.unit_runs(lane, 10).await.ok()?;
+            (runs.len() == 2 && runs.iter().all(|run| run.outcome.is_some())).then_some(())
+        })
+        .await;
+        assert!(finished.is_some(), "both runs are recorded as finished");
+
+        let errors = h
+            .call(Method::Errors, json!({}), cx(&main))
+            .await
+            .expect("errors");
+        let crashes: Vec<(&str, u64)> = errors["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .filter_map(|item| Some((item["unit"].as_str()?, item["crashes"].as_u64()?)))
+            .collect();
+        assert_eq!(crashes, [("dies", 1)], "{errors}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// A service whose config does not resolve reads failed with the error and
 /// its log says why, while a running one keeps its process.
 async fn unresolved_service_is_failed_unless_running() {

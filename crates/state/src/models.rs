@@ -111,6 +111,7 @@ pub(crate) struct UnitRunRow {
     pub actor_session_id: Option<String>,
     pub log_path: Option<Vec<u8>>,
     pub boot_id: Option<String>,
+    pub ended_by_request: Option<i32>,
 }
 #[derive(Insertable)]
 #[diesel(table_name = unit_runs)]
@@ -336,6 +337,7 @@ impl TryFrom<UnitRunRow> for UnitRun {
             actor: actor(row.actor_kind, row.actor_agent_id, row.actor_session_id)?,
             log_path: row.log_path.map(path_from_bytes),
             boot_id: row.boot_id,
+            ended_by_request: row.ended_by_request.map(|by_request| by_request != 0),
         })
     }
 }

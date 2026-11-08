@@ -62,7 +62,7 @@ impl Inner {
         let mut tracked = 0;
         for ((run, members), alive) in runs.into_iter().zip(members).zip(checks) {
             if !alive {
-                self.finish_run(run.id, GONE).await;
+                self.finish_run(run.id, GONE, false).await;
                 continue;
             }
             let lane = lanes.iter().find(|(_, lane)| {
@@ -135,7 +135,7 @@ impl Inner {
         let mut stopped = Vec::new();
         for (name, orphan, mut summary) in picked {
             // An unfinished row keeps the record, so the liveness check retries it.
-            if self.finish_run(orphan.run_id, TERMINATED).await {
+            if self.finish_run(orphan.run_id, TERMINATED, true).await {
                 let mut st = lane.st();
                 if st
                     .orphans
@@ -168,7 +168,7 @@ impl Inner {
                 if self.any_alive(orphan.process, &orphan.members).await {
                     continue;
                 }
-                if !self.finish_run(orphan.run_id, GONE).await {
+                if !self.finish_run(orphan.run_id, GONE, false).await {
                     continue;
                 }
                 let mut st = lane.st();
@@ -253,7 +253,7 @@ impl Inner {
     /// Before the store is reset or closed: finishes the rows of this daemon's
     /// exited units with their exit status, without waiting for their watchers.
     pub(crate) async fn finish_stopped_runs(&self) {
-        let runs: Vec<(UnitRunId, Option<ExitOutcome>)> = self
+        let runs: Vec<(UnitRunId, Option<ExitOutcome>, bool)> = self
             .all_lanes()
             .iter()
             .flat_map(|(_, lane)| {
@@ -261,12 +261,16 @@ impl Inner {
                     .units
                     .values()
                     .filter(|rec| !rec.host.is_alive())
-                    .filter_map(|rec| rec.run_id.map(|id| (id, rec.host.exit_outcome())))
+                    .filter_map(|rec| {
+                        let id = rec.run_id?;
+                        Some((id, rec.host.exit_outcome(), rec.host.stop_was_requested()))
+                    })
                     .collect::<Vec<_>>()
             })
             .collect();
-        for (id, outcome) in runs {
-            self.finish_run(id, outcome.unwrap_or(GONE)).await;
+        for (id, outcome, by_request) in runs {
+            self.finish_run(id, outcome.unwrap_or(GONE), by_request)
+                .await;
         }
     }
 
@@ -288,21 +292,27 @@ impl Inner {
             if alive {
                 self.terminate_all(run.process, &members).await;
             }
-            self.finish_run(run.id, if alive { TERMINATED } else { GONE })
-                .await;
+            let outcome = if alive { TERMINATED } else { GONE };
+            self.finish_run(run.id, outcome, alive).await;
             alive
         }))
         .await;
         Ok(ended.into_iter().filter(|alive| *alive).count())
     }
 
-    /// Finishes a run row, retrying briefly. An unfinished row keeps the unit's
-    /// active-run slot (one per lane and unit) taken, which would refuse its next
-    /// start. Returns false when the row is still unfinished.
-    pub(crate) async fn finish_run(&self, id: UnitRunId, outcome: ExitOutcome) -> bool {
+    /// Finishes a run row with its outcome and whether a stop asked for its end,
+    /// retrying briefly. An unfinished row keeps the unit's active-run slot (one
+    /// per lane and unit) taken, which would refuse its next start. Returns
+    /// false when the row is still unfinished.
+    pub(crate) async fn finish_run(
+        &self,
+        id: UnitRunId,
+        outcome: ExitOutcome,
+        by_request: bool,
+    ) -> bool {
         let mut delay = Duration::from_millis(100);
         for attempt in 1..=FINISH_ATTEMPTS {
-            match self.store.finish_unit_run(id, outcome).await {
+            match self.store.finish_unit_run(id, outcome, by_request).await {
                 // A missing row was reset or pruned: nothing is left to finish.
                 Ok(()) | Err(devlanes_state::Error::NotFound(_)) => return true,
                 Err(devlanes_state::Error::Closed) => return false,

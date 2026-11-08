@@ -5,7 +5,9 @@
 //! up), `tcp-echo` (echoes every connection on `$PORT`), `http <body>` (answers
 //! every request on `$PORT` with `<body>`), `http-keep <body>` (the same on
 //! kept-alive connections, and WebSockets that greet with `<body>` and echo),
-//! `sleep` (stays up), `exit <code>`,
+//! `sleep` (stays up), `exit <code>`, `killed <signal>` (ends by that signal
+//! on its own), `onstop <code>` (a later stop ends it with that exit code
+//! instead of the signal, as a shutdown handler would),
 //! `fail` (prints `boom`, exits 1), `nap <ms>` (waits, then goes on),
 //! `hold` (waits until the test calls [`FakeRunner::release`]),
 //! `deaf` (stops reading input: writes block
@@ -211,6 +213,7 @@ impl UnitRunner for FakeRunner {
                 start_time: 1,
             }),
             stubborn: AtomicBool::new(stubborn),
+            stop_code: Mutex::new(None),
             renders,
             sender: Mutex::new(Some(sender)),
             first: Mutex::new(Some(first)),
@@ -234,6 +237,8 @@ pub struct FakeUnit {
     identity: ProcessIdentity,
     /// Set by `stubborn`: the next stop request is ignored.
     stubborn: AtomicBool,
+    /// Set by `onstop`: the exit code a stop ends the unit with.
+    stop_code: Mutex<Option<i32>>,
     /// Set by `render`.
     renders: bool,
     sender: Mutex<Option<broadcast::Sender<OutputChunk>>>,
@@ -334,6 +339,18 @@ impl FakeUnit {
                         signal: None,
                     });
                     return;
+                }
+                "killed" => {
+                    self.end(ExitOutcome {
+                        code: None,
+                        signal: rest.trim().parse().ok(),
+                    });
+                    return;
+                }
+                "onstop" => {
+                    if let Ok(mut code) = self.stop_code.lock() {
+                        *code = rest.trim().parse().ok();
+                    }
                 }
                 "fail" => {
                     self.print("boom");
@@ -516,15 +533,17 @@ impl Unit for FakeUnit {
         }
         Ok(())
     }
-    /// Ends the unit with the requested signal (`stubborn`: from the second request).
+    /// Ends the unit with the requested signal, or the `onstop` code
+    /// (`stubborn`: from the second request).
     async fn stop(&self, policy: StopPolicy) -> Result<(), Error> {
         if self.stubborn.swap(false, Ordering::SeqCst) {
             return Ok(());
         }
         self.stop.send_replace(true);
+        let code = self.stop_code.lock().ok().and_then(|code| *code);
         self.end(ExitOutcome {
-            code: None,
-            signal: Some(signal_number(policy.signal)),
+            code,
+            signal: code.is_none().then(|| signal_number(policy.signal)),
         });
         Ok(())
     }
