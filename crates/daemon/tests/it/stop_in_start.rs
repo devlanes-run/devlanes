@@ -463,6 +463,45 @@ async fn restart_takes_a_unit_out_of_a_running_start() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// `restart api.1` brings up `api.1` only: a stopped `api.2` stays stopped.
+async fn restart_of_one_replica_leaves_the_others() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = r#"project: rep
+services:
+  api: { run: "echo api${{ replica.index }}; sleep", replicas: 2, ready: started }
+"#;
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        h.call(Method::Stop, json!({"units": ["api.2"]}), cx(&main))
+            .await
+            .expect("stop api.2");
+        let restarted: StartResult = serde_json::from_value(
+            h.call(Method::Restart, json!({"units": ["api.1"]}), cx(&main))
+                .await
+                .expect("restart"),
+        )
+        .expect("result");
+        assert_eq!(restarted.started, ["rep@0:api.1"], "{restarted:?}");
+        assert_eq!(spawned(&h, "echo api1"), 2);
+        assert_eq!(spawned(&h, "echo api2"), 1);
+        let api2 = lane(&h, &main)
+            .await
+            .units
+            .into_iter()
+            .find(|unit| unit.name == "api.2")
+            .map(|unit| unit.state);
+        assert_eq!(api2.as_deref(), Some("stopped"));
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// `restart` of a unit the start already spawned and waits for: stopped in the
 /// start, then started fresh.
 async fn restart_replaces_a_unit_the_start_waits_for() {

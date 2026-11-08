@@ -500,6 +500,28 @@ pub(crate) async fn wait_settled(hosts: &[UnitHost], deadline: Instant) -> bool 
     true
 }
 
+/// Adds to `cx.failures` each unit of `selected` that failed, or ended without
+/// a stop asking it to, unless it is there already.
+async fn record_failed_units(cx: &mut StartCx, selected: &[String]) {
+    let failed: Vec<(String, UnitHost)> = {
+        let st = cx.lane.st();
+        selected
+            .iter()
+            .filter(|unit| !cx.failures.iter().any(|f| &f.unit == *unit))
+            .filter_map(|unit| {
+                let host = &st.units.get(unit)?.host;
+                let failed = matches!(host.state(), UnitState::Failed(_))
+                    || (!host.is_alive() && !host.stop_was_requested());
+                failed.then(|| (unit.clone(), host.clone()))
+            })
+            .collect()
+    };
+    for (unit, host) in failed {
+        cx.failures
+            .push(failure_of(&cx.reference, &unit, &host).await);
+    }
+}
+
 /// Failure data for a unit: exit code, reason and last log lines.
 pub(crate) async fn failure_of(lane: &str, name: &str, host: &UnitHost) -> UnitFailureData {
     let reason = match host.state() {
@@ -578,6 +600,11 @@ pub(crate) struct StartCx {
     pub setup_started_at: Option<BTreeMap<String, String>>,
     pub already_running: Vec<String>,
     pub failures: Vec<UnitFailureData>,
+    /// False once the services phase saw a unit fail or the deadline pass.
+    pub services_ready: bool,
+    /// The units a restart named; `None` for a start, which takes every
+    /// replica of its services.
+    pub units: Option<BTreeSet<String>>,
     pub skipped_tasks: Vec<String>,
     /// Tasks and setup commands of this start that left processes behind.
     pub leftovers: Vec<Leftovers>,
@@ -610,6 +637,13 @@ pub(crate) struct StartCx {
     pub profile_stale: Vec<(String, Vec<String>)>,
 }
 
+impl StartCx {
+    /// Whether the start brings up `unit`, a replica of one of its services.
+    fn selects(&self, unit: &str) -> bool {
+        self.units.as_ref().is_none_or(|units| units.contains(unit))
+    }
+}
+
 /// One ordered step of the lane pipeline (plan 5.5).
 #[async_trait]
 pub(crate) trait LanePhase: Send + Sync {
@@ -639,10 +673,12 @@ struct SetupPhase;
 struct TasksPhase {
     after: bool,
 }
-/// All selected services together.
+/// All selected services together. It owns the start's one readiness wait:
+/// `after: services` tasks and the result read what it decided.
 struct ServicesPhase;
 
-/// The start pipeline in decision-5 order.
+/// The start pipeline in decision-5 order. `services` ends once every unit
+/// the start brought up is ready, failed or past the deadline.
 fn start_pipeline() -> Vec<Box<dyn LanePhase>> {
     vec![
         Box::new(InfraPhase),
@@ -1252,21 +1288,9 @@ impl LanePhase for TasksPhase {
         if chosen.is_empty() {
             return PhaseResult::Skipped(reason("no_tasks", json!({})));
         }
-        if self.after {
-            let hosts: Vec<UnitHost> = {
-                let st = cx.lane.st();
-                cx.started
-                    .iter()
-                    .chain(&cx.already_running)
-                    .filter_map(|unit| st.units.get(unit).map(|rec| rec.host.clone()))
-                    .collect()
-            };
-            let settled = tokio::select! {
-                settled = wait_settled(&hosts, cx.deadline) => settled,
-                () = cx.cancel.cancelled() => return PhaseResult::Error(start_cancelled(cx)),
-            };
-            if !settled {
-                cx.timed_out = true;
+        // The services phase decided whether the services are ready.
+        if self.after && !cx.services_ready {
+            if cx.timed_out {
                 for (name, _) in &chosen {
                     cx.skipped_tasks.push(name.clone());
                     engine.task_event(
@@ -1279,34 +1303,18 @@ impl LanePhase for TasksPhase {
                 }
                 return PhaseResult::Skipped(reason("timed_out", json!({})));
             }
-            let failed: Vec<String> = {
-                let st = cx.lane.st();
-                cx.started
-                    .iter()
-                    .chain(&cx.already_running)
-                    .filter(|unit| {
-                        st.units
-                            .get(*unit)
-                            .is_some_and(|rec| matches!(rec.host.state(), UnitState::Failed(_)))
-                    })
-                    .cloned()
-                    .collect()
-            };
-            if !failed.is_empty() || !cx.failures.is_empty() {
-                let mut units = failed;
-                units.extend(cx.failures.iter().map(|f| f.unit.clone()));
-                for (name, _) in &chosen {
-                    cx.skipped_tasks.push(name.clone());
-                    engine.task_event(
-                        &cx.reference,
-                        name,
-                        "skipped",
-                        None,
-                        Some(json!({"code": "service_failed", "units": units})),
-                    );
-                }
-                return PhaseResult::Skipped(reason("service_failed", json!({"units": units})));
+            let units: Vec<String> = cx.failures.iter().map(|f| f.unit.clone()).collect();
+            for (name, _) in &chosen {
+                cx.skipped_tasks.push(name.clone());
+                engine.task_event(
+                    &cx.reference,
+                    name,
+                    "skipped",
+                    None,
+                    Some(json!({"code": "service_failed", "units": units})),
+                );
             }
+            return PhaseResult::Skipped(reason("service_failed", json!({"units": units})));
         }
         let count = chosen.len();
         for (index, (name, hook)) in chosen.into_iter().enumerate() {
@@ -1387,15 +1395,61 @@ impl LanePhase for ServicesPhase {
         "services"
     }
 
+    /// Spawns the start's units, then waits until each is ready, failed or
+    /// past the deadline, and sends `services:ready` when all are ready.
     async fn run(&self, engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult {
+        let spawned = Self::spawn(engine, cx).await;
+        // Nothing more spawns: a waiting restart of a withdrawn unit may go.
+        cx.ctl.services_done.cancel();
+        engine.forget_waiting(&cx.project, &cx.lane, cx.start_id);
+        let joined = match spawned {
+            Ok(joined) => joined,
+            Err(result) => return result,
+        };
+        let selected: Vec<String> = cx
+            .started
+            .iter()
+            .chain(&cx.already_running)
+            .filter(|unit| cx.ctl.withdrawn_by(unit).is_none())
+            .cloned()
+            .collect();
+        let hosts: Vec<UnitHost> = {
+            let st = cx.lane.st();
+            selected
+                .iter()
+                .filter_map(|unit| st.units.get(unit).map(|rec| rec.host.clone()))
+                .collect()
+        };
+        let settled = tokio::select! {
+            settled = wait_settled(&hosts, cx.deadline) => settled,
+            () = cx.cancel.cancelled() => return PhaseResult::Error(start_cancelled(cx)),
+        };
+        if !settled {
+            cx.timed_out = true;
+        }
+        record_failed_units(cx, &selected).await;
+        cx.services_ready = !cx.timed_out && cx.failures.is_empty();
+        if cx.services_ready && (!cx.started.is_empty() || joined) {
+            // From this task, so subscribers see the units ready before the milestone.
+            engine.emit_lane(&cx.project, &cx.lane);
+            engine.phase_event(cx, self.name(), "ready", None, None);
+        }
+        PhaseResult::Done
+    }
+}
+
+impl ServicesPhase {
+    /// Spawns the selected units and joins those another start spawns.
+    /// `Ok(true)` when it joined a unit that spawned; `Err` ends the phase.
+    async fn spawn(engine: &Arc<Inner>, cx: &mut StartCx) -> Result<bool, PhaseResult> {
         if cx.setup_only {
-            return PhaseResult::Skipped(reason("setup_only", json!({})));
+            return Err(PhaseResult::Skipped(reason("setup_only", json!({}))));
         }
         let Some(resolved) = cx.resolved.clone() else {
-            return PhaseResult::Skipped(reason("not_resolved", json!({})));
+            return Err(PhaseResult::Skipped(reason("not_resolved", json!({}))));
         };
         if cx.services.is_empty() {
-            return PhaseResult::Skipped(reason("no_services", json!({})));
+            return Err(PhaseResult::Skipped(reason("no_services", json!({}))));
         }
         let mut to_spawn: Vec<&ResolvedService> = Vec::new();
         // A copy, because the paced spawn below needs `cx` mutably.
@@ -1413,6 +1467,10 @@ impl LanePhase for ServicesPhase {
                 continue;
             }
             for service in resolved.units_of(name) {
+                // A restart leaves the replicas it did not name as they are.
+                if !cx.selects(&service.unit) {
+                    continue;
+                }
                 // A stop or restart took it out of this start; the result says so.
                 if cx.ctl.withdrawn_by(&service.unit).is_some() {
                     continue;
@@ -1530,21 +1588,25 @@ impl LanePhase for ServicesPhase {
             let running = engine.running_planned(&cx.project);
             for check in &engine.integ.launch_checks {
                 if let Err(message) = check.check(&starting, &running) {
-                    return PhaseResult::Error(RpcError::new(
+                    return Err(PhaseResult::Error(RpcError::new(
                         "launch_check_failed",
                         json!({"message": message}),
                         1,
-                    ));
+                    )));
                 }
             }
         }
         // Each spawn waits for a start slot; see `pacing`.
         engine.spawn_services(cx, &to_spawn, &resolved).await;
+        let mut joined_any = false;
         for (unit, other) in joined {
             match joined_outcome(&cx.ctl, cx.deadline, &unit, &other).await {
                 // What the other start got for the unit is this start's answer too;
                 // waited for like a running unit, so its exit still counts.
-                Joined::Spawned => cx.already_running.push(unit),
+                Joined::Spawned => {
+                    joined_any = true;
+                    cx.already_running.push(unit);
+                }
                 Joined::Failed(error) => cx.failures.push(UnitFailureData {
                     lane: cx.reference.clone(),
                     unit,
@@ -1555,7 +1617,7 @@ impl LanePhase for ServicesPhase {
                 Joined::Gone => {}
             }
         }
-        PhaseResult::Done
+        Ok(joined_any)
     }
 }
 
@@ -2811,7 +2873,8 @@ impl Inner {
             .flat_map(|name| resolved.units_of(name))
             .map(|service| service.unit.clone())
             .filter(|unit| {
-                !st.orphans.contains_key(unit)
+                cx.selects(unit)
+                    && !st.orphans.contains_key(unit)
                     && !st.units.get(unit).is_some_and(|rec| rec.host.is_alive())
                     && cx.ctl.withdrawn_by(unit).is_none()
             })
@@ -3389,6 +3452,8 @@ impl Inner {
             setup_started_at: None,
             already_running: Vec::new(),
             failures: Vec::new(),
+            services_ready: true,
+            units: None,
             skipped_tasks: Vec::new(),
             leftovers: Vec::new(),
             infra_needs: Vec::new(),
@@ -3453,11 +3518,6 @@ impl Inner {
             // Whatever the phase made of it, an interrupted start ends here.
             if cx.cancel.is_cancelled() && !matches!(result, PhaseResult::Error(_)) {
                 result = PhaseResult::Error(start_cancelled(&cx));
-            }
-            if phase.name() == "services" {
-                // Nothing more spawns: a waiting restart of a withdrawn unit may go.
-                cx.ctl.services_done.cancel();
-                self.forget_waiting(project, lane, cx.start_id);
             }
             let (state, why) = result.event_state();
             if phase.visible() {
@@ -3548,55 +3608,31 @@ impl Inner {
         Ok(result)
     }
 
-    /// Waits for started units and assembles the [`StartResult`]. Units a stop or
-    /// restart withdrew are neither waited for nor failures: they are listed as
-    /// `stopped` with a `cancelled_by_stop` reason.
+    /// Assembles the [`StartResult`] once the services phase waited for the
+    /// units. Units a stop or restart withdrew are not failures: they are
+    /// listed as `stopped` with a `cancelled_by_stop` reason.
     async fn finish_start(self: &Arc<Self>, mut cx: StartCx, whole_lane: bool) -> StartResult {
-        let kept = |unit: &String| cx.ctl.withdrawn_by(unit).is_none();
+        let withdrawn = cx.ctl.withdrawn();
         let selected: Vec<String> = cx
             .started
             .iter()
             .chain(&cx.already_running)
-            .filter(|unit| kept(unit))
+            .filter(|unit| !withdrawn.contains_key(*unit))
             .cloned()
             .collect();
-        let hosts: Vec<UnitHost> = {
+        // A service may have crashed while `after: services` tasks ran.
+        record_failed_units(&mut cx, &selected).await;
+        let mut units: Vec<UnitSummary> = {
             let st = cx.lane.st();
             selected
                 .iter()
-                .filter_map(|unit| st.units.get(unit).map(|rec| rec.host.clone()))
+                .filter_map(|unit| {
+                    st.units
+                        .get(unit)
+                        .map(|rec| unit_summary(&cx.reference, unit, rec))
+                })
                 .collect()
         };
-        if !wait_settled(&hosts, cx.deadline).await {
-            cx.timed_out = true;
-        }
-        // Withdrawals may have come in while waiting.
-        let withdrawn = cx.ctl.withdrawn();
-        let selected: Vec<String> = selected
-            .into_iter()
-            .filter(|unit| !withdrawn.contains_key(unit))
-            .collect();
-        let mut units: Vec<UnitSummary> = Vec::new();
-        let mut failed_hosts = Vec::new();
-        {
-            let st = cx.lane.st();
-            for unit in &selected {
-                if let Some(rec) = st.units.get(unit) {
-                    units.push(unit_summary(&cx.reference, unit, rec));
-                    if matches!(rec.host.state(), UnitState::Failed(_))
-                        || (!rec.host.is_alive() && !rec.host.stop_was_requested())
-                    {
-                        failed_hosts.push((unit.clone(), rec.host.clone()));
-                    }
-                }
-            }
-        }
-        for (unit, host) in failed_hosts {
-            if !cx.failures.iter().any(|f| f.unit == unit) {
-                cx.failures
-                    .push(failure_of(&cx.reference, &unit, &host).await);
-            }
-        }
         let all_ready = units.iter().all(|u| u.state == "ready");
         if !withdrawn.is_empty() {
             units.extend(self.withdrawn_summaries(&cx, &withdrawn));
@@ -4341,6 +4377,8 @@ impl Inner {
             setup_started_at: None,
             already_running: Vec::new(),
             failures: Vec::new(),
+            services_ready: true,
+            units: Some(units.iter().cloned().collect()),
             skipped_tasks: Vec::new(),
             leftovers: Vec::new(),
             infra_needs: Vec::new(),
@@ -4365,11 +4403,8 @@ impl Inner {
         } else {
             ServicesPhase.run(self, &mut cx).await
         };
-        cx.ctl.services_done.cancel();
         let (state, why) = result.event_state();
         self.phase_event(&cx, phase, state, why, None);
-        // Replicas not named by the selectors stay as they are.
-        cx.already_running.retain(|unit| units.contains(unit));
         // A restarted service runs again, so a plain start after a crash brings it back.
         let desired = lane.desired.lock().await;
         let record = lane.st().record.clone();

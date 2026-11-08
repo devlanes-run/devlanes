@@ -398,6 +398,7 @@ async fn start_pipeline_order_and_idempotence() {
                 "tasks:started",
                 "tasks:done",
                 "services:started",
+                "services:ready",
                 "services:done",
                 "after-services:started",
                 "after-services:done",
@@ -923,15 +924,13 @@ services:
             let result = start(&h, cx(&main), json!({})).await;
             assert!(!result.ready, "{bad}");
             assert_eq!(result.skipped_tasks, ["seed"], "{bad}");
-            // Clients read the first after-services step as "services ready"
-            // (`services_ready_line` in devlanes-cli), so a skipped phase sends none.
-            let mut after = Vec::new();
+            let mut services = Vec::new();
             while let Ok(event) = bus.try_recv() {
-                if event.data["phase"] == "after-services" {
-                    after.push(event.data["state"].as_str().unwrap_or("").to_owned());
+                if event.event == events::PHASE && event.data["phase"] == "services" {
+                    services.push(event.data["state"].as_str().unwrap_or("").to_owned());
                 }
             }
-            assert_eq!(after, ["started", "skipped"], "{bad}");
+            assert_eq!(services, ["started", "done"], "{bad}: no services:ready");
             let failure = result
                 .failures
                 .iter()
