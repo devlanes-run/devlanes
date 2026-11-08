@@ -1108,7 +1108,8 @@ fn unit_table(lane: &LaneSummary, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
-/// `lane new`: the created lane and the command that starts it.
+/// `lane new`: the created lane. The action that ends without starting it adds
+/// the `next:` command ([`crate::Report::next`]).
 pub(super) fn lane_new(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let Ok(lane) = serde_json::from_value::<LaneSummary>(data["lane"].clone()) else {
         return tree(data);
@@ -1132,10 +1133,6 @@ pub(super) fn lane_new(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         lines.push(format!("  {note}"));
     }
     lines.extend(lane_warning_lines(&lane, cx));
-    lines.push(format!(
-        "next: {}",
-        Hint::command(["start", "--lane", lane.reference.as_str()]).0
-    ));
     lines
 }
 

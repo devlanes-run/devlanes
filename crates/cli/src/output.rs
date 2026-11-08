@@ -52,6 +52,9 @@ pub struct Report<'a> {
     pub method: Method,
     pub data: &'a Value,
     pub more: Option<Hint>,
+    /// The command to run next, printed as `next:` after a text result. Only
+    /// the action knows it: `lane new` gets one, `lane new --start` does not.
+    pub next: Option<Hint>,
 }
 
 impl<'a> Report<'a> {
@@ -61,12 +64,19 @@ impl<'a> Report<'a> {
             method,
             data,
             more: None,
+            next: None,
         }
     }
 
     /// Adds the exact cursor/query command when the transport handler has that context.
     pub fn with_more(mut self, hint: Hint) -> Self {
         self.more = Some(hint);
+        self
+    }
+
+    /// Adds the command to run next (see [`Report::next`]).
+    pub fn with_next(mut self, hint: Hint) -> Self {
+        self.next = Some(hint);
         self
     }
 }
@@ -95,6 +105,7 @@ pub trait Reporter: Send + Sync {
                 method: report.method,
                 data: &hidden,
                 more: report.more.clone(),
+                next: report.next.clone(),
             }
         } else {
             report
@@ -134,6 +145,9 @@ pub trait Reporter: Send + Sync {
             runtime: self.runtime(),
         };
         let mut lines = render::result(report.method, report.data, &cx);
+        if let Some(next) = &report.next {
+            lines.push(format!("next: {}", next.0));
+        }
         if report.data.get("truncated").and_then(Value::as_bool) == Some(true)
             || agent && report.method == Method::Logs && logs_shaped(report.data)
         {
