@@ -1212,11 +1212,15 @@ impl DaemonApi for ClientApi {
         &self,
         method: Method,
         lane: String,
-        selection: Selection,
+        mut selection: Selection,
     ) -> Result<Value, ApiError> {
-        // Restart and reload reuse the lane's stored env (plan decision 7); start
-        // supplies this shell's.
+        // Restart and reload reuse the lane's stored env and `--env` values (plan
+        // decision 7); start supplies this shell's and drops earlier `--env` values,
+        // as `devlanes start` does.
         let with_env = method == Method::Start;
+        if with_env {
+            selection.env = Some(BTreeMap::new());
+        }
         self.oneshot(
             method,
             to_value(&selection)?,

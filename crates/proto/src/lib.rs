@@ -527,8 +527,11 @@ pub struct Selection {
     /// the config defines none.
     #[serde(default)]
     pub profiles: Vec<String>,
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
+    /// `--env` values for the processes this request starts. `Some` (also
+    /// empty) replaces the values the lane keeps from earlier requests, `None`
+    /// keeps them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub mine: bool,
     #[serde(default)]

@@ -35,7 +35,8 @@ fn profile_resolver(
 
 #[tokio::test]
 /// `needs_env`: the call runs again with the login shell's environment, says
-/// so, and reads the shell once for the life of the server.
+/// so, and reads the shell once for the life of the server. `lane new --start`,
+/// whose new lane has no env, runs once with it: a rerun would add a second lane.
 async fn a_lane_without_env_gets_the_login_shells() {
     tokio::time::timeout(LIMIT, async {
         let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
@@ -55,6 +56,8 @@ async fn a_lane_without_env_gets_the_login_shells() {
                 text(&result)
             );
         }
+        let created = harness.call("devlanes", &["lane", "new", "--start"]).await;
+        assert!(!failed(&created), "{}", text(&created));
         let runs: Vec<(Value, Value)> = harness
             .runs()
             .iter()
@@ -63,7 +66,12 @@ async fn a_lane_without_env_gets_the_login_shells() {
         let lane_then_profile = [(json!("1"), Value::Null), (Value::Null, json!("1"))];
         assert_eq!(
             runs,
-            [lane_then_profile.clone(), lane_then_profile].concat()
+            [
+                &lane_then_profile[..],
+                &lane_then_profile,
+                &[(Value::Null, json!("1"))]
+            ]
+            .concat()
         );
         assert_eq!(RESOLVED.load(Ordering::SeqCst), 1);
     })

@@ -2073,7 +2073,9 @@ pub(crate) struct StartOptions {
     /// (`devlanes with`).
     pub transient: bool,
     pub env: Option<Arc<EnvMap>>,
-    pub overrides: EnvMap,
+    /// `--env` values; `Some` (also empty) replaces the ones the lane keeps from
+    /// earlier requests, `None` keeps them.
+    pub overrides: Option<EnvMap>,
     pub actor: Actor,
     pub timeout: Duration,
     pub session: Option<Session>,
@@ -3326,10 +3328,8 @@ impl Inner {
                     1,
                 )));
             }
-            // A request without a shell environment (the TUI's restart, `reload`)
-            // keeps the `--env` values stored with the lane's environment (decision 7).
-            if options.env.is_some() || !options.overrides.is_empty() {
-                st.overrides = options.overrides.clone();
+            if let Some(overrides) = &options.overrides {
+                st.overrides = overrides.clone();
             }
         }
         if let Some(env) = options.env.clone() {
@@ -4005,9 +4005,14 @@ impl Inner {
                     lane.st().profiles = record.profiles.clone();
                 }
             }
-            // A lane stopped by hand starts from its default next time.
+            // A lane stopped by hand starts from its default next time, without
+            // the `--env` values of what ran.
             Some(record) if whole => {
-                lane.st().profiles = Vec::new();
+                {
+                    let mut st = lane.st();
+                    st.profiles = Vec::new();
+                    st.overrides = EnvMap::new();
+                }
                 self.save_desired(lane, &record, DesiredState::Stopped, Vec::new(), Vec::new())
                     .await;
             }
@@ -4176,10 +4181,8 @@ impl Inner {
             lane.st().env = Some(env.clone());
             project.st().last_env = Some(env);
         }
-        // A request without a shell environment (the TUI's restart, `reload`) keeps
-        // the `--env` values stored with the lane's environment (decision 7).
-        if options.env.is_some() || !options.overrides.is_empty() {
-            lane.st().overrides = options.overrides.clone();
+        if let Some(overrides) = &options.overrides {
+            lane.st().overrides = overrides.clone();
         }
         if !options.profiles.is_empty() {
             let config = lane.st().config.loaded().cloned();
@@ -4619,7 +4622,7 @@ impl Inner {
                 profiles: Vec::new(),
                 transient: false,
                 env,
-                overrides: EnvMap::new(),
+                overrides: Some(EnvMap::new()),
                 actor: Actor::default(),
                 timeout: self.opts.start_timeout,
                 session: None,
@@ -5168,7 +5171,7 @@ mod tests {
             profiles: vec!["front".into(), "old".into()],
             transient: false,
             env: None,
-            overrides: EnvMap::new(),
+            overrides: None,
             actor: Actor::default(),
             timeout: Duration::from_secs(1),
             session: None,

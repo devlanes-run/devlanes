@@ -762,7 +762,7 @@ fn typed_params_preserve_opaque_refs_argv_and_context() {
     let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
     let params: Selection = serde_json::from_value(req.params).expect("typed selection");
     assert_eq!(params.units, ["2:api-*", "+web"]);
-    assert_eq!(params.env["X"], "last=part");
+    assert_eq!(params.env.expect("--env values")["X"], "last=part");
     assert_eq!(params.timeout_ms, Some(180_000));
     assert_eq!(req.context.lane.as_deref(), Some("feat/checkout"));
     assert_eq!(req.context.project.as_deref(), Some("acme"));

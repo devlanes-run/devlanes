@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use devlanes_cli::SendsEnv;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
@@ -505,12 +506,14 @@ pub(crate) fn client_name(context: &RequestContext<RoleServer>) -> String {
         .unwrap_or_default()
 }
 
-/// Runs `call` with the lane's env first; when the lane has none, again with the
-/// login shell's environment over the server's, or with the server's alone when
-/// the login shell's cannot be read, saying so in a note. Phases go to the
-/// client as progress while a start runs, counted over both runs. Fails with
-/// the text to show when the command could not be started, such as for a `cwd`
-/// that does not exist.
+/// Runs `call` as [`Cli::sends_env`](devlanes_cli::Cli::sends_env) says. A
+/// command that sends its env only when the lane has none runs with the lane's
+/// env first and, when the lane has none, again through [`login_shell_run`]; one
+/// that always sends it (`lane new --start`, `daemon restart`) runs once through
+/// it, since a second run would create a second lane. Phases go to the client
+/// as progress while a start runs, counted over both runs. Fails with the text
+/// to show when the command could not be started, such as for a `cwd` that does
+/// not exist.
 pub(crate) async fn execute(
     runner: &Runner,
     call: &Call,
@@ -519,8 +522,19 @@ pub(crate) async fn execute(
     context: &RequestContext<RoleServer>,
 ) -> Result<(Output, Vec<String>), String> {
     let started = std::time::Instant::now();
-    let mut notes = Vec::new();
     let mut sent = 0;
+    let sends_env = call.cli.sends_env();
+    if sends_env == SendsEnv::Always {
+        let lane = call.cli.lane.as_deref();
+        let ran = login_shell_run(runner, call, &call.args, cwd, lane, &mut sent, context).await?;
+        return Ok(ran.unwrap_or_else(|| {
+            let output = Output {
+                cancelled: true,
+                ..Output::default()
+            };
+            (output, Vec::new())
+        }));
+    }
     let mut output = run(
         runner,
         &call.args,
@@ -532,10 +546,10 @@ pub(crate) async fn execute(
     )
     .await?;
     // A command that sends no env, such as reload, would fail the same way again.
-    let Some(needs_env) =
-        error_of(&output.data, "needs_env").filter(|_| !output.cancelled && call.sends_env())
+    let Some(needs_env) = error_of(&output.data, "needs_env")
+        .filter(|_| !output.cancelled && sends_env == SendsEnv::UnlessFromLane)
     else {
-        return Ok((output, notes));
+        return Ok((output, Vec::new()));
     };
     // The second run gets what is left of the first's limit, at least 1 s:
     // the host's timeout covers the whole call, and so does a --timeout the
@@ -549,43 +563,56 @@ pub(crate) async fn execute(
     let lane = needs_env
         .pointer("/data/lane")
         .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| call.cli.lane.clone());
+        .or(call.cli.lane.as_deref());
+    match login_shell_run(runner, call, &args, cwd, lane, &mut sent, context).await? {
+        Some(rerun) => Ok(rerun),
+        None => {
+            output.cancelled = true;
+            Ok((output, Vec::new()))
+        }
+    }
+}
+
+/// Runs `args` of `call` once with the login shell's environment over the
+/// server's, or with the server's alone when the login shell's cannot be read,
+/// with a note saying which; `lane` goes into the hint for a program not found
+/// on the lane's `PATH`. `None` when the call was cancelled while the login
+/// shell's environment was read, before anything ran.
+async fn login_shell_run(
+    runner: &Runner,
+    call: &Call,
+    args: &[String],
+    cwd: &Path,
+    lane: Option<&str>,
+    sent: &mut u32,
+    context: &RequestContext<RoleServer>,
+) -> Result<Option<(Output, Vec<String>)>, String> {
     let resolved = tokio::select! {
         resolved = runner.shell_env.get() => resolved,
-        () = context.ct.cancelled() => {
-            output.cancelled = true;
-            return Ok((output, notes));
-        }
+        () = context.ct.cancelled() => return Ok(None),
     };
-    match resolved {
+    let mut notes = Vec::new();
+    let output = match resolved {
         Ok(shell) => {
             let runner = runner.with_shell_env(&shell.env);
-            output = run(
-                &runner,
-                &args,
-                cwd,
-                call.starts(),
-                false,
-                &mut sent,
-                context,
-            )
-            .await?;
+            let output = run(&runner, args, cwd, call.starts(), false, sent, context).await?;
             notes.push(shell_env::resolved_note(&shell.shell));
+            output
         }
         Err(error) => {
-            output = run(runner, &args, cwd, call.starts(), false, &mut sent, context).await?;
+            let output = run(runner, args, cwd, call.starts(), false, sent, context).await?;
             notes.push(
                 "note: the lane had no environment from a shell, so it got the environment of \
                  the devlanes mcp server"
                     .to_owned(),
             );
             if command_not_found(&output) {
-                notes.push(shell_env::not_found_hint(lane.as_deref(), error));
+                notes.push(shell_env::not_found_hint(lane, error));
             }
+            output
         }
-    }
-    Ok((output, notes))
+    };
+    Ok(Some((output, notes)))
 }
 
 /// Whether a unit of the command failed because its program is not on the
