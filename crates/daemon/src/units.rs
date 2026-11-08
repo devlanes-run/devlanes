@@ -31,15 +31,50 @@ const LOG_TICK: Duration = Duration::from_millis(devlanes_logs::PARTIAL_FLUSH_MS
 /// prompt waiting for input shows in the log.
 const PAUSE: Duration = Duration::from_millis(devlanes_logs::PARTIAL_FLUSH_MS);
 
+/// What a run is waiting for, fixed at spawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunGoal {
+    /// A service: ready once its check passes. The check word (`started`, `tcp`,
+    /// `http`, `log`, `cmd`) is `None` for a service that failed before it was planned.
+    Ready(Option<&'static str>),
+    /// A task, infra command or exec: done when it exits.
+    Exit,
+}
+
+impl RunGoal {
+    /// `UnitSummary.ready_check`: the check word of a service run.
+    pub fn check(self) -> Option<&'static str> {
+        match self {
+            Self::Ready(check) => check,
+            Self::Exit => None,
+        }
+    }
+}
+
+/// Why a run is stopped, which decides how its exit reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopCause {
+    /// Someone or something asked: `stop`, a restart, a lane clean, a cancel.
+    /// The run ends `Stopped`.
+    Requested,
+    /// The run's own time limit (a task's `timeout:`) passed. The run ends
+    /// `Failed` with a `task_timeout` reason carrying the limit.
+    TimedOut(Duration),
+}
+
 /// Lifecycle as exposed through `UnitSummary.state`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnitState {
     Starting,
     Ready,
+    /// Alive, with nothing to wait for but its exit (an [`RunGoal::Exit`] run).
+    Running,
     /// Readiness failed or the process exited non-zero before/after becoming ready.
     Failed(Option<RpcError>),
     Stopping,
-    /// Exited after an explicit stop, or a task/exec that finished with code 0.
+    /// Ended by a stop, or a service that ended on its own with 0.
+    Stopped(ExitOutcome),
+    /// An [`RunGoal::Exit`] run that ended on its own with 0.
     Exited(ExitOutcome),
 }
 
@@ -49,15 +84,17 @@ impl UnitState {
         match self {
             Self::Starting => "starting",
             Self::Ready => "ready",
+            Self::Running => "running",
             Self::Failed(_) => "failed",
             Self::Stopping => "stopping",
-            Self::Exited(_) => "stopped",
+            Self::Stopped(_) => "stopped",
+            Self::Exited(_) => "exited",
         }
     }
 
     /// Terminal states never transition again for this run.
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Exited(_)) || matches!(self, Self::Failed(_))
+        matches!(self, Self::Stopped(_) | Self::Exited(_) | Self::Failed(_))
     }
 }
 
@@ -66,6 +103,7 @@ pub struct UnitInfo {
     pub name: String,
     pub lane: String,
     pub kind: &'static str,
+    pub goal: RunGoal,
     pub actor: Actor,
     pub started_at_ms: u64,
     pub log_dir: PathBuf,
@@ -216,8 +254,9 @@ struct Inner {
     /// handed out (to viewers' scrollback), so none may be dropped.
     log_tx: std::sync::mpsc::Sender<LogCommand>,
     log_signals: Arc<LogSignals>,
-    /// Set when someone asked for a stop, so a signal exit reads as `stopped`, not `failed`.
-    stop_requested: std::sync::atomic::AtomicBool,
+    /// Why the run is being stopped, set by the first stop: a requested stop's
+    /// signal exit reads as `stopped`, a timed-out one as `failed`.
+    stop_cause: std::sync::OnceLock<StopCause>,
     /// Flips once the pump saw the end of output, so the exit is published after it.
     pump_done: watch::Sender<bool>,
     /// First log sequence of this run; earlier segments in the directory are older runs.
@@ -327,7 +366,11 @@ impl UnitHost {
         unit: Arc<dyn Unit>,
         identity: Option<ProcessIdentity>,
     ) -> Result<Self, RpcError> {
-        let host = Self::open(info, unit, identity, UnitState::Starting, None).await?;
+        let state = match info.goal {
+            RunGoal::Ready(_) => UnitState::Starting,
+            RunGoal::Exit => UnitState::Running,
+        };
+        let host = Self::open(info, unit, identity, state, None).await?;
         host.spawn_pump();
         host.spawn_waiter();
         Ok(host)
@@ -410,7 +453,7 @@ impl UnitHost {
                 log,
                 log_tx,
                 log_signals,
-                stop_requested: std::sync::atomic::AtomicBool::new(false),
+                stop_cause: std::sync::OnceLock::new(),
                 pump_done: watch::channel(false).0,
                 first_seq,
                 log_done,
@@ -471,7 +514,7 @@ impl UnitHost {
             if !matches!(state, UnitState::Failed(_)) {
                 return false;
             }
-            *state = UnitState::Exited(outcome);
+            *state = UnitState::Stopped(outcome);
             true
         })
     }
@@ -499,9 +542,7 @@ impl UnitHost {
 
     /// True after an explicit stop was requested for this run.
     pub fn stop_was_requested(&self) -> bool {
-        self.inner
-            .stop_requested
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.inner.stop_cause.get() == Some(&StopCause::Requested)
     }
 
     /// True when both handles refer to the same run.
@@ -524,18 +565,27 @@ impl UnitHost {
     /// Bounded: after the policy timeout plus a margin, a process that is gone gets an
     /// unknown exit published, and one that still runs is reported as `stop_timeout`.
     pub async fn stop(&self, policy: StopPolicy) -> Result<(), RpcError> {
-        self.stop_within(policy, STOP_MARGIN).await
+        self.stop_for(policy, StopCause::Requested).await
     }
 
-    /// [`UnitHost::stop`] with an explicit margin, so tests need not wait the default.
-    async fn stop_within(&self, policy: StopPolicy, margin: Duration) -> Result<(), RpcError> {
+    /// [`UnitHost::stop`] for `cause`, which decides how the exit reads.
+    pub async fn stop_for(&self, policy: StopPolicy, cause: StopCause) -> Result<(), RpcError> {
+        self.stop_within(policy, cause, STOP_MARGIN).await
+    }
+
+    /// [`UnitHost::stop_for`] with an explicit margin, so tests need not wait the default.
+    async fn stop_within(
+        &self,
+        policy: StopPolicy,
+        cause: StopCause,
+        margin: Duration,
+    ) -> Result<(), RpcError> {
         if !self.is_alive() {
             self.wait_log_closed().await;
             return Ok(());
         }
-        self.inner
-            .stop_requested
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // A later stop of a run already being stopped keeps the first cause.
+        let _ = self.inner.stop_cause.set(cause);
         self.set_state(UnitState::Stopping);
         let stopped = tokio::time::timeout(policy.timeout.saturating_add(margin), async {
             self.inner
@@ -1003,17 +1053,24 @@ impl Inner {
         {
             return;
         }
-        let requested = self
-            .stop_requested
-            .load(std::sync::atomic::Ordering::SeqCst);
-        let next = if requested || outcome.code == Some(0) {
-            UnitState::Exited(outcome)
-        } else {
-            UnitState::Failed(Some(RpcError::new(
+        let cause = self.stop_cause.get().copied();
+        let requested = cause == Some(StopCause::Requested);
+        let next = match cause {
+            Some(StopCause::Requested) => UnitState::Stopped(outcome),
+            Some(StopCause::TimedOut(limit)) => UnitState::Failed(Some(RpcError::new(
+                "task_timeout",
+                json!({"timeout_ms": u64::try_from(limit.as_millis()).unwrap_or(u64::MAX)}),
+                1,
+            ))),
+            None if outcome.code == Some(0) => match self.info.goal {
+                RunGoal::Exit => UnitState::Exited(outcome),
+                RunGoal::Ready(_) => UnitState::Stopped(outcome),
+            },
+            None => UnitState::Failed(Some(RpcError::new(
                 "exited",
                 json!({"code": outcome.code, "signal": outcome.signal}),
                 1,
-            )))
+            ))),
         };
         self.state.send_if_modified(|state| {
             // A readiness failure already explains the run; keep it.
@@ -1388,6 +1445,7 @@ mod tests {
             name: "web".into(),
             lane: "0".into(),
             kind: "service",
+            goal: RunGoal::Ready(Some("started")),
             actor: Actor::default(),
             started_at_ms: 0,
             log_dir: dir.path().join(run.to_string()),
@@ -1591,7 +1649,7 @@ mod tests {
         let unit = ScriptedUnit::start(None, gone_identity());
         unit.hang.store(true, Ordering::SeqCst);
         let gone = host(unit, &dir).await;
-        tokio::time::timeout(STEP, gone.stop_within(policy, margin))
+        tokio::time::timeout(STEP, gone.stop_within(policy, StopCause::Requested, margin))
             .await
             .expect("bounded")
             .expect("gone process settles");
@@ -1614,10 +1672,13 @@ mod tests {
         let unit = ScriptedUnit::start(None, me);
         unit.hang.store(true, Ordering::SeqCst);
         let alive = host(unit, &dir).await;
-        let error = tokio::time::timeout(STEP, alive.stop_within(policy, margin))
-            .await
-            .expect("bounded")
-            .expect_err("live process is reported");
+        let error = tokio::time::timeout(
+            STEP,
+            alive.stop_within(policy, StopCause::Requested, margin),
+        )
+        .await
+        .expect("bounded")
+        .expect_err("live process is reported");
         assert_eq!(error.code, "stop_timeout");
         assert!(alive.is_alive());
     }

@@ -167,15 +167,25 @@ pub(super) fn run(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .unwrap_or_else(|| task.clone());
     let target = format!("{lane}:{unit}");
     if data.get("exit_code").is_some() || data.get("state").is_some() {
-        let failed = text(data, "state") == "failed";
-        let mut line = format!(
-            "{} {lane}:{task}",
-            cx.state(if failed { "failed" } else { "exited" })
-        );
+        let state = match text(data, "state") {
+            // Daemons before `state` answered with the exit code alone.
+            state if state.is_empty() => "exited".to_owned(),
+            state => clean(&state),
+        };
+        let failed = state == "failed";
+        let mut line = format!("{} {lane}:{task}", cx.state(&state));
         if let Some(code) = int(data, "exit_code") {
             line.push_str(&format!(" exit={code}"));
         }
         let mut lines = vec![line];
+        // `exit=N` already says why a run with a code failed.
+        if let Some(reason) = data
+            .get("reason")
+            .filter(|_| int(data, "exit_code").is_none())
+            .and_then(|reason| serde_json::from_value::<RpcError>(reason.clone()).ok())
+        {
+            lines.push(format!("  {}", words::error_message(&reason).0));
+        }
         for leftovers in list(data, "leftovers") {
             // Steps run as their own units; name them, but not the task itself.
             let prefix = match text(leftovers, "unit") {
@@ -694,6 +704,7 @@ pub(super) fn task_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
     let task = text(data, "task");
     match text(data, "state").as_str() {
         "done" | "exited" => Some(format!("{} {task}", cx.mark(Outcome::Ok))),
+        "stopped" => Some(format!("{} {task} stopped", cx.mark(Outcome::Fail))),
         "failed" => Some(format!(
             "{} {task}{}",
             cx.mark(Outcome::Fail),
@@ -2647,6 +2658,43 @@ pub(super) fn daemon_status(data: &Value) -> Vec<String> {
     lines
 }
 
+/// How a `lane.stop` or `lane.clean` task, or a teardown entry, ended.
+pub(super) enum HookTaskEnd {
+    /// It ran and exited on its own with 0.
+    Exited,
+    /// It ended `state` (`failed`, `stopped`), with its reason in words or its
+    /// exit code (`exit 3`) when it has either.
+    Ended(String, Option<String>),
+    /// It could not run: the daemon's error code.
+    Error(String),
+    /// A daemon before `state` sent only the exit code.
+    Unnamed,
+}
+
+/// How result `task` (`{task|entry, exit_code, state, reason?}` or `{task|entry,
+/// error}`) ended.
+pub(super) fn hook_task_end(task: &Value) -> HookTaskEnd {
+    if let Some(code) = task.get("error").and_then(|error| error.get("code")) {
+        return HookTaskEnd::Error(display_value(code));
+    }
+    match task.get("state").and_then(Value::as_str) {
+        None => HookTaskEnd::Unnamed,
+        Some("exited") => HookTaskEnd::Exited,
+        Some(state) => {
+            let reason = task
+                .get("reason")
+                .and_then(|reason| serde_json::from_value::<RpcError>(reason.clone()).ok());
+            let detail = match reason {
+                Some(reason) => Some(words::error_message(&reason).0),
+                None => int(task, "exit_code")
+                    .filter(|code| *code != 0)
+                    .map(|code| format!("exit {code}")),
+            };
+            HookTaskEnd::Ended(clean(state), detail)
+        }
+    }
+}
+
 /// `daemon stop`: the stopped units and the `lane.stop` tasks it ran, each
 /// failed task on its own line. A daemon from before the report answered
 /// before stopping, with the process count alone.
@@ -2669,11 +2717,17 @@ pub(super) fn daemon_shutdown(data: &Value) -> Vec<String> {
         lines.push(format!("ran {}", plural(tasks.len(), "lane.stop task")));
     }
     for task in tasks {
-        let outcome = match (int(task, "exit_code"), task["error"].get("code")) {
-            (Some(0), _) => continue,
-            (Some(code), _) => format!("exit {code}"),
-            (None, Some(code)) => display_value(code),
-            (None, None) => "interrupted".to_owned(),
+        let outcome = match hook_task_end(task) {
+            HookTaskEnd::Exited => continue,
+            HookTaskEnd::Ended(state, Some(detail)) => format!("{state}, {detail}"),
+            HookTaskEnd::Ended(state, None) => state,
+            HookTaskEnd::Error(code) => code,
+            // Daemons before `state` named nothing; the exit code says it.
+            HookTaskEnd::Unnamed => match int(task, "exit_code") {
+                Some(0) => continue,
+                Some(code) => format!("exit {code}"),
+                None => "interrupted".to_owned(),
+            },
         };
         lines.push(format!(
             "  {} {}: {outcome}",

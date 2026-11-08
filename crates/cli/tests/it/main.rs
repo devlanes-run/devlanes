@@ -1514,6 +1514,24 @@ fn exit_codes_follow_the_method() {
         code(Method::Run, json!({"task": "test", "exit_code": 3})),
         3
     );
+    // Only `exited` succeeds: a stopped or timed-out run has no code and fails.
+    for state in ["stopped", "failed"] {
+        assert_eq!(
+            code(
+                Method::Run,
+                json!({"task": "test", "state": state, "exit_code": null})
+            ),
+            exit::FAILED,
+            "{state}"
+        );
+    }
+    assert_eq!(
+        code(
+            Method::Run,
+            json!({"task": "test", "state": "exited", "exit_code": 0})
+        ),
+        exit::OK
+    );
 }
 
 /// `doctor --json` adds the client's output mode and its reason to the daemon's checks.

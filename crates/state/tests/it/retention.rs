@@ -111,7 +111,7 @@ async fn age_retention_preserves_live_rows_and_once_markers() {
         .await
         .expect("task");
     store
-        .finish_task_run(task.id, Some(0), None)
+        .finish_task_run(task.id, Some(0), "exited".into(), None)
         .await
         .expect("task finish");
     let active_task = store
@@ -358,7 +358,7 @@ async fn size_budget_reclaims_pages_and_keeps_history_until_metrics_are_gone() {
         .await
         .expect("task");
     store
-        .finish_task_run(completed_task.id, Some(0), None)
+        .finish_task_run(completed_task.id, Some(0), "exited".into(), None)
         .await
         .expect("completed task");
     let active_task = store

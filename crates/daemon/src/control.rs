@@ -34,7 +34,7 @@ use crate::{
     registry::{PrimaryWorktree, internal, store_error},
     stream::LaneEvents,
     target::{Found, LaneOrFile, Policy},
-    units::UnitHost,
+    units::{RunGoal, UnitHost},
 };
 
 /// `resume` parameters.
@@ -150,15 +150,18 @@ async fn await_spawn(
 /// with `ignore_errors` still answers with its real exit code: it was run on
 /// its own, to see whether it works.
 fn run_result(task: &str, lane: &str, unit: Option<&str>, outcome: &TaskOutcome) -> Value {
-    let code = outcome.raw_code;
+    let code = outcome.code;
     let mut result = json!({
         "task": task,
         "lane": lane,
         "unit": unit,
         "interactive": false,
         "exit_code": code,
-        "state": if code == Some(0) { "exited" } else { "failed" },
+        "state": outcome.state.word(),
     });
+    if let crate::units::UnitState::Failed(Some(reason)) = &outcome.state {
+        result["reason"] = json!(reason);
+    }
     // Daemons the task started (`pg_ctl start`) outlive it on purpose; say so.
     if !outcome.leftovers.is_empty() {
         result["leftovers"] = json!(outcome.leftovers);
@@ -1010,8 +1013,7 @@ impl Inner {
             color: None,
             sync: Vec::new(),
             display_name: None,
-            // An exec unit has no readiness probe: alive is ready.
-            ready_check: Some("started"),
+            goal: RunGoal::Exit,
             role: "exec",
             keep_awake: false,
             fingerprint: None,
@@ -1020,9 +1022,8 @@ impl Inner {
         // Held until the unit is recorded, so a clean or reset that begins meanwhile
         // waits and then stops it, or refuses it once the lane is released.
         let (adhoc, _) = lane.enter_adhoc(&self.shutdown).await;
-        let (host, _) = self.spawn_unit(&project, &lane, request).await?;
+        self.spawn_unit(&project, &lane, request).await?;
         drop(adhoc);
-        host.set_state(crate::units::UnitState::Ready);
         let mut st = lane.st();
         let summary = match st.units.get_mut(&args.name) {
             Some(rec) => {
@@ -1291,7 +1292,10 @@ impl Inner {
         }
         // A clean, reset or shutdown that fired the token is no timeout, and a task
         // that succeeded just as the limit fired still succeeded.
-        let succeeded = matches!(&outcome, Ok(outcome) if outcome.code == Some(0));
+        let succeeded = matches!(
+            &outcome,
+            Ok(outcome) if matches!(outcome.state, crate::units::UnitState::Exited(_))
+        );
         let expired = expired.load(std::sync::atomic::Ordering::SeqCst);
         if expired && !self.shutdown.is_cancelled() && !succeeded {
             return Err(RpcError::new("timeout", json!({"task": task}), 124));
@@ -1368,13 +1372,12 @@ impl Inner {
                 sources.insert(file.to_owned());
             }
             // Never-run tasks get `null`, so clients can say so.
+            // A finished run keeps the word its end got; one without is still going.
             let last_run = runs.iter().find(|run| &run.task == name).map(|run| {
-                let state = match (run.ended_at, run.exit_code) {
-                    (None, _) => "running",
-                    (Some(_), Some(0)) => "done",
-                    (Some(_), Some(_)) => "failed",
-                    (Some(_), None) => "interrupted",
-                };
+                let state = run
+                    .state
+                    .as_deref()
+                    .unwrap_or(crate::units::UnitState::Running.word());
                 json!({
                     "state": state,
                     "trigger": run.trigger,

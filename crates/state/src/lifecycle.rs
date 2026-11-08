@@ -76,6 +76,9 @@ pub struct TaskRun {
     pub ended_at: Option<i64>,
     /// `None` after a signal, a daemon-side failure or abandonment.
     pub exit_code: Option<i32>,
+    /// How the run ended, in the word the daemon gave it (`exited`, `failed`,
+    /// `stopped`); `None` while it runs.
+    pub state: Option<String>,
     pub actor: Actor,
 }
 
@@ -284,15 +287,19 @@ impl Store {
         })
         .await
     }
-    /// Completes a task once and retains its successful-once marker across
-    /// retention. A success stores `spec_hash` on the marker, replacing the
-    /// previous one.
+    /// Completes a task once with `state`, how it ended, and retains its
+    /// successful-once marker across retention. A success (`state` is `exited`)
+    /// stores `spec_hash` on the marker, replacing the previous one.
     pub async fn finish_task_run(
         &self,
         id: TaskRunId,
         exit_code: Option<i32>,
+        state: String,
         spec_hash: Option<String>,
     ) -> Result<(), Error> {
+        if state.is_empty() {
+            return Err(Error::Invalid("a finished task run needs a state".into()));
+        }
         self.call(move |c| {
             c.immediate_transaction(|c| {
                 let ended = now()?;
@@ -304,11 +311,13 @@ impl Store {
                 .set((
                     task_runs::ended_at.eq(ended),
                     task_runs::exit_code.eq(exit_code),
+                    task_runs::state.eq(&state),
                 ))
                 .returning((task_runs::lane_id, task_runs::task))
                 .get_result::<(i64, String)>(c)
                 .optional()?;
-                if let Some((lane, task)) = row.filter(|_| exit_code == Some(0)) {
+                // Only a run that ended `exited` succeeded: a stopped one can exit 0 too.
+                if let Some((lane, task)) = row.filter(|_| state == "exited") {
                     diesel::insert_into(task_completions::table)
                         .values((
                             task_completions::lane_id.eq(lane),
@@ -382,17 +391,18 @@ impl Store {
         })
         .await
     }
-    /// Ends every unfinished task run with no exit code. Call at daemon startup:
-    /// a task's bookkeeping lives in the daemon that started it, so nothing can
-    /// finish these rows later, and they would block lane clean forever.
-    /// Returns how many runs were ended.
-    pub async fn abandon_task_runs(&self) -> Result<usize, Error> {
-        self.call(|c| {
+    /// Ends every unfinished task run with no exit code and `state`. Call at
+    /// daemon startup: a task's bookkeeping lives in the daemon that started it,
+    /// so nothing can finish these rows later, and they would block lane clean
+    /// forever. Returns how many runs were ended.
+    pub async fn abandon_task_runs(&self, state: String) -> Result<usize, Error> {
+        self.call(move |c| {
             Ok(
                 diesel::update(task_runs::table.filter(task_runs::ended_at.is_null()))
                     .set((
                         task_runs::ended_at.eq(now()?),
                         task_runs::exit_code.eq(None::<i32>),
+                        task_runs::state.eq(&state),
                     ))
                     .execute(c)?,
             )

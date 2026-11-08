@@ -3,11 +3,17 @@ source: crates/cli/tests/it/render.rs
 expression: text
 ---
 --- human (exit 0)
-cleaned acme@2: stopped 2 units, ran drop-db, teardown vhost
+cleaned acme@2: stopped 2 units, ran drop-db, archive, teardown vhost, dns
+  failed archive: stopped by its timeout of 1m 0s
   failed vhost exit=3
+  failed dns: stopped by its timeout of 30s
 --- plain (exit 0)
-cleaned acme@2: stopped 2 units, ran drop-db, teardown vhost
+cleaned acme@2: stopped 2 units, ran drop-db, archive, teardown vhost, dns
+  failed archive: stopped by its timeout of 1m 0s
   failed vhost exit=3
+  failed dns: stopped by its timeout of 30s
 --- agent (exit 0)
-cleaned acme@2: stopped 2 units, ran drop-db, teardown vhost
+cleaned acme@2: stopped 2 units, ran drop-db, archive, teardown vhost, dns
+  failed archive: stopped by its timeout of 1m 0s
   failed vhost exit=3
+  failed dns: stopped by its timeout of 30s
