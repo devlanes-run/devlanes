@@ -32,6 +32,14 @@ export function inProgress(unit: UnitSummary): boolean {
   );
 }
 
+/**
+ * Whether a unit counts as up in the card's counts: `ready`, or `running` for an
+ * exec command, which has no ready check (as the TUI counts them).
+ */
+export function isUp(unit: UnitSummary): boolean {
+  return unit.state === 'ready' || unit.state === 'running';
+}
+
 /** The units a person looks at: services and exec units, without hidden ones. */
 export function servicesOf(lane: Pick<LaneSummary, 'units'>): UnitSummary[] {
   return (lane.units || []).filter(
@@ -114,7 +122,7 @@ export function phasesOf(lane: LaneSummary): Phase[] {
   }
   const active = activeServices(lane);
   if (active.length) {
-    const ready = active.filter((unit) => unit.state === 'ready').length;
+    const ready = active.filter(isUp).length;
     const failed = active.filter((unit) => unit.state === 'failed');
     const state = failed.length ? 'failed' : ready === active.length ? 'done' : 'starting';
     const detail = failed.length
@@ -143,7 +151,7 @@ export function progressOf(lane: LaneSummary): Progress | null {
   let within = 0.5;
   if (current.name === 'services') {
     const active = activeServices(lane);
-    within = active.length ? active.filter((u) => u.state === 'ready').length / active.length : 0;
+    within = active.length ? active.filter(isUp).length / active.length : 0;
   }
   // Services get their phase once one runs; count it from the start so "2 of 3" holds.
   const later = phases.some((phase) => phase.name === 'services')
@@ -183,7 +191,7 @@ export function laneState(lane: LaneLike): string {
 export function laneWords(lane: LaneLike, now: number): string {
   const state = laneState(lane);
   const active = activeServices(lane);
-  const ready = active.filter((unit) => unit.state === 'ready').length;
+  const ready = active.filter(isUp).length;
   if (state === 'failed') {
     const failed = (lane.units || [])
       .filter((unit) => unit.state === 'failed')

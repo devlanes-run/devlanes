@@ -166,15 +166,25 @@ pub(super) fn run(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .unwrap_or_else(|| task.clone());
     let target = format!("{lane}:{unit}");
     if data.get("exit_code").is_some() || data.get("state").is_some() {
-        let failed = text(data, "state") == "failed";
-        let mut line = format!(
-            "{} {lane}:{task}",
-            cx.state(if failed { "failed" } else { "exited" })
-        );
+        let state = match text(data, "state") {
+            // Daemons before `state` answered with the exit code alone.
+            state if state.is_empty() => "exited".to_owned(),
+            state => clean(&state),
+        };
+        let failed = state == "failed";
+        let mut line = format!("{} {lane}:{task}", cx.state(&state));
         if let Some(code) = int(data, "exit_code") {
             line.push_str(&format!(" exit={code}"));
         }
         let mut lines = vec![line];
+        // `exit=N` already says why a run with a code failed.
+        if let Some(reason) = data
+            .get("reason")
+            .filter(|_| int(data, "exit_code").is_none())
+            .and_then(|reason| serde_json::from_value::<RpcError>(reason.clone()).ok())
+        {
+            lines.push(format!("  {}", words::error_message(&reason).0));
+        }
         for leftovers in list(data, "leftovers") {
             // Steps run as their own units; name them, but not the task itself.
             let prefix = match text(leftovers, "unit") {
@@ -674,6 +684,7 @@ pub(super) fn task_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
     let task = text(data, "task");
     match text(data, "state").as_str() {
         "done" | "exited" => Some(format!("{} {task}", cx.mark(Outcome::Ok))),
+        "stopped" => Some(format!("{} {task} stopped", cx.mark(Outcome::Fail))),
         "failed" => Some(format!(
             "{} {task}{}",
             cx.mark(Outcome::Fail),

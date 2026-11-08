@@ -117,6 +117,14 @@ fn log_failure(data: &Value) -> String {
     }
 }
 
+/// `stopped by its timeout of 1m`: a task that ran past its own `timeout:`.
+fn timed_out(data: &Value) -> String {
+    match data.get("timeout_ms").and_then(Value::as_u64) {
+        Some(ms) => format!("stopped by its timeout of {}", super::duration(ms)),
+        None => "stopped by its timeout".into(),
+    }
+}
+
 /// The fix for an http check that timed out on a non-2xx answer without a
 /// configured `status`: probe a route that answers 2xx, sending the app's own
 /// hostname when it routes by host, or accept that code.
@@ -551,6 +559,7 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             },
             logs_hint(data),
         ),
+        "timed_out" => (timed_out(data), logs_hint(data)),
         "git_failed" => (format!("git failed: {}", text(data, "message")), None),
         "unsupported" | "unsupported_method" => (
             format!(
@@ -1987,13 +1996,14 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
             "starting; waiting for its readiness check".into(),
             Some(Hint::command(["wait", &format!("{lane}:{unit}")])),
         ),
-        "ready_timeout" | "timed_out" => (
+        "ready_timeout" => (
             format!(
                 "did not become ready before the timeout{}",
                 last_answer(data)
             ),
             status_hint(data).or_else(|| Some(Hint::logs(lane, unit, 200))),
         ),
+        "timed_out" => (timed_out(data), Some(Hint::logs(lane, unit, 200))),
         "ready_log_failed" => (
             format!("its {}, so ready.log cannot match", log_failure(data)),
             Some(Hint::command(["daemon", "logs"])),

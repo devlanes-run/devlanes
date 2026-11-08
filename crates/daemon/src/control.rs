@@ -154,8 +154,11 @@ fn run_result(task: &str, lane: &str, unit: Option<&str>, outcome: &TaskOutcome)
         "unit": unit,
         "interactive": false,
         "exit_code": code,
-        "state": if code == Some(0) { "exited" } else { "failed" },
+        "state": outcome.state.word(),
     });
+    if let crate::units::UnitState::Failed(Some(reason)) = &outcome.state {
+        result["reason"] = json!(reason);
+    }
     // Daemons the task started (`pg_ctl start`) outlive it on purpose; say so.
     if !outcome.leftovers.is_empty() {
         result["leftovers"] = json!(outcome.leftovers);

@@ -1747,7 +1747,9 @@ pub mod events {
     /// detail changes: [`super::PhaseContainer`]s during infra, the running
     /// [`super::PhaseStep`] during setup and tasks.
     pub const PHASE: &str = "lane.phase";
-    /// `{lane, task, state, exit_code?}` for task runs.
+    /// `{lane, task, state, exit_code?, reason?, finished_at_ms?}` for task runs.
+    /// `state` is `started`, `skipped`, or how the run ended in unit state words:
+    /// `exited`, `failed` (with the unit's `reason`) or `stopped`.
     pub const TASK: &str = "task";
     /// `{unit, line: LogLine}` for followed logs.
     pub const LOG: &str = "log";

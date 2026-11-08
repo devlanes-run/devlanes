@@ -39,7 +39,7 @@ use crate::{
     ready::Readiness,
     registry::{internal, store_error},
     stopping::StopSteps,
-    units::{RunGoal, UnitHost, UnitInfo, UnitState, now_ms},
+    units::{RunGoal, StopCause, UnitHost, UnitInfo, UnitState, now_ms},
 };
 
 /// Log lines attached to every failure (cli-design 3.4).
@@ -1554,6 +1554,10 @@ pub(crate) struct TaskOutcome {
     /// entry with `ignore_errors`, which counts a failure as done for starts
     /// and steps; a `run` of that one entry reports what really happened.
     pub raw_code: Option<i32>,
+    /// How the run ended, for `run` and the closing `task` event: the last
+    /// unit's state, `Exited` for steps that all succeeded, `Stopped` for steps
+    /// cancelled between two units.
+    pub state: UnitState,
     pub host: Option<UnitHost>,
     /// Every unit of the task (steps included) that left processes behind.
     pub leftovers: Vec<Leftovers>,
@@ -2597,7 +2601,7 @@ impl Inner {
         if let Some(reason) = reason {
             data["reason"] = reason;
         }
-        if matches!(state, "done" | "failed") {
+        if !matches!(state, "started" | "skipped") {
             data["finished_at_ms"] = json!(now_ms());
         }
         self.bus.emit(events::TASK, data);
@@ -2947,6 +2951,10 @@ impl Inner {
                 let mut outcome = TaskOutcome {
                     code: Some(0),
                     raw_code: Some(0),
+                    state: UnitState::Exited(ExitOutcome {
+                        code: Some(0),
+                        signal: None,
+                    }),
                     host: None,
                     leftovers: Vec::new(),
                 };
@@ -2957,6 +2965,10 @@ impl Inner {
                             if cancel.is_cancelled() {
                                 outcome.code = None;
                                 outcome.raw_code = None;
+                                outcome.state = UnitState::Stopped(ExitOutcome {
+                                    code: None,
+                                    signal: None,
+                                });
                                 break;
                             }
                             let step_outcome = if let Some(entry) =
@@ -3018,6 +3030,7 @@ impl Inner {
                         outcome = TaskOutcome {
                             code: exit.code,
                             raw_code: exit.code,
+                            state: host.state(),
                             host: Some(host),
                             leftovers: Vec::new(),
                         };
@@ -3029,9 +3042,15 @@ impl Inner {
             .await;
             let code = result.as_ref().ok().and_then(|outcome| outcome.code);
             let (state, reason) = match &result {
-                Ok(outcome) if outcome.code == Some(0) => ("done", None),
-                Ok(_) if cancel.is_cancelled() => ("failed", Some(json!({"code": "cancelled"}))),
-                Ok(_) => ("failed", None),
+                Ok(outcome) => (
+                    outcome.state.word(),
+                    match &outcome.state {
+                        UnitState::Failed(Some(reason)) => {
+                            Some(json!({"code": reason.code, "data": reason.data}))
+                        }
+                        _ => None,
+                    },
+                ),
                 Err(error) => (
                     "failed",
                     Some(json!({"code": error.code, "data": error.data})),
@@ -3153,6 +3172,7 @@ impl Inner {
         Ok(TaskOutcome {
             code: if ok { Some(0) } else { outcome.code },
             raw_code: outcome.code,
+            state: host.state(),
             host: Some(host),
             leftovers,
         })
@@ -5020,13 +5040,15 @@ async fn finish(
     }
 }
 
-/// Waits for a one-shot unit, stopping it after `timeout`.
+/// Waits for a one-shot unit, stopping it after `timeout`, which fails it.
 async fn finish_within(host: &UnitHost, timeout: Option<Duration>) -> ExitOutcome {
     match timeout {
         Some(limit) => match tokio::time::timeout(limit, host.wait_exit()).await {
             Ok(outcome) => outcome,
             Err(_) => {
-                let _ = host.stop(StopPolicy::default()).await;
+                let _ = host
+                    .stop_for(StopPolicy::default(), StopCause::TimedOut(limit))
+                    .await;
                 ExitOutcome {
                     code: None,
                     signal: host.exit_outcome().and_then(|o| o.signal),

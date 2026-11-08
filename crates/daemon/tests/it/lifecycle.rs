@@ -163,8 +163,7 @@ async fn stop_interrupts_a_hung_start() {
         assert_eq!(error.code, "start_cancelled", "{error:?}");
         assert!(alive(&lane(&h, &main).await).is_empty());
         assert_eq!(h.runner.journal.entries(), ["sleep"], "web never spawned");
-        let closed = task_event(&mut bus, "hang", "failed").expect("closing task event");
-        assert_eq!(closed.data["reason"]["code"], "cancelled");
+        task_event(&mut bus, "hang", "stopped").expect("closing task event");
 
         let started: StartResult = serde_json::from_value(
             h.call(Method::Start, json!({"profiles": ["default"]}), cx(&main))
@@ -205,8 +204,7 @@ async fn run_timeout_stops_the_task_and_closes_its_run() {
         .expect_err("timeout");
         assert_eq!((error.code.as_str(), error.exit_code), ("timeout", 124));
         assert!(alive(&lane(&h, &main).await).is_empty(), "the task unit stopped");
-        let closed = task_event(&mut bus, "slow", "failed").expect("closing task event");
-        assert_eq!(closed.data["reason"]["code"], "cancelled");
+        task_event(&mut bus, "slow", "stopped").expect("closing task event");
         let cleaned = h
             .call(
                 Method::LaneClean,
@@ -219,6 +217,64 @@ async fn run_timeout_stops_the_task_and_closes_its_run() {
             .await
             .expect("no active run blocks the clean");
         assert_eq!(cleaned["lane"], "slow@0");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A task stopped by its own `timeout:` failed, unlike a stopped one: its unit,
+/// `wait`, `debug why`, the `run` answer and the closing `task` event all say
+/// `failed` with `timed_out`.
+async fn a_task_past_its_own_timeout_failed() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: slow\ntasks:\n  slow: { run: sleep, timeout: 300ms }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let mut bus = h.engine.subscribe();
+        let ran = h
+            .call(Method::Run, json!({"task": "slow"}), cx(&main))
+            .await
+            .expect("run answers once the task is stopped");
+        let failed = (json!("failed"), json!("timed_out"));
+        assert_eq!(
+            (ran["state"].clone(), ran["reason"]["code"].clone()),
+            failed
+        );
+        let closed = task_event(&mut bus, "slow", "failed").expect("closing task event");
+        assert_eq!(closed.data["reason"]["code"], "timed_out");
+        let unit = lane(&h, &main)
+            .await
+            .units
+            .into_iter()
+            .find(|unit| unit.name == "slow")
+            .expect("slow");
+        assert_eq!(
+            (unit.state.as_str(), unit.reason.map(|r| r.code)),
+            ("failed", Some("timed_out".to_owned()))
+        );
+        let waited = h
+            .call(
+                Method::Wait,
+                json!({"target": "slow", "timeout_ms": 5_000}),
+                cx(&main),
+            )
+            .await
+            .expect("wait");
+        assert_eq!(
+            (waited["state"].clone(), waited["reason"]["code"].clone()),
+            failed
+        );
+        let why = h
+            .call(Method::Why, json!({"unit": "slow"}), cx(&main))
+            .await
+            .expect("why");
+        assert_eq!(
+            (why["state"].clone(), why["reasons"][0]["code"].clone()),
+            failed
+        );
         h.close().await;
     })
     .await
@@ -287,7 +343,7 @@ async fn clean_closes_the_lane_to_exec_and_run() {
         assert_eq!(cleaned["lane"], "tidy@0");
 
         let ran = running.await.expect("join").expect("run answers");
-        assert_eq!(ran["state"], "failed", "{ran}");
+        assert_eq!(ran["state"], "stopped", "{ran}");
         assert_eq!(ran["exit_code"], Value::Null);
         assert_eq!(h.engine.managed_processes(), 0);
         h.close().await;

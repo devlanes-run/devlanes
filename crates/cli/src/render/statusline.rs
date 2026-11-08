@@ -60,7 +60,7 @@ pub fn statusline_lane<'a>(lanes: &'a [LaneSummary], cwd: &Path) -> Option<&'a L
 /// The status line of `lane`, without a newline:
 ///
 /// - `acme@1 3/3 ready · web acme1.localhost` when it runs, with the first
-///   proxied URL of a ready or running unit;
+///   proxied URL of a ready unit;
 /// - `acme@1 ✕ api failed · 2/3` when a unit failed (`api +1 failed` for more);
 /// - `acme@1 starting 1/3 ready` while it starts;
 /// - `acme@1 ❄ frozen · 3/3` or `acme@1 throttled · 3/3` while it is idle;
@@ -138,8 +138,8 @@ pub fn statusline(lane: &LaneSummary, session: Option<&str>, color: bool) -> Str
     line
 }
 
-/// A ready or running unit's first proxied URL without its scheme
-/// (`web.acme1.localhost:8443`), one the `mine` session started first.
+/// A ready unit's first proxied URL without its scheme (`web.acme1.localhost:8443`),
+/// one the `mine` session started first.
 fn shown_url<'a>(
     lane: &'a LaneSummary,
     mine: &impl Fn(&UnitSummary) -> bool,
@@ -147,7 +147,7 @@ fn shown_url<'a>(
     let mut units: Vec<&UnitSummary> = lane
         .units
         .iter()
-        .filter(|unit| matches!(unit.state.as_str(), "ready" | "running"))
+        .filter(|unit| unit.state == "ready")
         .collect();
     units.sort_by_key(|unit| !mine(unit));
     units.into_iter().find_map(|unit| {
