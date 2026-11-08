@@ -36,7 +36,6 @@ fn label(method: Method) -> &'static str {
         Method::Restart => "restart",
         Method::Reload => "reload",
         Method::Resume => "resume",
-        Method::LaneNew => "new lane",
         _ => "start",
     }
 }

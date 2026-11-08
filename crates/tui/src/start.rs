@@ -406,14 +406,11 @@ pub(crate) fn start_failures(value: &Value) -> Vec<UnitFailureData> {
 }
 
 /// The start results in a response: `start` and `restart` answer one,
-/// `lane.new` nests it under `start`, `resume` lists one per lane (or its error).
+/// `resume` lists one per lane (or its error).
 fn start_results(value: &Value) -> Vec<Result<StartResult, (String, RpcError)>> {
     let parse = |value: &Value| serde_json::from_value::<StartResult>(value.clone()).ok();
     if value.get("ready").is_some() {
         return parse(value).map(Ok).into_iter().collect();
-    }
-    if let Some(start) = value.get("start") {
-        return parse(start).map(Ok).into_iter().collect();
     }
     value
         .get("items")

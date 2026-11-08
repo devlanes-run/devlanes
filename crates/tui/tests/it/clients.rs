@@ -68,7 +68,7 @@ async fn with_clients(
     let api = FakeApi::with_lanes(mixed_lanes());
     let mut app = App::new(width, height);
     app.update(Msg::Status(api.status().await));
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     app.update(shifted('B'));
     assert_eq!(app.view, View::Boxes);
     app.update(Msg::Boxes(Ok(json!({"items": []}))));
@@ -111,7 +111,7 @@ fn selected(app: &App) -> Option<String> {
 #[tokio::test]
 async fn the_boxes_view_asks_for_the_clients_once_at_a_time() -> TestResult {
     let mut app = App::new(120, 40);
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     assert_eq!(fetches(&app.update(shifted('D'))), 0, "the daemon page");
     app.update(key(KeyCode::Esc));
     let effects = app.update(shifted('B'));
@@ -568,7 +568,7 @@ async fn a_stopped_daemon_has_no_clients() -> TestResult {
     assert_eq!(fetches(&app.update(event(CLIENTS_EVENT))), 0);
     let ticks: usize = (0..15).map(|_| fetches(&app.update(Msg::Tick))).sum();
     assert_eq!(ticks, 0);
-    assert_eq!(fetches(&app.update(Msg::Subscribed(Ok(())))), 1);
+    assert_eq!(fetches(&app.update(Msg::Subscribed(Ok(Vec::new())))), 1);
     Ok(())
 }
 

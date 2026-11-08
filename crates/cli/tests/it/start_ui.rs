@@ -31,6 +31,11 @@ fn opens(args: &[&str], no_ui: bool) -> Option<bool> {
             assert_eq!(request.params["events"], true, "{args:?}");
             Some(forced)
         }
+        // The binary decides once the lane exists.
+        Action::LaneNewThenStart { start, .. } => {
+            assert_eq!(start.params["events"], true, "{args:?}");
+            cli.start_in_ui(&runtime)
+        }
         _ => None,
     }
 }

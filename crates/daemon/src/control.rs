@@ -61,14 +61,10 @@ struct LaneNewParams {
     /// Name of that extra lane.
     #[serde(default)]
     name: Option<String>,
+    /// Sent by CLIs that started the new lane through `lane.new`. It is refused
+    /// before a lane is created, so such a CLI does not leave one unstarted.
     #[serde(default)]
     start: bool,
-    /// Stream the start's lane events on the request.
-    #[serde(default)]
-    events: bool,
-    /// `--env` overrides for the start.
-    #[serde(default)]
-    env: EnvMap,
 }
 
 /// `lane.clean` parameters.
@@ -541,14 +537,13 @@ impl Inner {
         futures_util::future::join_all(starts).await;
     }
 
-    /// `lane.new`: another lane for the cwd's folder, started when asked.
+    /// `lane.new`: another lane for the cwd's folder. Clients start it with a
+    /// plain `start` on the returned lane.
     pub(crate) async fn lane_new(
         self: &Arc<Self>,
         value: Value,
         context: &Context,
-        session: &Session,
     ) -> Result<Value, RpcError> {
-        let arrival = self.arrive();
         let args: LaneNewParams = required(value)?;
         if let Some(branch) = &args.branch {
             return Err(RpcError::new(
@@ -556,6 +551,13 @@ impl Inner {
                 json!({"message": format!(
                     "devlanes no longer creates worktrees; run `git worktree add <path> {branch}`, then `devlanes start` in it"
                 )}),
+                2,
+            ));
+        }
+        if args.start {
+            return Err(RpcError::new(
+                "bad_request",
+                json!({"message": "this devlanes client is older than the daemon; run devlanes lane new, then devlanes start --lane <name>"}),
                 2,
             ));
         }
@@ -580,39 +582,7 @@ impl Inner {
         } else {
             path.join(config_dir)
         };
-        let mut result = json!({"lane": summary, "name": extra, "folder": folder});
-        if args.start {
-            // Older CLIs send no environment for `lane new --start`.
-            let env = carries_env(context).or_else(|| project.st().last_env.clone());
-            let start_id = self.new_start_id();
-            let stream = args
-                .events
-                .then(|| LaneEvents::starts(vec![(project.clone(), lane.clone())], vec![start_id]));
-            let start = self.start_lane(
-                &project,
-                &lane,
-                StartOptions {
-                    selectors: Vec::new(),
-                    profiles: Vec::new(),
-                    transient: false,
-                    needs_profile_settings: false,
-                    env,
-                    overrides: Some(args.env.clone()),
-                    actor: context.actor.clone(),
-                    timeout: self.opts.start_timeout,
-                    session: None,
-                    setup_only: false,
-                    all_at_once: false,
-                    start_id: Some(start_id),
-                    arrival,
-                    restoring: false,
-                    accepted: None,
-                },
-            );
-            let start = self.with_lane_events(session, stream, start).await?;
-            result["start"] = serde_json::to_value(start).map_err(|e| internal("encode", e))?;
-        }
-        Ok(result)
+        Ok(json!({"lane": summary, "name": extra, "folder": folder}))
     }
 
     /// Another lane for `base`'s folder (`lane new`): its own worktree row,
