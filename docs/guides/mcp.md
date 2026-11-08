@@ -118,7 +118,7 @@ With `--read-only` the server offers only `status`, `logs`, `wait`, `debug_why`,
 
 Every tool refuses commands that need a terminal or never end, and says what to run instead: `ui`, `attach`, `start --attach`, `env shell`, `setup`, `update`, `uninstall`, `completions`, `status --statusline`, `daemon run`, `daemon logs -f`, and `logs -f`, `status --watch`, `debug events -f` or `infra logs -f` without `--timeout`.
 
-Hosts that send a progress token get the lane's phases, such as `acme@1 infra started`, as progress notifications. Cancelling a call is like Ctrl-C in a terminal: the command detaches and services keep running. On Windows cancelling also ends every process the command started, such as the program `devlanes with` ran. When the host closes the server's stdin or stops it with SIGTERM, or on Windows closes its console, the server ends its running commands the same way right away.
+Hosts that send a progress token get the phases of the lane a call starts (`start`, `restart`, `reload`, `with`, `lane resume`, `lane new --start`), such as `acme@1 infra started`, as progress notifications. Cancelling a call is like Ctrl-C in a terminal: the command detaches and services keep running. On Windows cancelling also ends every process the command started, such as the program `devlanes with` ran. When the host closes the server's stdin or stops it with SIGTERM, or on Windows closes its console, the server ends its running commands the same way right away.
 
 ## Tool call timeouts
 

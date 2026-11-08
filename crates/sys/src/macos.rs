@@ -17,6 +17,20 @@ use crate::{
 /// `sizeof(struct proc_bsdinfo)`, the exact length libproc must return.
 const BSDINFO_SIZE: c_int = size_of::<libc::proc_bsdinfo>() as c_int;
 
+/// `mkfifo(path, 0600)`; rustix has no `mkfifo` for Apple targets.
+pub(crate) fn make_fifo(path: &std::path::Path) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: `path` is a NUL-terminated string that outlives the call, and
+    // mkfifo only reads it.
+    if unsafe { libc::mkfifo(path.as_ptr(), 0o600) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// Lists all PIDs, then reads BSD info for each; processes exiting mid-scan are skipped.
 pub(crate) fn processes() -> Result<Vec<ProcessInfo>, Error> {
     Ok(all_pids()?.into_iter().filter_map(bsd_info).collect())

@@ -253,6 +253,20 @@ async fn hosts_outside_the_ca_are_warned_about() {
             },
         )
         .await;
+        // Before anything started, as in CI: the lane the project gets first.
+        let check = h
+            .call(Method::ConfigCheck, json!({}), cx(&main))
+            .await
+            .expect("config check");
+        assert_eq!(check["provisional"], "demo@0", "{check}");
+        let found = check["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .find(|w| w["code"] == "host_outside_ca")
+            .expect("config check warns before a start");
+        assert_eq!(found["path"], "services.web.hosts");
+        assert!(found["message"].as_str().is_some_and(|m| m.contains("web.demo.localhost")));
         let started = h
             .call(Method::Start, json!({}), cx(&main))
             .await

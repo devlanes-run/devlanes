@@ -240,7 +240,12 @@ impl Inner {
         session: &Session,
     ) -> Result<Value, RpcError> {
         let args: InfraLogsParams = required(value)?;
-        let (project, lane) = self.target_lane(context).await?;
+        let (project, lane) = self
+            .lane(
+                context,
+                crate::target::Policy::of(devlanes_proto::Method::InfraLogs),
+            )
+            .await?;
         let tail = args.tail.unwrap_or(DEFAULT_TAIL).min(MAX_TAIL);
         let targets = self
             .infra_log_targets(&project, &lane, &args.container)

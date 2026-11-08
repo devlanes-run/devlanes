@@ -712,11 +712,13 @@ impl LaneSt {
         }
     }
 
-    /// Canonical reference: `project@index`, or `project@<dir>` while unassigned.
+    /// Canonical reference: `project@index`; while unassigned, an extra lane's
+    /// `project@<name>`, else `project@<dir>`.
     pub(crate) fn reference(&self, project: &str) -> String {
-        match self.index() {
-            Some(index) => format!("{project}@{index}"),
-            None => format!("{project}@{}", dir_name(&self.path)),
+        match (self.index(), self.alias()) {
+            (Some(index), _) => format!("{project}@{index}"),
+            (None, Some((_, name))) => format!("{project}@{name}"),
+            (None, None) => format!("{project}@{}", dir_name(&self.path)),
         }
     }
 

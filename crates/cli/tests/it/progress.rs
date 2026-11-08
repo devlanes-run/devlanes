@@ -118,6 +118,10 @@ fn starts_ask_for_their_lane_events() {
     let human = runtime(&["devlanes"], true, false);
     let agent = runtime(&["devlanes", "--output", "agent"], false, false);
     let piped = runtime(&["devlanes", "--output", "plain"], false, false);
+    let mcp = Runtime {
+        json_out: Some(JsonOut::new("/tmp/json".into())),
+        ..agent.clone()
+    };
     let events = |args: &[&str], runtime: &Runtime| built(args, runtime).params["events"] == true;
     for args in [
         &["devlanes", "start"][..],
@@ -128,8 +132,10 @@ fn starts_ask_for_their_lane_events() {
     ] {
         assert!(events(args, &human), "{args:?}");
         assert!(events(args, &piped), "{args:?}");
-        // Agent output prints no progress, so the events would be wasted.
+        // Agent output prints no progress, so the events would be wasted,
+        // unless `devlanes mcp` reads them from the JSON copy.
         assert!(!events(args, &agent), "{args:?}");
+        assert!(events(args, &mcp), "{args:?}");
     }
     assert!(!events(&["devlanes", "lane", "new"], &human));
     // `wait` streams them only for the bar.

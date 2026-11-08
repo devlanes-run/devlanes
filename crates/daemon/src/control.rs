@@ -4,6 +4,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     future::Future,
+    path::Path,
     sync::Arc,
     time::Duration,
 };
@@ -16,7 +17,8 @@ use devlanes_core::{
     ports::PortName,
 };
 use devlanes_proto::{
-    Context, ExecParams, Page, ResumePlan, RpcError, RunParams, Selection, UnitSummary, events,
+    Context, ExecParams, Method, Page, ResumePlan, RpcError, RunParams, Selection, UnitSummary,
+    events,
 };
 use devlanes_resolve::ResolvedLane;
 use devlanes_state::DesiredState;
@@ -26,11 +28,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     Session,
-    engine::{Inner, LanePair, MainLane, carries_env, confirmation, params, required},
+    engine::{Inner, LanePair, carries_env, confirmation, params, required},
     lifecycle::{SpawnRequest, StartOptions, TaskOutcome},
-    model::{EnvMap, Kind, LaneRt, ProjectRt, is_mine, lane_summary, lock, unit_summary},
-    registry::{internal, store_error},
+    model::{EnvMap, Kind, LaneRt, LaneView, ProjectRt, is_mine, lane_summary, lock, unit_summary},
+    registry::{PrimaryWorktree, internal, store_error},
     stream::LaneEvents,
+    target::{Found, LaneOrFile, Policy},
     units::UnitHost,
 };
 
@@ -169,49 +172,6 @@ impl Inner {
         timeout_ms.map_or(self.opts.start_timeout, Duration::from_millis)
     }
 
-    /// Resolves the lane for a selection and re-lists its worktrees first (plan 5.2).
-    async fn selection_lane(
-        self: &Arc<Self>,
-        units: &[String],
-        context: &Context,
-    ) -> Result<(LanePair, Vec<String>), RpcError> {
-        // The lane `lane_for_units` resolves: a unit's lane part wins over `--lane`.
-        let named: Option<devlanes_core::refs::LaneRef> = units
-            .iter()
-            .find_map(|unit| unit.parse::<devlanes_core::refs::UnitRef>().ok()?.lane)
-            .or_else(|| context.lane.as_deref()?.parse().ok());
-        match named {
-            // A reference naming a known project relists that project, not the
-            // cwd's: a project `lane clean` forgot stays forgotten. An unknown one
-            // is registered, if at all, by `resolve_lane_ref`.
-            Some(devlanes_core::refs::LaneRef {
-                project: Some(name),
-                ..
-            }) => {
-                if let Ok(project) = self.project_by_name(&name) {
-                    let _ = self.relist(&project).await;
-                }
-            }
-            None if context.lane.is_none() => {
-                if let Some(project) = self.project_for(context).await? {
-                    let _ = self.relist(&project).await;
-                }
-            }
-            // A short reference (or a `--lane` that does not parse, which
-            // `lane_for_units` reports) resolves among the cwd's projects, so the
-            // cwd's project may fail to resolve (a folder shared by several
-            // projects) without failing the start.
-            _ => {
-                for id in self.reference_scope(context).await.unwrap_or_default() {
-                    if let Some(project) = self.project(id) {
-                        let _ = self.relist(&project).await;
-                    }
-                }
-            }
-        }
-        self.lane_for_units(units, context).await
-    }
-
     /// A lone unit selector that matched nothing but is a lane number or an
     /// extra lane's name (`stop 1`, `stop review`): the error names that lane
     /// under `names_lane`, so the client can suggest `--lane` instead of acting
@@ -234,7 +194,14 @@ impl Inner {
         {
             return error;
         }
-        let Ok((project, lane)) = self.resolve_lane_ref(unit, context).await else {
+        // Looked up without registering, relisting or claiming anything.
+        let Ok(parsed) = unit.parse::<devlanes_core::refs::LaneRef>() else {
+            return error;
+        };
+        let Ok(Some(scope)) = self.reference_scope(context).await else {
+            return error;
+        };
+        let Ok((project, lane)) = self.match_reference(&parsed, &scope, context) else {
             return error;
         };
         let st = lane.st();
@@ -258,7 +225,9 @@ impl Inner {
         // whatever their lane lookup, infra or tasks take.
         let arrival = self.arrive();
         let selection: Selection = params(value)?;
-        let ((project, lane), selectors) = self.selection_lane(&selection.units, context).await?;
+        let ((project, lane), selectors) = self
+            .lane_for_units(&selection.units, context, Policy::of(Method::Start))
+            .await?;
         self.fresh_config(&project, &lane).await;
         Self::refuse_external(&project, &lane, &selectors)?;
         let start_id = self.new_start_id();
@@ -328,12 +297,14 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let selection: Selection = params(value)?;
         let mut stopped: Vec<UnitSummary> = Vec::new();
-        // `stop --mine` across the lanes of `mine_scope` (the current project, or every
+        // `stop --mine` across the lanes of its scope (the current project, or every
         // project outside one): one lane's failure must not leave the rest running.
+        // In a project nobody started, `stop` with or without units stops nothing.
         let mut errors: Vec<Value> = Vec::new();
         let mut warnings: Vec<Value> = Vec::new();
+        let policy = Policy::of(Method::Stop);
         if selection.mine && selection.units.is_empty() && context.lane.is_none() {
-            let scope = self.mine_scope(context).await?;
+            let scope = self.read_scope(context, false, policy).await?.lanes();
             for (project, lane) in &scope {
                 if lane.st().any_running() {
                     match self
@@ -354,9 +325,10 @@ impl Inner {
             if let Some(warning) = self.mine_elsewhere(&scope, &context.actor) {
                 warnings.push(warning);
             }
-        } else {
-            let ((project, lane), selectors) =
-                self.lane_for_units(&selection.units, context).await?;
+        } else if let Some(((project, lane), selectors)) = self
+            .units_or_nothing(&selection.units, context, policy)
+            .await?
+        {
             Self::refuse_external(&project, &lane, &selectors)?;
             let selectors = (!selectors.is_empty()).then_some(selectors);
             let mine = selection.mine.then_some(&context.actor);
@@ -423,7 +395,9 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let arrival = self.arrive();
         let selection: Selection = params(value)?;
-        let ((project, lane), selectors) = self.lane_for_units(&selection.units, context).await?;
+        let ((project, lane), selectors) = self
+            .lane_for_units(&selection.units, context, Policy::of(Method::Restart))
+            .await?;
         self.fresh_config(&project, &lane).await;
         Self::refuse_external(&project, &lane, &selectors)?;
         let start_id = self.new_start_id();
@@ -554,7 +528,11 @@ impl Inner {
         let starts = lanes.into_iter().map(|planned| {
             let (context, env) = (&context, env.clone());
             async move {
-                let (project, lane) = match self.resolve_lane_ref(&planned.lane, context).await {
+                let context = &Context {
+                    lane: Some(planned.lane.clone()),
+                    ..context.clone()
+                };
+                let (project, lane) = match self.lane(context, Policy::of(Method::Resume)).await {
                     Ok(pair) => pair,
                     Err(error) => {
                         tracing::warn!(lane = %planned.lane, code = %error.code, "a lane to resume was not found");
@@ -620,15 +598,9 @@ impl Inner {
         }
         // The folder the new lane shares: `--lane`'s (an extra lane stands for its
         // folder's first lane), else the cwd's, never a guessed one.
-        let (project, base) = match &context.lane {
-            Some(reference) => {
-                let (project, lane) = self.resolve_lane_ref(reference, context).await?;
-                let path = lane.st().path.clone();
-                let base = Self::lane_at(&project, &path).unwrap_or(lane);
-                (project, base)
-            }
-            None => self.cwd_lane(context, MainLane::Refused).await?,
-        };
+        let (project, lane) = self.lane(context, Policy::of(Method::LaneNew)).await?;
+        let path = lane.st().path.clone();
+        let base = Self::lane_at(&project, &path).unwrap_or(lane);
         let (lane, extra, data_left) = self
             .extra_lane(&project, &base, args.name.as_deref())
             .await?;
@@ -847,12 +819,12 @@ impl Inner {
         context: &Context,
     ) -> Result<Value, RpcError> {
         let args: LaneCleanParams = params(value)?;
-        let reference = args.lane.or_else(|| context.lane.clone());
-        let (project, lane) = match &reference {
-            Some(reference) => self.resolve_lane_ref(reference, context).await?,
-            // Never the main lane by guess: with `--yes` there is no prompt to stop it.
-            None => self.cwd_lane(context, MainLane::Refused).await?,
+        let context = &Context {
+            lane: args.lane.or_else(|| context.lane.clone()),
+            ..context.clone()
         };
+        // Never the main lane by guess: with `--yes` there is no prompt to stop it.
+        let (project, lane) = self.lane(context, Policy::of(Method::LaneClean)).await?;
         let name = lane.st().reference(&project.name());
         if !context.yes {
             return Err(confirmation(json!({"lane": name, "flag": "--yes"})));
@@ -871,11 +843,11 @@ impl Inner {
     /// and drops port offsets no config uses any more. Needs `yes` only when there are
     /// lanes to clean; the confirmation lists them under `lanes`.
     pub(crate) async fn lane_gc(self: &Arc<Self>, context: &Context) -> Result<Value, RpcError> {
-        // At a folder shared by several projects, each of them is re-listed.
-        let projects = if context.project.is_some() || context.file.is_some() {
-            self.project_for(context).await?.into_iter().collect()
-        } else {
-            self.projects_here(context).await?
+        // At a folder shared by several projects, each of them is re-listed; in a
+        // project nobody started, none.
+        let projects = match self.projects(context, Policy::of(Method::LaneGc)).await? {
+            Found::Projects { projects, .. } => projects,
+            Found::Unregistered { .. } | Found::Nothing { .. } => Vec::new(),
         };
         for project in &projects {
             let _ = self.relist_only(project).await;
@@ -1021,7 +993,7 @@ impl Inner {
                 2,
             ));
         }
-        let (project, lane) = self.explicit_or_cwd_lane(context).await?;
+        let (project, lane) = self.lane(context, Policy::of(Method::Exec)).await?;
         self.fresh_config(&project, &lane).await;
         // An exec unit under a configured name would take that unit's place: its
         // logs, its stop and the next start of the real one.
@@ -1152,7 +1124,7 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let args: RunArgs = required(value)?;
         let run = args.run;
-        let (project, lane) = self.explicit_or_cwd_lane(context).await?;
+        let (project, lane) = self.lane(context, Policy::of(Method::Run)).await?;
         self.fresh_config(&project, &lane).await;
         let reference = lane.st().reference(&project.name());
         if let Some(env) = carries_env(context) {
@@ -1409,7 +1381,16 @@ impl Inner {
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<Value, RpcError> {
-        let (project, lane) = self.target_lane(context).await?;
+        let (project, lane) = match self
+            .lane_or_file(context, Policy::of(Method::ProfileList))
+            .await?
+        {
+            LaneOrFile::Lane(pair) => pair,
+            LaneOrFile::File { config, .. } => {
+                let items = devlanes_resolve::profile_summaries(&config);
+                return Ok(json!({"lane": null, "items": items}));
+            }
+        };
         let st = lane.st();
         let reference = st.reference(&project.name());
         let config = match &st.config {
@@ -1428,18 +1409,27 @@ impl Inner {
 
     /// `task.list`: tasks plus the `run_script` files the config references.
     pub(crate) async fn task_list(self: &Arc<Self>, context: &Context) -> Result<Value, RpcError> {
-        let (project, lane) = self.target_lane(context).await?;
-        let (config_dir, _) = project.config_path();
-        let (config, path) = {
-            let st = lane.st();
-            let config = st
-                .config
-                .loaded()
-                .cloned()
-                .ok_or_else(|| RpcError::new("no_config", json!({"path": st.path}), 1))?;
-            (config, st.path.join(config_dir))
+        let (config, path, lane_id) = match self
+            .lane_or_file(context, Policy::of(Method::TaskList))
+            .await?
+        {
+            LaneOrFile::Lane((project, lane)) => {
+                let (config_dir, _) = project.config_path();
+                let st = lane.st();
+                let config = st
+                    .config
+                    .loaded()
+                    .cloned()
+                    .ok_or_else(|| RpcError::new("no_config", json!({"path": st.path}), 1))?;
+                let lane_id = st.record.as_ref().map(|record| record.id);
+                (config, st.path.join(config_dir), lane_id)
+            }
+            // A project nobody started has run nothing.
+            LaneOrFile::File { file, config } => {
+                let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
+                (config, dir, None)
+            }
         };
-        let lane_id = lane.st().record.as_ref().map(|record| record.id);
         let runs = match lane_id {
             Some(id) => self.store.last_task_runs(id).await.map_err(store_error)?,
             None => Vec::new(),
@@ -1590,8 +1580,9 @@ impl Inner {
     async fn infra_for(
         self: &Arc<Self>,
         context: &Context,
+        method: Method,
     ) -> Result<(LanePair, crate::integrations::InfraSpec), RpcError> {
-        let (project, lane) = self.target_lane(context).await?;
+        let (project, lane) = self.lane(context, Policy::of(method)).await?;
         let spec = self.infra_spec(&project, &lane, &[]).await?;
         let needs = self
             .integ
@@ -1609,7 +1600,7 @@ impl Inner {
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<Value, RpcError> {
-        let ((project, lane), spec) = self.infra_for(context).await?;
+        let ((project, lane), spec) = self.infra_for(context, Method::InfraUp).await?;
         let _op = lane.op.write().await;
         // Compose and Docker refuse to start paused containers.
         self.wake_lane(&project, &lane, Some(crate::idle::Activity::Command))
@@ -1645,7 +1636,7 @@ impl Inner {
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<Value, RpcError> {
-        let ((project, _), spec) = self.infra_for(context).await?;
+        let ((project, _), spec) = self.infra_for(context, Method::InfraDown).await?;
         let running: Vec<String> = project
             .lanes()
             .iter()
@@ -1665,7 +1656,7 @@ impl Inner {
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<Value, RpcError> {
-        let ((project, lane), spec) = self.infra_for(context).await?;
+        let ((project, lane), spec) = self.infra_for(context, Method::InfraStatus).await?;
         let status = self
             .integ
             .infra
@@ -1675,103 +1666,138 @@ impl Inner {
         Ok(json!({"lane": lane.st().reference(&project.name()), "infra": status}))
     }
 
-    /// `config.check` on the request's project file (`--file`, the `--project` or
-    /// `--lane` lane's, else the nearest `devlanes.yaml`), with preset option validation.
+    /// `config.check` on the request's project file (`--file`, the target lane's,
+    /// else the nearest `devlanes.yaml`), with preset option validation. Hostname
+    /// advice comes from the lane's layout, or from a provisional lane 0 when the
+    /// lane has none yet; the reply names that lane under `provisional`, and lists
+    /// `hostnames` under `skipped` when neither can be laid out.
     pub(crate) async fn config_check(
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<Value, RpcError> {
-        let file = match &context.file {
-            Some(file) => Some(file.clone()),
-            None if context.project.is_some() || context.lane.is_some() => {
-                let (project, lane) = self.target_lane(context).await?;
-                let (dir, name) = project.config_path();
-                Some(lane.st().path.join(dir).join(name))
-            }
-            None => {
-                let cwd = context.cwd.clone();
-                tokio::task::spawn_blocking(move || devlanes_config::find_project_file(&cwd))
-                    .await
-                    .map_err(|error| internal("io", error))?
-                    .map_err(|error| internal("io", error))?
-            }
-        };
-        let Some(file) = file else {
-            return Err(crate::engine::no_config(&context.cwd).await);
-        };
+        let target = self
+            .lane_or_file(context, Policy::of(Method::ConfigCheck))
+            .await?;
         // The lane's warnings below come from its loaded config; bring it up to date.
         // A worktree without its own devlanes.local.yaml uses the primary
-        // worktree's, as the lane does.
-        let mut primary_dir = None;
-        if let Ok((project, lane)) = self.target_lane(context).await {
-            self.fresh_config(&project, &lane).await;
-            primary_dir = Some(self.config_dirs(&project, &lane).1);
-        }
+        // worktree's, as the lane does; for a project nobody started, the primary
+        // worktree git reports.
+        let (file, primary) = match &target {
+            LaneOrFile::Lane((project, lane)) => {
+                self.fresh_config(project, lane).await;
+                let file = context.file.clone().unwrap_or_else(|| {
+                    let (dir, name) = project.config_path();
+                    lane.st().path.join(dir).join(name)
+                });
+                let branch = project.st().primary_branch.clone();
+                let primary = PrimaryWorktree {
+                    root: self.primary_path(project),
+                    branch: Some(branch),
+                    relative: project.config_path().0,
+                };
+                (file, primary)
+            }
+            LaneOrFile::File { file, config } => {
+                let primary = PrimaryWorktree::of(file, config, self.opts.ci).await?;
+                (file.clone(), primary)
+            }
+        };
+        let primary_dir = primary.root.join(&primary.relative);
         let checks = self.config_checks();
         let known = crate::platforms::known(&self.integ.contributors);
         let path = file.clone();
-        let (report, unknown) = tokio::task::spawn_blocking(move || {
-            let config = match &primary_dir {
-                Some(primary) => {
-                    devlanes_config::load_lane_project_with::<OpaqueExtensions>(&path, primary)?
-                }
-                None => devlanes_config::load_project_with::<OpaqueExtensions>(&path)?,
-            };
+        let (config, report, unknown) = tokio::task::spawn_blocking(move || {
+            let config =
+                devlanes_config::load_lane_project_with::<OpaqueExtensions>(&path, &primary_dir)?;
             let report = crate::registry::check_config(&config, &checks)?;
-            Ok::<_, devlanes_config::ConfigError>((
-                report,
-                crate::platforms::unknown(&config, &known),
-            ))
+            let unknown = crate::platforms::unknown(&config, &known);
+            Ok::<_, devlanes_config::ConfigError>((config, report, unknown))
         })
         .await
         .map_err(|error| internal("config_check", error))?
         .map_err(|error| crate::model::config_error(&error))?;
-        let mut warnings =
-            serde_json::to_value(&report.warnings).map_err(|e| internal("encode", e))?;
-        if let Some(list) = warnings.as_array_mut() {
-            list.extend(unknown);
-            // Hostnames need the lane's evaluated layout; a lane that cannot be
-            // laid out yet (unassigned) only misses this advice.
-            if let Ok((project, lane)) = self.target_lane(context).await {
+        let mut warnings: Vec<Value> = match serde_json::to_value(&report.warnings) {
+            Ok(Value::Array(list)) => list,
+            Ok(_) => Vec::new(),
+            Err(error) => return Err(internal("encode", error)),
+        };
+        warnings.extend(unknown);
+        let mut result = json!({"project": report.project, "path": file});
+        let laid_out = match &target {
+            LaneOrFile::Lane((project, lane)) if lane.st().view.is_some() => {
                 let st = lane.st();
-                for warning in self.ca_warnings(&st.reference(&project.name()), &st) {
-                    let data = &warning.data;
-                    let path = st
-                        .view
-                        .as_ref()
-                        .and_then(|view| {
-                            let service = view
-                                .routes
-                                .iter()
-                                .find(|route| route.host == data["host"])
-                                .map(|route| format!("services.{}.hosts", route.service));
-                            service.or_else(|| {
-                                view.externals
-                                    .iter()
-                                    .find(|external| {
-                                        external.routes.iter().any(|r| r.host == data["host"])
-                                    })
-                                    .map(|external| {
-                                        format!("infra.external.{}.hosts", external.name)
-                                    })
-                            })
-                        })
-                        .unwrap_or_else(|| "infra.hosts".into());
-                    list.push(json!({
-                        "path": path,
-                        "message": format!(
-                            "{} is outside the names the devlanes CA can certify, so HTTPS fails there (plain HTTP works); use a name like {}",
-                            data["host"].as_str().unwrap_or_default(),
-                            data["suggestion"].as_str().unwrap_or_default(),
-                        ),
-                        "code": warning.code,
-                        "host": data["host"],
-                        "suggestion": data["suggestion"],
-                    }));
-                }
-                list.extend(self.config_check_warnings(&st.reference(&project.name()), &st));
+                let reference = st.reference(&project.name());
+                warnings.extend(self.host_warnings(&reference, st.view.as_deref()));
+                true
             }
+            // Hostnames depend on the lane's index, domain and vars, not on its
+            // ports, so lane 0 laid out from the file gives the same advice before
+            // anything started. `host_conflict` needs other lanes and is left out.
+            _ => {
+                let facts = self.provisional_facts(
+                    &config,
+                    &primary.root,
+                    primary.branch.as_deref(),
+                    &primary.relative,
+                );
+                let reference = format!("{}@0", config.project);
+                match self.provisional_view(&config, &facts).await {
+                    Some(view) => {
+                        warnings.extend(self.host_warnings(&reference, Some(&view)));
+                        result["provisional"] = json!(reference);
+                        true
+                    }
+                    None => false,
+                }
+            }
+        };
+        if !laid_out {
+            result["skipped"] = json!(["hostnames"]);
         }
-        Ok(json!({"project": report.project, "path": file, "warnings": warnings}))
+        if let LaneOrFile::Lane((project, lane)) = &target {
+            let st = lane.st();
+            warnings.extend(self.config_check_warnings(&st.reference(&project.name()), &st));
+        }
+        result["warnings"] = json!(warnings);
+        Ok(result)
+    }
+
+    /// `host_outside_ca` warnings of a lane's layout `view`, shaped for `config check`
+    /// with the config path that names each host.
+    fn host_warnings(&self, reference: &str, view: Option<&LaneView>) -> Vec<Value> {
+        self.ca_warnings(reference, view)
+            .into_iter()
+            .map(|warning| {
+                let data = &warning.data;
+                let path = view
+                    .and_then(|view| {
+                        let service = view
+                            .routes
+                            .iter()
+                            .find(|route| route.host == data["host"])
+                            .map(|route| format!("services.{}.hosts", route.service));
+                        service.or_else(|| {
+                            view.externals
+                                .iter()
+                                .find(|external| {
+                                    external.routes.iter().any(|r| r.host == data["host"])
+                                })
+                                .map(|external| format!("infra.external.{}.hosts", external.name))
+                        })
+                    })
+                    .unwrap_or_else(|| "infra.hosts".into());
+                json!({
+                    "path": path,
+                    "message": format!(
+                        "{} is outside the names the devlanes CA can certify, so HTTPS fails there (plain HTTP works); use a name like {}",
+                        data["host"].as_str().unwrap_or_default(),
+                        data["suggestion"].as_str().unwrap_or_default(),
+                    ),
+                    "code": warning.code,
+                    "host": data["host"],
+                    "suggestion": data["suggestion"],
+                })
+            })
+            .collect()
     }
 }
