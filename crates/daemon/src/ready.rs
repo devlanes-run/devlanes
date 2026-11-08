@@ -183,7 +183,7 @@ async fn ready_after_window(host: &UnitHost) {
     tokio::select! {
         biased;
         _ = host.wait_exit() => {}
-        () = sleep(Duration::from_millis(left)) => host.mark_ready(),
+        () = sleep(Duration::from_millis(left)) => host.set_state(UnitState::Ready),
     }
 }
 

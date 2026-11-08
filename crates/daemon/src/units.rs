@@ -437,23 +437,15 @@ impl UnitHost {
     }
 
     /// Moves to a new state unless the run already reached a terminal state.
+    /// Only a starting run becomes ready: a run a stop reached first stays
+    /// `stopping`.
     pub fn set_state(&self, next: UnitState) {
         self.inner.state.send_if_modified(|state| {
-            if state.is_terminal() || *state == next {
+            let stale_ready = next == UnitState::Ready && *state != UnitState::Starting;
+            if state.is_terminal() || *state == next || stale_ready {
                 return false;
             }
             *state = next;
-            true
-        });
-    }
-
-    /// Moves a starting run to ready. A run a stop reached first stays `stopping`.
-    pub fn mark_ready(&self) {
-        self.inner.state.send_if_modified(|state| {
-            if *state != UnitState::Starting {
-                return false;
-            }
-            *state = UnitState::Ready;
             true
         });
     }
@@ -1374,11 +1366,16 @@ mod tests {
 
     /// A PTY host for `unit` logging into its own directory under `dir`.
     async fn host(unit: Arc<ScriptedUnit>, dir: &tempfile::TempDir) -> UnitHost {
-        host_with(unit, dir, true).await
+        host_with(unit, dir, true, 0).await
     }
 
-    /// [`host`] for a PTY (`pty`) or pipe unit.
-    async fn host_with(unit: Arc<ScriptedUnit>, dir: &tempfile::TempDir, pty: bool) -> UnitHost {
+    /// [`host`] for a PTY (`pty`) or pipe unit spawned at `started_at_ms`.
+    async fn host_with(
+        unit: Arc<ScriptedUnit>,
+        dir: &tempfile::TempDir,
+        pty: bool,
+        started_at_ms: u64,
+    ) -> UnitHost {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let run = NEXT.fetch_add(1, Ordering::Relaxed);
         let info = UnitInfo {
@@ -1386,7 +1383,7 @@ mod tests {
             lane: "0".into(),
             kind: "service",
             actor: Actor::default(),
-            started_at_ms: 0,
+            started_at_ms,
             log_dir: dir.path().join(run.to_string()),
             retention: LogRetention::default(),
             pty,
@@ -1434,6 +1431,67 @@ mod tests {
             .await
             .expect("stop of an exited unit returns")
             .expect("stop succeeds");
+    }
+
+    /// A check that passed leaves the unit `starting` until the early-exit
+    /// window ends, so an exit inside the window fails it instead of
+    /// following a `ready` that `after: services` tasks would trust.
+    #[tokio::test]
+    async fn a_passed_check_waits_out_the_early_exit_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let unit = ScriptedUnit::start(None, gone_identity_cached());
+        let output = unit
+            .output
+            .lock()
+            .expect("output lock")
+            .clone()
+            .expect("output open");
+        // The window counts from the wall-clock spawn. A spawn a minute ahead
+        // keeps it open however slow the real steps below are; the paused
+        // clock alone decides when it ends.
+        let host = host_with(unit.clone(), &dir, true, now_ms() + 60_000).await;
+        let mut logged = host.watch_logged();
+        output
+            .send(OutputChunk {
+                stream: OutputStream::Terminal,
+                bytes: Bytes::from_static(b"up\r\n"),
+            })
+            .expect("send");
+        // Logged before the check begins, so its first read passes.
+        tokio::time::timeout(STEP, async {
+            loop {
+                let page = host.read_log(LogQuery::default()).await.expect("read");
+                if page.items.iter().any(|line| line.text == "up") {
+                    break;
+                }
+                logged.changed().await.expect("log writer runs");
+            }
+        })
+        .await
+        .expect("up is logged");
+        tokio::time::pause();
+        let check = tokio::spawn({
+            let host = host.clone();
+            async move {
+                let ready = crate::ready::Readiness::Log {
+                    pattern: "up".into(),
+                };
+                let limit = Duration::from_secs(3600);
+                crate::ready::run_check(&host, ready, limit, || async { Vec::new() }).await;
+            }
+        });
+        // The paused clock moves only once nothing runs or reads the log, so
+        // by then the check has passed and waits out the window.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(host.state(), UnitState::Starting);
+        drop(output);
+        unit.end(Some(1), None);
+        check.await.expect("the check ends with the exit");
+        assert!(
+            matches!(host.state(), UnitState::Failed(_)),
+            "{:?}",
+            host.state()
+        );
     }
 
     /// The log tick flushes partial lines and the file buffer, so a read-only query of
@@ -1613,7 +1671,7 @@ mod tests {
             .expect("output lock")
             .clone()
             .expect("output open");
-        let host = host_with(unit, &dir, false).await;
+        let host = host_with(unit, &dir, false, 0).await;
         let mut logged = host.watch_logged();
         let Logged::Through(first) = *logged.borrow() else {
             panic!("the log thread is running");
