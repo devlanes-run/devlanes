@@ -1468,38 +1468,15 @@ impl Inner {
         Ok(json!({"stopped": stopped, "terminated": terminated}))
     }
 
-    /// Fills the lane's Compose env (`COMPOSE_PROJECT_NAME` and the rest) when
-    /// no start or `infra up` did since the daemon began: `run` reaches infra
-    /// entries on such a lane too, after a daemon restart for one. Starts
-    /// nothing; a lane without infra, or Docker being down, leaves it empty.
+    /// Brings the lane's live infra up to date before a `run`
+    /// ([`Self::current_infra`]): `run` reaches `infra.*` entries on a lane no
+    /// start brought up too, after a daemon restart for one, and the first
+    /// read that finds its containers fills its Compose env
+    /// (`COMPOSE_PROJECT_NAME` and the rest). Starts nothing; a lane without
+    /// infra, or Docker being down, leaves the env empty.
     async fn ensure_infra_env(self: &Arc<Self>, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
-        if !lane.st().setup_env.is_empty() {
-            return;
-        }
-        let Ok(spec) = self.infra_spec(project, lane, &[]).await else {
-            return;
-        };
-        if spec.is_empty() {
-            return;
-        }
-        let needs = self.integ.infra.port_needs(&spec).await.unwrap_or_default();
-        let spec = match self.infra_spec(project, lane, &needs).await {
-            Ok(with_ports) => with_ports,
-            Err(_) => spec,
-        };
-        match self.integ.infra.namespace(&spec).await {
-            Ok(up) => {
-                // Only the env: the namespace and containers make status list
-                // the lane's infra as up, which nothing here checked.
-                let mut st = lane.st();
-                // A start that finished meanwhile knows better.
-                if st.setup_env.is_empty() {
-                    st.setup_env = up.setup_env;
-                }
-            }
-            Err(error) => {
-                tracing::debug!(code = %error.code, "infra env for a run unavailable");
-            }
+        if let Err(error) = self.current_infra(project, lane).await {
+            tracing::debug!(code = %error.code, "infra for a run unavailable");
         }
     }
 
@@ -1535,25 +1512,27 @@ impl Inner {
         // The containers bind the lane's ports, so box lanes it clashes with
         // give them up first. Its own containers keep it counted once up.
         let claim = self.claim_ports(&lane).await;
-        let up = match self.infra_up(&project, &spec).await {
-            Ok(up) => up,
+        let (read, up) = match self.up_infra(&project, &lane, &spec).await {
+            Ok(done) => done,
             Err(error) => {
                 // Before the claim drops, so what runs anyway keeps the lane.
                 self.store_after_failed_up(&lane, &spec).await;
-                return Err(RpcError::from(error));
+                return Err(error);
             }
         };
-        {
-            let mut st = lane.st();
-            st.infra_ns = Some(up.namespace.clone());
-            st.infra_replaced();
-            st.store_containers(up.containers.clone());
-            st.setup_env = up.setup_env.clone();
-        }
+        let endpoints = read.up.namespace.clone();
+        let report = up.report.clone();
+        crate::infra_restarts::store_infra_up(&lane, read, up);
         drop(claim);
+        // What `infra_namespace_changed` does, under the `op` this holds.
         self.refresh_views_held(&project, &lane).await;
+        let running = lane.st().any_running();
+        if running {
+            self.update_drift(&project, &lane).await;
+        }
+        self.emit_lane(&project, &lane);
         Ok(
-            json!({"lane": lane.st().reference(&project.name()), "infra": up.report, "endpoints": up.namespace}),
+            json!({"lane": lane.st().reference(&project.name()), "infra": report, "endpoints": endpoints}),
         )
     }
 

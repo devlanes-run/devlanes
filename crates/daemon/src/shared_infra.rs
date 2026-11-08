@@ -153,14 +153,16 @@ impl Inner {
 
     /// `InfraProvider::down` holding `project.shared_infra` exclusively (`infra
     /// down`). With [`Self::stop_shared_infra_unless_used`], the only callers
-    /// of `down`.
+    /// of `down`. The project's lanes check their infra again afterwards.
     pub(crate) async fn infra_down(
-        &self,
-        project: &ProjectRt,
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
         spec: &SharedInfraSpec,
     ) -> Result<Value, InfraError> {
         let _exclusive = project.shared_infra.write().await;
-        self.integ.infra.down(spec).await
+        let report = self.integ.infra.down(spec).await;
+        self.resync_project_infra(project);
+        report
     }
 
     /// Stops `project`'s shared containers, keeping their data, unless a lane
@@ -188,8 +190,8 @@ impl Inner {
     /// a start that reaches `up` after this took the lock waits, and its `up`
     /// runs after the `down` and brings the containers back.
     pub(crate) async fn stop_shared_infra_unless_used(
-        &self,
-        project: &ProjectRt,
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
         leaving: &Arc<LaneRt>,
     ) -> SharedInfraStop {
         if used_by_another(project, leaving) {
@@ -200,10 +202,14 @@ impl Inner {
             SharedOnClean::Used => SharedInfraStop::Used,
             SharedOnClean::None => SharedInfraStop::None,
             SharedOnClean::Unknown(error) => SharedInfraStop::Unknown(error),
-            SharedOnClean::Stop(spec) => match self.integ.infra.down(&spec).await {
-                Ok(report) => SharedInfraStop::Stopped(report),
-                Err(error) => SharedInfraStop::Failed(error),
-            },
+            SharedOnClean::Stop(spec) => {
+                let report = self.integ.infra.down(&spec).await;
+                self.resync_project_infra(project);
+                match report {
+                    Ok(report) => SharedInfraStop::Stopped(report),
+                    Err(error) => SharedInfraStop::Failed(error),
+                }
+            }
         }
     }
 }

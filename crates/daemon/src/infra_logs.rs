@@ -313,14 +313,14 @@ impl Inner {
             sort_replicas(&mut found);
             found
         };
-        let own = pick(&lane.st().infra_containers, false);
+        let own = pick(lane.st().infra().containers(), false);
         if !own.is_empty() {
             return Ok(own);
         }
         let others: Vec<InfraContainer> = project
             .lanes()
             .iter()
-            .flat_map(|other| other.st().infra_containers.clone())
+            .flat_map(|other| other.st().infra().containers().to_vec())
             .collect();
         let shared = pick(&others, true);
         if !shared.is_empty() {

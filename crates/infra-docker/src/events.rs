@@ -122,6 +122,10 @@ pub fn map_event(event: &EventMessage) -> Option<HealthEvent> {
 pub enum WatchEvent {
     /// A container lifecycle change the engine reported.
     Event(HealthEvent),
+    /// The current subscription ended or failed, often because the engine
+    /// stopped. Sent before waiting for the engine, so callers learn of it
+    /// while it is down.
+    Ended,
     /// The engine's event stream ended or failed and is subscribed again;
     /// events from the time it was down are lost.
     Reconnected,
@@ -141,7 +145,8 @@ struct Resubscribe<S, St, P> {
 }
 
 /// The events of `subscribe()`, subscribed again whenever that stream ends or
-/// fails: it then retries `ping` with a delay doubling from `backoff_min` to
+/// fails: it then yields [`WatchEvent::Ended`] and retries `ping` with a delay
+/// doubling from `backoff_min` to
 /// `backoff_max` until it answers `true`, and subscribes again. It yields
 /// [`WatchEvent::Reconnected`] before the new subscription when events may
 /// have been missed: the old one delivered events, or the engine did not
@@ -183,8 +188,9 @@ where
                     Some(Err(error)) => tracing::debug!(%error, "docker event stream failed"),
                     None => tracing::debug!("docker event stream ended"),
                 }
+                state.current = None;
+                return Some((WatchEvent::Ended, state));
             }
-            state.current = None;
             let mut answered_at_once = true;
             loop {
                 tokio::time::sleep(state.delay).await;
@@ -299,8 +305,9 @@ mod tests {
     }
 
     #[tokio::test]
-    /// After the engine comes back, a subscription that fails at once while
-    /// the engine answers is retried without a second `Reconnected`.
+    /// Every subscription that ends says so at once, and after the engine
+    /// comes back, a subscription that fails at once while the engine answers
+    /// is retried without a second `Reconnected`.
     async fn resubscribing_reports_reconnected_after_the_stream_ends() {
         let first = map_event(&event("die", LANE)).expect("mapped");
         let second = map_event(&event("start", LANE)).expect("mapped");
@@ -326,14 +333,16 @@ mod tests {
             Duration::from_millis(1),
         );
         let items: Vec<WatchEvent> =
-            tokio::time::timeout(Duration::from_secs(5), watch.take(3).collect::<Vec<_>>())
+            tokio::time::timeout(Duration::from_secs(5), watch.take(5).collect::<Vec<_>>())
                 .await
-                .expect("three items");
+                .expect("five items");
         assert_eq!(
             items,
             [
                 WatchEvent::Event(first),
+                WatchEvent::Ended,
                 WatchEvent::Reconnected,
+                WatchEvent::Ended,
                 WatchEvent::Event(second),
             ]
         );
