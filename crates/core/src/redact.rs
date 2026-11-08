@@ -49,8 +49,8 @@ pub fn secret_field(name: &str) -> bool {
 ///   in a bug report costs more than a hidden word;
 /// - `env` objects in JSON: Screen hides their secret-looking values,
 ///   Archive hides every value;
-/// - home: Screen has none; Archive replaces the home it was given by `~`,
-///   ignoring case and treating `\` and `/` alike on Windows.
+/// - home: Screen has none; Archive replaces each spelling of the home it was
+///   given by `~` (see [`hide_home`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Output {
     Screen,
@@ -79,27 +79,29 @@ pub struct Redactor {
     output: Output,
     /// Longest first, so a value containing another is replaced whole.
     values: Vec<String>,
-    home: Option<String>,
+    /// Spellings of the user's home, such as its long and 8.3 short paths.
+    homes: Vec<String>,
 }
 
 impl Redactor {
     /// For output read on screen or by an agent (`env show --explain`), with
     /// the secrets of `vars`.
     pub fn screen<K: AsRef<str>, V: AsRef<str>>(vars: impl IntoIterator<Item = (K, V)>) -> Self {
-        Self::new(Output::Screen, vars, None)
+        Self::new(Output::Screen, vars, Vec::new())
     }
 
     /// For a file attached to a bug report (`debug bundle`), with the secrets
-    /// of `vars`; `home` is replaced by `~`.
+    /// of `vars`; each of `homes`, the paths that name the user's home, is
+    /// replaced by `~`.
     pub fn archive<K: AsRef<str>, V: AsRef<str>>(
         vars: impl IntoIterator<Item = (K, V)>,
-        home: Option<&Path>,
+        homes: impl IntoIterator<Item = impl AsRef<Path>>,
     ) -> Self {
-        // A home of `/` would replace every separator.
-        let home = home
-            .map(|home| home.to_string_lossy().into_owned())
-            .filter(|home| home.len() > 1);
-        Self::new(Output::Archive, vars, home)
+        let homes = homes
+            .into_iter()
+            .map(|home| home.as_ref().to_string_lossy().into_owned())
+            .collect();
+        Self::new(Output::Archive, vars, homes)
     }
 
     /// Learns the values of the secret-named variables in `vars` that `output`
@@ -107,7 +109,7 @@ impl Redactor {
     fn new<K: AsRef<str>, V: AsRef<str>>(
         output: Output,
         vars: impl IntoIterator<Item = (K, V)>,
-        home: Option<String>,
+        homes: Vec<String>,
     ) -> Self {
         let mut values: Vec<String> = vars
             .into_iter()
@@ -121,7 +123,7 @@ impl Redactor {
         Self {
             output,
             values,
-            home,
+            homes,
         }
     }
 
@@ -203,11 +205,11 @@ impl Redactor {
         for value in &self.values {
             out = out.replace(value.as_str(), REDACTED);
         }
-        let out = hide_url_passwords(&out);
-        match &self.home {
-            Some(home) => hide_home(&out, home),
-            None => out,
+        let mut out = hide_url_passwords(&out);
+        for home in &self.homes {
+            out = hide_home(&out, home);
         }
+        out
     }
 }
 
@@ -277,51 +279,99 @@ fn hide_assignments(text: &str) -> String {
     out
 }
 
-/// `text` with `home` replaced by `~`.
-#[cfg(not(windows))]
+/// `text` with `home` replaced by `~` wherever it names the home itself, not
+/// the start of a longer name: the end of the text, a separator or a character
+/// that cannot continue a file name must follow. On Unix the match is exact.
+/// On Windows it ignores case, treats `\` and `/` alike, and matches the path
+/// after the drive, taking the drive right before it into the match when
+/// present (`C:`, the verbatim `\\?\C:` or Git Bash's `/c`). So
+/// `C:\Users\someone`, `c:/users/someone`, `/c/Users/someone`,
+/// `\\?\C:\Users\someone` and `HOMEPATH`'s `\Users\someone` all become `~`.
 fn hide_home(text: &str, home: &str) -> String {
-    text.replace(home, "~")
+    let (drive, path) = split_drive(home);
+    let path: Vec<char> = path.chars().map(fold).collect();
+    // A home of `/` or `C:\` would replace every separator.
+    if path.len() < 2 {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut index = 0;
+    while index + path.len() <= chars.len() {
+        let end = index + path.len();
+        let found = chars[index..end]
+            .iter()
+            .zip(&path)
+            .all(|(c, want)| fold(*c) == *want)
+            && chars.get(end).is_none_or(|c| !continues_name(*c));
+        if found {
+            let start = index - drive_before(&chars[copied..index], drive);
+            out.extend(&chars[copied..start]);
+            out.push('~');
+            copied = end;
+            index = end;
+        } else {
+            index += 1;
+        }
+    }
+    out.extend(&chars[copied..]);
+    out
 }
 
-/// `text` with every spelling of `home` replaced by `~`: Windows paths ignore
-/// case, and devlanes, Git Bash and programs write them with `/` as well as
-/// `\`. Only the matched prefix is replaced, so the rest keeps its spelling.
+/// Whether `c` can continue a file name component, so a home followed by it is
+/// the start of a longer name (`/home/al` in `/home/alice`).
+fn continues_name(c: char) -> bool {
+    c.is_ascii_alphanumeric() || ".-_".contains(c)
+}
+
+/// How many characters at the end of `before` spell `drive`: `C:`, the
+/// verbatim `\\?\C:` or Git Bash's mount `/c`.
+fn drive_before(before: &[char], drive: Option<char>) -> usize {
+    let Some(drive) = drive else { return 0 };
+    let is_drive = |letter: &char| fold(*letter) == drive;
+    match before {
+        [.., '\\', '\\', '?', '\\', letter, ':'] if is_drive(letter) => 6,
+        [.., letter, ':'] | [.., '/', letter] if is_drive(letter) => 2,
+        _ => 0,
+    }
+}
+
+/// `home` split into its drive letter, folded, and the path after it. Unix
+/// paths have no drive.
+#[cfg(not(windows))]
+fn split_drive(home: &str) -> (Option<char>, &str) {
+    (None, home)
+}
+
+/// `home` split into its drive letter, folded, and the path after it
+/// (`C:\Users\someone` gives `C` and `\Users\someone`).
 #[cfg(windows)]
-fn hide_home(text: &str, home: &str) -> String {
-    /// One character as Windows compares paths.
-    fn fold(c: char) -> char {
-        if c == '/' {
-            return '\\';
+fn split_drive(home: &str) -> (Option<char>, &str) {
+    match home.as_bytes() {
+        [letter, b':', ..] if letter.is_ascii_alphabetic() => {
+            (Some(fold(char::from(*letter))), &home[2..])
         }
-        crate::paths::fold_case(c.encode_utf8(&mut [0; 4]))
-            .chars()
-            .next()
-            .unwrap_or(c)
+        _ => (None, home),
     }
-    let home: Vec<char> = home.chars().map(fold).collect();
-    // Bytes of `rest` that spell the home, if it starts with it.
-    let matched = |rest: &str| {
-        let mut chars = rest.char_indices();
-        for want in &home {
-            match chars.next() {
-                Some((_, c)) if fold(c) == *want => {}
-                _ => return None,
-            }
-        }
-        Some(chars.next().map_or(rest.len(), |(index, _)| index))
-    };
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(c) = rest.chars().next() {
-        if let Some(len) = matched(rest) {
-            out.push('~');
-            rest = &rest[len..];
-        } else {
-            out.push(c);
-            rest = &rest[c.len_utf8()..];
-        }
+}
+
+/// One character as the OS compares paths: unchanged on Unix.
+#[cfg(not(windows))]
+fn fold(c: char) -> char {
+    c
+}
+
+/// One character as Windows compares paths: case folded, and `/` as `\`.
+#[cfg(windows)]
+fn fold(c: char) -> char {
+    if c == '/' {
+        return '\\';
     }
-    out
+    crate::paths::fold_case(c.encode_utf8(&mut [0; 4]))
+        .chars()
+        .next()
+        .unwrap_or(c)
 }
 
 #[cfg(test)]
@@ -333,6 +383,12 @@ mod tests {
     const HOME: &str = "/Users/someone";
     #[cfg(windows)]
     const HOME: &str = r"C:\Users\someone";
+    /// The home's spellings the archive is given: on Windows also its 8.3
+    /// short path.
+    #[cfg(not(windows))]
+    const HOMES: [&str; 1] = [HOME];
+    #[cfg(windows)]
+    const HOMES: [&str; 2] = [HOME, r"C:\Users\SOMEON~1"];
     const SEP: &str = std::path::MAIN_SEPARATOR_STR;
 
     /// One call on a redactor.
@@ -372,7 +428,7 @@ mod tests {
             ("CI_PASS", "1"),
         ];
         let screen = Redactor::screen(vars);
-        let archive = Redactor::archive(vars, Some(Path::new(HOME)));
+        let archive = Redactor::archive(vars, HOMES);
         let text = |text: &str| Call::Text(text.to_owned());
         let log = format!("DEBUG spawning program=fixture-server cwd={HOME}{SEP}src{SEP}acme");
         let rows: Vec<(Call, Value, Value)> = vec![
@@ -446,19 +502,29 @@ mod tests {
                 }),
             ),
         ];
+        // Unchanged on screen, `archived` in the archive.
+        let home_row = |input: &str, archived: &str| (text(input), json!(input), json!(archived));
+        // A longer name that starts with the home is someone else's.
+        let longer = home_row(&format!("{HOME}ice{SEP}x"), &format!("{HOME}ice{SEP}x"));
         #[cfg(not(windows))]
-        let spellings = Vec::new();
+        let spellings = [longer];
         #[cfg(windows)]
-        let spellings = vec![
-            (
-                text(r"log at c:\users\someone\.devlanes\logs\daemon.log"),
-                json!(r"log at c:\users\someone\.devlanes\logs\daemon.log"),
-                json!(r"log at ~\.devlanes\logs\daemon.log"),
+        let spellings = [
+            longer,
+            home_row(
+                r"log at c:\users\someone\.devlanes\logs\daemon.log",
+                r"log at ~\.devlanes\logs\daemon.log",
             ),
-            (
-                text("DEVLANES_LANE_DATA=C:/Users/someone/.devlanes/data/acme/0"),
-                json!("DEVLANES_LANE_DATA=C:/Users/someone/.devlanes/data/acme/0"),
-                json!("DEVLANES_LANE_DATA=~/.devlanes/data/acme/0"),
+            home_row(
+                "DEVLANES_LANE_DATA=C:/Users/someone/.devlanes/data/acme/0",
+                "DEVLANES_LANE_DATA=~/.devlanes/data/acme/0",
+            ),
+            home_row(r"HOMEPATH=\Users\someone", "HOMEPATH=~"),
+            home_row("PWD=/c/Users/someone/src", "PWD=~/src"),
+            home_row(r"opened \\?\C:\Users\someone\x", r"opened ~\x"),
+            home_row(
+                r"TEMP=C:\Users\SOMEON~1\AppData\Local\Temp",
+                r"TEMP=~\AppData\Local\Temp",
             ),
         ];
         for (row, (call, on_screen, in_archive)) in rows.iter().chain(&spellings).enumerate() {
