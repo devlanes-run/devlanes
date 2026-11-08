@@ -15,7 +15,7 @@ hint: devlanes lane gc --yes
 error: acme@2's project file now names project acme-next
 hint: devlanes lane gc --yes
 error: devlanes.prod.yaml and devlanes.yaml both name project acme; change project: in one of them
-error: acme-prod not found; a project from a file other than devlanes.yaml is known once a command names it with --file
+error: acme-prod not found; a project from a file other than devlanes.yaml is known once `start` or `status` names it with --file
 hint: devlanes lane ls
 error: port 5173 is taken by shop@1:web
 hint: devlanes stop shop@1:web

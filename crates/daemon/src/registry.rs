@@ -423,7 +423,7 @@ fn name_taken(name: &str, other: &Path) -> RpcError {
 
 /// `project_ambiguous` (exit 3): `cwd` is in a folder, such as a repository root,
 /// shared by several registered projects and the request named none.
-fn project_ambiguous(cwd: &Path, projects: &[Arc<ProjectRt>]) -> RpcError {
+pub(crate) fn project_ambiguous(cwd: &Path, projects: &[Arc<ProjectRt>]) -> RpcError {
     let mut names: Vec<String> = projects.iter().map(|project| project.name()).collect();
     names.sort();
     RpcError::new(
@@ -434,69 +434,24 @@ fn project_ambiguous(cwd: &Path, projects: &[Arc<ProjectRt>]) -> RpcError {
 }
 
 /// Evaluates a literal-or-expression without lane context (block size, max).
-fn literal<T: Clone + serde::de::DeserializeOwned>(value: &Option<Templated<T>>) -> Option<T> {
+pub(crate) fn literal<T: Clone + serde::de::DeserializeOwned>(
+    value: &Option<Templated<T>>,
+) -> Option<T> {
     value
         .as_ref()
         .and_then(|value| value.evaluate(&ExpressionContext::default()).ok())
 }
 
 impl Inner {
-    /// The request's project: the one `--file` names (registering it), else the one
-    /// `--project` names, else the cwd's ([`Self::project_here`]).
-    pub(crate) async fn project_for(
-        self: &Arc<Self>,
-        context: &devlanes_proto::Context,
-    ) -> Result<Option<Arc<ProjectRt>>, RpcError> {
-        if let Some(file) = &context.file {
-            return self.load_project(file).await.map(Some);
-        }
-        if let Some(name) = &context.project {
-            return self.project_by_name(name).map(Some);
-        }
-        self.project_here(context).await
-    }
-
-    /// The one project of [`Self::projects_here`]; when several share the folder, the
-    /// request's `lane_project` among them, else `project_ambiguous`.
-    pub(crate) async fn project_here(
-        self: &Arc<Self>,
-        context: &devlanes_proto::Context,
-    ) -> Result<Option<Arc<ProjectRt>>, RpcError> {
-        let projects = self.projects_here(context).await?;
-        if projects.len() > 1
-            && let Some(name) = &context.lane_project
-            && let Some(project) = projects.iter().find(|project| project.name() == *name)
-        {
-            return Ok(Some(project.clone()));
-        }
-        Self::one_project(&context.cwd, projects)
-    }
-
-    /// The cwd's projects ([`Self::projects_for_cwd`]), or the request's `lane_project`
-    /// when the cwd is in one of that project's lane folders or in no project. A
-    /// `devlanes.prod.yaml` project's services run where `devlanes.yaml` names another
-    /// project, so there the cwd alone would pick the wrong one.
-    pub(crate) async fn projects_here(
-        self: &Arc<Self>,
-        context: &devlanes_proto::Context,
-    ) -> Result<Vec<Arc<ProjectRt>>, RpcError> {
-        let Some(name) = &context.lane_project else {
-            return self.projects_for_cwd(&context.cwd).await;
-        };
-        if let Some(project) = self.lane_folder_project(name, &context.cwd).await {
-            return Ok(vec![project]);
-        }
-        let projects = self.projects_for_cwd(&context.cwd).await?;
-        if projects.is_empty() {
-            return Ok(vec![self.project_by_name(name)?]);
-        }
-        Ok(projects)
-    }
-
     /// The project named `name` when `cwd` is in the folder of one of its lanes, unless
-    /// a nearer `devlanes.yaml` below that folder, such as a subdirectory project's,
-    /// holds `cwd`.
-    async fn lane_folder_project(&self, name: &str, cwd: &Path) -> Option<Arc<ProjectRt>> {
+    /// `nearest`, the nearest project file above `cwd`, lies below that folder (a
+    /// subdirectory project's).
+    pub(crate) fn lane_folder_project(
+        &self,
+        name: &str,
+        cwd: &Path,
+        nearest: Option<&Path>,
+    ) -> Option<Arc<ProjectRt>> {
         let (project, folder) = self.all_lanes().into_iter().find_map(|(project, lane)| {
             if project.name() != name {
                 return None;
@@ -508,15 +463,7 @@ impl Inner {
             }?;
             path_starts_with(cwd, &folder).then_some((project, folder))
         })?;
-        let nearest = {
-            let cwd = cwd.to_path_buf();
-            tokio::task::spawn_blocking(move || devlanes_config::find_project_file(&cwd))
-                .await
-                .ok()?
-                .ok()?
-        };
         nearest
-            .as_deref()
             .and_then(Path::parent)
             .is_none_or(|dir| path_starts_with(&folder, dir))
             .then_some(project)
@@ -525,86 +472,39 @@ impl Inner {
     /// The registered project named `name`; `not_found` says how a project file other
     /// than `devlanes.yaml` gets registered.
     pub(crate) fn project_by_name(&self, name: &str) -> Result<Arc<ProjectRt>, RpcError> {
+        self.known_project(name)
+            .ok_or_else(|| self.unknown_project(name))
+    }
+
+    /// The registered project named `name`.
+    pub(crate) fn known_project(&self, name: &str) -> Option<Arc<ProjectRt>> {
         self.all_projects()
             .into_iter()
             .find(|project| project.name() == name)
-            .ok_or_else(|| {
-                let mut names: Vec<String> = self.all_projects().iter().map(|p| p.name()).collect();
-                names.sort();
-                RpcError::new(
-                    "not_found",
-                    json!({
-                        "reference": name,
-                        "candidates": names,
-                        "hint": "a project in a file other than devlanes.yaml is registered \
-                                 the first time a command names its file with --file",
-                    }),
-                    3,
-                )
-            })
     }
 
-    /// Registers the project named `name` from the request's `--file`, else from the
-    /// nearest `devlanes.yaml` above the cwd, when that file names it. A file naming
-    /// another project stays unregistered, so a mistyped reference cannot bring back
-    /// a project `lane clean` forgot.
-    pub(crate) async fn register_named(
-        self: &Arc<Self>,
-        name: &str,
-        context: &devlanes_proto::Context,
-    ) {
-        let file = match &context.file {
-            Some(file) => file.clone(),
-            None if context.cwd.as_os_str().is_empty() => return,
-            None => {
-                let cwd = context.cwd.clone();
-                match tokio::task::spawn_blocking(move || {
-                    devlanes_config::search_project_file(&cwd)
-                })
-                .await
-                {
-                    Ok(Ok(devlanes_config::ConfigSearch::Found(file))) => file,
-                    _ => return,
-                }
-            }
-        };
-        let dir = file.parent().map(Path::to_path_buf).unwrap_or_default();
-        let Some(file_name) = file.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-            return;
-        };
-        let (state, _) = load_config(dir.clone(), dir, file_name, self.config_checks()).await;
-        if matches!(state, ConfigState::Loaded(config) if config.project == name) {
-            let _ = self.load_project(&file).await;
-        }
+    /// `not_found` for a project name the daemon does not know, listing the ones it
+    /// does.
+    pub(crate) fn unknown_project(&self, name: &str) -> RpcError {
+        let mut names: Vec<String> = self.all_projects().iter().map(|p| p.name()).collect();
+        names.sort();
+        RpcError::new(
+            "not_found",
+            json!({
+                "reference": name,
+                "candidates": names,
+                "hint": "a project in a file other than devlanes.yaml is known once \
+                         `start` or `status` names its file with --file",
+            }),
+            3,
+        )
     }
 
-    /// The project of the nearest `devlanes.yaml` above `cwd` (registered on first
-    /// use). Without one, the projects of the deepest lanes holding `cwd`
-    /// ([`Self::projects_holding`]): a project file below the worktree root seen from
-    /// above it, or a worktree whose file is gone.
-    async fn projects_for_cwd(
-        self: &Arc<Self>,
-        cwd: &Path,
-    ) -> Result<Vec<Arc<ProjectRt>>, RpcError> {
-        if cwd.as_os_str().is_empty() {
-            return Ok(Vec::new());
-        }
-        let search = {
-            let cwd = cwd.to_path_buf();
-            tokio::task::spawn_blocking(move || devlanes_config::search_project_file(&cwd))
-                .await
-                .map_err(|error| internal("io", error))?
-                .map_err(|error| internal("io", error))?
-        };
-        let file = match search {
-            devlanes_config::ConfigSearch::Found(file) => file,
-            devlanes_config::ConfigSearch::Missing { .. } => {
-                return Ok(self.projects_holding(cwd));
-            }
-        };
-        // A lane read from this file answers without parsing it again, once its stamp
-        // shows no edit; an invalid file still finds its lane, so `status`, `stop` and
-        // `logs` keep working. One that now names another project does not.
+    /// The project whose lane reads the `devlanes.yaml` `file`, answered without
+    /// parsing it again once its stamp shows no edit. An invalid file still finds
+    /// its lane, so `status`, `stop` and `logs` keep working; one that now names
+    /// another project does not.
+    pub(crate) async fn project_reading(self: &Arc<Self>, file: &Path) -> Option<Arc<ProjectRt>> {
         let dir = file.parent().unwrap_or(Path::new(""));
         for (project, lane) in self.all_lanes() {
             let (config_dir, config_file) = project.config_path();
@@ -620,10 +520,10 @@ impl Inner {
             }
             self.fresh_config(&project, &lane).await;
             if !matches!(lane.st().config, ConfigState::Elsewhere(_)) {
-                return Ok(vec![project]);
+                return Some(project);
             }
         }
-        Ok(vec![self.load_project(&file).await?])
+        None
     }
 
     /// The projects of the deepest present lanes whose worktree holds `cwd`, preferring
@@ -688,26 +588,12 @@ impl Inner {
         projects
     }
 
-    /// At most one of `projects`, the cwd's ([`Self::projects_here`]); several, at a
-    /// folder shared by several projects, are `project_ambiguous` rather than a pick.
-    fn one_project(
-        cwd: &Path,
-        mut projects: Vec<Arc<ProjectRt>>,
-    ) -> Result<Option<Arc<ProjectRt>>, RpcError> {
-        match projects.len() {
-            0 | 1 => Ok(projects.pop()),
-            _ => Err(project_ambiguous(cwd, &projects)),
-        }
-    }
-
-    /// Registers the project a project file names, or returns it when known. Projects
-    /// are identified by name: another repository that uses the name is refused, and so
-    /// is a second file in this repository naming the same project while the first
-    /// still does.
-    pub(crate) async fn load_project(
-        self: &Arc<Self>,
+    /// Parses the project file `config_file` once, with what it extends and its local
+    /// overlay: its config, or the error that keeps it from loading.
+    pub(crate) async fn parse_project_file(
+        &self,
         config_file: &Path,
-    ) -> Result<Arc<ProjectRt>, RpcError> {
+    ) -> Result<Arc<ProjectConfig>, RpcError> {
         if devlanes_config::is_local_overlay(config_file) {
             return Err(RpcError::new(
                 "bad_request",
@@ -728,22 +614,171 @@ impl Inner {
             .unwrap_or_else(|| devlanes_config::DEFAULT_PROJECT_FILE.to_owned());
         let (state, _) = load_config(
             config_dir.clone(),
-            config_dir.clone(),
-            file_name.clone(),
+            config_dir,
+            file_name,
             self.config_checks(),
         )
         .await;
-        let config = match state {
-            ConfigState::Loaded(config) => config,
-            ConfigState::Invalid(error) => return Err(error),
-            ConfigState::Missing | ConfigState::Elsewhere(_) => {
-                return Err(RpcError::new(
-                    "not_found",
-                    json!({"reference": config_file}),
-                    3,
-                ));
-            }
+        match state {
+            ConfigState::Loaded(config) => Ok(config),
+            ConfigState::Invalid(error) => Err(error),
+            ConfigState::Missing | ConfigState::Elsewhere(_) => Err(RpcError::new(
+                "not_found",
+                json!({"reference": config_file}),
+                3,
+            )),
+        }
+    }
+
+    /// Brings the registered `project` up to date with `config_file`, a project file
+    /// that names it: its repository, the file's place and the worktree list. Another
+    /// repository using the name is refused, and so is a second file in this
+    /// repository naming the project while the first still does.
+    pub(crate) async fn sync_known(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        config_file: &Path,
+        config: &ProjectConfig,
+    ) -> Result<(), RpcError> {
+        let checkout = Checkout::of(config_file, config).await?;
+        let registering = self.registering.lock().await;
+        self.follow_checkout(project, config_file, &checkout)
+            .await?;
+        drop(registering);
+        self.sync_worktrees(project, checkout.trees).await?;
+        Ok(())
+    }
+
+    /// Registers the project `config_file` names: the explicit step of the methods
+    /// whose policy registers. Falls back to [`Self::sync_known`] when another request
+    /// registered the name first.
+    pub(crate) async fn register_file(
+        self: &Arc<Self>,
+        config_file: &Path,
+        config: &ProjectConfig,
+    ) -> Result<Arc<ProjectRt>, RpcError> {
+        let checkout = Checkout::of(config_file, config).await?;
+        let name = config.project.clone();
+        // Serializes registration so two first requests cannot both create the project.
+        let registering = self.registering.lock().await;
+        if let Some(project) = self.known_project(&name) {
+            self.follow_checkout(&project, config_file, &checkout)
+                .await?;
+            drop(registering);
+            self.sync_worktrees(&project, checkout.trees).await?;
+            return Ok(project);
+        }
+        let Checkout {
+            repository,
+            root,
+            common_dir,
+            primary_branch,
+            relative,
+            file_name,
+            trees,
+        } = checkout;
+        let record = self
+            .store
+            .upsert_project(ProjectInput {
+                name: name.clone(),
+                common_dir: common_dir.clone(),
+                root_path: root.clone(),
+                primary_branch: primary_branch.clone(),
+            })
+            .await
+            .map_err(store_error)?;
+        self.store
+            .set_project_config(record.id, relative.clone(), file_name.clone())
+            .await
+            .map_err(store_error)?;
+        let project = self
+            .register_project(
+                record.id,
+                name,
+                root,
+                common_dir,
+                primary_branch,
+                (relative, file_name),
+            )
+            .await?;
+        drop(registering);
+        self.sync_worktrees(&project, trees).await?;
+        self.watch_project(&project, repository).await;
+        Ok(project)
+    }
+
+    /// Points the registered `project` at `checkout`, the repository and place of
+    /// `config_file`, which names it. Called under `registering`.
+    async fn follow_checkout(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        config_file: &Path,
+        checkout: &Checkout,
+    ) -> Result<(), RpcError> {
+        let identity = checkout
+            .common_dir
+            .clone()
+            .unwrap_or_else(|| checkout.root.clone());
+        let (known_root, known_identity) = {
+            let st = project.st();
+            (
+                st.root.clone(),
+                st.common_dir.clone().unwrap_or_else(|| st.root.clone()),
+            )
         };
+        if !same_path(&known_identity, &identity) {
+            let gone = !tokio::fs::try_exists(&known_root).await.unwrap_or(true);
+            if !gone {
+                return Err(name_taken(&project.name(), &known_root));
+            }
+            // The repository moved: the name follows it.
+            self.adopt_repository(
+                project,
+                &checkout.root,
+                checkout.common_dir.clone(),
+                &checkout.primary_branch,
+            )
+            .await?;
+        }
+        let (known_dir, known_file) = project.config_path();
+        if known_dir != checkout.relative || known_file != checkout.file_name {
+            self.move_config(
+                project,
+                config_file,
+                &checkout.root,
+                &checkout.relative,
+                &checkout.file_name,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+}
+
+/// The repository a project file sits in, as registration records it.
+struct Checkout {
+    repository: Option<devlanes_git::Repository>,
+    root: PathBuf,
+    common_dir: Option<PathBuf>,
+    primary_branch: String,
+    /// The file's folder below `root`.
+    relative: PathBuf,
+    file_name: String,
+    trees: Vec<Tree>,
+}
+
+impl Checkout {
+    /// Asks git about the folder of `config_file`; outside a repository the folder
+    /// is the project's only worktree.
+    async fn of(config_file: &Path, config: &ProjectConfig) -> Result<Self, RpcError> {
+        let config_dir = config_file
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let file_name = config_file
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| devlanes_config::DEFAULT_PROJECT_FILE.to_owned());
         let repository = devlanes_git::discover(&config_dir, config.lanes.primary.as_deref())
             .await
             .map_err(|error| internal("git_failed", error))?;
@@ -778,66 +813,19 @@ impl Inner {
                 }],
             ),
         };
-        let identity = common_dir.clone().unwrap_or_else(|| root.clone());
-        let name = config.project.clone();
-        // Serializes registration so two first requests cannot both create the project.
-        let _registering = self.registering.lock().await;
-        if let Some(project) = self.all_projects().into_iter().find(|p| p.name() == name) {
-            let (known_root, known_identity) = {
-                let st = project.st();
-                (
-                    st.root.clone(),
-                    st.common_dir.clone().unwrap_or_else(|| st.root.clone()),
-                )
-            };
-            if !same_path(&known_identity, &identity) {
-                let gone = !tokio::fs::try_exists(&known_root).await.unwrap_or(true);
-                if !gone {
-                    return Err(name_taken(&name, &known_root));
-                }
-                // The repository moved: the name follows it.
-                self.adopt_repository(&project, &root, common_dir.clone(), &primary_branch)
-                    .await?;
-            }
-            let (known_dir, known_file) = project.config_path();
-            if known_dir != relative || known_file != file_name {
-                self.move_config(&project, config_file, &root, &relative, &file_name)
-                    .await?;
-            }
-            drop(_registering);
-            self.sync_worktrees(&project, trees).await?;
-            return Ok(project);
-        }
-        let record = self
-            .store
-            .upsert_project(ProjectInput {
-                name: name.clone(),
-                common_dir: common_dir.clone(),
-                root_path: root.clone(),
-                primary_branch: primary_branch.clone(),
-            })
-            .await
-            .map_err(store_error)?;
-        self.store
-            .set_project_config(record.id, relative.clone(), file_name.clone())
-            .await
-            .map_err(store_error)?;
-        let project = self
-            .register_project(
-                record.id,
-                name,
-                root,
-                common_dir,
-                primary_branch,
-                (relative, file_name),
-            )
-            .await?;
-        drop(_registering);
-        self.sync_worktrees(&project, trees).await?;
-        self.watch_project(&project, repository).await;
-        Ok(project)
+        Ok(Self {
+            repository,
+            root,
+            common_dir,
+            primary_branch,
+            relative,
+            file_name,
+            trees,
+        })
     }
+}
 
+impl Inner {
     /// Points a project at the repository it now lives in, after the one it was
     /// registered from is gone.
     async fn adopt_repository(
@@ -1767,7 +1755,7 @@ impl Inner {
             st.branch.clone(),
         )
         .with_project_dir(&config_dir)
-        .with_domain_suffix(self.domain_suffix(&st.config)))
+        .with_domain_suffix(self.domain_suffix(st.config.loaded().map(AsRef::as_ref))))
     }
 
     /// `<data root>/<project>`, holding the data folders of the project's lanes.
@@ -2179,10 +2167,41 @@ impl Inner {
         let dotenv = read_dotenv(lane_dir, primary_dir).await;
         let client_env = env.map(|env| (*env).clone()).unwrap_or_default();
         let infra = infra_ns.unwrap_or(Value::Null);
-        let mut input = ResolveInput::new(&config, &facts, allocation.block, &allocation.offsets);
-        input.client_env = &client_env;
-        input.dotenv = &dotenv;
-        input.infra = &infra;
+        let view = self.view_of(
+            &config,
+            &facts,
+            (allocation.block, &allocation.offsets),
+            (&client_env, &dotenv, &infra),
+            lanes_main,
+        )?;
+        let reference = lane.st().reference(&project.name());
+        let own = crate::external::lane_ports(
+            &reference,
+            view.services
+                .iter()
+                .map(|service| (service.name.as_str(), service.port, &service.ports)),
+            &infra,
+        );
+        if let Some(error) = self.external_conflict(&config, lane, own) {
+            return Err(error);
+        }
+        Ok(view)
+    }
+
+    /// Layout of a lane with `facts`, its port block and offsets, and its client
+    /// env, `.env` and infra endpoints. Stores and reserves nothing.
+    pub(crate) fn view_of(
+        &self,
+        config: &ProjectConfig,
+        facts: &LaneFacts,
+        (block, offsets): (devlanes_core::ports::PortBlock, &BTreeMap<PortName, u16>),
+        (client_env, dotenv, infra): (&EnvMap, &EnvMap, &Value),
+        lanes_main: Option<&Value>,
+    ) -> Result<LaneView, RpcError> {
+        let mut input = ResolveInput::new(config, facts, block, offsets);
+        input.client_env = client_env;
+        input.dotenv = dotenv;
+        input.infra = infra;
         input.lanes_main = lanes_main;
         input.contributors = &self.integ.contributors;
         input.ca_env = &self.integ.ca_env;
@@ -2209,36 +2228,18 @@ impl Inner {
             })
             .collect();
         let infra_routes = infra_routes(
-            &config,
-            &facts,
-            &layout,
-            &infra,
-            &client_env,
-            &dotenv,
-            https_port,
+            config, facts, &layout, infra, client_env, dotenv, https_port,
         );
-        let reference = lane.st().reference(&project.name());
-        let own = crate::external::lane_ports(
-            &reference,
-            layout
-                .services
-                .values()
-                .map(|service| (service.name.as_str(), service.port, &service.ports)),
-            &infra,
-        );
-        if let Some(error) = self.external_conflict(&config, lane, own) {
-            return Err(error);
-        }
         let externals = crate::external::external_infos(
-            &config,
+            config,
             &lane_context(
-                &facts,
+                facts,
                 &layout.domain,
                 layout.port,
                 &layout.vars,
-                &infra,
-                &client_env,
-                &dotenv,
+                infra,
+                client_env,
+                dotenv,
             ),
             https_port,
         );
@@ -2249,7 +2250,7 @@ impl Inner {
             domain: layout.domain.clone(),
             port: layout.port,
             vars: layout.vars.clone(),
-            block: (allocation.block.start, allocation.block.size),
+            block: (block.start, block.size),
             services,
             routes: layout.routes.clone(),
             infra_routes,
@@ -2572,7 +2573,7 @@ pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
 }
 
 /// Converts git's view of a worktree.
-fn tree(worktree: &devlanes_git::Worktree) -> Tree {
+pub(crate) fn tree(worktree: &devlanes_git::Worktree) -> Tree {
     Tree {
         identity: worktree.identity.clone(),
         path: worktree.path.clone(),
