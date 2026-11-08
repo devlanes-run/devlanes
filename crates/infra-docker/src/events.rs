@@ -128,8 +128,8 @@ pub enum WatchEvent {
     Ended,
     /// The stream was subscribed again. Events between the two subscriptions
     /// may be lost, so callers read the state they keep again. Docker's own
-    /// replay (`since`) holds the last 256 events of every type in total, so
-    /// it could not prove the gap complete and is not used.
+    /// replay (`since`) holds the last 256 engine events in total, across all
+    /// types, so it could not prove the gap complete and is not used.
     Reconnected,
 }
 
