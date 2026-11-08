@@ -663,6 +663,10 @@ impl<E: Extensions> Planner<'_, '_, E> {
             files,
             mut notes,
         } = draft;
+        // What a script runner sets for the script itself (npm's package
+        // variables and `.bin` directories on Windows).
+        let mut script_env = BTreeMap::new();
+        let mut script_path = Vec::new();
         let (argv, cwd) = match drafted {
             DraftCommand::Shell(text) => {
                 let text = if args.is_empty() {
@@ -701,6 +705,8 @@ impl<E: Extensions> Planner<'_, '_, E> {
                 let runner = script.as_ref().map_or("run_script", |s| s.runner);
                 notes.extend(plan.detail.map(|detail| format!("{runner}: {detail}")));
                 notes.extend(plan.notes);
+                script_env = plan.env;
+                script_path = plan.path;
                 (plan.argv, plan.cwd)
             }
         };
@@ -713,14 +719,16 @@ impl<E: Extensions> Planner<'_, '_, E> {
         for key in &remove {
             client.remove(&devlanes_core::env::fold_name(key.clone()));
         }
-        let mut devlanes = self.devlanes.clone();
+        // The script's variables sit with devlanes' own, which win over them.
+        let mut devlanes = script_env;
+        devlanes.extend(self.devlanes.clone());
         if let (UnitKind::Service, Some(layout)) = (spec.kind, spec.layout) {
             devlanes.insert("PORT".into(), layout.port.to_string());
             devlanes.insert("HOST".into(), "127.0.0.1".into());
             devlanes.insert("DEVLANES_SERVICE".into(), layout.name.clone());
             devlanes.insert("DEVLANES_ORIGINS".into(), self.origins.clone());
         }
-        let env = assemble([
+        let mut env = assemble([
             (EnvLayer::Client, client),
             (EnvLayer::Contributor, contributed),
             (EnvLayer::Devlanes, devlanes),
@@ -729,6 +737,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
             (EnvLayer::Profile, profile),
             (EnvLayer::Override, input.overrides.clone()),
         ]);
+        prepend_path(&mut env, &script_path);
         Ok(Launch {
             program: program.clone(),
             args: rest.to_vec(),
@@ -1210,6 +1219,25 @@ fn ready(
         check: spec,
         timeout: timeout.unwrap_or(DEFAULT_READY_TIMEOUT),
     })
+}
+
+/// Puts `dirs` in front of `env`'s `PATH`, in order; without a `PATH` they
+/// become it, from the devlanes layer.
+fn prepend_path(env: &mut devlanes_core::env::Environment, dirs: &[PathBuf]) {
+    if dirs.is_empty() {
+        return;
+    }
+    let key = devlanes_core::env::fold_name("PATH".to_owned());
+    let current = env.values.get(&key).map(std::env::split_paths);
+    let joined = std::env::join_paths(dirs.iter().cloned().chain(current.into_iter().flatten()));
+    match joined {
+        Ok(joined) => {
+            env.values
+                .insert(key.clone(), joined.to_string_lossy().into_owned());
+            env.sources.entry(key).or_insert(EnvLayer::Devlanes);
+        }
+        Err(error) => tracing::warn!(%error, "a script directory cannot go on PATH"),
+    }
 }
 
 /// Adds the `stop_signal_mapped` note when the config names a signal that

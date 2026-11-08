@@ -1,6 +1,6 @@
 # devlanes-shell-windows
 
-Finds Git for Windows' `sh.exe`, which runs `run:` strings and `ready.cmd` on Windows in place of `/bin/sh`, and builds its environment and command line. The binary looks the shell up once at daemon start; `devlanes-runner-windows` and the daemon's readiness checks start it. It is a crate of its own because both of those need it and neither may depend on the other. On other platforms the crate is empty.
+Finds Git for Windows' `sh.exe`, which runs `run:` strings and `ready.cmd` on Windows in place of `/bin/sh`, and builds its environment and command line. The binary looks the shell up once at daemon start; `devlanes-runner-windows` and the daemon's readiness checks start it. It is a crate of its own because both of those, and `devlanes-run-script-npm`, need it and none may depend on the others. On other platforms the crate is empty.
 
 ## Usage
 
@@ -21,6 +21,7 @@ async fn command_line() -> Option<std::ffi::OsString> {
 - `shell_env(env, shell)`: sets `MSYS_NO_PATHCONV` and `MSYS2_ARG_CONV_EXCL` and appends the shell's `usr\bin` to `PATH`.
 - `shell_command_line(shell, script)`: `"<shell>" "-c" "<script>"`, quoted for the MSYS2 runtime.
 - `quote_msys(arg)`: one argument quoted for the MSYS2 runtime's parser.
+- `quote_for_cmd(arg)`: one argument quoted for a `cmd.exe` command line, as std quotes batch file arguments; `runner-windows` and the npm script runner use it.
 
 ## MSYS2 and Cygwin
 

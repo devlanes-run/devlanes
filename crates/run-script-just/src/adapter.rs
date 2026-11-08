@@ -51,6 +51,8 @@ impl ScriptRunner for JustRecipes {
             body: None,
             notes: Vec::new(),
             detail: None,
+            env: Default::default(),
+            path: Vec::new(),
         })
     }
 }

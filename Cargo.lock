@@ -1852,6 +1852,9 @@ version = "0.6.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
+ "devlanes-runner-windows",
+ "devlanes-shell-windows",
+ "devlanes-sys-windows",
  "insta",
  "serde",
  "serde_json",
