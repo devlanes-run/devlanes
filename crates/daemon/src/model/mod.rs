@@ -22,6 +22,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::units::{UnitHost, UnitState};
 
+mod lane_infra;
+
+pub(crate) use lane_infra::{CurrentInfra, EventEffect, InfraRead, LaneInfra};
+
 /// Client environments; values may hold tokens and stay in memory.
 pub(crate) type EnvMap = BTreeMap<String, String>;
 
@@ -319,18 +323,8 @@ pub(crate) struct LaneSt {
     pub busy: Option<&'static str>,
     pub view: Option<Arc<LaneView>>,
     pub allocation: Option<Allocation>,
-    pub infra_ns: Option<Value>,
-    /// Running containers behind `infra_ns`, for Docker stats.
-    pub infra_containers: Vec<crate::integrations::InfraContainer>,
-    /// Stored containers (by namespace key) that went from down to running since
-    /// `infra_ns` was written, with a count bumped on every such restart. Their
-    /// published ports may have changed; see [`crate::infra_restarts`].
-    pub infra_restarted: BTreeMap<String, u64>,
-    /// A background refresh of the restarted containers is scheduled.
-    pub infra_refresh_queued: bool,
-    /// Bumped whenever `infra_ns` is written or cleared as a whole, so a partial
-    /// refresh that read Docker before that drops its result.
-    pub infra_generation: u64,
+    /// The lane's live infra; written only through the `*_infra` methods.
+    infra: LaneInfra,
     pub setup_env: EnvMap,
     /// Why the last layout of the lane (`view`) did not resolve, such as a
     /// `lanes.vars` value with no value here. The next layout that resolves
@@ -550,11 +544,7 @@ impl LaneSt {
             busy: None,
             view: None,
             allocation: None,
-            infra_ns: None,
-            infra_containers: Vec::new(),
-            infra_restarted: BTreeMap::new(),
-            infra_refresh_queued: false,
-            infra_generation: 0,
+            infra: LaneInfra::default(),
             setup_env: EnvMap::new(),
             view_error: None,
             last_error: None,
@@ -688,23 +678,107 @@ impl LaneSt {
         self.any_alive() || !self.orphans.is_empty()
     }
 
-    /// Stores the lane's infra containers. A claim counts as having run
-    /// something once one of them holds a port of the lane.
-    pub(crate) fn store_containers(
+    /// The lane's live infra.
+    pub(crate) fn infra(&self) -> &LaneInfra {
+        &self.infra
+    }
+
+    /// Stores a full read ([`LaneInfra::replace`]). Returns whether the
+    /// namespace changed.
+    pub(crate) fn replace_infra(&mut self, read: InfraRead) -> bool {
+        let changed = self.infra.replace(read);
+        self.claim_containers();
+        changed
+    }
+
+    /// Stores `keys` of a read ([`LaneInfra::merge`]). Returns whether the
+    /// namespace changed.
+    pub(crate) fn merge_infra(&mut self, read: &InfraRead, keys: &BTreeSet<String>) -> bool {
+        let changed = self.infra.merge(read, keys);
+        self.claim_containers();
+        changed
+    }
+
+    /// Keeps the declared names of a lane whose infra never ran.
+    pub(crate) fn note_infra_declared(&mut self, declared: BTreeSet<String>) {
+        self.infra.note_declared(declared);
+    }
+
+    /// Records observations ([`LaneInfra::apply_observed`]). Returns the keys
+    /// that run with other runs than stored.
+    pub(crate) fn apply_infra_observed(
+        &mut self,
+        observed: &BTreeMap<String, crate::integrations::Observation>,
+        began: tokio::time::Instant,
+    ) -> BTreeSet<String> {
+        self.infra.apply_observed(observed, began)
+    }
+
+    /// `keys` were asked about and got no answer.
+    pub(crate) fn infra_unanswered(
+        &mut self,
+        keys: &BTreeSet<String>,
+        began: tokio::time::Instant,
+    ) {
+        self.infra.mark_unknown(keys, began);
+    }
+
+    /// Stores the lane's infra containers alone, such as the ones a failed
+    /// `up` left running.
+    pub(crate) fn store_infra_containers(
         &mut self,
         containers: Vec<crate::integrations::InfraContainer>,
     ) {
-        if self.claiming > 0 && containers.iter().any(|container| container.holds_port()) {
-            self.claim_ran = true;
-        }
-        self.infra_containers = containers;
+        self.infra.store_containers(containers);
+        self.claim_containers();
     }
 
-    /// Records that `infra_ns` was written or cleared as a whole: the containers'
-    /// ports are current again, and partial refreshes in flight are dropped.
-    pub(crate) fn infra_replaced(&mut self) {
-        self.infra_generation += 1;
-        self.infra_restarted.clear();
+    /// Applies a container event ([`LaneInfra::apply_event`]).
+    pub(crate) fn apply_infra_event(
+        &mut self,
+        event: &crate::integrations::InfraEvent,
+        now: tokio::time::Instant,
+    ) -> EventEffect {
+        self.infra.apply_event(event, now)
+    }
+
+    /// Events may have been lost: every key of a lane that stores its infra is
+    /// checked again. Returns whether the lane stores its infra.
+    pub(crate) fn suspect_all_infra(&mut self, now: tokio::time::Instant) -> bool {
+        self.infra.suspect_all(now)
+    }
+
+    /// Confirms `runs` of `key` healthy.
+    pub(crate) fn mark_infra_settled(
+        &mut self,
+        key: &str,
+        runs: &[crate::integrations::ContainerRun],
+    ) {
+        self.infra.mark_settled(key, runs);
+    }
+
+    /// Schedules the background infra refresh unless one is scheduled.
+    pub(crate) fn queue_infra_refresh(&mut self) -> bool {
+        self.infra.queue_refresh()
+    }
+
+    /// The scheduled infra refresh started.
+    pub(crate) fn infra_refresh_taken(&mut self) {
+        self.infra.refresh_taken();
+    }
+
+    /// A claim counts as having run something once one of the lane's
+    /// containers holds a port of the lane.
+    fn claim_containers(&mut self) {
+        if self.claiming > 0
+            && self
+                .infra
+                .containers()
+                .iter()
+                .any(|container| container.holds_port())
+        {
+            self.claim_ran = true;
+        }
     }
 
     /// `ports_pending` and `host_conflict` warnings for the lane's summary.
@@ -901,9 +975,6 @@ pub(crate) struct LaneRt {
     /// Held while a start checks and runs setup entries, so two starts never
     /// run the same entry at once.
     pub setup: tokio::sync::Mutex<()>,
-    /// Held by a partial refresh of restarted containers across its Docker read
-    /// and its merge, so two of them never finish out of order.
-    pub infra_refresh: tokio::sync::Mutex<()>,
 }
 
 impl LaneRt {
@@ -1643,7 +1714,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
 /// Containers from the lane's infra namespace (`{name: {port, ports}}`), set while
 /// its infra is up, with `infra.hidden` applied.
 pub(crate) fn container_summaries(lane: &LaneSt) -> Vec<devlanes_proto::ContainerSummary> {
-    let Some(Value::Object(namespace)) = &lane.infra_ns else {
+    let Some(namespace) = lane.infra().namespace() else {
         return Vec::new();
     };
     let hidden: &[String] = lane
@@ -1681,13 +1752,15 @@ pub(crate) fn container_summaries(lane: &LaneSt) -> Vec<devlanes_proto::Containe
                 hidden: hidden.contains(name),
                 color: Some(derived_color(lane, name)),
                 shared: lane
-                    .infra_containers
+                    .infra()
+                    .containers()
                     .iter()
                     .any(|container| &container.name == name && container.shared),
                 cpu_percent: None,
                 memory_bytes: None,
                 state: lane
-                    .infra_containers
+                    .infra()
+                    .containers()
                     .iter()
                     .filter(|container| &container.name == name)
                     .filter_map(|container| container.state.clone())
