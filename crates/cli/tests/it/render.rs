@@ -360,11 +360,11 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 vec![unit("api", "ready"), pgadmin],
             )])
         }),
-        // An exec command in progress reads `running` in every text mode.
         ("status_exec", Method::Status, {
-            let mut docs = unit("docs", "ready");
+            let mut docs = unit("docs", "running");
             docs["kind"] = json!("exec");
-            docs["ready_check"] = json!("started");
+            docs["cpu_percent"] = json!(4.5);
+            docs["memory_bytes"] = json!(150_000_000);
             docs["urls"] = json!([]);
             docs["ports"] = json!({});
             page(vec![lane(
@@ -497,9 +497,8 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             json!({"cleaned": [], "kept_running": ["acme@3", "acme@4"], "offsets_removed": 0}),
         ),
         ("exec", Method::Exec, {
-            let mut exec = unit("probe", "ready");
+            let mut exec = unit("probe", "running");
             exec["kind"] = json!("exec");
-            exec["ready_check"] = json!("started");
             exec["urls"] = json!([]);
             exec["ports"] = json!({});
             exec["left_out"] = json!([{"key": "DATABASE_URL", "infra": "postgres"}]);

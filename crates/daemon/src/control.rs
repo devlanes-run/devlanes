@@ -31,7 +31,7 @@ use crate::{
     model::{EnvMap, Kind, LaneRt, ProjectRt, is_mine, lane_summary, lock, unit_summary},
     registry::{internal, store_error},
     stream::LaneEvents,
-    units::UnitHost,
+    units::{RunGoal, UnitHost},
 };
 
 /// `resume` parameters.
@@ -1114,8 +1114,7 @@ impl Inner {
             color: None,
             sync: Vec::new(),
             display_name: None,
-            // An exec unit has no readiness probe: alive is ready.
-            ready_check: Some("started"),
+            goal: RunGoal::Exit,
             role: "exec",
             keep_awake: false,
             fingerprint: None,
@@ -1124,9 +1123,8 @@ impl Inner {
         // Held until the unit is recorded, so a clean or reset that begins meanwhile
         // waits and then stops it, or refuses it once the lane is released.
         let (adhoc, _) = lane.enter_adhoc(&self.shutdown).await;
-        let (host, _) = self.spawn_unit(&project, &lane, request).await?;
+        self.spawn_unit(&project, &lane, request).await?;
         drop(adhoc);
-        host.set_state(crate::units::UnitState::Ready);
         let mut st = lane.st();
         let summary = match st.units.get_mut(&args.name) {
             Some(rec) => {

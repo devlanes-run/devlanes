@@ -33,25 +33,13 @@ fn unit_label(unit: &UnitSummary, cx: &Ctx<'_>) -> String {
 }
 
 /// The state word people see ([`UnitSummary::shown_state`]: `running`, `frozen`,
-/// `throttled`); other modes keep the protocol word, which scripts match, except
-/// `running` for an exec command (see [`runs_unprobed`]).
+/// `throttled`); other modes keep the protocol word, which scripts match.
 fn state_word<'a>(unit: &'a UnitSummary, cx: &Ctx<'_>) -> &'a str {
     if cx.human() {
         unit.shown_state()
-    } else if runs_unprobed(unit, cx) {
-        "running"
     } else {
         &unit.state
     }
-}
-
-/// Whether text output shows a `ready` unit as `running`: an exec command in every
-/// text mode, since it is ready only by being alive and `wait` waits for its exit;
-/// for people also any unit whose readiness is only that its process started.
-/// JSON keeps `ready`.
-fn runs_unprobed(unit: &UnitSummary, cx: &Ctx<'_>) -> bool {
-    unit.state == "ready"
-        && (unit.kind == "exec" || (cx.human() && unit.ready_check.as_deref() == Some("started")))
 }
 
 /// The state word, with the queue place for queued units (`queued 6/40`). People
@@ -90,14 +78,9 @@ fn orphan_note(unit: &UnitSummary) -> String {
 /// Agent line for one unit: `state lane:unit exit=N urls ports actor=`.
 pub(crate) fn unit_line(unit: &UnitSummary, cx: &Ctx<'_>) -> String {
     // Never the power word: the line keeps `ready` first and adds `power=` below.
-    let state = if runs_unprobed(unit, cx) {
-        "running"
-    } else {
-        &unit.state
-    };
     let mut line = format!(
         "{} {}:{}",
-        cx.state(&clean(&state.to_lowercase())),
+        cx.state(&clean(&unit.state.to_lowercase())),
         clean(&unit.lane),
         cx.unit_name(&clean(&unit.name), &unit.state, unit.color.as_deref())
     );

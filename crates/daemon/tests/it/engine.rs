@@ -1444,7 +1444,7 @@ async fn stop_mine_filters_by_actor() {
             .iter()
             .find(|u| u.name == "human-job")
             .expect("human job");
-        assert_eq!(human.state, "ready");
+        assert_eq!(human.state, "running");
         h.close().await;
     })
     .await
@@ -1515,7 +1515,7 @@ async fn stop_mine_stays_in_the_project() {
             .expect_err("unloadable project");
         assert_eq!(error.code, "config_error");
         let all = status(&h, cx(&root), json!({"all": true})).await;
-        assert_eq!(job_state(all, "beta@0").as_deref(), Some("ready"));
+        assert_eq!(job_state(all, "beta@0").as_deref(), Some("running"));
         let named = Context {
             project: Some("beta".into()),
             ..mine(&alpha)

@@ -31,15 +31,39 @@ const LOG_TICK: Duration = Duration::from_millis(devlanes_logs::PARTIAL_FLUSH_MS
 /// prompt waiting for input shows in the log.
 const PAUSE: Duration = Duration::from_millis(devlanes_logs::PARTIAL_FLUSH_MS);
 
+/// What a run is waiting for, fixed at spawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunGoal {
+    /// A service: ready once its check passes. The check word (`started`, `tcp`,
+    /// `http`, `log`, `cmd`) is `None` for a service that failed before it was planned.
+    Ready(Option<&'static str>),
+    /// A task, infra command or exec: done when it exits.
+    Exit,
+}
+
+impl RunGoal {
+    /// `UnitSummary.ready_check`: the check word of a service run.
+    pub fn check(self) -> Option<&'static str> {
+        match self {
+            Self::Ready(check) => check,
+            Self::Exit => None,
+        }
+    }
+}
+
 /// Lifecycle as exposed through `UnitSummary.state`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnitState {
     Starting,
     Ready,
+    /// Alive, with nothing to wait for but its exit (an [`RunGoal::Exit`] run).
+    Running,
     /// Readiness failed or the process exited non-zero before/after becoming ready.
     Failed(Option<RpcError>),
     Stopping,
-    /// Exited after an explicit stop, or a task/exec that finished with code 0.
+    /// Ended by a stop, or a service that ended on its own with 0.
+    Stopped(ExitOutcome),
+    /// An [`RunGoal::Exit`] run that ended on its own with 0.
     Exited(ExitOutcome),
 }
 
@@ -49,15 +73,17 @@ impl UnitState {
         match self {
             Self::Starting => "starting",
             Self::Ready => "ready",
+            Self::Running => "running",
             Self::Failed(_) => "failed",
             Self::Stopping => "stopping",
-            Self::Exited(_) => "stopped",
+            Self::Stopped(_) => "stopped",
+            Self::Exited(_) => "exited",
         }
     }
 
     /// Terminal states never transition again for this run.
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Exited(_)) || matches!(self, Self::Failed(_))
+        matches!(self, Self::Stopped(_) | Self::Exited(_) | Self::Failed(_))
     }
 }
 
@@ -66,6 +92,7 @@ pub struct UnitInfo {
     pub name: String,
     pub lane: String,
     pub kind: &'static str,
+    pub goal: RunGoal,
     pub actor: Actor,
     pub started_at_ms: u64,
     pub log_dir: PathBuf,
@@ -323,7 +350,11 @@ impl UnitHost {
         unit: Arc<dyn Unit>,
         identity: Option<ProcessIdentity>,
     ) -> Result<Self, RpcError> {
-        let host = Self::open(info, unit, identity, UnitState::Starting, None).await?;
+        let state = match info.goal {
+            RunGoal::Ready(_) => UnitState::Starting,
+            RunGoal::Exit => UnitState::Running,
+        };
+        let host = Self::open(info, unit, identity, state, None).await?;
         host.spawn_pump();
         host.spawn_waiter();
         Ok(host)
@@ -457,7 +488,7 @@ impl UnitHost {
             if !matches!(state, UnitState::Failed(_)) {
                 return false;
             }
-            *state = UnitState::Exited(outcome);
+            *state = UnitState::Stopped(outcome);
             true
         })
     }
@@ -992,8 +1023,13 @@ impl Inner {
         let requested = self
             .stop_requested
             .load(std::sync::atomic::Ordering::SeqCst);
-        let next = if requested || outcome.code == Some(0) {
-            UnitState::Exited(outcome)
+        let next = if requested {
+            UnitState::Stopped(outcome)
+        } else if outcome.code == Some(0) {
+            match self.info.goal {
+                RunGoal::Exit => UnitState::Exited(outcome),
+                RunGoal::Ready(_) => UnitState::Stopped(outcome),
+            }
         } else {
             UnitState::Failed(Some(RpcError::new(
                 "exited",
@@ -1374,6 +1410,7 @@ mod tests {
             name: "web".into(),
             lane: "0".into(),
             kind: "service",
+            goal: RunGoal::Ready(Some("started")),
             actor: Actor::default(),
             started_at_ms: 0,
             log_dir: dir.path().join(run.to_string()),

@@ -21,6 +21,17 @@ export function roleOf(unit: UnitSummary): string {
   return unit.role || unit.kind || 'service';
 }
 
+/**
+ * Whether a unit is on its way: a busy state, or a task or setup step whose
+ * process runs (`running`), which the start waits on until it exits.
+ */
+export function inProgress(unit: UnitSummary): boolean {
+  return (
+    isBusy(unit.state) ||
+    (unit.state === 'running' && ['task', 'setup', 'teardown'].includes(roleOf(unit)))
+  );
+}
+
 /** The units a person looks at: services and exec units, without hidden ones. */
 export function servicesOf(lane: Pick<LaneSummary, 'units'>): UnitSummary[] {
   return (lane.units || []).filter(
@@ -81,7 +92,7 @@ export function phasesOf(lane: LaneSummary): Phase[] {
     const [only] = steps;
     if (!only) continue;
     const failed = steps.filter((unit) => unit.state === 'failed');
-    const running = steps.find((unit) => isBusy(unit.state) || unit.state === 'queued');
+    const running = steps.find(inProgress);
     const done = steps.filter((unit) => unitState(unit) === 'done' || unit.state === 'ready');
     if (failed.length) {
       rows.push({

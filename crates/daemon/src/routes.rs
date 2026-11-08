@@ -482,12 +482,13 @@ impl Inner {
 fn route_status(st: &LaneSt, unit: &str) -> RouteStatus {
     match st.units.get(unit) {
         Some(rec) => match rec.host.state() {
-            UnitState::Ready => RouteStatus::Ready,
+            // Services, the only units routed, never reach `Running`.
+            UnitState::Ready | UnitState::Running => RouteStatus::Ready,
             UnitState::Starting => RouteStatus::Starting,
             UnitState::Failed(_) => RouteStatus::Failed {
                 log_tail: rec.failure_tail.join("\n"),
             },
-            UnitState::Stopping | UnitState::Exited(_) => RouteStatus::Idle,
+            UnitState::Stopping | UnitState::Stopped(_) | UnitState::Exited(_) => RouteStatus::Idle,
         },
         // A previous daemon's process may still serve the port.
         None if st.orphans.contains_key(unit) => RouteStatus::Ready,

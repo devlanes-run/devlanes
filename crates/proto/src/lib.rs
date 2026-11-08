@@ -759,8 +759,10 @@ pub struct LogLine {
 }
 
 /// Public service state is separate from an OS-specific process handle.
-/// States: `idle`, `queued`, `starting`, `ready`, `failed`, `stopping`, `stopped`, `exited`.
-/// `queued` units wait for a start slot; their `reason` has code `queued` with
+/// States: `idle`, `queued`, `starting`, `ready`, `running`, `failed`, `stopping`,
+/// `stopped`, `exited`. `running` is an exec command, task or infra command whose
+/// process runs; it has no ready check. `exited` is one of those that ended on its
+/// own with 0. `queued` units wait for a start slot; their `reason` has code `queued` with
 /// `{position, queued, in_flight, window, hold, memory_need_bytes,
 /// available_memory_bytes?, cpu_percent?, memory_pressure?}`; `hold` is
 /// `window_full`, `memory_critical` or `memory` (waiting for memory to fit).

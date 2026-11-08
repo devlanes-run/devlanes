@@ -59,7 +59,7 @@ fn a_failed_unit_comes_first_with_the_ready_count() {
 fn the_sessions_own_units_come_first() {
     let mut mailer = unit("mailer", "failed");
     mailer["actor"] = json!({"kind": "agent", "agent_id": "claude-code", "session_id": "s1"});
-    let mut probe = unit("probe", "ready");
+    let mut probe = unit("probe", "running");
     probe["kind"] = json!("exec");
     probe["actor"] = mailer["actor"].clone();
     let failed = summary(lane(

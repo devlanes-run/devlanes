@@ -39,7 +39,7 @@ use crate::{
     ready::Readiness,
     registry::{internal, store_error},
     stopping::StopSteps,
-    units::{UnitHost, UnitInfo, UnitState, now_ms},
+    units::{RunGoal, UnitHost, UnitInfo, UnitState, now_ms},
 };
 
 /// Log lines attached to every failure (cli-design 3.4).
@@ -82,8 +82,7 @@ pub(crate) struct SpawnRequest {
     pub sync: Vec<devlanes_resolve::SyncSpec>,
     /// `services.<name>.name` (services only).
     pub display_name: Option<String>,
-    /// The readiness check word (services only).
-    pub ready_check: Option<&'static str>,
+    pub goal: RunGoal,
     /// `UnitSummary.role`: `service`, `task`, `setup`, `teardown` or `exec`.
     pub role: &'static str,
     /// `services.<name>.keep_awake`: the lane never goes idle while this runs.
@@ -127,7 +126,7 @@ impl SpawnRequest {
             color: Some(service.color.clone()),
             sync: service.sync.clone(),
             display_name: service.display_name.clone(),
-            ready_check: Some(ready_word(&service.ready.check)),
+            goal: RunGoal::Ready(Some(ready_word(&service.ready.check))),
             role: "service",
             keep_awake: service.keep_awake,
             fingerprint: Some(crate::drift::Fingerprint::of(service)),
@@ -165,7 +164,7 @@ impl SpawnRequest {
             color: None,
             sync: Vec::new(),
             display_name: None,
-            ready_check: None,
+            goal: RunGoal::Exit,
             role: kind.word(),
             keep_awake: false,
             fingerprint: None,
@@ -195,7 +194,7 @@ pub(crate) struct NotStartedRec {
     pub files: Vec<PreparedFile>,
     pub color: Option<String>,
     pub display_name: Option<String>,
-    pub ready_check: Option<&'static str>,
+    pub goal: RunGoal,
     pub keep_awake: bool,
     pub fingerprint: Option<crate::drift::Fingerprint>,
 }
@@ -230,7 +229,7 @@ impl NotStartedRec {
             files: Vec::new(),
             color: Some(service.color.clone()),
             display_name: service.display_name.clone(),
-            ready_check: None,
+            goal: RunGoal::Ready(None),
             keep_awake: false,
             fingerprint: None,
         }
@@ -462,11 +461,12 @@ fn recordable(process: &devlanes_core::ProcessIdentity) -> bool {
     process.pid > 0
 }
 
-/// True once the state no longer moves toward ready on its own.
+/// True once the state no longer moves toward ready on its own. `Running` is
+/// left out: only services are waited on here, and they never reach it.
 fn settled(state: &UnitState) -> bool {
     matches!(
         state,
-        UnitState::Ready | UnitState::Failed(_) | UnitState::Exited(_)
+        UnitState::Ready | UnitState::Failed(_) | UnitState::Stopped(_) | UnitState::Exited(_)
     )
 }
 
@@ -2179,7 +2179,7 @@ impl Inner {
                         files: request.files,
                         color: Some(color),
                         display_name: request.display_name,
-                        ready_check: request.ready_check,
+                        goal: request.goal,
                         keep_awake: request.keep_awake,
                         fingerprint: request.fingerprint,
                     };
@@ -2195,6 +2195,7 @@ impl Inner {
             name: request.name.clone(),
             lane: reference.clone(),
             kind: request.kind.word(),
+            goal: request.goal,
             actor: request.actor.clone(),
             started_at_ms: now_ms(),
             log_dir: log_dir.clone(),
@@ -2267,7 +2268,6 @@ impl Inner {
                 managed: managed.clone(),
                 syncs: Vec::new(),
                 display_name: request.display_name,
-                ready_check: request.ready_check,
                 role: request.role,
                 keep_awake: request.keep_awake,
                 fingerprint: request.fingerprint.map(Arc::new),
@@ -2330,6 +2330,7 @@ impl Inner {
             name: rec.name.clone(),
             lane: reference,
             kind: Kind::Service.word(),
+            goal: rec.goal,
             actor: rec.actor.clone(),
             started_at_ms: now_ms(),
             log_dir: rec.log_dir.clone(),
@@ -2377,7 +2378,6 @@ impl Inner {
                     managed,
                     syncs: Vec::new(),
                     display_name: rec.display_name,
-                    ready_check: rec.ready_check,
                     role: "service",
                     keep_awake: rec.keep_awake,
                     fingerprint: rec.fingerprint.map(Arc::new),
@@ -2453,7 +2453,8 @@ impl Inner {
                     }
                 }
                 engine.emit_unit(&project, &lane, &name, &host);
-                if matches!(state, UnitState::Exited(_)) || !host.is_alive() {
+                if matches!(state, UnitState::Stopped(_) | UnitState::Exited(_)) || !host.is_alive()
+                {
                     break;
                 }
                 // A run that failed its ready check keeps that state when it
