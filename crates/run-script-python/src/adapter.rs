@@ -50,6 +50,8 @@ impl ScriptRunner for PythonScripts {
             cwd: planned.cwd,
             body: None,
             notes: planned.notes,
+            env: Default::default(),
+            path: Vec::new(),
         })
     }
 }

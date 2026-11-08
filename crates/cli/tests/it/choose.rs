@@ -175,12 +175,6 @@ fn options_follow_the_kind() {
     ]}));
     assert_eq!(tasks[0].detail, "runs on lane.start");
     assert_eq!(tasks[1].detail, "on demand");
-    assert_eq!(
-        lane_for_cwd(std::slice::from_ref(&lane), "/work/acme/web/src".as_ref())
-            .map(|lane| lane.reference.as_str()),
-        Some("acme@0")
-    );
-    assert!(lane_for_cwd(std::slice::from_ref(&lane), "/elsewhere".as_ref()).is_none());
 }
 
 #[test]

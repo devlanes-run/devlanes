@@ -727,8 +727,9 @@ pub enum Msg {
     /// The terminal gained (`true`) or lost focus.
     Focus(bool),
     /// The lanes the daemon resolved for the TUI's directory and the CLI's
-    /// `-p`, `--file` or `--lane` ([`crate::api::DaemonApi::home_lanes`]).
-    Home(Vec<String>),
+    /// `-p`, `--file` or `--lane`, and the one it answered as the directory's own
+    /// ([`crate::api::DaemonApi::home_scope`]).
+    Home(crate::api::Home),
     Status(Result<Vec<LaneSummary>, ApiError>),
     Subscribed(Result<(), ApiError>),
     Event(Event),
@@ -1287,10 +1288,8 @@ pub struct App {
     pane_press: Option<(u16, u16)>,
     /// The open dialog's box, written by the last render.
     pub dialog_area: RefCell<Option<Rect>>,
-    /// The working directory, to open on its lane first.
-    cwd: Option<PathBuf>,
-    /// [`Msg::Home`]'s lanes: the TUI opens on one of them.
-    home: Vec<String>,
+    /// [`Msg::Home`]: the TUI opens on one of its lanes.
+    home: crate::api::Home,
     pub connection: Connection,
     /// How the daemon stands for the user, on top of the connection.
     pub daemon_state: DaemonState,
@@ -1479,8 +1478,7 @@ impl App {
             last_click: None,
             pane_press: None,
             dialog_area: RefCell::new(None),
-            cwd: None,
-            home: Vec::new(),
+            home: crate::api::Home::default(),
             connection: Connection::Connecting,
             daemon_state: DaemonState::Online,
             starting_since: None,
@@ -1643,10 +1641,7 @@ impl App {
                 if was_up && unit.state == "failed" && lane.state != "starting" && !was_starting {
                     let body = unit
                         .exit_code
-                        .map(|code| {
-                            devlanes_cli::exit::words(code.into())
-                                .map_or_else(|| format!("exited {code}"), str::to_owned)
-                        })
+                        .map(|code| format!("exited {code}"))
                         .unwrap_or_default();
                     notes.push((format!("{}:{} crashed", lane.reference, unit.name), body));
                 }
@@ -3031,51 +3026,31 @@ impl App {
         self.sync_attach(effects);
     }
 
-    /// The lane to open on: the one the TUI this one replaces showed, the one
-    /// whose worktree holds the working directory (among [`Msg::Home`]'s lanes
-    /// when the daemon named some, a folder's own lane before its `lane new`
-    /// extras; when several projects share the folder, one with something
-    /// running, else the first in list order),
-    /// the first home lane with something running, else the first home lane;
-    /// without home lanes, the first project with something running, else the
-    /// first lane.
+    /// The lane to open on: the one the TUI this one replaces showed, else the
+    /// daemon's `here` (the directory's own lane) when listed, else the first
+    /// home lane with something running, else the first home lane; without home
+    /// lanes, the first project with something running, else the first lane.
     fn initial_lane(&self) -> Option<String> {
         if let Some(lane) = &self.reopen_lane
             && self.lane(lane).is_some()
         {
             return Some(lane.clone());
         }
+        if let Some(here) = &self.home.here
+            && self.lanes.iter().any(|lane| lane.reference == *here)
+        {
+            return Some(here.clone());
+        }
         let home: Vec<&LaneSummary> = self
             .lanes
             .iter()
-            .filter(|lane| self.home.contains(&lane.reference))
+            .filter(|lane| self.home.lanes.contains(&lane.reference))
             .collect();
         let candidates: Vec<&LaneSummary> = if home.is_empty() {
             self.lanes.iter().collect()
         } else {
             home.clone()
         };
-        if let Some(cwd) = &self.cwd {
-            let mut best: Option<((usize, bool, bool), &LaneSummary)> = None;
-            for lane in &candidates {
-                if lane.path.as_os_str().is_empty()
-                    || !devlanes_core::paths::path_starts_with(cwd, &lane.path)
-                {
-                    continue;
-                }
-                let key = (
-                    lane.path.as_os_str().len(),
-                    lane.name.is_none(),
-                    lane.units.iter().any(|u| is_active(&u.state)),
-                );
-                if best.is_none_or(|(best, _)| key > best) {
-                    best = Some((key, lane));
-                }
-            }
-            if let Some((_, lane)) = best {
-                return Some(lane.reference.clone());
-            }
-        }
         let running = candidates
             .iter()
             .copied()
@@ -3217,11 +3192,6 @@ impl App {
                         || (u.state == "running" && tree::role(u) != tree::Role::Service)
                 })
         })
-    }
-
-    /// Opens on the lane of `cwd` the first time lanes load.
-    pub fn prefer_path(&mut self, cwd: PathBuf) {
-        self.cwd = Some(cwd);
     }
 
     /// Opens where the TUI this one replaces was: its lane the first time
@@ -8165,10 +8135,7 @@ pub fn unit_ref(lane: &str, unit: &str) -> String {
 fn failure_words(failure: &devlanes_proto::UnitFailureData) -> Worded {
     let mut worded = match (&failure.reason, failure.exit_code) {
         (Some(reason), _) => words::rpc(reason),
-        (None, Some(code)) => Worded::local(
-            &devlanes_cli::exit::words(code.into())
-                .map_or_else(|| format!("exited with code {code}"), str::to_owned),
-        ),
+        (None, Some(code)) => Worded::local(&format!("exited with code {code}")),
         (None, None) => Worded::local("never became ready"),
     };
     worded

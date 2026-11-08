@@ -197,6 +197,10 @@ pub struct UnitHost {
 
 struct Inner {
     info: UnitInfo,
+    /// When the host started watching the spawned unit, on the monotonic
+    /// clock the readiness window is measured with; `info.started_at_ms` is
+    /// the wall-clock time shown to users.
+    spawned: tokio::time::Instant,
     unit: Arc<dyn Unit>,
     identity: Option<ProcessIdentity>,
     state: watch::Sender<UnitState>,
@@ -363,6 +367,7 @@ impl UnitHost {
         state: UnitState,
         first_seq: Option<u64>,
     ) -> Result<Self, RpcError> {
+        let spawned = tokio::time::Instant::now();
         let log = open_log(
             info.log_dir.clone(),
             info.name.replace('#', "_"),
@@ -394,6 +399,7 @@ impl UnitHost {
         let host = Self {
             inner: Arc::new(Inner {
                 info,
+                spawned,
                 unit,
                 identity,
                 state: watch::channel(state).0,
@@ -421,6 +427,11 @@ impl UnitHost {
         &self.inner.info
     }
 
+    /// When the host started watching the spawned unit, on tokio's monotonic clock.
+    pub fn spawned(&self) -> tokio::time::Instant {
+        self.inner.spawned
+    }
+
     /// The process identity recorded in `unit_runs`, if the runner reported one.
     pub fn identity(&self) -> Option<ProcessIdentity> {
         self.inner.identity
@@ -437,9 +448,12 @@ impl UnitHost {
     }
 
     /// Moves to a new state unless the run already reached a terminal state.
+    /// Only a starting run becomes ready: a run a stop reached first stays
+    /// `stopping`.
     pub fn set_state(&self, next: UnitState) {
         self.inner.state.send_if_modified(|state| {
-            if state.is_terminal() || *state == next {
+            let stale_ready = next == UnitState::Ready && *state != UnitState::Starting;
+            if state.is_terminal() || *state == next || stale_ready {
                 return false;
             }
             *state = next;
@@ -1423,6 +1437,67 @@ mod tests {
             .await
             .expect("stop of an exited unit returns")
             .expect("stop succeeds");
+    }
+
+    /// A check that passed leaves the unit `starting` until the early-exit
+    /// window ends, so an exit inside the window fails it instead of
+    /// following a `ready` that `after: services` tasks would trust.
+    #[tokio::test(start_paused = true)]
+    async fn a_passed_check_waits_out_the_early_exit_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let unit = ScriptedUnit::start(None, gone_identity_cached());
+        let output = unit
+            .output
+            .lock()
+            .expect("output lock")
+            .clone()
+            .expect("output open");
+        let host = host(unit.clone(), &dir).await;
+        let mut logged = host.watch_logged();
+        output
+            .send(OutputChunk {
+                stream: OutputStream::Terminal,
+                bytes: Bytes::from_static(b"up\r\n"),
+            })
+            .expect("send");
+        // Logged before the check begins, so its first read passes. While the
+        // log thread writes, the paused clock jumps to the next timer: the
+        // pump's 200 ms pause, or a bound on this wait, which is why there is
+        // none. nextest's limit ends a hang.
+        loop {
+            let page = host.read_log(LogQuery::default()).await.expect("read");
+            if page.items.iter().any(|line| line.text == "up") {
+                break;
+            }
+            logged.changed().await.expect("log writer runs");
+        }
+        assert!(
+            tokio::time::Instant::now() < host.spawned() + crate::ready::EARLY_EXIT,
+            "the window ended before the check began"
+        );
+        let check = tokio::spawn({
+            let host = host.clone();
+            async move {
+                let ready = crate::ready::Readiness::Log {
+                    pattern: "up".into(),
+                };
+                let limit = Duration::from_secs(3600);
+                crate::ready::run_check(&host, ready, limit, || async { Vec::new() }).await;
+            }
+        });
+        // The paused clock moves only once nothing runs or reads the log, so
+        // by then the check has passed and waits out the window.
+        let last = host.spawned() + crate::ready::EARLY_EXIT - Duration::from_millis(1);
+        tokio::time::sleep_until(last).await;
+        assert_eq!(host.state(), UnitState::Starting);
+        drop(output);
+        unit.end(Some(1), None);
+        check.await.expect("the check ends with the exit");
+        assert!(
+            matches!(host.state(), UnitState::Failed(_)),
+            "{:?}",
+            host.state()
+        );
     }
 
     /// The log tick flushes partial lines and the file buffer, so a read-only query of

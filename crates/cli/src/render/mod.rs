@@ -16,7 +16,7 @@ use serde_json::Value;
 pub(crate) use lanes::display_url;
 pub(crate) use other::doctor_failed;
 pub use other::{DoctorCheck, DoctorState, doctor_checks_of, watch_line};
-pub use statusline::{StatuslineInput, statusline, statusline_lane};
+pub use statusline::{StatuslineInput, statusline};
 pub use words::status_hint;
 pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording, lane_drift, unit_drift};
 
@@ -327,17 +327,6 @@ pub(crate) fn text(value: &Value, key: &str) -> String {
 /// Integer field.
 pub(crate) fn int(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(Value::as_i64)
-}
-
-/// The ` exit=N` field of an agent line. Left off for a stopped unit whose
-/// code has words (a Windows console event), as a Unix stop by signal
-/// carries no code.
-pub(crate) fn exit_field(state: &str, code: i64) -> String {
-    if state == "stopped" && crate::exit::words(code).is_some() {
-        String::new()
-    } else {
-        format!(" exit={code}")
-    }
 }
 
 /// Array field, empty when absent.

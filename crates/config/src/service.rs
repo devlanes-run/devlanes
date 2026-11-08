@@ -276,12 +276,14 @@ service_fields! {
     /// so put that tag first.
     #[schemars(extend("examples" = [["api","essential"],["worker"],["web"]]))]
     tags: Vec<String>,
-    /// When the service counts as up: `devlanes start` waits for it, and `after: services`
-    /// tasks run once every started service is ready. Write `started` (ready once the
-    /// process runs) or a mapping with one of `tcp`, `http`, `log` or `cmd`, plus `timeout`
-    /// (default 60s). Without it, a service with `hosts` waits for TCP on its port and one
-    /// without hosts uses `started`. A check that times out marks the service failed, which
-    /// also skips `after: services` tasks; the process keeps running and is not restarted.
+    /// When the service counts as up: once its check passed and it has run half a second.
+    /// `devlanes start` waits for it, and `after: services` tasks run once every started
+    /// service is ready. Write `started` (no probe) or a mapping with one of `tcp`, `http`,
+    /// `log` or `cmd`, plus `timeout` (default 60s). Without it, a service with `hosts` waits
+    /// for TCP on its port and one without hosts uses `started`. A service that exits within
+    /// that half second failed to start. A check that times out marks the service failed,
+    /// which also skips `after: services` tasks; the process keeps running and is not
+    /// restarted.
     ready: ReadyConfig,
     /// Run the service in a pseudoterminal, so it sees a terminal as it would in your shell
     /// and you can type into it from the TUI. Set false to use pipes instead: stdin is empty

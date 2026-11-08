@@ -239,6 +239,8 @@ impl ScriptRunner for FakeRunner {
             body: Some(format!("echo {}", request.name)),
             notes: Vec::new(),
             detail: None,
+            env: Default::default(),
+            path: Vec::new(),
         })
     }
 }

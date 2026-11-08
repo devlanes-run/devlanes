@@ -140,13 +140,11 @@ pub struct Options {
     pub env: Option<std::collections::BTreeMap<String, String>>,
     /// Where daemon.log times are shown; `None` is the system's zone.
     pub time_zone: Option<jiff::tz::TimeZone>,
-    /// The directory whose lane opens first; `None` is the process's.
-    pub cwd: Option<std::path::PathBuf>,
     /// The CLI's request context; its cwd, `-p`, `--file` and `--lane` pick the
     /// lane the TUI opens on. `None` is the process's directory alone.
     pub scope: Option<devlanes_proto::Context>,
     /// The lane and view of the TUI this one replaces, from [`REOPEN_ENV`];
-    /// the lane wins over `cwd`'s.
+    /// the lane wins over the directory's.
     pub reopen: Option<Reopen>,
     /// The setup steps only this user can check (the CA's trust), for the
     /// setup prompt; `None` checks nothing on this side.

@@ -28,6 +28,10 @@ struct StatusParams {
     mine: bool,
     #[serde(default)]
     watch: bool,
+    /// The command the client completes with the lane `status` reports as `here`;
+    /// `status` itself when absent.
+    #[serde(default)]
+    here_for: Option<Method>,
 }
 
 /// `logs` parameters: proto's [`LogQuery`] plus `all` (cli `LaneLogQuery`).
@@ -229,6 +233,13 @@ impl Inner {
         let scope = self
             .read_scope(context, args.all, Policy::of(Method::Status))
             .await?;
+        // The request's own lane as the command the client completes would resolve
+        // it, after this status's own registration (none with `all`).
+        let here = match args.here_for {
+            Some(method) => Some(self.here(context, method).await),
+            None if !args.all => Some(self.here(context, Method::Status).await),
+            None => None,
+        };
         let lanes = scope.lanes();
         let mine = args.mine.then_some(&context.actor);
         let items = self.summaries(&lanes, mine);
@@ -259,7 +270,14 @@ impl Inner {
                 })
                 .await;
         }
-        serde_json::to_value(Page::complete(items)).map_err(|e| internal("encode", e))
+        let mut reply =
+            serde_json::to_value(Page::complete(items)).map_err(|e| internal("encode", e))?;
+        match here {
+            Some(Ok(reference)) => reply["here"] = json!(reference),
+            Some(Err(error)) => reply["here_error"] = json!(error),
+            None => {}
+        }
+        Ok(reply)
     }
 
     /// `lane.list`: re-lists worktrees first so new ones show immediately.
@@ -750,7 +768,7 @@ impl Inner {
         let push = |reasons: &mut Vec<Value>, code: &str, data: Value| {
             reasons.push(json!({"code": code, "data": data}))
         };
-        let (host, service, st_reason, needs_env, config, busy, unassigned, orphan, saved) = {
+        let (host, service, view_error, needs_env, config, busy, unassigned, orphan, saved) = {
             let st = lane.st();
             let orphan = st.orphan_error(&project.name(), &name);
             // A start by name adds to these, and a plain start brings them back.
@@ -767,7 +785,7 @@ impl Inner {
             (
                 host,
                 service,
-                st.last_error.clone(),
+                st.view_error.clone(),
                 st.env.is_none(),
                 st.config.clone(),
                 st.busy,
@@ -787,8 +805,15 @@ impl Inner {
                 "reasons": reasons,
             }));
         }
-        if let Some(reason) = unassigned {
-            push(&mut reasons, "unassigned", reason.data);
+        let alive = host.as_ref().is_some_and(UnitHost::is_alive);
+        match unassigned {
+            Some(reason) => push(&mut reasons, "unassigned", reason.data),
+            // Without a layout no service of the lane is known or can start.
+            None => {
+                if let Some(error) = view_error.filter(|_| !alive) {
+                    push(&mut reasons, &error.code, error.data);
+                }
+            }
         }
         match &config {
             ConfigState::Missing => push(&mut reasons, "no_config", json!({})),
@@ -816,13 +841,9 @@ impl Inner {
                 _ => {}
             }
         }
-        let alive = host.as_ref().is_some_and(UnitHost::is_alive);
         if !alive && let Some(service) = &service {
             if needs_env {
                 push(&mut reasons, "needs_env", json!({"lane": reference}));
-            }
-            if let Some(error) = st_reason.filter(|e| e.code == "config_error") {
-                push(&mut reasons, &error.code, error.data);
             }
             if let Some((profiles, selected)) = Inner::profile_services(&lane)
                 && !selected.contains(&service.name)
@@ -1008,7 +1029,7 @@ impl Inner {
                     .get(&format!("services.{name}"))
                     .or_else(|| resolved.errors.get(&format!("tasks.{name}")))
                 {
-                    return Err(crate::resolve::resolve_error(error));
+                    return Err(crate::resolve::resolve_error(error, &reference));
                 }
                 let launch = resolved
                     .services

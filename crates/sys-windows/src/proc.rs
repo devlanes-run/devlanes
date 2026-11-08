@@ -6,9 +6,12 @@
 //! alter it. Windows reuses PIDs quickly, so every action on a recorded
 //! process opens it and compares the start time on that same handle first.
 
+use std::ffi::OsString;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
+use std::path::PathBuf;
 use std::ptr;
 use std::time::Duration;
 
@@ -192,6 +195,12 @@ impl Held {
     /// Waits up to `timeout` for the process to exit; `true` once it has.
     pub fn wait(&self, timeout: Duration) -> io::Result<bool> {
         wait_handle(&self.handle, Some(timeout))
+    }
+
+    /// The full path of the executable the process runs, such as
+    /// `C:\Program Files\Git\usr\bin\sh.exe`.
+    pub fn image_path(&self) -> io::Result<PathBuf> {
+        image_path(&self.handle)
     }
 }
 
@@ -477,9 +486,15 @@ fn parent_of(handle: &OwnedHandle) -> Option<u32> {
     u32::try_from(info.InheritedFromUniqueProcessId).ok()
 }
 
-/// The executable's file name, like the snapshot's `szExeFile`. Most paths
-/// fit `MAX_PATH`; longer ones get one retry at the longest Windows allows.
+/// The executable's file name, like the snapshot's `szExeFile`.
 fn image_name(handle: &OwnedHandle) -> Option<String> {
+    let path = image_path(handle).ok()?;
+    Some(path.file_name()?.to_string_lossy().into_owned())
+}
+
+/// The full Win32 path of the executable an open process runs. Most paths
+/// fit `MAX_PATH`; longer ones get one retry at the longest Windows allows.
+fn image_path(handle: &impl AsRawHandle) -> io::Result<PathBuf> {
     for capacity in [260_usize, 32_768] {
         let mut buffer = vec![0_u16; capacity];
         let mut len = capacity as u32;
@@ -494,16 +509,14 @@ fn image_name(handle: &OwnedHandle) -> Option<String> {
             )
         };
         if ok != 0 {
-            let path = String::from_utf16_lossy(&buffer[..len as usize]);
-            return Some(path.rsplit('\\').next().unwrap_or(&path).to_owned());
+            return Ok(PathBuf::from(OsString::from_wide(&buffer[..len as usize])));
         }
-        if io::Error::last_os_error().raw_os_error()
-            != Some(ERROR_INSUFFICIENT_BUFFER.cast_signed())
-        {
-            return None;
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER.cast_signed()) {
+            return Err(error);
         }
     }
-    None
+    Err(io::Error::other("the executable's path is too long"))
 }
 
 /// The TCP port in the low 16 bits of a table entry, in network byte order.

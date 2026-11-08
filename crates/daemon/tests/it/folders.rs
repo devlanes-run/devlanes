@@ -96,6 +96,16 @@ async fn a_folder_can_hold_several_lanes() {
             first.lane, "demo@0",
             "the folder's first lane stays its default"
         );
+        // Clients that complete a command there are told the same lane.
+        let here = h
+            .call(
+                Method::Status,
+                json!({"all": true, "here_for": "logs"}),
+                cx(&main),
+            )
+            .await
+            .expect("status");
+        assert_eq!(here["here"], "demo@0", "{here}");
         let second = start(&h, on_lane(&main, "review"), json!({"units": ["web"]})).await;
         assert_eq!(second.lane, "demo@1");
         assert_eq!(second.started, ["demo@1:web"]);
@@ -522,6 +532,19 @@ async fn a_project_whose_lanes_were_all_cleaned_is_forgotten() {
             .await
             .expect("nothing to stop");
         assert_eq!(stopped["items"], json!([]));
+        // The `logs` picker asks which lane `logs` would use.
+        let picker = h
+            .call(
+                Method::Status,
+                json!({"all": true, "here_for": "logs"}),
+                cx(&main),
+            )
+            .await
+            .expect("picker status");
+        assert_eq!(
+            picker["here_error"]["code"], "project_not_started",
+            "{picker}"
+        );
         assert!(
             status(&h, cx(&tmp.path)).await.is_empty(),
             "reads in the folder do not bring it back"

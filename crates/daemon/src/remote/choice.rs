@@ -31,9 +31,9 @@ use crate::{
 const APPLY_WAIT: Duration = Duration::from_secs(2);
 
 impl Remotes {
-    /// The latest assignment.
-    pub(crate) fn assignment(&self) -> Arc<Assignment> {
-        lock(&self.assignment).1.clone()
+    /// The latest assignment, with its version.
+    pub(crate) fn assignment(&self) -> (u64, Arc<Assignment>) {
+        lock(&self.assignment).clone()
     }
 }
 

@@ -217,7 +217,7 @@ async fn queued_units_stop_bypass_and_restart() {
         )
         .await;
         let started: StartResult = serde_json::from_value(
-            h.call(Method::Start, json!({"timeout_ms": 400}), cx(&main))
+            h.call(Method::Start, json!({"timeout_ms": 1500}), cx(&main))
                 .await
                 .expect("start"),
         )

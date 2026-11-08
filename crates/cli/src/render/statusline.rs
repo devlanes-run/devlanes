@@ -1,7 +1,7 @@
 //! `status --statusline`: one short line for the lane of a directory, for the
 //! status line of an editor or agent, such as Claude Code's `statusLine` command.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use devlanes_proto::{LaneSummary, UnitSummary};
 use serde_json::Value;
@@ -40,21 +40,6 @@ impl StatuslineInput {
             session_id: field("/session_id"),
         }
     }
-}
-
-/// The lane whose worktree holds `cwd`, picked as the daemon picks the lane of
-/// a command's directory: the deepest worktree that still exists, and a
-/// folder's own lane before the extra lanes `lane new` added to it.
-pub fn statusline_lane<'a>(lanes: &'a [LaneSummary], cwd: &Path) -> Option<&'a LaneSummary> {
-    lanes
-        .iter()
-        .filter(|lane| {
-            lane.reason
-                .as_ref()
-                .is_none_or(|reason| reason.code != "worktree_missing")
-        })
-        .filter(|lane| devlanes_core::paths::path_starts_with(cwd, &lane.path))
-        .max_by_key(|lane| (lane.path.components().count(), lane.name.is_none()))
 }
 
 /// The status line of `lane`, without a newline:

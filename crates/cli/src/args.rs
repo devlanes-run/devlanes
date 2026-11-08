@@ -1679,27 +1679,31 @@ impl Cli {
     /// commands with a default (stop, env) never ask.
     pub fn missing_choice(&self) -> Option<crate::Choice> {
         use crate::ChoiceKind as K;
-        let (command, kind, multi): (Vec<&'static str>, K, bool) = match &self.command {
+        let (command, kind, multi, method): (Vec<&'static str>, K, bool, Method) = match &self
+            .command
+        {
             Some(Command::Url {
                 command: UrlCommand::Print { unit: None },
-            }) => (vec!["url", "print"], K::Url, false),
+            }) => (vec!["url", "print"], K::Url, false, Method::Url),
             Some(Command::Url {
                 command: UrlCommand::Open { unit: None },
-            }) => (vec!["url", "open"], K::Url, false),
-            Some(Command::Attach { unit: None }) => (vec!["attach"], K::Running, false),
-            Some(Command::Wait { target: None }) => (vec!["wait"], K::Target, false),
+            }) => (vec!["url", "open"], K::Url, false, Method::Url),
+            Some(Command::Attach { unit: None }) => {
+                (vec!["attach"], K::Running, false, Method::Attach)
+            }
+            Some(Command::Wait { target: None }) => (vec!["wait"], K::Target, false, Method::Wait),
             Some(Command::Debug {
                 command: DebugCommand::Why { unit: None },
-            }) => (vec!["debug", "why"], K::Unit, false),
+            }) => (vec!["debug", "why"], K::Unit, false, Method::Why),
             Some(Command::Logs(args)) if args.units.is_empty() && !args.mine && !args.all => {
-                (vec!["logs"], K::Unit, true)
+                (vec!["logs"], K::Unit, true, Method::Logs)
             }
             Some(Command::Run(args)) if args.task.is_none() && !args.list => {
-                (vec!["run"], K::Task, false)
+                (vec!["run"], K::Task, false, Method::Run)
             }
             Some(Command::Lane {
                 command: LaneCommand::Clean { lane: None, .. },
-            }) => (vec!["lane", "clean"], K::Lane, false),
+            }) => (vec!["lane", "clean"], K::Lane, false, Method::LaneClean),
             _ => return None,
         };
         Some(crate::Choice {
@@ -1707,6 +1711,7 @@ impl Cli {
             command,
             kind,
             multi,
+            method,
         })
     }
 

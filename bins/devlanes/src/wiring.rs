@@ -78,7 +78,6 @@ pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
         // The process's environment, zone and directory.
         env: None,
         time_zone: None,
-        cwd: None,
         scope: None,
         reopen: crate::relaunch::reopen(),
         setup_check: Some(setup_check(paths.clone())),
@@ -196,9 +195,11 @@ pub async fn engine(
         windows_shell().await
     };
     #[cfg(windows)]
-    let mut integ = Integrations::with_runner(Arc::new(WindowsUnits(
-        devlanes_runner_windows::WindowsRunner::default().with_shell(shell.clone()),
-    )));
+    let runner = devlanes_runner_windows::WindowsRunner::default().with_shell(shell.clone());
+    #[cfg(windows)]
+    let runtimes = runner.runtimes().clone();
+    #[cfg(windows)]
+    let mut integ = Integrations::with_runner(Arc::new(WindowsUnits(runner)));
     #[cfg(windows)]
     {
         integ.shell = shell;
@@ -217,6 +218,7 @@ pub async fn engine(
     {
         integ.processes = Arc::new(WindowsProcesses {
             helper: devlanes_runner_windows::ConsoleHelper::current_exe().ok(),
+            runtimes,
         });
     }
     integ.ca_env = ca_env;
@@ -843,7 +845,7 @@ impl RouteSink for ProxyRoutes {
                 route.unit = Some(entry.unit).filter(|unit| !unit.is_empty());
                 route.remote = entry.remote;
                 route.listen_port = entry.box_https_port;
-                route.pool_key = entry.upstream_box;
+                route.pool_key = entry.pool_key;
                 route
             })
             .collect();
@@ -1056,11 +1058,13 @@ async fn windows_shell() -> Option<PathBuf> {
 }
 
 /// [`SysProcesses`] whose orphan stops ask first, as a running unit's stop
-/// does: `WM_CLOSE` and one Ctrl-Break per unit through `helper`, then
+/// does: `WM_CLOSE` and one console event per unit through `helper`, then
 /// termination of what is left after the grace period.
 #[cfg(windows)]
 struct WindowsProcesses {
     helper: Option<devlanes_runner_windows::ConsoleHelper>,
+    /// The unit runner's, so orphan stops share its reads of program images.
+    runtimes: devlanes_runner_windows::Runtimes,
 }
 
 #[cfg(windows)]
@@ -1090,9 +1094,16 @@ impl devlanes_daemon::integrations::ProcessTable for WindowsProcesses {
         members: &[ProcessIdentity],
         grace: Duration,
     ) {
-        let (helper, members) = (self.helper.clone(), members.to_vec());
+        let (helper, runtimes, members) =
+            (self.helper.clone(), self.runtimes.clone(), members.to_vec());
         let stopped = tokio::task::spawn_blocking(move || {
-            devlanes_runner_windows::stop_orphan(helper.as_ref(), leader, &members, grace)
+            devlanes_runner_windows::stop_orphan(
+                helper.as_ref(),
+                &runtimes,
+                leader,
+                &members,
+                grace,
+            )
         })
         .await;
         match stopped {
@@ -2839,7 +2850,7 @@ mod tests {
             remote: false,
             box_https_port: None,
             address: None,
-            upstream_box: None,
+            pool_key: None,
         }
     }
 

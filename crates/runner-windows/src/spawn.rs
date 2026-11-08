@@ -16,7 +16,9 @@ use devlanes_sys_windows::{
 
 use crate::{
     StderrMode,
-    command::{self, CommandError, Quoting},
+    command::{self, CommandError},
+    exit::Leader,
+    runtime::Runtimes,
     terminal::Terminal,
 };
 
@@ -122,10 +124,11 @@ pub(crate) struct Launched {
     pub child: Child,
     pub job: Job,
     pub pipes: Vec<(OutputStream, PipeReader)>,
-    /// The program is Git's `sh.exe` standing in for `/bin/sh`.
-    pub through_shell: bool,
-    /// The program is a batch file that `cmd.exe` runs.
-    pub batch: bool,
+    /// What the leader is, which decides how its exit code reads.
+    pub leader_kind: Leader,
+    /// `<System32>\cmd.exe`, the command interpreter that asks "Terminate
+    /// batch job (Y/N)?".
+    pub system_cmd: PathBuf,
     /// For `pty: true`: the pseudo console and the size it was created at.
     pub terminal: Option<(Terminal, TerminalSize)>,
 }
@@ -138,11 +141,13 @@ pub(crate) struct Launched {
 /// [`TerminalSize::RENDERED_HEADLESS`] when that is the default (no viewer
 /// yet); its one output pipe carries the console host's rendering. Nothing
 /// that fails before `CreateProcessW` succeeded leaves a job or a process
-/// behind.
+/// behind. The leader is [`Leader::Msys`] when `runtimes` says the resolved
+/// program links the MSYS runtime, else [`Leader::Native`].
 pub(crate) fn launch(
     spec: LaunchSpec,
     stderr: StderrMode,
     shell: Option<&Path>,
+    runtimes: &Runtimes,
 ) -> Result<Launched, SpawnError> {
     let through_shell = spec.program == POSIX_SHELL;
     let mut env = spec.env;
@@ -162,12 +167,13 @@ pub(crate) fn launch(
     }
     let env = child_env(env);
     let system = devlanes_sys_windows::file::system_directory()?;
-    let quoting = if through_shell {
-        Quoting::Msys
+    let command = command::build(&program, &spec.args, &env, &spec.cwd, &system, runtimes)?;
+    let leader_kind = if command.msys {
+        Leader::Msys
     } else {
-        Quoting::Native
+        Leader::Native
     };
-    let command = command::build(&program, &spec.args, &env, &spec.cwd, &system, quoting)?;
+    let system_cmd = system.join("cmd.exe");
     let environment = Environment::new(&env)?;
     let job = || {
         Job::create(JobOptions {
@@ -211,8 +217,8 @@ pub(crate) fn launch(
             child,
             job,
             pipes: vec![(OutputStream::Terminal, output_reader)],
-            through_shell,
-            batch: command.batch,
+            leader_kind,
+            system_cmd,
             terminal: Some((terminal, size)),
         });
     }
@@ -253,8 +259,8 @@ pub(crate) fn launch(
         child,
         job,
         pipes,
-        through_shell,
-        batch: command.batch,
+        leader_kind,
+        system_cmd,
         terminal: None,
     })
 }
@@ -279,17 +285,6 @@ pub(crate) fn child_env(env: BTreeMap<String, String>) -> BTreeMap<String, Strin
 /// own one is a member of its job.
 pub(crate) fn is_console_host(name: &str) -> bool {
     name.eq_ignore_ascii_case("conhost.exe")
-}
-
-/// Whether `name` is a shell that MSYS2 or Cygwin ships: Git for Windows'
-/// `sh.exe`, `bash.exe` and `dash.exe`, or an MSYS2 `zsh.exe` or `fish.exe`.
-/// Their runtime turns a console event into SIGINT for the shell, and the
-/// native programs they start ignore a Ctrl-C event. A native program with
-/// one of these names only keeps getting Ctrl-Break.
-pub(crate) fn is_msys_shell(name: &str) -> bool {
-    ["sh.exe", "bash.exe", "dash.exe", "zsh.exe", "fish.exe"]
-        .iter()
-        .any(|shell| name.eq_ignore_ascii_case(shell))
 }
 
 #[cfg(test)]

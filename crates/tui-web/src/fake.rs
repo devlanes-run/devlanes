@@ -33,7 +33,10 @@ impl Fake {
     pub fn new(width: u16, height: u16) -> Self {
         let mut app = App::new(width, height);
         app.version = devlanes_version::VERSION;
-        app.prefer_path(scene::PATH.into());
+        app.update(Msg::Home(devlanes_tui::api::Home {
+            lanes: Vec::new(),
+            here: Some(scene::HERE.into()),
+        }));
         let mut fake = Self {
             app,
             queue: VecDeque::new(),
