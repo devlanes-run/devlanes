@@ -114,7 +114,10 @@ impl Image {
             .collect::<io::Result<Vec<_>>>()?;
         let mut names = Vec::new();
         for index in 0..MAX_IMPORTS as u32 {
-            let descriptor = offset(&sections, table + index * 20)?;
+            let rva = table
+                .checked_add(index * 20)
+                .ok_or_else(|| invalid("import table outside the image"))?;
+            let descriptor = offset(&sections, rva)?;
             let name = self.u32(descriptor + 12)?;
             if name == 0 && self.u32(descriptor + 16)? == 0 {
                 return Ok(names);
@@ -199,8 +202,32 @@ fn invalid(what: &str) -> io::Error {
 mod tests {
     use super::*;
 
+    /// A PE32+ image with one section at the top of the address space and an
+    /// import table starting 20 bytes below `u32::MAX`, whose first
+    /// descriptor names a DLL, so the second descriptor's address overflows.
+    fn import_table_at_the_top() -> Vec<u8> {
+        let mut image = vec![0_u8; 0x300];
+        let mut put = |at: usize, bytes: &[u8]| image[at..at + bytes.len()].copy_from_slice(bytes);
+        put(0, b"MZ");
+        put(0x3C, &0x40_u32.to_le_bytes());
+        put(0x40, b"PE\0\0");
+        put(0x46, &1_u16.to_le_bytes()); // one section
+        put(0x54, &240_u16.to_le_bytes()); // optional header size
+        put(0x58, &0x20B_u16.to_le_bytes()); // PE32+
+        put(0xC4, &16_u32.to_le_bytes()); // data directories
+        put(0xD0, &0xFFFF_FFEC_u32.to_le_bytes()); // import table
+        put(0x154, &0xFFFF_FF00_u32.to_le_bytes()); // section address
+        put(0x158, &0x100_u32.to_le_bytes()); // section size in the file
+        put(0x15C, &0x200_u32.to_le_bytes()); // section offset in the file
+        put(0x210, b"acme.dll\0");
+        put(0x2F8, &0xFFFF_FF10_u32.to_le_bytes()); // first descriptor's name
+        put(0x2FC, &1_u32.to_le_bytes()); // and its thunks
+        image
+    }
+
     /// Git's `usr\bin\sh.exe` links the MSYS runtime; its `bin\bash.exe`
-    /// launcher and this test binary do not; a cut-off copy is malformed.
+    /// launcher and this test binary do not; a cut-off copy and an import
+    /// table that runs past `u32::MAX` are malformed.
     #[tokio::test]
     async fn links_msys_reads_imports() {
         let shell = devlanes_shell_windows::windows_shell()
@@ -216,7 +243,11 @@ mod tests {
         let cut = dir.path().join("cut.exe");
         let bytes = std::fs::read(&shell).expect("read sh.exe");
         std::fs::write(&cut, &bytes[..256]).expect("write");
-        let error = links_msys(&cut).expect_err("truncated");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+        let top = dir.path().join("top.exe");
+        std::fs::write(&top, import_table_at_the_top()).expect("write");
+        for image in [cut, top] {
+            let error = links_msys(&image).expect_err("malformed");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+        }
     }
 }
