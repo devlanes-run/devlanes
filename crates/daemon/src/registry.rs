@@ -775,8 +775,10 @@ impl PrimaryWorktree {
         ci: bool,
     ) -> Result<Self, RpcError> {
         let checkout = Checkout::of(config_file, config).await?;
-        let root = primary_tree(&checkout.trees, &checkout.primary_branch, ci)
-            .map_or_else(|| checkout.root.clone(), |tree| tree.path.clone());
+        let root = primary_tree(&checkout.trees, &checkout.primary_branch, ci).map_or_else(
+            || checkout.root.clone(),
+            |primary| primary.tree.path.clone(),
+        );
         Ok(Self {
             root,
             branch: checkout
@@ -1039,7 +1041,8 @@ impl Inner {
             }
             trees.push(lane_tree(&lane));
         }
-        primary_tree(&trees, &primary, self.opts.ci).map_or(root, |tree| tree.path.clone())
+        primary_tree(&trees, &primary, self.opts.ci)
+            .map_or(root, |primary| primary.tree.path.clone())
     }
 
     /// The loaded config of the primary worktree's lane, whose project-wide settings
@@ -1272,8 +1275,8 @@ impl Inner {
     }
 
     /// Gives present worktrees with a config a lane index and port block
-    /// (decision 2: lane 0 for the primary branch, or any branch under
-    /// [`crate::EngineOptions::ci`], else lowest free index >= 1).
+    /// (decision 2: lane 0 for the worktree [`primary_tree`] gives it to while lane
+    /// 0 is free, else lowest free index >= 1).
     async fn assign_lanes(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -1288,25 +1291,27 @@ impl Inner {
         let mut lanes = project.lanes();
         lanes.sort_by_key(|lane| lane.st().path.clone());
         let trees: Vec<Tree> = lanes.iter().map(|lane| lane_tree(&lane.st())).collect();
-        let primary_identity =
-            primary_tree(&trees, &primary, self.opts.ci).map(|tree| tree.identity.clone());
+        let (primary_identity, lane_zero) = match primary_tree(&trees, &primary, self.opts.ci) {
+            Some(found) => (Some(found.tree.identity.clone()), found.lane_zero),
+            None => (None, false),
+        };
         let mut assigned = Vec::new();
         for lane in lanes {
-            let (config, branch, alias) = {
+            let (config, is_primary) = {
                 let st = lane.st();
                 if !st.present || st.record.is_some() {
                     continue;
                 }
                 // Only the primary worktree gets a lane by existing; any other
                 // gets one once devlanes runs in it.
-                let primary_tree = primary_identity.as_deref() == Some(st.identity.as_str());
-                if !primary_tree && !st.wanted {
+                let is_primary = primary_identity.as_deref() == Some(st.identity.as_str());
+                if !is_primary && !st.wanted {
                     continue;
                 }
                 let Some(config) = st.config.loaded().cloned() else {
                     continue;
                 };
-                (config, st.branch.clone(), st.alias().is_some())
+                (config, is_primary)
             };
             let used: BTreeSet<u32> = project
                 .lanes()
@@ -1323,11 +1328,7 @@ impl Inner {
                 ));
                 continue;
             }
-            // An extra lane of a folder never takes lane 0 from its first lane.
-            let index = if !alias
-                && (self.opts.ci || branch.as_deref() == Some(primary.as_str()))
-                && !used.contains(&0)
-            {
+            let index = if is_primary && lane_zero && !used.contains(&0) {
                 0
             } else {
                 (1..).find(|i| !used.contains(i)).unwrap_or(1)
@@ -1375,14 +1376,19 @@ impl Inner {
         Ok(assigned)
     }
 
-    /// Computes `moves_to` for every assigned lane (applied at its next start).
-    /// Under CI a lane that holds lane 0 keeps it on any branch, and no lane on
-    /// the primary branch moves onto it.
+    /// Computes `moves_to` for every assigned lane (applied at its next start): the
+    /// worktree [`primary_tree`] gives lane 0 to moves onto it, and another lane
+    /// holding it moves off. Under CI a lane that holds lane 0 keeps it, and nobody
+    /// moves onto it.
     pub(crate) fn update_moves(&self, project: &ProjectRt) {
         let primary = project.st().primary_branch.clone();
         let lanes = project.lanes();
         let used: BTreeSet<u32> = lanes.iter().filter_map(|l| l.st().index()).collect();
         let free = (1..).find(|i| !used.contains(i)).unwrap_or(1);
+        let trees: Vec<Tree> = lanes.iter().map(|lane| lane_tree(&lane.st())).collect();
+        let lane_zero = primary_tree(&trees, &primary, self.opts.ci)
+            .filter(|found| found.lane_zero)
+            .map(|found| found.tree.identity.clone());
         for lane in lanes {
             let mut st = lane.st();
             let Some(index) = st.index() else {
@@ -1393,7 +1399,7 @@ impl Inner {
                 st.moves_to = None;
                 continue;
             }
-            let on_primary = st.branch.as_deref() == Some(primary.as_str());
+            let on_primary = lane_zero.as_deref() == Some(st.identity.as_str());
             st.moves_to = match (on_primary, index) {
                 (true, 0) | (false, 1..) => None,
                 (true, _) if self.opts.ci && used.contains(&0) => None,
@@ -2596,18 +2602,26 @@ pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
     })
 }
 
-/// The primary worktree among `trees`: the only one that gets a lane by existing,
-/// and lane 0 at a project's first start. That is the present worktree on
-/// `primary_branch` (the first by path if git reports several), else the present
-/// main checkout (identity `main`), which then gets the first free lane instead.
-/// Under CI (`ci`) the main checkout comes first, since there the checkout takes
-/// lane 0 on any branch. An extra lane of a folder (`lane new`) is never primary,
-/// and neither is a worktree whose folder is gone. `None` when none qualifies.
+/// The worktree [`primary_tree`] chose.
+pub(crate) struct Primary<'a> {
+    pub tree: &'a Tree,
+    /// It is the worktree lane 0 belongs to; otherwise lane 0 is nobody's.
+    pub lane_zero: bool,
+}
+
+/// The primary worktree among `trees`: the only one that gets a lane by existing.
+/// Lane 0 belongs to the present worktree on `primary_branch` (the first by path
+/// if git reports several); under CI (`ci`) to the present main checkout (identity
+/// `main`) on any branch instead. Without that worktree the primary one is the
+/// present main checkout, or under CI the worktree on the primary branch, and lane
+/// 0 is nobody's: it gets the first free lane. An extra lane of a folder (`lane
+/// new`) is never primary, and neither is a worktree whose folder is gone. `None`
+/// when none qualifies.
 pub(crate) fn primary_tree<'a>(
     trees: impl IntoIterator<Item = &'a Tree>,
     primary_branch: &str,
     ci: bool,
-) -> Option<&'a Tree> {
+) -> Option<Primary<'a>> {
     let rank = |tree: &Tree| {
         let on_primary = tree.branch.as_deref() == Some(primary_branch);
         let checkout = tree.identity == "main";
@@ -2625,7 +2639,10 @@ pub(crate) fn primary_tree<'a>(
         .into_iter()
         .filter_map(|tree| Some((rank(tree)?, tree)))
         .min_by(|(a, x), (b, y)| a.cmp(b).then_with(|| x.path.cmp(&y.path)))
-        .map(|(_, tree)| tree)
+        .map(|(rank, tree)| Primary {
+            tree,
+            lane_zero: rank == 0,
+        })
 }
 
 /// A lane's worktree as a [`Tree`], for [`primary_tree`].
