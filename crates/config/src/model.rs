@@ -245,18 +245,6 @@ impl RunScript {
         }
         Ok((&self.file, &self.name))
     }
-
-    /// The file and script name with the name swapped by a profile's `run_scripts`.
-    pub fn file_and_name_for_profile<'a>(
-        &'a self,
-        profile: Option<&'a ProfileOptions>,
-    ) -> Result<(&'a str, &'a str), crate::ConfigError> {
-        let (file, name) = self.file_and_name()?;
-        Ok((
-            file,
-            profile.map_or(name, |profile| profile.remap_script(name)),
-        ))
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -411,13 +399,6 @@ pub struct ProfileOptions {
     #[serde(default)]
     #[schemars(schema_with = "script_remaps_schema", extend("examples" = [{"dev":"start"}]))]
     pub run_scripts: IndexMap<String, String>,
-}
-
-impl ProfileOptions {
-    /// Return a single-step script remapping, or the original name when no mapping exists.
-    pub fn remap_script<'a>(&'a self, name: &'a str) -> &'a str {
-        self.run_scripts.get(name).map_or(name, String::as_str)
-    }
 }
 
 /// Express nonempty script keys and values to YAML editors as well as runtime validation.

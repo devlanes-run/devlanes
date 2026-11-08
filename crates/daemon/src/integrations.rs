@@ -398,6 +398,76 @@ pub struct ContainerLogChunk {
     pub bytes: Bytes,
 }
 
+/// Docker's `State.StartedAt` text of one container run. Docker gives every
+/// run its own, so equal values are the same run. They come from the engine's
+/// clock, so they are compared for equality only, never ordered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedAt(String);
+
+/// The zero time Docker reports for a container that never started.
+#[derive(Debug, thiserror::Error)]
+#[error("the container never started")]
+pub struct NeverStarted;
+
+impl std::str::FromStr for StartedAt {
+    type Err = NeverStarted;
+
+    /// Rejects an empty value and Docker's zero time.
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text.is_empty() || text.starts_with("0001-01-01T00:00:00") {
+            return Err(NeverStarted);
+        }
+        Ok(Self(text.to_owned()))
+    }
+}
+
+impl std::fmt::Display for StartedAt {
+    /// The text as Docker sent it, as setup records keep it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// One running container of a namespace key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerRun {
+    /// The Docker container name.
+    pub docker: String,
+    pub started_at: StartedAt,
+}
+
+/// What the engine says now about one namespace key ([`InfraProvider::observe`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Observation {
+    /// Its running containers, at least one, sorted by Docker name.
+    Running(Vec<ContainerRun>),
+    /// None of its containers runs; `state` is the display word (`exited 1`,
+    /// `missing`, `restarting`).
+    NotRunning { state: String },
+    /// The engine's endpoint refused the connection or does not exist, so no
+    /// container runs.
+    EngineStopped,
+    /// The engine did not answer for this key: a timeout, a permission
+    /// problem, an engine error.
+    Unknown,
+}
+
+/// A container lifecycle change, as published on the bus by its snake-case name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InfraEventKind {
+    /// `start` and `restart`.
+    Started,
+    HealthStarting,
+    Healthy,
+    Unhealthy,
+    /// The main process exited; `stop` and `kill` also end in this.
+    Died,
+    Stopped,
+    OutOfMemory,
+    Removed,
+}
+
 /// A container lifecycle change for the event bus.
 #[derive(Debug, Clone, Serialize)]
 pub struct InfraEvent {
@@ -405,11 +475,8 @@ pub struct InfraEvent {
     pub lane: Option<u32>,
     /// The Docker container name.
     pub container: String,
-    /// `started`, `health_starting`, `healthy`, `unhealthy`, `died`, `stopped`,
-    /// `out_of_memory` or `removed`; or `reconnected` (with no project, lane or
-    /// container) when the engine's event stream came back and events may have
-    /// been missed.
-    pub state: String,
+    #[serde(rename = "state")]
+    pub kind: InfraEventKind,
     /// The main process's exit code with `died`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i64>,
@@ -418,15 +485,27 @@ pub struct InfraEvent {
 impl InfraEvent {
     /// The `ContainerSummary.state` this event leaves the container in.
     pub fn container_state(&self) -> String {
-        match (self.state.as_str(), self.exit_code) {
-            ("started", _) => "running".into(),
-            ("health_starting", _) => "starting".into(),
-            ("died", Some(code)) => format!("exited {code}"),
-            ("died" | "stopped", _) => "exited".into(),
-            ("out_of_memory", _) => "oom".into(),
-            (other, _) => other.into(),
+        match (self.kind, self.exit_code) {
+            (InfraEventKind::Started, _) => "running".into(),
+            (InfraEventKind::HealthStarting, _) => "starting".into(),
+            (InfraEventKind::Healthy, _) => "healthy".into(),
+            (InfraEventKind::Unhealthy, _) => "unhealthy".into(),
+            (InfraEventKind::Died, Some(code)) => format!("exited {code}"),
+            (InfraEventKind::Died | InfraEventKind::Stopped, _) => "exited".into(),
+            (InfraEventKind::OutOfMemory, _) => "oom".into(),
+            (InfraEventKind::Removed, _) => "removed".into(),
         }
     }
+}
+
+/// An item of [`InfraProvider::events`].
+#[derive(Debug, Clone)]
+pub enum InfraWatch {
+    /// A container lifecycle change.
+    Container(InfraEvent),
+    /// Events may have been lost (the engine's stream ended or came back), so
+    /// what lanes store must be checked again.
+    Resync,
 }
 
 /// Containers: shared and per-lane Compose services plus plain Docker containers.
@@ -441,15 +520,25 @@ pub trait InfraProvider: Send + Sync {
     /// already run healthy with their current config are left alone, so a call
     /// with everything up only reads state.
     async fn up(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError>;
-    /// The `infra` namespace and setup env without starting anything. Still reads
-    /// the containers' state from Docker; a lane that stored the result of
-    /// [`InfraProvider::up`] for its run needs no call.
+    /// The `infra` namespace, its containers with their state and the setup env,
+    /// without starting anything. Reads the containers from Docker.
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError>;
-    /// Fills in the state of `containers` that [`InfraProvider::namespace`]
-    /// could not tell, such as plain containers it lists from their spec.
-    /// Only callers that keep the containers ask, since it may cost a Docker
-    /// call. A state it can't learn stays `None`.
-    async fn container_states(&self, _spec: &InfraSpec, _containers: &mut [InfraContainer]) {}
+    /// What the engine says now about each of `keys` (namespace keys of
+    /// `spec`): the runs of its running containers, or why none runs. Asks the
+    /// engine only, never Compose, within a bound of its own. A key missing
+    /// from the answer is [`Observation::Unknown`].
+    async fn observe(&self, spec: &InfraSpec, keys: &[String]) -> BTreeMap<String, Observation>;
+    /// Every name the lane's `infra` namespace can hold: the plain containers,
+    /// the shared Compose services and the lane's own ones. Read from the files,
+    /// never from the engine.
+    async fn declared(&self, spec: &InfraSpec) -> Result<BTreeSet<String>, InfraError>;
+    /// The env `infra.setup` entries get (`COMPOSE_PROJECT_NAME`,
+    /// `COMPOSE_FILE` and the rest), as [`InfraUp::setup_env`] carries it.
+    /// Read from the files, never from the engine, so no container needs to
+    /// run. Empty when the provider cannot tell.
+    async fn setup_env(&self, _spec: &InfraSpec) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
     /// Health and endpoints of a project's infra.
     async fn status(&self, spec: &InfraSpec) -> Result<Value, InfraError>;
     /// Stops the project's shared containers, keeping their data (`infra down`,
@@ -472,15 +561,6 @@ pub trait InfraProvider: Send + Sync {
     async fn lane_resources(&self, _project: &str, _lane: u32) -> Result<Value, InfraError> {
         Ok(Value::Object(serde_json::Map::new()))
     }
-    /// `StartedAt` of the containers backing `containers` (compose service or plain
-    /// container names) as seen from this lane, by name; one that does not run is
-    /// absent. One call answers every setup entry of a start, from the engine alone
-    /// once the project's compose files were resolved.
-    async fn containers_started_at(
-        &self,
-        spec: &InfraSpec,
-        containers: &[String],
-    ) -> Result<BTreeMap<String, String>, InfraError>;
     /// Waits until each of `containers` that runs now is healthy, or running when
     /// it has no healthcheck, at most `timeout`; they are waited for together.
     /// Never starts, creates or recreates anything. A container that does not
@@ -511,8 +591,8 @@ pub trait InfraProvider: Send + Sync {
     async fn adopt(&self, projects: &[String]) -> Result<Value, InfraError>;
     /// Docker reachability and Compose version for `doctor`.
     async fn doctor(&self) -> Value;
-    /// Container events; `None` when the provider has no event source.
-    fn events(&self) -> Option<broadcast::Receiver<InfraEvent>> {
+    /// Container events and resyncs; `None` when the provider has no event source.
+    fn events(&self) -> Option<broadcast::Receiver<InfraWatch>> {
         None
     }
     /// Each container `up` brings up for `spec`, as it is now. Polled about once a
@@ -554,6 +634,19 @@ impl InfraProvider for NoInfra {
     async fn namespace(&self, _: &InfraSpec) -> Result<InfraUp, InfraError> {
         Ok(InfraUp::default())
     }
+    /// No engine runs.
+    async fn observe(&self, _: &InfraSpec, keys: &[String]) -> BTreeMap<String, Observation> {
+        keys.iter()
+            .map(|key| (key.clone(), Observation::EngineStopped))
+            .collect()
+    }
+    /// The plain containers; Compose files need the provider that runs Compose.
+    async fn declared(&self, spec: &InfraSpec) -> Result<BTreeSet<String>, InfraError> {
+        if !spec.compose_files.is_empty() {
+            return Err(unavailable());
+        }
+        Ok(spec.containers.iter().map(|c| c.name.clone()).collect())
+    }
     /// Reports the missing engine.
     async fn status(&self, _: &InfraSpec) -> Result<Value, InfraError> {
         Err(unavailable())
@@ -572,14 +665,6 @@ impl InfraProvider for NoInfra {
     /// Nothing to remove without an engine.
     async fn remove_lane(&self, _: &str, _: u32) -> Result<Value, InfraError> {
         Ok(Value::Null)
-    }
-    /// No containers.
-    async fn containers_started_at(
-        &self,
-        _: &InfraSpec,
-        _: &[String],
-    ) -> Result<BTreeMap<String, String>, InfraError> {
-        Ok(BTreeMap::new())
     }
     /// No containers.
     async fn adopt(&self, _: &[String]) -> Result<Value, InfraError> {

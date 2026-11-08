@@ -202,6 +202,7 @@ impl Inner {
                 selectors,
                 profiles: selection.profile_names(),
                 transient: selection.transient,
+                needs_profile_settings: selection.needs_profile_settings,
                 env: carries_env(context),
                 overrides: selection.env.clone(),
                 actor: context.actor.clone(),
@@ -354,6 +355,7 @@ impl Inner {
             selectors: selectors.clone(),
             profiles: selection.profile_names(),
             transient: false,
+            needs_profile_settings: false,
             env: carries_env(context),
             overrides: selection.env.clone(),
             actor: context.actor.clone(),
@@ -416,8 +418,9 @@ impl Inner {
                             selectors: Vec::new(),
                             profiles: Vec::new(),
                             transient: false,
+                            needs_profile_settings: false,
                             env: Some(env.clone()),
-                            overrides: EnvMap::new(),
+                            overrides: Some(EnvMap::new()),
                             actor: context.actor.clone(),
                             timeout: self.timeout(args.timeout_ms),
                             session: None,
@@ -487,8 +490,9 @@ impl Inner {
                             selectors: planned.units,
                             profiles: planned.profiles,
                             transient: false,
+                            needs_profile_settings: false,
                             env,
-                            overrides: EnvMap::new(),
+                            overrides: Some(EnvMap::new()),
                             actor: context.actor.clone(),
                             timeout: self.opts.start_timeout,
                             session: None,
@@ -571,8 +575,9 @@ impl Inner {
                     selectors: Vec::new(),
                     profiles: Vec::new(),
                     transient: false,
+                    needs_profile_settings: false,
                     env,
-                    overrides: args.env.clone(),
+                    overrides: Some(args.env.clone()),
                     actor: context.actor.clone(),
                     timeout: self.opts.start_timeout,
                     session: None,
@@ -618,10 +623,9 @@ impl Inner {
         if base.st().record.is_none() {
             // The folder's first lane comes first; it could not get one.
             return Err(reason.unwrap_or_else(|| {
-                RpcError::new(
-                    "unassigned",
-                    json!({"lane": base.st().reference(&project.name())}),
-                    1,
+                crate::model::unassigned(
+                    &base.st().reference(&project.name()),
+                    crate::model::Unassigned::NoRecord,
                 )
             }));
         }
@@ -698,10 +702,9 @@ impl Inner {
         if lane.st().record.is_none() {
             let st = lane.st();
             return Err(st.unassigned.clone().unwrap_or_else(|| {
-                RpcError::new(
-                    "unassigned",
-                    json!({"lane": st.reference(&project.name())}),
-                    1,
+                crate::model::unassigned(
+                    &st.reference(&project.name()),
+                    crate::model::Unassigned::NoRecord,
                 )
             }));
         }
@@ -767,7 +770,7 @@ impl Inner {
                 .iter()
                 .filter_map(|(project, lane)| {
                     let st = lane.st();
-                    let running = st.any_running() || st.busy.is_some();
+                    let running = st.any_running() || st.is_busy();
                     // A gone worktree that never was a lane is dropped unasked.
                     (stale(&st) && !running && st.record.is_some())
                         .then(|| st.reference(&project.name()))
@@ -788,7 +791,7 @@ impl Inner {
                     stale(&st),
                     st.record.is_some(),
                     st.reference(&project.name()),
-                    st.any_running() || st.busy.is_some(),
+                    st.any_running() || st.is_busy(),
                 )
             };
             if !stale || present && !assigned {
@@ -960,7 +963,7 @@ impl Inner {
             return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
         }
         let (resolved, layers) = self
-            .resolve_lane_env(&project, &lane, Arc::default(), None)
+            .resolve_lane_env(&project, &lane, Arc::default())
             .await?;
         let mut left_out = layers.unset.clone();
         left_out.retain(|key, _| !args.env.contains_key(key));
@@ -1471,11 +1474,16 @@ impl Inner {
         Ok(json!({"stopped": stopped, "terminated": terminated}))
     }
 
-    /// Fills the lane's Compose env (`COMPOSE_PROJECT_NAME` and the rest) when
-    /// no start or `infra up` did since the daemon began: `run` reaches infra
-    /// entries on such a lane too, after a daemon restart for one. Starts
-    /// nothing; a lane without infra, or Docker being down, leaves it empty.
+    /// Brings the lane's live infra up to date before a `run`
+    /// ([`Self::current_infra`]), and fills its Compose env
+    /// (`COMPOSE_PROJECT_NAME` and the rest) when no start or `infra up` did:
+    /// `run` reaches `infra.*` entries on a lane no start brought up too, after
+    /// a daemon restart for one. The env comes from the Compose files, so it
+    /// is there whether or not a container runs. Starts nothing.
     async fn ensure_infra_env(self: &Arc<Self>, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
+        if let Err(error) = self.current_infra(project, lane).await {
+            tracing::debug!(code = %error.code, "infra for a run unavailable");
+        }
         if !lane.st().setup_env.is_empty() {
             return;
         }
@@ -1485,24 +1493,11 @@ impl Inner {
         if spec.is_empty() {
             return;
         }
-        let needs = self.integ.infra.port_needs(&spec).await.unwrap_or_default();
-        let spec = match self.infra_spec(project, lane, &needs).await {
-            Ok(with_ports) => with_ports,
-            Err(_) => spec,
-        };
-        match self.integ.infra.namespace(&spec).await {
-            Ok(up) => {
-                // Only the env: the namespace and containers make status list
-                // the lane's infra as up, which nothing here checked.
-                let mut st = lane.st();
-                // A start that finished meanwhile knows better.
-                if st.setup_env.is_empty() {
-                    st.setup_env = up.setup_env;
-                }
-            }
-            Err(error) => {
-                tracing::debug!(code = %error.code, "infra env for a run unavailable");
-            }
+        let env = self.integ.infra.setup_env(&spec).await;
+        let mut st = lane.st();
+        // A start that finished meanwhile knows better.
+        if st.setup_env.is_empty() {
+            st.setup_env = env;
         }
     }
 
@@ -1538,25 +1533,27 @@ impl Inner {
         // The containers bind the lane's ports, so box lanes it clashes with
         // give them up first. Its own containers keep it counted once up.
         let claim = self.claim_ports(&lane).await;
-        let up = match self.infra_up(&project, &spec).await {
-            Ok(up) => up,
+        let (read, up) = match self.up_infra(&project, &lane, &spec).await {
+            Ok(done) => done,
             Err(error) => {
                 // Before the claim drops, so what runs anyway keeps the lane.
                 self.store_after_failed_up(&lane, &spec).await;
-                return Err(RpcError::from(error));
+                return Err(error);
             }
         };
-        {
-            let mut st = lane.st();
-            st.infra_ns = Some(up.namespace.clone());
-            st.infra_replaced();
-            st.store_containers(up.containers.clone());
-            st.setup_env = up.setup_env.clone();
-        }
+        let endpoints = read.up.namespace.clone();
+        let report = up.report.clone();
+        crate::infra_restarts::store_infra_up(&lane, read, up);
         drop(claim);
+        // What `infra_namespace_changed` does, under the `op` this holds.
         self.refresh_views_held(&project, &lane).await;
+        let running = lane.st().any_running();
+        if running {
+            self.update_drift(&project, &lane).await;
+        }
+        self.emit_lane(&project, &lane);
         Ok(
-            json!({"lane": lane.st().reference(&project.name()), "infra": up.report, "endpoints": up.namespace}),
+            json!({"lane": lane.st().reference(&project.name()), "infra": report, "endpoints": endpoints}),
         )
     }
 

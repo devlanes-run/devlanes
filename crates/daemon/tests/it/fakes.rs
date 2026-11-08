@@ -5,7 +5,9 @@
 //! up), `tcp-echo` (echoes every connection on `$PORT`), `http <body>` (answers
 //! every request on `$PORT` with `<body>`), `http-keep <body>` (the same on
 //! kept-alive connections, and WebSockets that greet with `<body>` and echo),
-//! `sleep` (stays up), `exit <code>`,
+//! `sleep` (stays up), `exit <code>`, `killed <signal>` (ends by that signal
+//! on its own), `onstop <code>` (read at spawn: a stop ends it with that
+//! exit code instead of the signal, as a shutdown handler would),
 //! `fail` (prints `boom`, exits 1), `nap <ms>` (waits, then goes on),
 //! `hold` (waits until the test calls [`FakeRunner::release`]),
 //! `deaf` (stops reading input: writes block
@@ -37,9 +39,9 @@ use devlanes_core::{
     StopSignal, TerminalSize, Unit,
 };
 use devlanes_daemon::integrations::{
-    ContainerLogChunk, ContainerLogOptions, ExitDetails, InfraContainer, InfraError, InfraEvent,
-    InfraPortNeed, InfraProvider, InfraSpec, InfraUp, ManagedUnit, PortScope, ProcessTable,
-    SharedInfraSpec, UnitRunner,
+    ContainerLogChunk, ContainerLogOptions, ContainerRun, ExitDetails, InfraContainer, InfraError,
+    InfraEvent, InfraPortNeed, InfraProvider, InfraSpec, InfraUp, InfraWatch, ManagedUnit,
+    Observation, PortScope, ProcessTable, SharedInfraSpec, StartedAt, UnitRunner,
 };
 use devlanes_proto::{LeftProcess, PhaseContainer};
 use futures_util::{StreamExt, stream::BoxStream};
@@ -196,9 +198,12 @@ impl UnitRunner for FakeRunner {
             .split(';')
             .any(|command| command.trim() == "stubborn");
         let renders = script.split(';').any(|command| command.trim() == "render");
-        let graceful = script
-            .split(';')
-            .any(|command| command.trim() == "graceful");
+        let stop_code = script.split(';').find_map(|command| {
+            command
+                .trim()
+                .strip_prefix("onstop ")
+                .and_then(|code| code.trim().parse().ok())
+        });
         let real = if stubborn {
             self.stubborn_identity
                 .lock()
@@ -214,8 +219,8 @@ impl UnitRunner for FakeRunner {
                 start_time: 1,
             }),
             stubborn: AtomicBool::new(stubborn),
+            stop_code,
             renders,
-            graceful,
             sender: Mutex::new(Some(sender)),
             first: Mutex::new(Some(first)),
             exit: watch::channel(None).0,
@@ -238,11 +243,10 @@ pub struct FakeUnit {
     identity: ProcessIdentity,
     /// Set by `stubborn`: the next stop request is ignored.
     stubborn: AtomicBool,
+    /// Set by `onstop`: the exit code a stop ends the unit with.
+    stop_code: Option<i32>,
     /// Set by `render`.
     renders: bool,
-    /// Set by `graceful`: a stop ends it with exit 0, as a process that handles
-    /// the signal and exits cleanly.
-    graceful: bool,
     sender: Mutex<Option<broadcast::Sender<OutputChunk>>>,
     first: Mutex<Option<broadcast::Receiver<OutputChunk>>>,
     exit: watch::Sender<Option<ExitOutcome>>,
@@ -319,7 +323,7 @@ impl FakeUnit {
                 }
                 "deaf" => self.deaf.store(true, Ordering::SeqCst),
                 // Read at spawn.
-                "render" | "graceful" => {}
+                "render" | "onstop" => {}
                 "printenv" => self.print(env.get(rest).map_or("", String::as_str)),
                 "daemonize" | "escape" => {
                     let process = LeftProcess {
@@ -339,6 +343,13 @@ impl FakeUnit {
                     self.end(ExitOutcome {
                         code: Some(code),
                         signal: None,
+                    });
+                    return;
+                }
+                "killed" => {
+                    self.end(ExitOutcome {
+                        code: None,
+                        signal: rest.trim().parse().ok(),
                     });
                     return;
                 }
@@ -523,22 +534,19 @@ impl Unit for FakeUnit {
         }
         Ok(())
     }
-    /// Ends the unit with the requested signal (`stubborn`: from the second request).
+    /// Ends the unit with the requested signal, or the `onstop` code
+    /// (`stubborn`: from the second request).
     async fn stop(&self, policy: StopPolicy) -> Result<(), Error> {
         if self.stubborn.swap(false, Ordering::SeqCst) {
             return Ok(());
         }
         self.stop.send_replace(true);
-        self.end(if self.graceful {
-            ExitOutcome {
-                code: Some(0),
-                signal: None,
-            }
-        } else {
-            ExitOutcome {
-                code: None,
-                signal: Some(signal_number(policy.signal)),
-            }
+        self.end(ExitOutcome {
+            code: self.stop_code,
+            signal: self
+                .stop_code
+                .is_none()
+                .then(|| signal_number(policy.signal)),
         });
         Ok(())
     }
@@ -654,18 +662,24 @@ type LiveLine = Option<(usize, String)>;
 #[derive(Default, Clone)]
 pub struct FakeInfra {
     pub calls: Journal,
-    /// Read-only questions (`port_needs`, `namespace`, `containers_started_at`),
-    /// which the real provider answers with Docker calls.
+    /// Read-only questions (`port_needs`, `namespace`, `observe`), which the
+    /// real provider answers with Docker calls.
     pub queries: Journal,
-    /// `StartedAt` reported for every container.
-    pub started_at: Arc<Mutex<Option<String>>>,
+    /// `StartedAt` of the running `db` replicas; [`FIRST_RUN`] when unset.
+    pub db_run: Arc<Mutex<Option<String>>>,
+    /// `StartedAt` of the running `cache`; [`FIRST_RUN`] when unset.
+    pub cache_run: Arc<Mutex<Option<String>>>,
+    /// Once set, the next `namespace` answers with the current `cache`, then
+    /// moves it to this port and run, as a container that restarts during a
+    /// read.
+    pub after_namespace: Arc<Mutex<Option<(u16, String)>>>,
     /// When set, `up` fails with this error.
     pub fail_up: Arc<Mutex<Option<InfraError>>>,
     /// When set, `lane_resources` fails with this error, as without Docker.
     pub fail_resources: Arc<Mutex<Option<InfraError>>>,
     /// When set, the state `namespace` reports for the lane's `db`, such as
     /// `exited 1` for one an `up` that failed never started. `healthy`
-    /// otherwise.
+    /// otherwise. An `exited` one does not run for `observe`.
     pub namespace_db_state: Arc<Mutex<Option<String>>>,
     /// Lines every container's log holds. Line `n` is stamped [`fake_timestamp`]`(n)`.
     pub logs: Arc<Mutex<Vec<String>>>,
@@ -681,18 +695,17 @@ pub struct FakeInfra {
     pub progress: Arc<Mutex<std::collections::VecDeque<Vec<PhaseContainer>>>>,
     /// Fired when `progress` handed out the last snapshot.
     pub progress_read: Arc<tokio::sync::Notify>,
-    /// Container events, sent with [`FakeInfra::emit`].
-    events: Arc<std::sync::OnceLock<broadcast::Sender<InfraEvent>>>,
+    /// Container events and resyncs, sent with [`FakeInfra::emit`] and
+    /// [`FakeInfra::resync`].
+    events: Arc<std::sync::OnceLock<broadcast::Sender<InfraWatch>>>,
     /// The host port the shared `cache` publishes; 6379 when unset.
     pub cache_port: Arc<Mutex<Option<u16>>>,
     /// `cache` is down: `namespace` leaves it out, as Compose lists only
-    /// running containers, and `wait_healthy` skips it.
+    /// running containers, `observe` reports it exited and `wait_healthy`
+    /// skips it.
     pub cache_down: Arc<Mutex<bool>>,
     /// When set, `wait_healthy` waits for a notification before it answers.
     pub wait_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
-    /// `up` leaves the lane's `db` out of its containers, as for a lane whose
-    /// containers a restarted daemon learned while `db` was down.
-    pub up_omits_db: Arc<Mutex<bool>>,
     /// When set, `down` waits for a notification between recording `down`
     /// and `down done`.
     pub down_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
@@ -701,15 +714,66 @@ pub struct FakeInfra {
     pub ports_from_spec: Arc<Mutex<bool>>,
 }
 
+/// The `StartedAt` of a container whose run no test set.
+pub const FIRST_RUN: &str = "2026-01-01T00:00:00Z";
+
 impl FakeInfra {
     /// Sends a container event to the engine.
     pub fn emit(&self, event: InfraEvent) {
-        let _ = self.sender().send(event);
+        let _ = self.sender().send(InfraWatch::Container(event));
+    }
+
+    /// Tells the engine that events may have been lost.
+    pub fn resync(&self) {
+        let _ = self.sender().send(InfraWatch::Resync);
     }
 
     /// The event channel, made on first use.
-    fn sender(&self) -> &broadcast::Sender<InfraEvent> {
+    fn sender(&self) -> &broadcast::Sender<InfraWatch> {
         self.events.get_or_init(|| broadcast::channel(16).0)
+    }
+
+    /// The run in `slot`, or [`FIRST_RUN`].
+    fn run(slot: &Mutex<Option<String>>) -> StartedAt {
+        slot.lock()
+            .ok()
+            .and_then(|run| run.clone())
+            .unwrap_or_else(|| FIRST_RUN.to_owned())
+            .parse()
+            .expect("a started run")
+    }
+
+    /// What the engine says about `key` of `spec`: the lane's `db` replicas
+    /// and the shared `cache`, each running unless a knob says otherwise.
+    fn observation(&self, spec: &InfraSpec, key: &str) -> Observation {
+        match key {
+            "db" => {
+                let state = self.namespace_db_state.lock().ok().and_then(|s| s.clone());
+                if let Some(state) = state.filter(|state| state.starts_with("exited")) {
+                    return Observation::NotRunning { state };
+                }
+                let replicas = self.db_replicas.lock().map_or(1, |r| (*r).max(1));
+                let run = Self::run(&self.db_run);
+                Observation::Running(
+                    (1..=replicas)
+                        .map(|replica| ContainerRun {
+                            docker: format!("{}-lane{}-db-{replica}", spec.project, spec.lane),
+                            started_at: run.clone(),
+                        })
+                        .collect(),
+                )
+            }
+            "cache" if self.cache_down.lock().is_ok_and(|down| *down) => Observation::NotRunning {
+                state: "exited 0".into(),
+            },
+            "cache" => Observation::Running(vec![ContainerRun {
+                docker: format!("{}-cache-1", spec.project),
+                started_at: Self::run(&self.cache_run),
+            }]),
+            _ => Observation::NotRunning {
+                state: "missing".into(),
+            },
+        }
     }
 
     /// The live log channel, made on first use.
@@ -826,19 +890,18 @@ impl InfraProvider for FakeInfra {
             namespace: self.namespace(spec),
             setup_env: BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())]),
             report: json!({"services": ["db"]}),
-            containers: {
-                let mut containers = self.containers(spec, "healthy");
-                if self.up_omits_db.lock().is_ok_and(|omits| *omits) {
-                    containers.retain(|c| c.name != "db");
-                }
-                containers
-            },
+            containers: self.containers(spec, "healthy"),
         })
     }
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
         self.query("namespace");
+        let namespace = self.namespace(spec);
+        if let Some((port, run)) = self.after_namespace.lock().ok().and_then(|mut a| a.take()) {
+            *self.cache_port.lock().expect("lock") = Some(port);
+            *self.cache_run.lock().expect("lock") = Some(run);
+        }
         Ok(InfraUp {
-            namespace: self.namespace(spec),
+            namespace,
             // As Compose's provider: the same env `up` gives, nothing started.
             setup_env: BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())]),
             containers: self.containers(
@@ -853,10 +916,27 @@ impl InfraProvider for FakeInfra {
             ..InfraUp::default()
         })
     }
+    async fn observe(&self, spec: &InfraSpec, keys: &[String]) -> BTreeMap<String, Observation> {
+        self.query("observe");
+        keys.iter()
+            .map(|key| (key.clone(), self.observation(spec, key)))
+            .collect()
+    }
+    /// The lane's `db` and the shared `cache`, whatever the config says.
+    async fn declared(
+        &self,
+        _: &InfraSpec,
+    ) -> Result<std::collections::BTreeSet<String>, InfraError> {
+        Ok(["cache", "db"].map(String::from).into())
+    }
+    /// As Compose's provider: the env `up` gives, whatever runs.
+    async fn setup_env(&self, _: &InfraSpec) -> BTreeMap<String, String> {
+        BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())])
+    }
     async fn status(&self, _: &InfraSpec) -> Result<Value, InfraError> {
         Ok(json!({"db": "healthy"}))
     }
-    fn events(&self) -> Option<broadcast::Receiver<InfraEvent>> {
+    fn events(&self) -> Option<broadcast::Receiver<InfraWatch>> {
         Some(self.sender().subscribe())
     }
     /// Records `down` on entry, waits for [`FakeInfra::down_gate`] when one is
@@ -892,23 +972,6 @@ impl InfraProvider for FakeInfra {
             "containers": [{"name": format!("{project}-lane{lane}-db-1"), "kind": "compose"}],
             "volumes": [{"name": format!("{project}-lane{lane}_pgdata"), "bytes": 4096}],
         }))
-    }
-    /// Every container started at the scripted time; none run without one.
-    async fn containers_started_at(
-        &self,
-        _: &InfraSpec,
-        containers: &[String],
-    ) -> Result<BTreeMap<String, String>, InfraError> {
-        self.query("containers_started_at");
-        let started = self.started_at.lock().ok().and_then(|s| s.clone());
-        Ok(started
-            .map(|at| {
-                containers
-                    .iter()
-                    .map(|container| (container.clone(), at.clone()))
-                    .collect()
-            })
-            .unwrap_or_default())
     }
     /// Records `wait <docker names>`, waits for the gate when one is set and
     /// skips the containers that are down.

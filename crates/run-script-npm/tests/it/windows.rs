@@ -4,16 +4,16 @@
 use std::{collections::BTreeMap, ffi::OsString, path::Path, sync::Arc, time::Duration};
 
 use devlanes_core::{
-    ExitOutcome, LaunchSpec, StopPolicy, StopSignal, TerminalSize, Unit,
+    ExitOutcome, LaunchSpec, OutputChunk, OutputStream, StopPolicy, StopSignal, TerminalSize, Unit,
     contrib::{self, ScriptPlan, ScriptRunner},
 };
 use devlanes_run_script_npm::NpmScripts;
 use devlanes_runner_windows::{
     ConsoleHelper, HELPER_ARG, WindowsRunner, WindowsUnit, console_ctrl_main,
 };
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::{Receiver, error::RecvError};
 
-use super::write_files;
+use super::{COMMAND_LIMIT, QUIET, write_files};
 
 /// Upper bound for each test body.
 const LIMIT: Duration = Duration::from_secs(60);
@@ -83,6 +83,60 @@ impl Drop for Cleanup {
     fn drop(&mut self) {
         self.0.terminate();
     }
+}
+
+/// Every chunk until the channel closes.
+async fn drain(mut output: Receiver<OutputChunk>) -> Vec<OutputChunk> {
+    let mut chunks = Vec::new();
+    loop {
+        match output.recv().await {
+            Ok(chunk) => chunks.push(chunk),
+            Err(RecvError::Lagged(_)) => {}
+            Err(RecvError::Closed) => return chunks,
+        }
+    }
+}
+
+/// Runs `argv` in `dir` as a pipe unit, the way the daemon starts a package
+/// manager, within [`COMMAND_LIMIT`]. Returns whether it exited 0 and its
+/// stdout, or `None` when the runner could not start it.
+pub(super) fn run(argv: &[String], dir: &Path) -> Option<(bool, String)> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let mut env: BTreeMap<String, String> = std::env::vars().collect();
+        env.extend(QUIET.map(|(name, value)| (name.to_owned(), value.to_owned())));
+        let unit = runner()
+            .spawn_unit(LaunchSpec {
+                program: argv[0].clone(),
+                args: argv[1..].to_vec(),
+                cwd: dir.to_path_buf(),
+                env,
+                pty: false,
+                size: TerminalSize::default(),
+            })
+            .await
+            .ok()?;
+        let _cleanup = Cleanup(unit.clone());
+        let output = unit.output();
+        tokio::time::timeout(COMMAND_LIMIT, async {
+            let chunks = drain(output).await;
+            let outcome = unit.wait().await.expect("wait");
+            let mut stdout = String::new();
+            for chunk in chunks {
+                let text = String::from_utf8_lossy(&chunk.bytes);
+                match chunk.stream {
+                    OutputStream::Stderr => eprint!("{text}"),
+                    _ => stdout.push_str(&text),
+                }
+            }
+            Some((outcome.code == Some(0), stdout))
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{argv:?} timed out"))
+    })
 }
 
 /// A stopped npm script reports its program's own exit code: npm is not

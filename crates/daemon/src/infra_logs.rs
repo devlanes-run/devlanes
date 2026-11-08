@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use crate::{
     Session,
     engine::{Inner, required},
+    infra_restarts::COMMAND_INFRA_WAIT,
     integrations::{ContainerLogChunk, ContainerLogOptions, InfraContainer, InfraError},
     model::{LaneRt, ProjectRt},
     registry::internal,
@@ -289,7 +290,8 @@ impl Inner {
 
     /// The Docker containers behind `container`, in replica order: the lane's
     /// own, else a shared one another lane of the project started, else what
-    /// the provider finds running without starting anything.
+    /// a check of the lane's infra ([`Inner::refresh_infra`]) finds running
+    /// and stores, without starting anything.
     async fn infra_log_targets(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -313,32 +315,31 @@ impl Inner {
             sort_replicas(&mut found);
             found
         };
-        let own = pick(&lane.st().infra_containers, false);
+        let own = pick(lane.st().infra().containers(), false);
         if !own.is_empty() {
             return Ok(own);
         }
         let others: Vec<InfraContainer> = project
             .lanes()
             .iter()
-            .flat_map(|other| other.st().infra_containers.clone())
+            .flat_map(|other| other.st().infra().containers().to_vec())
             .collect();
         let shared = pick(&others, true);
         if !shared.is_empty() {
             return Ok(shared);
         }
-        // Plain containers need their host ports in the spec to be listed.
-        if let Ok(spec) = self.infra_spec(project, lane, &[]).await {
-            let needs = self.integ.infra.port_needs(&spec).await.unwrap_or_default();
-            let spec = match self.infra_spec(project, lane, &needs).await {
-                Ok(with_ports) => with_ports,
-                Err(_) => spec,
-            };
-            if let Ok(up) = self.integ.infra.namespace(&spec).await {
-                let found = pick(&up.containers, false);
-                if !found.is_empty() {
-                    return Ok(found);
-                }
-            }
+        // Containers that run without a lane having stored them: the lane
+        // checks its infra and stores what runs.
+        if let Err(failed) = self
+            .refresh_infra(project, lane, &[], COMMAND_INFRA_WAIT)
+            .await
+        {
+            let error = RpcError::from(failed);
+            tracing::debug!(code = %error.code, "lane infra not checked for logs");
+        }
+        let found = pick(lane.st().infra().containers(), false);
+        if !found.is_empty() {
+            return Ok(found);
         }
         candidates.sort();
         Err(RpcError::new(

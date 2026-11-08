@@ -4,26 +4,26 @@ expression: text
 ---
 --- human (exit 1)
 acme
-  LANE  BRANCH        STATE       SERVICES  CPU   MEM        URL
-  0     main          running     2/2       9.0%  286.1 MiB  https://acme.localhost:8443
-  2     feat/billing  failed      1/4       4.5%  143.1 MiB  https://acme2.localhost:8443
-  3     fix/login     idle        –         –     –          https://acme3.localhost:8443  (moves to lane 0; config changed)
-  4     feat/search   idle        –         –     –          https://acme4.localhost:8443  (needs start from a shell: devlanes start --lane acme@4)
-  5     old/branch    idle        –         –     –          https://acme5.localhost:8443  (worktree missing: devlanes lane gc)
-  –     spike/xyz     unassigned  –         –     –          –  (port pool full; devlanes lane gc)
+  LANE   BRANCH        STATE       SERVICES  CPU   MEM        URL
+  0      main          running     2/2       9.0%  286.1 MiB  https://acme.localhost:8443
+  2      feat/billing  failed      1/4       4.5%  143.1 MiB  https://acme2.localhost:8443
+  3      fix/login     idle        –         –     –          https://acme3.localhost:8443  (moves to lane 0; config changed)
+  4      feat/search   idle        –         –     –          https://acme4.localhost:8443  (needs start from a shell: devlanes start --lane acme@4)
+  5      old/branch    idle        –         –     –          https://acme5.localhost:8443  (worktree missing: devlanes lane gc)
+  spike  spike/xyz     unassigned  –         –     –          –  (port pool full; devlanes lane gc)
 --- plain (exit 1)
 acme
-  LANE  BRANCH        STATE       SERVICES  CPU   MEM        URL
-  0     main          running     2/2       9.0%  286.1 MiB  https://acme.localhost:8443
-  2     feat/billing  failed      1/4       4.5%  143.1 MiB  https://acme2.localhost:8443
-  3     fix/login     idle        –         –     –          https://acme3.localhost:8443  (moves to lane 0; config changed)
-  4     feat/search   idle        –         –     –          https://acme4.localhost:8443  (needs start from a shell: devlanes start --lane acme@4)
-  5     old/branch    idle        –         –     –          https://acme5.localhost:8443  (worktree missing: devlanes lane gc)
-  –     spike/xyz     unassigned  –         –     –          –  (port pool full; devlanes lane gc)
+  LANE   BRANCH        STATE       SERVICES  CPU   MEM        URL
+  0      main          running     2/2       9.0%  286.1 MiB  https://acme.localhost:8443
+  2      feat/billing  failed      1/4       4.5%  143.1 MiB  https://acme2.localhost:8443
+  3      fix/login     idle        –         –     –          https://acme3.localhost:8443  (moves to lane 0; config changed)
+  4      feat/search   idle        –         –     –          https://acme4.localhost:8443  (needs start from a shell: devlanes start --lane acme@4)
+  5      old/branch    idle        –         –     –          https://acme5.localhost:8443  (worktree missing: devlanes lane gc)
+  spike  spike/xyz     unassigned  –         –     –          –  (port pool full; devlanes lane gc)
 --- agent (exit 1)
 running acme@0 main 2/2
 failed acme@2 feat/billing 1/4 failed=admin
 idle acme@3 fix/login (moves to lane 0) (config changed)
 idle acme@4 feat/search (needs start from a shell: devlanes start --lane acme@4)
 idle acme@5 old/branch (worktree missing: devlanes lane gc)
-unassigned acme spike/xyz reason="pool full"
+unassigned acme@spike spike/xyz reason="pool full"

@@ -29,7 +29,7 @@ use crate::{
     integrations::{InfraPortNeed, PortScope},
     model::{
         ConfigState, EnvMap, LaneRt, LaneSt, LaneView, ProjectRt, ProjectSt, ServiceInfo,
-        config_error, lane_summary, lock,
+        Unassigned, config_error, lane_summary, lock, unassigned,
     },
 };
 
@@ -45,7 +45,7 @@ fn sweepable(st: &LaneSt) -> bool {
     !st.present
         && st.record.is_some()
         && !st.any_running()
-        && st.busy.is_none()
+        && !st.is_busy()
         && matches!(removed_policy(st), RemovedWorktrees::Clean)
 }
 
@@ -1333,11 +1333,8 @@ impl Inner {
             if let Some(max) = primary_max.unwrap_or_else(|| literal(&config.lanes.max))
                 && used.len() >= usize::try_from(max).unwrap_or(usize::MAX)
             {
-                lane.st().unassigned = Some(RpcError::new(
-                    "unassigned",
-                    json!({"reason": "lanes_max", "max": max}),
-                    1,
-                ));
+                let reference = lane.st().reference(&project.name());
+                lane.st().unassigned = Some(unassigned(&reference, Unassigned::LanesMax(max)));
                 continue;
             }
             let index = if is_primary && lane_zero && !used.contains(&0) {
@@ -1373,11 +1370,8 @@ impl Inner {
                     let mut st = lane.st();
                     st.record = None;
                     st.allocation = None;
-                    st.unassigned = Some(RpcError::new(
-                        "unassigned",
-                        json!({"reason": "pool_exhausted"}),
-                        1,
-                    ));
+                    let reference = st.reference(&project.name());
+                    st.unassigned = Some(unassigned(&reference, Unassigned::PoolExhausted));
                 }
                 Err(error) => {
                     lane.st().last_error = Some(error);
@@ -1435,9 +1429,11 @@ impl Inner {
             let st = lane.st();
             // A lane that runs something keeps its index, domain and ports.
             match st.moves_to {
-                // The calling start counts in `starting`; another one may have
-                // planned on the current index.
-                Some(target) if st.record.is_some() && !st.any_running() && st.starting <= 1 => {
+                // The calling start counts itself among the starts in their
+                // phases; another one may have planned on the current index.
+                Some(target)
+                    if st.record.is_some() && !st.any_running() && st.starts_in_phases() <= 1 =>
+                {
                     target
                 }
                 _ => return Ok(()),
@@ -1452,7 +1448,7 @@ impl Inner {
             let Ok(_holder_op) = holder.op.try_write() else {
                 return Ok(());
             };
-            if holder.st().any_running() || holder.st().busy.is_some() {
+            if holder.st().any_running() || holder.st().is_busy() {
                 return Ok(());
             }
             let used: BTreeSet<u32> = project
@@ -1531,8 +1527,8 @@ impl Inner {
         let st = lane.st();
         // Another start holding the lane planned on the current block, even
         // while its units still wait for a start slot. A `held` caller that is
-        // a start counts itself in `starting`.
-        let others = st.starting.saturating_sub(usize::from(held));
+        // a start counts itself among the starts in their phases.
+        let others = st.starts_in_phases().saturating_sub(usize::from(held));
         let access = if st.any_running() || st.spawning > 0 || others > 0 {
             LaneAccess::Running
         } else {
@@ -1620,7 +1616,7 @@ impl Inner {
             let record = st
                 .record
                 .clone()
-                .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "unassigned"}), 1))?;
+                .ok_or_else(|| unassigned(&reference, Unassigned::NoRecord))?;
             (config, record, st.env.clone())
         };
         let needs = devlanes_resolve::port_needs(&config, &self.integ.contributors)
@@ -1787,7 +1783,7 @@ impl Inner {
         let record = st
             .record
             .as_ref()
-            .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "unassigned"}), 1))?;
+            .ok_or_else(|| unassigned(&st.reference(&name), Unassigned::NoRecord))?;
         let data_path = self.lane_data_path(&name, record.id);
         Ok(LaneFacts::new(
             name,
@@ -2220,14 +2216,19 @@ impl Inner {
             let allocation = st
                 .allocation
                 .clone()
-                .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "no_ports"}), 1))?;
-            (config, allocation, st.env.clone(), st.infra_ns.clone())
+                .ok_or_else(|| unassigned(&st.reference(&project.name()), Unassigned::NoPorts))?;
+            (
+                config,
+                allocation,
+                st.env.clone(),
+                st.infra().namespace_value(),
+            )
         };
         let facts = self.facts(project, lane)?;
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
         let dotenv = read_dotenv(lane_dir, primary_dir).await;
         let client_env = env.map(|env| (*env).clone()).unwrap_or_default();
-        let infra = infra_ns.unwrap_or(Value::Null);
+        let infra = infra_ns;
         let reference = lane.st().reference(&project.name());
         let view = self.view_of(
             &reference,
@@ -2633,7 +2634,6 @@ pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
         desired: tokio::sync::Mutex::new(()),
         decide: tokio::sync::Mutex::new(()),
         setup: tokio::sync::Mutex::new(()),
-        infra_refresh: tokio::sync::Mutex::new(()),
     })
 }
 

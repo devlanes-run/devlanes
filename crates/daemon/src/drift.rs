@@ -17,7 +17,7 @@ use crate::{
     Session,
     engine::{Inner, carries_env, params},
     lifecycle::StartOptions,
-    model::{EnvMap, Kind, LaneRt, LaneSt, ProjectRt},
+    model::{Kind, LaneRt, LaneSt, ProjectRt},
     registry::internal,
     stream::LaneEvents,
 };
@@ -511,8 +511,9 @@ impl Inner {
             selectors: Vec::new(),
             profiles: Vec::new(),
             transient: false,
+            needs_profile_settings: false,
             env: carries_env(context),
-            overrides: EnvMap::new(),
+            overrides: None,
             actor: context.actor.clone(),
             timeout: self.timeout(selection.timeout_ms),
             session: None,
@@ -614,7 +615,10 @@ impl Inner {
                 return Err(reason.clone());
             }
             if st.record.is_none() {
-                return Err(RpcError::new("unassigned", json!({"lane": reference}), 1));
+                return Err(crate::model::unassigned(
+                    &reference,
+                    crate::model::Unassigned::NoRecord,
+                ));
             }
             if options.env.is_none() && st.env.is_none() {
                 return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));

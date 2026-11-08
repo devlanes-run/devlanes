@@ -1,7 +1,6 @@
-use devlanes_config::{
-    Extensions, ProfileConfig, ProfileOptions, ProjectConfig, ServiceConfig, Templated,
-};
+use devlanes_config::{Env, Extensions, ProfileConfig, ProjectConfig, ServiceConfig, Templated};
 use globset::Glob;
+use indexmap::IndexMap;
 
 use crate::ResolveError;
 
@@ -15,8 +14,8 @@ pub struct Selection {
     pub profiles: Vec<String>,
     /// First entry of `profiles`, for single-profile callers.
     pub profile: Option<String>,
-    /// Object-form options of the profiles, merged (see [`select_profiles`]).
-    pub profile_options: Option<ProfileOptions>,
+    /// What the profiles give the units they plan (see [`profile_settings`]).
+    pub settings: ProfileSettings,
     /// Entries of `services` kept only because their `autostart` is an expression,
     /// which needs the lane to evaluate. [`retain_autostart`] drops the ones that
     /// evaluate to false.
@@ -103,54 +102,106 @@ pub(crate) fn active_profiles<E: Extensions, P: AsRef<str>>(
     Ok(names)
 }
 
-/// Merges the options of several profiles: `env` and `run_scripts` in order
-/// (later wins), `infra: false` only when every configured profile says so
-/// literally. A single object-form profile is returned unchanged; `None` when no
-/// profile has the object form.
-pub(crate) fn merge_options<E: Extensions>(
+/// What a set of profiles gives the units it plans, apart from which services
+/// it selects: compared to decide whether two profile sets plan units alike.
+/// A new profile option goes here when it changes how units are planned, and
+/// into selection when it picks services.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProfileSettings {
+    /// The profiles' `env`, merged in order (later wins), as written.
+    pub env: Env,
+    /// The profiles' `run_scripts`, merged in order.
+    pub run_scripts: IndexMap<String, String>,
+    /// The `infra` values that can turn infra off, in profile order without
+    /// repeats; empty when infra stays on (no profile, or one leaving it on).
+    /// Infra is off when every entry evaluates false.
+    pub infra: Vec<Templated<bool>>,
+}
+
+impl ProfileSettings {
+    /// `name` swapped by the profiles' `run_scripts`, once, not chained.
+    pub fn remap_script<'a>(&'a self, name: &'a str) -> &'a str {
+        self.run_scripts.get(name).map_or(name, String::as_str)
+    }
+
+    /// The settings that differ from `other`'s, worded as drift fields are:
+    /// `env NAME` and `run_scripts NAME` per entry, then `infra`.
+    pub fn differences(&self, other: &Self) -> Vec<String> {
+        let mut fields = Vec::new();
+        changed_entries("env", &self.env, &other.env, &mut fields);
+        changed_entries(
+            "run_scripts",
+            &self.run_scripts,
+            &other.run_scripts,
+            &mut fields,
+        );
+        if self.infra != other.infra {
+            fields.push("infra".to_owned());
+        }
+        fields
+    }
+}
+
+/// Adds `label KEY` to `fields` for each key whose value differs between
+/// `ours` and `theirs`, or that only one of them has; `ours`' order first.
+fn changed_entries<V: PartialEq>(
+    label: &str,
+    ours: &IndexMap<String, V>,
+    theirs: &IndexMap<String, V>,
+    fields: &mut Vec<String>,
+) {
+    let keys = ours
+        .keys()
+        .chain(theirs.keys().filter(|key| !ours.contains_key(*key)));
+    for key in keys {
+        if ours.get(key) != theirs.get(key) {
+            fields.push(format!("{label} {key}"));
+        }
+    }
+}
+
+/// The settings of the profiles `names`, in that order. Names the config does
+/// not have are left out, and `default` applies when none remain and the
+/// config defines it, as planning does with a lane's saved profiles.
+pub fn profile_settings<E: Extensions>(
     config: &ProjectConfig<E>,
     names: &[String],
-) -> Option<ProfileOptions> {
-    let configured: Vec<&ProfileConfig> = names
+) -> ProfileSettings {
+    let mut configured: Vec<&ProfileConfig> = names
         .iter()
         .filter_map(|name| config.profiles.get(name))
         .collect();
-    let objects: Vec<&ProfileOptions> = configured
-        .iter()
-        .filter_map(|profile| match profile {
-            ProfileConfig::Object(options) => Some(options),
-            ProfileConfig::Selectors(_) => None,
-        })
-        .collect();
-    match (configured.len(), objects.as_slice()) {
-        (_, []) => None,
-        (1, [only]) => Some((*only).clone()),
-        _ => {
-            let mut merged = ProfileOptions::default();
-            for options in &objects {
-                merged
-                    .env
-                    .extend(options.env.iter().map(|(k, v)| (k.clone(), v.clone())));
-                merged.run_scripts.extend(
-                    options
-                        .run_scripts
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone())),
-                );
-            }
-            let all_off = configured.iter().all(|profile| {
-                matches!(
-                    profile,
-                    ProfileConfig::Object(ProfileOptions {
-                        infra: Some(Templated::Literal(false)),
-                        ..
-                    })
-                )
-            });
-            merged.infra = all_off.then_some(Templated::Literal(false));
-            Some(merged)
+    if configured.is_empty()
+        && let Some(default) = config.profiles.get("default")
+    {
+        configured.push(default);
+    }
+    let mut settings = ProfileSettings::default();
+    let mut infra_on = configured.is_empty();
+    for profile in configured {
+        let ProfileConfig::Object(options) = profile else {
+            infra_on = true;
+            continue;
+        };
+        settings
+            .env
+            .extend(options.env.iter().map(|(k, v)| (k.clone(), v.clone())));
+        settings.run_scripts.extend(
+            options
+                .run_scripts
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+        match &options.infra {
+            None | Some(Templated::Literal(true)) => infra_on = true,
+            Some(value) if !settings.infra.contains(value) => settings.infra.push(value.clone()),
+            Some(_) => {}
         }
     }
+    if infra_on {
+        settings.infra.clear();
+    }
+    settings
 }
 
 /// How a selector matched a service.
@@ -187,8 +238,8 @@ pub fn select<E: Extensions>(
 ///   listed in `autostart_pending`; [`retain_autostart`] settles it once the lane
 ///   is resolved.
 ///
-/// `profile_options` merges the profiles: `env` and `run_scripts` in the order
-/// given (later wins); `infra: false` only when every profile says so literally.
+/// `settings` merges the profiles' `env` and `run_scripts` in the order given
+/// (later wins) and lists the `infra` values that can turn infra off;
 /// [`crate::resolve_lane`] evaluates templated `infra` values per lane.
 pub fn select_profiles<E: Extensions, P: AsRef<str>>(
     config: &ProjectConfig<E>,
@@ -256,7 +307,7 @@ pub fn select_profiles<E: Extensions, P: AsRef<str>>(
     Ok(Selection {
         services,
         profile: names.first().cloned(),
-        profile_options: merge_options(config, &names),
+        settings: profile_settings(config, &names),
         profiles: names,
         autostart_pending,
     })
