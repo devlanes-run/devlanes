@@ -1420,6 +1420,7 @@ dependencies = [
  "bollard",
  "bytes",
  "devlanes-core",
+ "devlanes-loopback",
  "futures-util",
  "serde",
  "serde_json",

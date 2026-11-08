@@ -30,10 +30,11 @@ pub async fn connect(address: SocketAddr, timeout: Duration) -> io::Result<TcpSt
     } else {
         TcpSocket::new_v6()?
     };
-    // Off loopback a lost SYN is worth sending again.
+    // Off loopback a lost SYN is worth sending again. A failure is ignored, as libuv
+    // does: without the option a refusal only arrives later.
     #[cfg(windows)]
     if address.ip().is_loopback() {
-        devlanes_sys_windows::net::skip_syn_retransmissions(&socket)?;
+        let _ = devlanes_sys_windows::net::skip_syn_retransmissions(&socket);
     }
     tokio::time::timeout(timeout, socket.connect(address))
         .await
