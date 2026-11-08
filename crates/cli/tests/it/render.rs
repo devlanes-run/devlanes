@@ -470,7 +470,12 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                     {"task": "archive", "exit_code": null, "state": "failed",
                      "reason": {"code": "task_timeout", "data": {"timeout_ms": 60_000}, "exit_code": 1}},
                 ],
-                "teardown": [{"entry": "vhost", "exit_code": 3, "ignored": false}],
+                // `vhost` from a daemon before `state`; `dns` ran past its own timeout.
+                "teardown": [
+                    {"entry": "vhost", "exit_code": 3, "ignored": false},
+                    {"entry": "dns", "exit_code": null, "state": "failed", "ignored": false,
+                     "reason": {"code": "task_timeout", "data": {"timeout_ms": 30_000}, "exit_code": 1}},
+                ],
                 "infra": {"compose": "acme-2"},
             }),
         ),

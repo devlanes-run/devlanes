@@ -1161,6 +1161,7 @@ pub(super) fn lane_clean(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .chain(teardown.iter().map(|t| (t, "entry")))
     {
         let ignored = entry.get("ignored").and_then(Value::as_bool) == Some(true);
+        let note = if ignored { " (ignored)" } else { "" };
         match hook_task_end(entry) {
             HookTaskEnd::Exited => continue,
             HookTaskEnd::Error(code) => {
@@ -1174,18 +1175,17 @@ pub(super) fn lane_clean(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
             HookTaskEnd::Ended(state, detail) => {
                 let detail = detail.map(|detail| format!(": {detail}"));
                 lines.push(format!(
-                    "  {} {}{}",
+                    "  {} {}{}{note}",
                     cx.state(&state),
                     text(entry, key),
                     detail.unwrap_or_default()
                 ));
                 continue;
             }
-            // Teardown entries, and tasks from daemons before `state`.
+            // Daemons before `state` sent the exit code alone.
             HookTaskEnd::Unnamed => {}
         }
         if let Some(code) = int(entry, "exit_code").filter(|code| *code != 0) {
-            let note = if ignored { " (ignored)" } else { "" };
             lines.push(format!(
                 "  {} {} exit={code}{note}",
                 cx.state("failed"),

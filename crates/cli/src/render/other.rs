@@ -2638,7 +2638,7 @@ pub(super) fn daemon_status(data: &Value) -> Vec<String> {
     lines
 }
 
-/// How a `lane.stop` or `lane.clean` task in a hook result ended.
+/// How a `lane.stop` or `lane.clean` task, or a teardown entry, ended.
 pub(super) enum HookTaskEnd {
     /// It ran and exited on its own with 0.
     Exited,
@@ -2651,7 +2651,8 @@ pub(super) enum HookTaskEnd {
     Unnamed,
 }
 
-/// How hook result `task` (`{task, exit_code, state, reason?}` or `{task, error}`) ended.
+/// How result `task` (`{task|entry, exit_code, state, reason?}` or `{task|entry,
+/// error}`) ended.
 pub(super) fn hook_task_end(task: &Value) -> HookTaskEnd {
     if let Some(code) = task.get("error").and_then(|error| error.get("code")) {
         return HookTaskEnd::Error(display_value(code));

@@ -1587,6 +1587,21 @@ impl TaskOutcome {
     pub(crate) fn counts_done(&self) -> bool {
         !matches!(self.state, UnitState::Stopped(_)) && (self.code == Some(0) || self.ignore_errors)
     }
+
+    /// The result of a hook task or teardown entry `name` under `key` (`task`,
+    /// `entry`): `{<key>, exit_code, state, reason?}`, so clients word its end
+    /// by `state` and the failure's `reason`.
+    pub(crate) fn result(&self, key: &str, name: &str) -> Value {
+        let mut result = json!({
+            key: name,
+            "exit_code": self.code,
+            "state": self.state.word(),
+        });
+        if let UnitState::Failed(Some(reason)) = &self.state {
+            result["reason"] = json!(reason);
+        }
+        result
+    }
 }
 
 /// Saved names a start brought back without, because the config no longer has them.
@@ -4166,17 +4181,7 @@ impl Inner {
                 )
                 .await;
             results.push(match outcome {
-                Ok(outcome) => {
-                    let mut result = json!({
-                        "task": name,
-                        "exit_code": outcome.code,
-                        "state": outcome.state.word(),
-                    });
-                    if let UnitState::Failed(Some(reason)) = &outcome.state {
-                        result["reason"] = json!(reason);
-                    }
-                    result
-                }
+                Ok(outcome) => outcome.result("task", name),
                 Err(error) => {
                     json!({"task": name, "error": {"code": error.code, "data": error.data}})
                 }
@@ -4492,7 +4497,11 @@ impl Inner {
                         .run_command(project, lane, "teardown", command, &actor, &cancel, None)
                         .await;
                     teardown.push(match result {
-                        Ok(outcome) => json!({"entry": name, "exit_code": outcome.code, "ignored": command.ignore_errors}),
+                        Ok(outcome) => {
+                            let mut result = outcome.result("entry", name);
+                            result["ignored"] = json!(command.ignore_errors);
+                            result
+                        }
                         Err(error) => json!({"entry": name, "error": {"code": error.code}}),
                     });
                 }
@@ -4730,7 +4739,7 @@ impl Inner {
                 results
                     .into_iter()
                     .map(|mut result| {
-                        if result.get("exit_code").and_then(Value::as_i64) != Some(0) {
+                        if result.get("state").and_then(Value::as_str) != Some("exited") {
                             tracing::warn!(lane = %reference, task = %result["task"], result = %result, "lane.stop task failed during daemon shutdown");
                         }
                         result["lane"] = json!(reference);
