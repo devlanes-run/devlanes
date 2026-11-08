@@ -22,6 +22,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::units::{UnitHost, UnitState};
 
+mod lane_infra;
+
+pub(crate) use lane_infra::{CurrentInfra, EventEffect, InfraRead, LaneInfra};
+
 /// Client environments; values may hold tokens and stay in memory.
 pub(crate) type EnvMap = BTreeMap<String, String>;
 
@@ -316,21 +320,13 @@ pub(crate) struct LaneSt {
     pub profiles: Vec<String>,
     pub units: BTreeMap<String, UnitRec>,
     pub started_at_ms: Option<u64>,
-    pub busy: Option<&'static str>,
+    /// A stop of the whole lane runs. Starts in their phases are
+    /// [`Self::starts_in_phases`].
+    pub stopping: bool,
     pub view: Option<Arc<LaneView>>,
     pub allocation: Option<Allocation>,
-    pub infra_ns: Option<Value>,
-    /// Running containers behind `infra_ns`, for Docker stats.
-    pub infra_containers: Vec<crate::integrations::InfraContainer>,
-    /// Stored containers (by namespace key) that went from down to running since
-    /// `infra_ns` was written, with a count bumped on every such restart. Their
-    /// published ports may have changed; see [`crate::infra_restarts`].
-    pub infra_restarted: BTreeMap<String, u64>,
-    /// A background refresh of the restarted containers is scheduled.
-    pub infra_refresh_queued: bool,
-    /// Bumped whenever `infra_ns` is written or cleared as a whole, so a partial
-    /// refresh that read Docker before that drops its result.
-    pub infra_generation: u64,
+    /// The lane's live infra; written only through the `*_infra` methods.
+    infra: LaneInfra,
     pub setup_env: EnvMap,
     /// Why the last layout of the lane (`view`) did not resolve, such as a
     /// `lanes.vars` value with no value here. The next layout that resolves
@@ -362,9 +358,6 @@ pub(crate) struct LaneSt {
     /// meanwhile add their units to the lane it brings up instead of bringing
     /// it up again.
     pub bringup: Option<Bringup>,
-    /// Starts between their decision to run and the end of their phases. The
-    /// lane reads `starting` until the last of them is done.
-    pub starting: usize,
     /// Starts and `infra up`s that passed their checks and have not returned.
     /// The lane counts as running for box lanes that clash with it while
     /// one is, so a start that fails its checks takes nothing from a box.
@@ -547,14 +540,10 @@ impl LaneSt {
             profiles: Vec::new(),
             units: BTreeMap::new(),
             started_at_ms: None,
-            busy: None,
+            stopping: false,
             view: None,
             allocation: None,
-            infra_ns: None,
-            infra_containers: Vec::new(),
-            infra_restarted: BTreeMap::new(),
-            infra_refresh_queued: false,
-            infra_generation: 0,
+            infra: LaneInfra::default(),
             setup_env: EnvMap::new(),
             view_error: None,
             last_error: None,
@@ -566,7 +555,6 @@ impl LaneSt {
             starts: Vec::new(),
             waiting: BTreeMap::new(),
             bringup: None,
-            starting: 0,
             claiming: 0,
             claim_ran: false,
             spawning: 0,
@@ -688,23 +676,107 @@ impl LaneSt {
         self.any_alive() || !self.orphans.is_empty()
     }
 
-    /// Stores the lane's infra containers. A claim counts as having run
-    /// something once one of them holds a port of the lane.
-    pub(crate) fn store_containers(
+    /// The lane's live infra.
+    pub(crate) fn infra(&self) -> &LaneInfra {
+        &self.infra
+    }
+
+    /// Stores a full read ([`LaneInfra::replace`]). Returns whether the
+    /// namespace changed.
+    pub(crate) fn replace_infra(&mut self, read: InfraRead) -> bool {
+        let changed = self.infra.replace(read);
+        self.claim_containers();
+        changed
+    }
+
+    /// Stores `keys` of a read ([`LaneInfra::merge`]). Returns whether the
+    /// namespace changed.
+    pub(crate) fn merge_infra(&mut self, read: &InfraRead, keys: &BTreeSet<String>) -> bool {
+        let changed = self.infra.merge(read, keys);
+        self.claim_containers();
+        changed
+    }
+
+    /// Keeps the declared names of a lane whose infra never ran.
+    pub(crate) fn note_infra_declared(&mut self, declared: BTreeSet<String>) {
+        self.infra.note_declared(declared);
+    }
+
+    /// Records observations ([`LaneInfra::apply_observed`]). Returns the keys
+    /// that run with other runs than stored.
+    pub(crate) fn apply_infra_observed(
+        &mut self,
+        observed: &BTreeMap<String, crate::integrations::Observation>,
+        began: tokio::time::Instant,
+    ) -> BTreeSet<String> {
+        self.infra.apply_observed(observed, began)
+    }
+
+    /// `keys` were asked about and got no answer.
+    pub(crate) fn infra_unanswered(
+        &mut self,
+        keys: &BTreeSet<String>,
+        began: tokio::time::Instant,
+    ) {
+        self.infra.mark_unknown(keys, began);
+    }
+
+    /// Stores the lane's infra containers alone, such as the ones a failed
+    /// `up` left running.
+    pub(crate) fn store_infra_containers(
         &mut self,
         containers: Vec<crate::integrations::InfraContainer>,
     ) {
-        if self.claiming > 0 && containers.iter().any(|container| container.holds_port()) {
-            self.claim_ran = true;
-        }
-        self.infra_containers = containers;
+        self.infra.store_containers(containers);
+        self.claim_containers();
     }
 
-    /// Records that `infra_ns` was written or cleared as a whole: the containers'
-    /// ports are current again, and partial refreshes in flight are dropped.
-    pub(crate) fn infra_replaced(&mut self) {
-        self.infra_generation += 1;
-        self.infra_restarted.clear();
+    /// Applies a container event ([`LaneInfra::apply_event`]).
+    pub(crate) fn apply_infra_event(
+        &mut self,
+        event: &crate::integrations::InfraEvent,
+        now: tokio::time::Instant,
+    ) -> EventEffect {
+        self.infra.apply_event(event, now)
+    }
+
+    /// Events may have been lost: every key of a lane that stores its infra is
+    /// checked again. Returns whether the lane stores its infra.
+    pub(crate) fn suspect_all_infra(&mut self, now: tokio::time::Instant) -> bool {
+        self.infra.suspect_all(now)
+    }
+
+    /// Confirms `runs` of `key` healthy.
+    pub(crate) fn mark_infra_settled(
+        &mut self,
+        key: &str,
+        runs: &[crate::integrations::ContainerRun],
+    ) {
+        self.infra.mark_settled(key, runs);
+    }
+
+    /// Schedules the background infra refresh unless one is scheduled.
+    pub(crate) fn queue_infra_refresh(&mut self) -> bool {
+        self.infra.queue_refresh()
+    }
+
+    /// The scheduled infra refresh started.
+    pub(crate) fn infra_refresh_taken(&mut self) {
+        self.infra.refresh_taken();
+    }
+
+    /// A claim counts as having run something once one of the lane's
+    /// containers holds a port of the lane.
+    fn claim_containers(&mut self) {
+        if self.claiming > 0
+            && self
+                .infra
+                .containers()
+                .iter()
+                .any(|container| container.holds_port())
+        {
+            self.claim_ran = true;
+        }
     }
 
     /// `ports_pending` and `host_conflict` warnings for the lane's summary.
@@ -805,7 +877,7 @@ impl LaneSt {
     }
 
     /// Lifecycle word for `LaneSummary.state`: `starting` while a start runs
-    /// its phases or a service is still starting. Queued services make it
+    /// its phases ([`Self::starts_in_phases`]) or a service is still starting. Queued services make it
     /// `starting` too, in [`crate::engine::Inner::fill_queued`], since the lane does not
     /// see the gate.
     pub(crate) fn state_word(&self) -> &'static str {
@@ -820,8 +892,11 @@ impl LaneSt {
         if self.record.is_none() {
             return "unassigned";
         }
-        if let Some(busy) = self.busy {
-            return busy;
+        if self.stopping {
+            return "stopping";
+        }
+        if self.starts_in_phases() > 0 {
+            return "starting";
         }
         let failed = self.units.iter().any(|(name, unit)| {
             unit.kind == Kind::Service
@@ -844,6 +919,17 @@ impl LaneSt {
         } else {
             "idle"
         }
+    }
+
+    /// Starts that hold the lane's lease and have not ended their phases. A
+    /// start counts itself while it runs.
+    pub(crate) fn starts_in_phases(&self) -> usize {
+        self.starts.iter().filter(|start| start.in_phases()).count()
+    }
+
+    /// Whether a stop of the whole lane or a start in its phases is under way.
+    pub(crate) fn is_busy(&self) -> bool {
+        self.stopping || self.starts_in_phases() > 0
     }
 
     /// Whether `start`/`resume` from a shell is needed before services can run.
@@ -901,9 +987,6 @@ pub(crate) struct LaneRt {
     /// Held while a start checks and runs setup entries, so two starts never
     /// run the same entry at once.
     pub setup: tokio::sync::Mutex<()>,
-    /// Held by a partial refresh of restarted containers across its Docker read
-    /// and its merge, so two of them never finish out of order.
-    pub infra_refresh: tokio::sync::Mutex<()>,
 }
 
 impl LaneRt {
@@ -1035,11 +1118,32 @@ impl Drop for SpawnGuard {
     }
 }
 
-/// What a `stop` or `restart` of single units can do to the start (or restart)
-/// running on their lane without waiting for its `op`.
+/// What a start brought up, which its answer and its error report.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Brought {
+    /// Service units it spawned, and units still queued at its deadline.
+    pub started: Vec<String>,
+    /// Setup entries (`setup.<name>`) and tasks it ran to success.
+    pub ran: Vec<String>,
+    /// It brought the lane up instead of adding units to it.
+    pub whole_lane: bool,
+}
+
+/// The one record of a start (or restart), installed on its lane from the
+/// request until [`crate::engine::Inner::end_start`]: its id, how to cancel
+/// it, how far it got and what it brought up. A `stop` or `restart` of single
+/// units reaches it here without waiting for its `op`.
 pub(crate) struct StartCtl {
     /// The `start_id` of the start's events and result.
     start_id: u64,
+    /// What the start brought up so far.
+    brought: Mutex<Brought>,
+    /// The start holds the lane's lease, so other starts and refreshes leave
+    /// the block and index it plans on alone.
+    holds_lease: AtomicBool,
+    /// The start finished its phases; the lane no longer reads `starting`
+    /// for it.
+    phases_ended: AtomicBool,
     /// Ends the start as `start_cancelled`: a whole-lane stop, clean, reset or
     /// shutdown fires it, and so does a stop of the task the start runs.
     pub cancel: CancellationToken,
@@ -1073,6 +1177,9 @@ impl StartCtl {
     pub(crate) fn new(parent: &CancellationToken, start_id: u64) -> Self {
         Self {
             start_id,
+            brought: Mutex::new(Brought::default()),
+            holds_lease: AtomicBool::new(false),
+            phases_ended: AtomicBool::new(false),
             cancel: parent.child_token(),
             spawning: Mutex::new(BTreeSet::new()),
             gate_waits: Mutex::new(Vec::new()),
@@ -1088,6 +1195,46 @@ impl StartCtl {
     /// The `start_id` of this start.
     pub(crate) fn start_id(&self) -> u64 {
         self.start_id
+    }
+
+    /// Records a service unit the start spawned (or left queued at its deadline).
+    pub(crate) fn push_started(&self, unit: String) {
+        lock(&self.brought).started.push(unit);
+    }
+
+    /// Records a setup entry (`setup.<name>`) or task the start ran.
+    pub(crate) fn push_ran(&self, unit: String) {
+        lock(&self.brought).ran.push(unit);
+    }
+
+    /// The service units the start spawned so far.
+    pub(crate) fn started(&self) -> Vec<String> {
+        lock(&self.brought).started.clone()
+    }
+
+    /// Everything the start brought up so far.
+    pub(crate) fn brought(&self) -> Brought {
+        lock(&self.brought).clone()
+    }
+
+    /// Records that the start took the lane's lease, bringing the lane up when
+    /// `whole_lane`. The lane reads `starting` for it until the returned mark
+    /// drops, however the start returns.
+    #[must_use = "the start's phases end when the mark drops"]
+    pub(crate) fn mark_lease(self: &Arc<Self>, whole_lane: bool) -> PhasesMark {
+        lock(&self.brought).whole_lane = whole_lane;
+        self.holds_lease.store(true, Ordering::Release);
+        PhasesMark(self.clone())
+    }
+
+    /// Records that the start finished its phases.
+    fn end_phases(&self) {
+        self.phases_ended.store(true, Ordering::Release);
+    }
+
+    /// Between [`Self::mark_lease`] and [`Self::end_phases`].
+    fn in_phases(&self) -> bool {
+        self.holds_lease.load(Ordering::Acquire) && !self.phases_ended.load(Ordering::Acquire)
     }
 
     /// Records how long `unit` waited for its start slot.
@@ -1177,6 +1324,16 @@ impl StartCtl {
     }
 }
 
+/// A start in its phases, until dropped ([`StartCtl::mark_lease`]).
+pub(crate) struct PhasesMark(Arc<StartCtl>);
+
+impl Drop for PhasesMark {
+    /// Ends the start's phases.
+    fn drop(&mut self) {
+        self.0.end_phases();
+    }
+}
+
 /// Task units a start runs, until dropped ([`StartCtl::running_tasks`]).
 pub(crate) struct TaskGuard {
     ctl: Arc<StartCtl>,
@@ -1198,7 +1355,8 @@ impl Drop for TaskGuard {
     }
 }
 
-/// A start's control installed on its lane ([`LaneRt::begin_start`]).
+/// A start's control installed on its lane ([`LaneRt::begin_start`]). A start
+/// ends by handing it to [`crate::engine::Inner::end_start`].
 pub(crate) struct StartSlot {
     lane: Arc<LaneRt>,
     pub ctl: Arc<StartCtl>,
@@ -1206,7 +1364,8 @@ pub(crate) struct StartSlot {
 
 impl Drop for StartSlot {
     /// Uninstalls the control and releases restarts waiting for the services
-    /// phase.
+    /// phase. Emits nothing: `end_start` tells clients, and a slot dropped
+    /// anywhere else is a start unwinding.
     fn drop(&mut self) {
         self.ctl.services_done.cancel();
         self.lane
@@ -1643,7 +1802,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
 /// Containers from the lane's infra namespace (`{name: {port, ports}}`), set while
 /// its infra is up, with `infra.hidden` applied.
 pub(crate) fn container_summaries(lane: &LaneSt) -> Vec<devlanes_proto::ContainerSummary> {
-    let Some(Value::Object(namespace)) = &lane.infra_ns else {
+    let Some(namespace) = lane.infra().namespace() else {
         return Vec::new();
     };
     let hidden: &[String] = lane
@@ -1681,13 +1840,15 @@ pub(crate) fn container_summaries(lane: &LaneSt) -> Vec<devlanes_proto::Containe
                 hidden: hidden.contains(name),
                 color: Some(derived_color(lane, name)),
                 shared: lane
-                    .infra_containers
+                    .infra()
+                    .containers()
                     .iter()
                     .any(|container| &container.name == name && container.shared),
                 cpu_percent: None,
                 memory_bytes: None,
                 state: lane
-                    .infra_containers
+                    .infra()
+                    .containers()
                     .iter()
                     .filter(|container| &container.name == name)
                     .filter_map(|container| container.state.clone())

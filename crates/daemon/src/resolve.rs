@@ -326,7 +326,7 @@ impl Inner {
                 env,
                 st.overrides.clone(),
                 profiles.map_or_else(|| st.profiles.clone(), <[String]>::to_vec),
-                st.infra_ns.clone().unwrap_or(Value::Null),
+                st.infra().namespace_value(),
                 st.index(),
             )
         };
@@ -463,12 +463,10 @@ impl Inner {
                 allocation,
                 st.view.clone(),
                 st.env.clone(),
-                st.infra_ns.clone().unwrap_or(Value::Null),
+                st.infra().namespace_value(),
             )
         };
         let facts = self.facts(project, lane)?;
-        // Before infra: Docker creates a missing bind-mount source itself (as root on Linux).
-        self.ensure_lane_data(project, lane).await?;
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
         let dotenv = read_dotenv(lane_dir.clone(), primary_dir.clone()).await;
         let client: EnvMap = env.map(|e| (*e).clone()).unwrap_or_default();

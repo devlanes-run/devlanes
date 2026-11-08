@@ -440,6 +440,27 @@ pub struct ResolvedLane {
     pub(crate) services_namespace: Value,
 }
 
+/// Whether a declared `infra.<name>` runs, as the lane's infra owner knows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfraState {
+    Running,
+    /// It does not run, and why.
+    Down(DownReason),
+    /// The engine did not say: never observed, a timeout, or another non-answer.
+    Unknown,
+}
+
+/// Why a declared container does not run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownReason {
+    /// The engine answered that it is stopped, exited, removed or was never
+    /// created, or an event said so ("not up"; `devlanes infra up` starts it).
+    NotRunning,
+    /// The engine's endpoint refused the connection or does not exist, so no
+    /// container runs ("Docker is not running").
+    EngineNotRunning,
+}
+
 /// The `global_env` and profile `env` values of a lane outside any unit. `Debug`
 /// prints keys only, since values can carry secrets.
 #[derive(Clone)]

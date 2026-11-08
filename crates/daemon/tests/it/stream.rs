@@ -395,3 +395,75 @@ async fn running_phases_report_their_detail() {
     .await
     .expect("timeout");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+/// Each start, whether it timed out or failed, ends with one `start.ended`,
+/// after a `lane.changed` that follows all of its phases.
+async fn a_start_ends_once_after_its_last_lane_change() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: demo\nservices:\n  web: { run: sleep, ready: { log: never } }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let mut bus = h.engine.subscribe();
+
+        let value = h
+            .call(Method::Start, json!({"timeout_ms": 300}), cx(&main))
+            .await
+            .expect("start");
+        let timed_out: StartResult = serde_json::from_value(value).expect("result");
+        assert!(timed_out.timed_out, "{timed_out:?}");
+        let error = h
+            .call(Method::Start, json!({"units": ["nope"]}), cx(&main))
+            .await
+            .expect_err("an unknown unit fails the start");
+        // Both starts answered, so everything they emit is on the bus by now.
+        h.close().await;
+        let mut lane = Vec::new();
+        loop {
+            match bus.try_recv() {
+                Ok(event) if lane_of(&event) == Some("demo@0") => lane.push(event),
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                Err(other) => panic!("bus: {other:?}"),
+            }
+        }
+
+        let ended: Vec<(usize, u64)> = lane
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| event.event == events::START_ENDED)
+            .map(|(at, event)| (at, event.data["start_id"].as_u64().expect("start_id")))
+            .collect();
+        let seen: Vec<String> = lane
+            .iter()
+            .map(|event| format!("{} {} {}", event.seq, event.event, event.data["start_id"]))
+            .collect();
+        // The failed start answers without its id; its end is the other one.
+        let first = timed_out.start_id.expect("start id");
+        assert_eq!(ended.len(), 2, "{error:?} {seen:?}");
+        assert_eq!(ended[0].1, first, "{seen:?}");
+        assert_ne!(ended[1].1, first, "{seen:?}");
+        // A `lane.changed` lies between a start's last phase (or the previous
+        // start's end) and its own end, and none of its phases comes later.
+        let mut from = 0;
+        for (at, id) in ended {
+            let phases: Vec<usize> = (0..lane.len())
+                .filter(|&i| {
+                    lane[i].event == events::PHASE && lane[i].data["start_id"] == json!(id)
+                })
+                .collect();
+            assert!(phases.iter().all(|&i| i < at), "{seen:?}");
+            let after = phases.last().map_or(from, |&i| i.max(from));
+            assert!(
+                lane[after..at]
+                    .iter()
+                    .any(|event| event.event == events::LANE_CHANGED),
+                "{seen:?}"
+            );
+            from = at + 1;
+        }
+    })
+    .await
+    .expect("timeout");
+}
