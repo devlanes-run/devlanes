@@ -17,8 +17,9 @@ mod host;
 mod spec;
 
 pub use docker::{
-    DockerInfra, Endpoint, EnsureAction, EnsureOptions, Ensured, LaneContainer, LaneContents,
-    LaneVolume, LogChunk, LogOptions, LogStream, ManagedContainer, Removed, create_body,
+    ComposeContainer, DockerConnector, DockerInfra, Endpoint, EnsureAction, EnsureOptions, Ensured,
+    LaneContainer, LaneContents, LaneVolume, LogChunk, LogOptions, LogStream, ManagedContainer,
+    Removed, create_body,
 };
 pub use error::Error;
 pub use events::{EventKind, HealthEvent, WATCHED_EVENTS, WatchEvent, map_event};

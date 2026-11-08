@@ -54,6 +54,8 @@ pub mod features {
     /// `status` answers the request's own lane as `here` or `here_error`, for the
     /// command named by its `here_for` param ([`super::Method::Status`]).
     pub const STATUS_HERE: &str = "status_here";
+    /// The daemon sends [`super::events::START_ENDED`] for every start.
+    pub const START_ENDED: &str = "start_ended";
 }
 
 /// Attribution is supplied by clients and never inferred by the daemon.
@@ -1246,6 +1248,10 @@ pub struct PhaseStep {
 
 /// Final `start`/`restart`/`resume` result, after every started unit is ready or failed
 /// (or the timeout passed). Ownership fields let `devlanes with` stop only what it started.
+///
+/// A start or restart that fails with an error instead puts `lane`, `started`,
+/// `ran` and `whole_lane` into the error's data, with the meaning they have
+/// here, so a client can stop what the start brought up.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StartResult {
     /// Canonical lane reference, e.g. `acme@2`.
@@ -1776,6 +1782,10 @@ pub mod events {
     /// timed out, had a failed unit or brought nothing up sends none, and
     /// `after: services` tasks run only after it.
     pub const PHASE: &str = "lane.phase";
+    /// `{lane, start_id}` once per start (and restart) when it ended, whatever
+    /// its outcome: after the start's last `lane.changed` and after the lane
+    /// stopped counting it. `lane` is the canonical reference.
+    pub const START_ENDED: &str = "start.ended";
     /// `{lane, task, state, exit_code?, reason?, finished_at_ms?}` for task runs.
     /// `state` is `started`, `skipped`, or how the run ended in unit state words:
     /// `exited`, `failed` (with the unit's `reason`) or `stopped`.

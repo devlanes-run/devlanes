@@ -1025,6 +1025,7 @@ async fn serve_client(
             devlanes_proto::features::PROJECT_FILE,
             devlanes_proto::features::RELOAD,
             devlanes_proto::features::STATUS_HERE,
+            devlanes_proto::features::START_ENDED,
         ]
         .map(String::from),
     );

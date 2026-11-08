@@ -5,6 +5,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use devlanes_core::env::EnvLayer;
 use devlanes_proto::{Context, LaneSummary, LogLine, LogQuery, Method, Page, RpcError, events};
+use devlanes_state::EndedBy;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::Instant;
@@ -104,6 +105,21 @@ fn parse_duration(text: &str) -> Option<Duration> {
         _ => return None,
     };
     Some(Duration::from_secs(seconds))
+}
+
+/// Whether `errors` counts a finished run as a crash. A run its own time
+/// limit stopped always is, as it reads `failed`; one that ended with no stop
+/// is when it has a non-zero exit code or a signal. A requested stop never is,
+/// and neither is a run whose end nobody knows (rows from before this was
+/// recorded, earlier boots, orphans that ended unwatched).
+fn is_crash(run: &devlanes_state::UnitRun) -> bool {
+    match run.ended_by {
+        Some(EndedBy::TimedOut) => true,
+        Some(EndedBy::Itself) => run
+            .outcome
+            .is_some_and(|o| o.code.is_some_and(|c| c != 0) || o.signal.is_some()),
+        Some(EndedBy::Requested) | None => false,
+    }
 }
 
 /// Lowercase name of an env layer for `env --explain`.
@@ -549,7 +565,7 @@ impl Inner {
                             .map(|(name, rec)| (name.clone(), rec.host.clone()))
                             .collect(),
                     };
-                    (hosts, st.busy.is_some())
+                    (hosts, st.is_busy())
                 };
                 let states: Vec<UnitState> = hosts.iter().map(|(_, host)| host.state()).collect();
                 let failed: Vec<usize> = states
@@ -617,6 +633,7 @@ impl Inner {
     }
 
     /// `errors`: exit codes, crash counts, last error lines and port conflicts.
+    /// Crashes are counted by [`is_crash`].
     pub(crate) async fn errors_method(
         self: &Arc<Self>,
         value: Value,
@@ -665,7 +682,7 @@ impl Inner {
                     .filter(|run| {
                         run.unit == name
                             && u64::try_from(run.started_at).unwrap_or(0) >= since_ms
-                            && run.outcome.is_some_and(|o| o.code.is_some_and(|c| c != 0))
+                            && is_crash(run)
                     })
                     .count();
                 let state = host.state();
@@ -756,7 +773,7 @@ impl Inner {
         let push = |reasons: &mut Vec<Value>, code: &str, data: Value| {
             reasons.push(json!({"code": code, "data": data}))
         };
-        let (host, service, view_error, needs_env, config, busy, unassigned, orphan, saved) = {
+        let (host, service, view_error, needs_env, config, starting, unassigned, orphan, saved) = {
             let st = lane.st();
             let orphan = st.orphan_error(&project.name(), &name);
             // A start by name adds to these, and a plain start brings them back.
@@ -776,7 +793,7 @@ impl Inner {
                 st.view_error.clone(),
                 st.env.is_none(),
                 st.config.clone(),
-                st.busy,
+                st.starts_in_phases() > 0,
                 st.unassigned.clone(),
                 orphan,
                 saved,
@@ -865,7 +882,7 @@ impl Inner {
                 );
             }
         }
-        if busy == Some("starting")
+        if starting
             && let Some(config) = config.loaded()
             && let Some(task) = config.tasks.get(&name)
             && task.after.is_some()

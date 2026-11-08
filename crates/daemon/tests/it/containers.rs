@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use devlanes_daemon::integrations::{RouteEntry, RouteSink};
+use devlanes_daemon::integrations::{InfraEventKind, RouteEntry, RouteSink};
 use devlanes_metrics::{Error, MetricsSource, Sample, SampleRequest, Subject, unix_ms};
 use devlanes_proto::{LaneSummary, Method, Page};
 use serde_json::{Value, json};
@@ -619,22 +619,38 @@ async fn cache(h: &crate::Harness, main: &std::path::Path) -> Option<(u16, Optio
 }
 
 /// A container event of the shared `cache`.
-fn cache_event(state: &str) -> devlanes_daemon::integrations::InfraEvent {
+fn cache_event(kind: InfraEventKind) -> devlanes_daemon::integrations::InfraEvent {
     devlanes_daemon::integrations::InfraEvent {
         project: "demo".into(),
         lane: None,
         container: "demo-cache-1".into(),
-        state: state.into(),
+        kind,
         exit_code: None,
     }
+}
+
+/// Moves the shared `cache` to its `run`th run, published on `port`.
+fn restart_cache(h: &crate::Harness, port: u16, run: u32) {
+    *h.infra.cache_port.lock().expect("lock") = Some(port);
+    *h.infra.cache_run.lock().expect("lock") = Some(format!("2026-01-01T00:{run:02}:00Z"));
+}
+
+/// Whether `status` lists the lane's `cache` on `port` in time.
+async fn cache_on(h: &crate::Harness, main: &std::path::Path, port: u16) -> bool {
+    crate::eventually(std::time::Duration::from_secs(5), || async {
+        cache(h, main).await.filter(|(listed, _)| *listed == port)
+    })
+    .await
+    .is_some()
 }
 
 #[tokio::test(flavor = "multi_thread")]
 /// A shared container that restarts with a new published port: the lane reads
 /// it again, `status` shows it, the service that reads it shows drift and its
-/// restart gets the new port. After an engine reconnect a container that is
-/// down keeps its last port and does not hold up a start; its later start
-/// counts as a restart.
+/// restart gets the new port. A crash before the refresh reads, a `start`
+/// whose `die` was lost and a restart during the read all end on the last
+/// run's port. After events were lost, a container that is down keeps its
+/// last port and does not hold up a start; its later start counts.
 async fn restarted_shared_container_refreshes_ports_and_drift() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -662,21 +678,21 @@ async fn restarted_shared_container_refreshes_ports_and_drift() {
         assert_eq!(cache(&h, &main).await.map(|c| c.0), Some(6379));
 
         *h.infra.cache_down.lock().expect("lock") = true;
-        h.infra.emit(cache_event("reconnected"));
-        let missing = crate::eventually(std::time::Duration::from_secs(5), || async {
+        h.infra.resync();
+        let down = crate::eventually(std::time::Duration::from_secs(5), || async {
             cache(&h, &main)
                 .await
-                .filter(|(_, state)| state.as_deref() == Some("missing"))
+                .filter(|(_, state)| state.as_deref() == Some("exited 0"))
         })
         .await;
-        assert_eq!(missing.map(|c| c.0), Some(6379), "the last port stays");
+        assert_eq!(down.map(|c| c.0), Some(6379), "the last port stays");
         h.call(Method::Start, json!({"units": ["web"]}), cx(&main))
             .await
             .expect("a down container does not fail the start");
 
-        *h.infra.cache_port.lock().expect("lock") = Some(6380);
+        restart_cache(&h, 6380, 1);
         *h.infra.cache_down.lock().expect("lock") = false;
-        h.infra.emit(cache_event("started"));
+        h.infra.emit(cache_event(InfraEventKind::Started));
         let drifted = crate::eventually(std::time::Duration::from_secs(5), || async {
             let status = h.call(Method::Status, json!({}), cx(&main)).await.ok()?;
             let lanes: Page<LaneSummary> = serde_json::from_value(status).ok()?;
@@ -686,6 +702,42 @@ async fn restarted_shared_container_refreshes_ports_and_drift() {
         })
         .await;
         assert!(drifted.is_some(), "status shows the new port and the drift");
+
+        // It crashes again before the refresh reads it, and starts once more.
+        restart_cache(&h, 6381, 2);
+        for kind in [
+            InfraEventKind::Died,
+            InfraEventKind::Started,
+            InfraEventKind::Died,
+        ] {
+            h.infra.emit(cache_event(kind));
+        }
+        assert!(cache_on(&h, &main, 6381).await);
+        restart_cache(&h, 6382, 3);
+        h.infra.emit(cache_event(InfraEventKind::Started));
+        assert!(cache_on(&h, &main, 6382).await, "a start after a crash counts");
+
+        // A restart whose `die` was lost.
+        restart_cache(&h, 6383, 4);
+        h.infra.emit(cache_event(InfraEventKind::Started));
+        assert!(cache_on(&h, &main, 6383).await, "a start without its die counts");
+
+        // It restarts while its ports are read: they are not kept for the
+        // new run, and the restart below reads the ports of that run.
+        restart_cache(&h, 6384, 5);
+        *h.infra.after_namespace.lock().expect("lock") =
+            Some((6385, "2026-01-01T00:06:00Z".into()));
+        h.infra.emit(cache_event(InfraEventKind::Started));
+        let read = crate::eventually(std::time::Duration::from_secs(5), || async {
+            h.infra
+                .after_namespace
+                .lock()
+                .expect("lock")
+                .is_none()
+                .then_some(())
+        })
+        .await;
+        assert!(read.is_some(), "the refresh read the namespace");
 
         h.call(Method::Restart, json!({"units": ["api"]}), cx(&main))
             .await
@@ -701,15 +753,72 @@ async fn restarted_shared_container_refreshes_ports_and_drift() {
                 .ok()?;
             logs["items"][0]["text"]
                 .as_str()
-                .filter(|text| *text == "6380")
+                .filter(|text| *text == "6385")
                 .map(str::to_owned)
         })
         .await;
         assert!(printed.is_some(), "the restarted service reads the new port");
+        assert_eq!(cache(&h, &main).await.map(|c| c.0), Some(6385));
         h.call(Method::Stop, json!({}), cx(&main))
             .await
             .expect("stop");
         h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// The host port `status` lists for the lane's `db`.
+async fn db_port(h: &crate::Harness, main: &std::path::Path) -> Option<u16> {
+    let status = h.call(Method::Status, json!({}), cx(main)).await.ok()?;
+    let lanes: Page<LaneSummary> = serde_json::from_value(status).ok()?;
+    let db = lanes
+        .items
+        .first()?
+        .containers
+        .iter()
+        .find(|c| c.name == "db")?;
+    db.ports.get("5432").copied()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A daemon that restarted while a lane's containers kept running lists them
+/// with their ports, as the daemon before it did.
+async fn restarted_daemon_lists_running_infra() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CONFIG);
+        let home = tmp.path.join("home");
+        let first = harness(
+            &home,
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        first
+            .call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let port = db_port(&first, &main).await.expect("db listed");
+        // The crash: the daemon goes away without stopping anything.
+        drop(first);
+        let second = harness(
+            &home,
+            Setup {
+                infra: true,
+                logs: Some(tmp.path.join("logs-after-crash")),
+                ..Setup::default()
+            },
+        )
+        .await;
+        let listed = crate::eventually(std::time::Duration::from_secs(5), || async {
+            db_port(&second, &main).await
+        })
+        .await;
+        assert_eq!(listed, Some(port));
+        second.close().await;
     })
     .await
     .expect("timeout");
@@ -816,7 +925,7 @@ async fn metrics_carry_system_lanes_and_container_state() {
             project: "demo".into(),
             lane: Some(0),
             container: "demo-lane0-db-1".into(),
-            state: "died".into(),
+            kind: InfraEventKind::Died,
             exit_code: Some(137),
         });
         let exited = crate::eventually(std::time::Duration::from_secs(5), || async {

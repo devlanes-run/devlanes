@@ -331,7 +331,7 @@ async fn lane_clean_reports_a_teardown_entry_past_its_timeout() {
 async fn a_step_stopped_by_name_stops_its_task() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let config = "project: steps\ntasks:\n  pipeline: { steps: [first, second] }\n  first: { run: \"graceful; sleep\" }\n  second: { run: \"echo second\" }\n";
+        let config = "project: steps\ntasks:\n  pipeline: { steps: [first, second] }\n  first: { run: \"onstop 0; sleep\" }\n  second: { run: \"echo second\" }\n";
         let main = repo(&tmp.path, "r", config);
         let home = tmp.path.join("home");
         let h = harness(&home, Setup::default()).await;
