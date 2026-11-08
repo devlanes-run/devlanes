@@ -869,11 +869,18 @@ mod tests {
             .expect("Git for Windows' sh.exe");
         let cwd = std::env::temp_dir();
         let env = windows_env(&[("DL_READY", "yes")]);
+        // An attempt is cut off after `CMD_ATTEMPT`, and a loaded runner has
+        // stalled sh.exe for longer than that. A paused clock does not advance
+        // while the attempt's blocking wait runs, so only the exit code decides
+        // here; `cmd_probe_timeout_ends_the_tree` covers the cut-off, and
+        // nextest's limit ends a hang. Paused only after the lookup above,
+        // which bounds `git --exec-path` with a real-time timeout.
+        tokio::time::pause();
         let probe = |command: &'static str| {
             let (shell, cwd, env) = (shell.clone(), cwd.clone(), env.clone());
             async move {
-                let soon = Instant::now() + Duration::from_secs(30);
-                windows::cmd_succeeds(&shell, command, &cwd, &env, soon).await
+                let deadline = Instant::now() + CMD_ATTEMPT;
+                windows::cmd_succeeds(&shell, command, &cwd, &env, deadline).await
             }
         };
         assert!(probe("test \"$DL_READY\" = yes").await);
