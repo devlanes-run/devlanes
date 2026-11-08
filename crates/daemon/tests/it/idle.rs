@@ -137,6 +137,9 @@ async fn keep_awake_and_idle_lanes_refuse_a_freeze() {
             "project: awake\nservices:\n  api: { run: sleep }\n  worker: { run: sleep, keep_awake: true, replicas: 2 }\n",
         );
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Status, json!({}), cx(&main))
+            .await
+            .expect("status registers the project");
         let idle = h
             .call(Method::DebugFreeze, json!({}), cx(&main))
             .await

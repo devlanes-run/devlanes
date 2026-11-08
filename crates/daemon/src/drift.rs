@@ -454,7 +454,13 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let arrival = self.arrive();
         let selection: Selection = params(value)?;
-        let ((project, lane), selectors) = self.lane_for_units(&selection.units, context).await?;
+        let ((project, lane), selectors) = self
+            .lane_for_units(
+                &selection.units,
+                context,
+                crate::target::Policy::of(devlanes_proto::Method::Reload),
+            )
+            .await?;
         self.fresh_config(&project, &lane).await;
         let name = project.name();
         let reference = lane.st().reference(&name);

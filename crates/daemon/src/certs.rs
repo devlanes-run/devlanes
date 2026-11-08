@@ -7,7 +7,7 @@
 use devlanes_proto::LaneWarning;
 use serde_json::json;
 
-use crate::{engine::Inner, model::LaneSt};
+use crate::{engine::Inner, model::LaneView};
 
 /// True when `host` (a `*.` wildcard included) is one of `permitted` or below it.
 pub(crate) fn permitted(host: &str, permitted: &[String]) -> bool {
@@ -40,9 +40,9 @@ fn suggestion(host: &str, domain: &str) -> String {
 impl Inner {
     /// `host_outside_ca` warnings for the lane's routes (services, infra and
     /// `infra.external`) the CA's name constraints exclude; none without
-    /// constraints.
-    pub(crate) fn ca_warnings(&self, reference: &str, lane: &LaneSt) -> Vec<LaneWarning> {
-        let (Some(allowed), Some(view)) = (&self.integ.ca_permitted, &lane.view) else {
+    /// constraints. `view` is the lane's layout.
+    pub(crate) fn ca_warnings(&self, reference: &str, view: Option<&LaneView>) -> Vec<LaneWarning> {
+        let (Some(allowed), Some(view)) = (&self.integ.ca_permitted, view) else {
             return Vec::new();
         };
         let domain = if permitted(&view.domain, allowed) {
@@ -90,7 +90,7 @@ impl Inner {
             .iter()
             .flat_map(|(project, lane)| {
                 let st = lane.st();
-                self.ca_warnings(&st.reference(&project.name()), &st)
+                self.ca_warnings(&st.reference(&project.name()), st.view.as_deref())
             })
             .collect()
     }
