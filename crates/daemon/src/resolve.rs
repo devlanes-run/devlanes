@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use crate::{
     engine::Inner,
     integrations::{ContainerDecl, InfraPortNeed, InfraSpec, PortScope, SharedInfraSpec},
-    model::{ConfigState, EnvMap, LaneRt, ProjectRt},
+    model::{ConfigState, EnvMap, LaneRt, ProjectRt, Unassigned, unassigned},
     registry::{lane_context, read_dotenv, store_error},
 };
 
@@ -193,9 +193,7 @@ impl Inner {
                     .unassigned
                     .clone()
                     .or_else(|| st.last_error.clone())
-                    .unwrap_or_else(|| {
-                        RpcError::new("unassigned", json!({"lane": reference}), 1)
-                    }));
+                    .unwrap_or_else(|| unassigned(&reference, Unassigned::NoRecord)));
             }
             match &st.config {
                 ConfigState::Loaded(_) => None,
@@ -303,13 +301,10 @@ impl Inner {
                     return Err(RpcError::new("no_config", json!({"lane": reference}), 1));
                 }
             };
-            let allocation = st.allocation.clone().ok_or_else(|| {
-                RpcError::new(
-                    "unassigned",
-                    json!({"lane": reference, "reason": "no_ports"}),
-                    1,
-                )
-            })?;
+            let allocation = st
+                .allocation
+                .clone()
+                .ok_or_else(|| unassigned(&reference, Unassigned::NoPorts))?;
             let env = st
                 .env
                 .clone()
@@ -452,7 +447,7 @@ impl Inner {
             let allocation = st
                 .allocation
                 .clone()
-                .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "no_ports"}), 1))?;
+                .ok_or_else(|| unassigned(&reference, Unassigned::NoPorts))?;
             (
                 config,
                 allocation,

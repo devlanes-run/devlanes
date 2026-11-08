@@ -29,7 +29,7 @@ use crate::{
     integrations::{InfraPortNeed, PortScope},
     model::{
         ConfigState, EnvMap, LaneRt, LaneSt, LaneView, ProjectRt, ProjectSt, ServiceInfo,
-        config_error, lane_summary, lock,
+        Unassigned, config_error, lane_summary, lock, unassigned,
     },
 };
 
@@ -1334,11 +1334,7 @@ impl Inner {
                 && used.len() >= usize::try_from(max).unwrap_or(usize::MAX)
             {
                 let reference = lane.st().reference(&project.name());
-                lane.st().unassigned = Some(RpcError::new(
-                    "unassigned",
-                    json!({"lane": reference, "reason": "lanes_max", "max": max}),
-                    1,
-                ));
+                lane.st().unassigned = Some(unassigned(&reference, Unassigned::LanesMax(max)));
                 continue;
             }
             let index = if is_primary && lane_zero && !used.contains(&0) {
@@ -1375,11 +1371,7 @@ impl Inner {
                     st.record = None;
                     st.allocation = None;
                     let reference = st.reference(&project.name());
-                    st.unassigned = Some(RpcError::new(
-                        "unassigned",
-                        json!({"lane": reference, "reason": "pool_exhausted"}),
-                        1,
-                    ));
+                    st.unassigned = Some(unassigned(&reference, Unassigned::PoolExhausted));
                 }
                 Err(error) => {
                     lane.st().last_error = Some(error);
@@ -1624,7 +1616,7 @@ impl Inner {
             let record = st
                 .record
                 .clone()
-                .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "unassigned"}), 1))?;
+                .ok_or_else(|| unassigned(&reference, Unassigned::NoRecord))?;
             (config, record, st.env.clone())
         };
         let needs = devlanes_resolve::port_needs(&config, &self.integ.contributors)
@@ -1791,7 +1783,7 @@ impl Inner {
         let record = st
             .record
             .as_ref()
-            .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "unassigned"}), 1))?;
+            .ok_or_else(|| unassigned(&st.reference(&name), Unassigned::NoRecord))?;
         let data_path = self.lane_data_path(&name, record.id);
         Ok(LaneFacts::new(
             name,
@@ -2224,7 +2216,7 @@ impl Inner {
             let allocation = st
                 .allocation
                 .clone()
-                .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "no_ports"}), 1))?;
+                .ok_or_else(|| unassigned(&st.reference(&project.name()), Unassigned::NoPorts))?;
             (
                 config,
                 allocation,
