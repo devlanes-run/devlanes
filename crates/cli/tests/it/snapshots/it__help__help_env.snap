@@ -7,7 +7,7 @@ Show, export or enter the environment of a lane or unit
 Usage: devlanes env [OPTIONS] <COMMAND>
 
 Commands:
-  show    Print the environment of the lane or of one unit as KEY=VALUE lines
+  show    Print the environment of the lane or of one unit as KEY=VALUE lines; agent output hides secret-looking values
   export  Print export KEY=VALUE lines for eval in a shell
   shell   Open a subshell with the lane's or one unit's environment
   help    Print this message or the help of the given subcommand(s)

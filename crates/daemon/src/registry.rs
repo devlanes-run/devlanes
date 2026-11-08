@@ -2223,13 +2223,18 @@ impl Inner {
                 .allocation
                 .clone()
                 .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "no_ports"}), 1))?;
-            (config, allocation, st.env.clone(), st.infra_ns.clone())
+            (
+                config,
+                allocation,
+                st.env.clone(),
+                st.infra().namespace_value(),
+            )
         };
         let facts = self.facts(project, lane)?;
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
         let dotenv = read_dotenv(lane_dir, primary_dir).await;
         let client_env = env.map(|env| (*env).clone()).unwrap_or_default();
-        let infra = infra_ns.unwrap_or(Value::Null);
+        let infra = infra_ns;
         let reference = lane.st().reference(&project.name());
         let view = self.view_of(
             &reference,
@@ -2635,7 +2640,6 @@ pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
         desired: tokio::sync::Mutex::new(()),
         decide: tokio::sync::Mutex::new(()),
         setup: tokio::sync::Mutex::new(()),
-        infra_refresh: tokio::sync::Mutex::new(()),
     })
 }
 

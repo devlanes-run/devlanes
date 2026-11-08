@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    sync::Arc,
     time::Duration,
 };
 
@@ -128,8 +129,22 @@ pub struct LaneVolume {
     pub bytes: Option<u64>,
 }
 
+/// A container of a Compose project, from [`DockerInfra::compose_containers`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ComposeContainer {
+    /// The container name, without Docker's leading `/`.
+    pub name: String,
+    /// The Compose service it runs.
+    pub service: String,
+    pub health: Health,
+}
+
 /// Label Compose puts on the containers and volumes of a project.
 const COMPOSE_PROJECT_LABEL: &str = "com.docker.compose.project";
+/// Label Compose puts on a container with the service it runs.
+const COMPOSE_SERVICE_LABEL: &str = "com.docker.compose.service";
+/// `True` on the containers of `docker compose run`.
+const COMPOSE_ONEOFF_LABEL: &str = "com.docker.compose.oneoff";
 
 /// Longest the engine may take to size volumes for [`DockerInfra::lane_contents`];
 /// it walks every volume's files, so on a busy machine it can take seconds.
@@ -184,11 +199,55 @@ pub struct DockerInfra {
     docker: Docker,
 }
 
+/// Reads an environment variable, for [`DockerConnector::new`].
+type EnvReader = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// The engine client, made on the first call that can make one and kept from
+/// then on. Every call before that tries again, so an engine that starts after
+/// the daemon is found by the next call. `connect` errors are the caller's
+/// per-call answer: [`Error::is_engine_stopped`] reads an absent Unix socket as
+/// a stopped engine.
+pub struct DockerConnector {
+    env: EnvReader,
+    client: tokio::sync::OnceCell<DockerInfra>,
+}
+
+impl DockerConnector {
+    /// Resolves the endpoint from `DOCKER_HOST` and the current Docker context
+    /// read through `env`, as [`DockerInfra::connect`] does.
+    pub fn new(env: impl Fn(&str) -> Option<String> + Send + Sync + 'static) -> Self {
+        Self {
+            env: Arc::new(env),
+            client: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// The process environment.
+    pub fn from_process_env() -> Self {
+        Self::new(|key| std::env::var(key).ok())
+    }
+
+    /// The client, connecting first while there is none. The endpoint is
+    /// resolved on each attempt, so a context switched before the engine came
+    /// up is used. Concurrent first calls connect once.
+    pub async fn get(&self) -> Result<&DockerInfra, Error> {
+        self.client
+            .get_or_try_init(|| DockerInfra::connect_with(self.env.clone()))
+            .await
+    }
+}
+
 impl DockerInfra {
     /// Connects to the engine selected by `DOCKER_HOST` or the current Docker context.
     pub async fn connect() -> Result<Self, Error> {
-        let host = tokio::task::spawn_blocking(|| {
-            let env = |key: &str| std::env::var(key).ok();
+        Self::connect_with(Arc::new(|key: &str| std::env::var(key).ok())).await
+    }
+
+    /// [`Self::connect`] with the environment read through `env`. Resolving
+    /// reads Docker's config files, so it runs off the executor.
+    async fn connect_with(env: EnvReader) -> Result<Self, Error> {
+        let host = tokio::task::spawn_blocking(move || {
+            let env = |key: &str| env(key);
             resolve_host(env, config_dir(env).as_deref())
         })
         .await
@@ -375,6 +434,57 @@ impl DockerInfra {
         )]));
         let summaries = self.list(&filters, true).await?;
         Ok(summaries.into_iter().map(managed_from_summary).collect())
+    }
+
+    /// Every container of Compose project `project`, each replica, running or
+    /// not, without `docker compose run` one-offs. One engine list, no Compose
+    /// process.
+    pub async fn compose_containers(&self, project: &str) -> Result<Vec<ComposeContainer>, Error> {
+        let mut filters = label_filters(&BTreeMap::from([(
+            COMPOSE_PROJECT_LABEL.to_owned(),
+            project.to_owned(),
+        )]));
+        filters
+            .entry("label".to_owned())
+            .or_default()
+            .push(format!("{COMPOSE_ONEOFF_LABEL}=False"));
+        Ok(self
+            .list(&filters, true)
+            .await?
+            .into_iter()
+            .filter_map(|summary| {
+                let service = summary.labels.as_ref()?.get(COMPOSE_SERVICE_LABEL)?.clone();
+                Some(ComposeContainer {
+                    name: summary_name(summary.names.as_deref()),
+                    service,
+                    health: health_from_summary(
+                        summary.state,
+                        summary.health.and_then(|health| health.status),
+                    ),
+                })
+            })
+            .collect())
+    }
+
+    /// Docker's `State.StartedAt` of `container` (a name or id) while its
+    /// process runs, paused or not; `None` when it does not run or no longer
+    /// exists.
+    pub async fn started_at(&self, container: &str) -> Result<Option<String>, Error> {
+        let inspect = match self.docker.inspect_container(container, None).await {
+            Ok(inspect) => inspect,
+            Err(error) => {
+                let error = Error::from(error);
+                return if error.is_not_found() {
+                    Ok(None)
+                } else {
+                    Err(error)
+                };
+            }
+        };
+        Ok(inspect.state.and_then(|state| {
+            let runs = state.running == Some(true) || state.paused == Some(true);
+            state.started_at.filter(|_| runs)
+        }))
     }
 
     /// Stops running containers of `project`, limited to `scope` when given. Returns the
@@ -605,8 +715,8 @@ impl DockerInfra {
 
     /// Lifecycle events of every container on the engine, plain or Compose, for as
     /// long as the stream is polled. When Docker closes the stream (an engine
-    /// restart) it waits until the engine answers again, yields
-    /// [`WatchEvent::Reconnected`] and subscribes again.
+    /// restart) it yields [`WatchEvent::Ended`], waits until the engine answers
+    /// again, yields [`WatchEvent::Reconnected`] and subscribes again.
     pub fn watch(&self) -> BoxStream<'static, WatchEvent> {
         let events = self.clone();
         let ping = self.clone();
@@ -858,6 +968,23 @@ mod tests {
             base_dir: "/work/acme".into(),
             block: PortBlock::new(21000, 10).expect("valid block"),
         }
+    }
+
+    /// A daemon started before the engine finds it on a later call: a socket
+    /// file that appears between two calls is connected to. Only Unix fails
+    /// at connect; a Windows pipe is first opened by a request.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn connector_connects_once_the_engine_appears() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("docker.sock");
+        let host = format!("unix://{}", path.display());
+        let connector =
+            DockerConnector::new(move |key| (key == "DOCKER_HOST").then(|| host.clone()));
+        let error = connector.get().await.expect_err("no socket yet");
+        assert!(error.is_engine_stopped(), "{error:?}");
+        let _engine = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+        assert!(connector.get().await.is_ok());
     }
 
     #[test]

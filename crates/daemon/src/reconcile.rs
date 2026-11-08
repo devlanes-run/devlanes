@@ -12,72 +12,33 @@ use serde_json::json;
 
 use crate::{
     engine::{Inner, once},
+    infra_restarts::REFRESH_BOUND,
+    integrations::InfraWatch,
     registry::store_error,
 };
 
 impl Inner {
-    /// Keeps `ContainerSummary.state` current: the event's container gets the
-    /// state it leaves, in every lane that uses it, and those lanes are published.
-    /// A stored container that comes back from down is marked restarted and its
-    /// ports read again; `reconnected` does that for every stored container.
-    /// Returns whether the event concerned a container some lane stored.
+    /// Applies a container event to every lane that stores the container: its
+    /// `ContainerSummary.state`, and a check of the lane's infra after a
+    /// `start`, since the container may publish other ports now. Returns
+    /// whether some lane stores the container.
     pub(crate) fn apply_container_event(
         self: &Arc<Self>,
         event: &crate::integrations::InfraEvent,
     ) -> bool {
-        let reconnected = event.state == "reconnected";
-        let state = event.container_state();
+        let now = tokio::time::Instant::now();
         let mut matched = false;
         for (project, lane) in self.all_lanes() {
-            let (changed, restarted) = {
-                let mut st = lane.st();
-                let mut changed = false;
-                let mut restarted = Vec::new();
-                let tracked = st.infra_ns.is_some();
-                for container in st
-                    .infra_containers
-                    .iter_mut()
-                    .filter(|container| reconnected || container.docker == event.container)
-                {
-                    matched = true;
-                    if reconnected {
-                        restarted.push(container.name.clone());
-                        continue;
-                    }
-                    // `restart` follows `start` and finds it running already.
-                    let down = container.state.as_deref().is_some_and(|old| {
-                        old.starts_with("exited") || matches!(old, "removed" | "missing" | "oom")
-                    });
-                    if down && state == "running" {
-                        restarted.push(container.name.clone());
-                    }
-                    // `stop` follows `die`, which already carried the exit code.
-                    let keeps_code = state == "exited"
-                        && container
-                            .state
-                            .as_deref()
-                            .is_some_and(|old| old.starts_with("exited "));
-                    if !keeps_code && container.state.as_deref() != Some(state.as_str()) {
-                        container.state = Some(state.clone());
-                        changed = true;
-                    }
-                }
-                if !tracked {
-                    restarted.clear();
-                }
-                for name in &restarted {
-                    *st.infra_restarted.entry(name.clone()).or_default() += 1;
-                }
-                (changed, !restarted.is_empty())
-            };
-            if restarted {
+            let effect = lane.st().apply_infra_event(event, now);
+            matched |= effect.matched;
+            if effect.suspect {
                 self.queue_infra_refresh(&project, &lane);
             }
-            if changed {
+            if effect.changed {
                 self.emit_lane(&project, &lane);
             }
         }
-        matched && !reconnected
+        matched
     }
 
     /// Reloads known projects, records surviving units as orphans, starts
@@ -139,45 +100,27 @@ impl Inner {
         Ok(())
     }
 
-    /// Learns which containers each lane with a record runs, which a new
-    /// daemon doesn't know until a start or `infra up`. A lane whose own
+    /// Reads the infra of each lane with a record, which a new daemon doesn't
+    /// know until a start or `infra up`: its running containers with their
+    /// ports, so `status` and the routes show them, and a lane whose own
     /// containers hold ports keeps them from box lanes, also after a reboot
-    /// brought the containers back by themselves. Publishes once at the end.
+    /// brought the containers back by themselves.
     async fn learn_lane_containers(self: &Arc<Self>) {
-        let mut learned = false;
         for (project, lane) in self.all_lanes() {
             if lane.st().index().is_none() {
                 continue;
             }
-            let Ok(spec) = self.infra_spec(&project, &lane, &[]).await else {
-                continue;
-            };
-            if spec.is_empty() {
-                continue;
+            match self.infra_spec(&project, &lane, &[]).await {
+                Ok(spec) if !spec.is_empty() => {}
+                _ => continue,
             }
-            // Plain containers are only named with their ports allocated.
-            let needs = self.integ.infra.port_needs(&spec).await.unwrap_or_default();
-            let spec = match self.infra_spec(&project, &lane, &needs).await {
-                Ok(with_ports) => with_ports,
-                Err(_) => spec,
-            };
-            match self.infra_namespace_kept(&spec).await {
-                Ok(up) => {
-                    let mut st = lane.st();
-                    // A start or `infra up` that stored them meanwhile knows
-                    // better.
-                    if st.infra_containers.is_empty() {
-                        st.store_containers(up.containers);
-                        learned = true;
-                    }
-                }
-                Err(error) => {
-                    tracing::debug!(code = %error.code, "lane containers unknown after a restart");
-                }
+            if let Err(failed) = self
+                .refresh_infra(&project, &lane, &[], REFRESH_BOUND)
+                .await
+            {
+                let error = RpcError::from(failed);
+                tracing::debug!(code = %error.code, "lane infra unknown after a restart");
             }
-        }
-        if learned {
-            self.publish_routes();
         }
     }
 
@@ -297,25 +240,17 @@ impl Inner {
                     match event {
                         // The stream carries every container on the engine;
                         // clients hear only of the ones a lane uses.
-                        Ok(event) => {
+                        Ok(InfraWatch::Container(event)) => {
                             if engine.apply_container_event(&event) {
                                 engine.bus.emit("infra.changed", json!(event));
                             }
                         }
+                        Ok(InfraWatch::Resync) => engine.resync_infra(),
                         // Events of other containers can push out a lane's
-                        // own, so the lanes read their containers again.
+                        // own, so the lanes check their containers again.
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
-                            tracing::debug!(
-                                missed,
-                                "container events lost; reading lane infra again"
-                            );
-                            engine.apply_container_event(&crate::integrations::InfraEvent {
-                                project: String::new(),
-                                lane: None,
-                                container: String::new(),
-                                state: "reconnected".into(),
-                                exit_code: None,
-                            });
+                            tracing::debug!(missed, "container events lost; checking lane infra");
+                            engine.resync_infra();
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                     }

@@ -570,7 +570,7 @@ async fn unit_identity_actor_and_exit_roundtrip_without_environment_columns() {
         signal: Some(15),
     };
     store
-        .finish_unit_run(run.id, outcome)
+        .finish_unit_run(run.id, outcome, None)
         .await
         .expect("finish");
     store
@@ -580,6 +580,7 @@ async fn unit_identity_actor_and_exit_roundtrip_without_environment_columns() {
                 code: Some(0),
                 signal: None,
             },
+            None,
         )
         .await
         .expect("idempotent finish");
@@ -791,7 +792,8 @@ async fn registry_updates_deletes_and_allocation_release() {
                 ExitOutcome {
                     code: Some(0),
                     signal: None
-                }
+                },
+                None
             )
             .await
             .is_err()
@@ -954,6 +956,59 @@ async fn migration_drops_cleaned_lanes() {
         .await
         .expect("lane registered again");
     assert_ne!(again.id.0, cleaned);
+}
+
+#[tokio::test]
+/// Runs finished before the `unit_run_ended_by` migration read as not knowing
+/// what ended them, so their exit codes count as no crash.
+async fn migration_leaves_earlier_runs_without_ended_by() {
+    use diesel::migration::MigrationSource;
+    const MIGRATIONS: diesel_migrations::EmbeddedMigrations = embed_migrations!("migrations");
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("runs.db");
+    let mut c = SqliteConnection::establish(path.to_str().expect("path")).expect("db");
+    c.batch_execute("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000")
+        .expect("connection settings");
+    c.applied_migrations().expect("ledger");
+    let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
+        .expect("migrations");
+    // By name, so a migration numbered before or after this one does not
+    // change which ones run first.
+    let ended_by = migrations
+        .iter()
+        .position(|migration| migration.name().to_string().ends_with("_unit_run_ended_by"))
+        .expect("the unit_run_ended_by migration");
+    c.run_migrations(&migrations[..ended_by])
+        .expect("the migrations before it");
+    c.batch_execute(
+        "INSERT INTO projects (id, name, identity, root_path, primary_branch)
+         VALUES (1, 'acme', X'61', X'61', 'main');
+         INSERT INTO worktrees (id, project_id, identity, path, present, first_seen, last_seen)
+         VALUES (1, 1, 'main', X'61', 1, 1, 1);
+         INSERT INTO lanes (id, project_id, worktree_id, lane_index, name, desired_state, created_at)
+         VALUES (1, 1, 1, 0, 'lane0', 'stopped', 1);
+         INSERT INTO unit_runs (lane_id, unit, pid, sid, process_start_time, started_at, ended_at, exit_code, actor_kind)
+         VALUES (1, 'web', 10, 10, '1', 1, 2, 1, 'human');",
+    )
+    .expect("a finished run");
+
+    let store = Store::open(&path).await.expect("upgrade");
+    let runs = store
+        .unit_runs(devlanes_core::LaneId(1), 10)
+        .await
+        .expect("runs");
+    assert_eq!(
+        runs.iter()
+            .map(|run| (run.outcome, run.ended_by))
+            .collect::<Vec<_>>(),
+        [(
+            Some(ExitOutcome {
+                code: Some(1),
+                signal: None
+            }),
+            None
+        )]
+    );
 }
 
 /// A path as the store writes it into a BLOB column on Unix.
