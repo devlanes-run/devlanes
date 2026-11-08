@@ -1044,7 +1044,7 @@ pub enum Action {
     /// runs on it as `devlanes start` would, its `context.lane` set to the lane
     /// `create` returned.
     LaneNewThenStart {
-        create: Request,
+        create: Box<Request>,
         start: Request,
     },
     /// A start that runs inside the TUI: the request is sent first, and the TUI
@@ -1460,12 +1460,12 @@ impl Cli {
                 LaneCommand::New {
                     name, start: true, ..
                 } => {
-                    let create = Request {
+                    let create = Box::new(Request {
                         id: 0,
                         method: Method::LaneNew,
                         params: json!({"name": name}),
                         context: context.clone(),
-                    };
+                    });
                     // The new lane has no env of its own (`SendsEnv::Always`).
                     context.env = send_env.then(environment);
                     return Ok(Action::LaneNewThenStart {

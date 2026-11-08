@@ -209,7 +209,7 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             Box::pin(run(&cli, runtime, action)).await
         }
         Action::LaneNewThenStart { create, mut start } => {
-            let data = match call(create.clone()).await {
+            let data = match call((*create).clone()).await {
                 Ok(data) => data,
                 Err(error) => {
                     let rendered = runtime
