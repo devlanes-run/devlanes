@@ -11,6 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+devlanes-loopback = { path = "../loopback" }
 async-trait.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
