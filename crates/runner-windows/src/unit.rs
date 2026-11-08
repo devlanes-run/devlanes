@@ -34,7 +34,9 @@ use tokio::{
 use crate::{
     CONTROL_C_EXIT, ConsoleHelper, WindowsRunner,
     output::{self, Slot},
-    spawn::{self, is_console_host, is_msys_shell},
+    runtime::Runtimes,
+    spawn::{self, is_console_host},
+    stop::{self, Ask, StopPlan},
     terminal::Terminal,
 };
 
@@ -96,12 +98,12 @@ pub struct WindowsUnit {
 struct Inner {
     identity: ProcessIdentity,
     pty: bool,
-    /// The leader is Git's `sh.exe` standing in for `/bin/sh`.
-    through_shell: bool,
     /// The leader is `cmd.exe` running a batch file.
     batch: bool,
-    /// An MSYS shell was a live member when the stop's event went out.
+    /// An MSYS program was a live member when the stop began.
     shell_ran: AtomicBool,
+    /// Which programs link the MSYS runtime, shared with the runner.
+    runtimes: Runtimes,
     job: Job,
     /// Held so the leader's PID stays its own until the unit is dropped.
     leader: Arc<Child>,
@@ -375,9 +377,9 @@ pub(crate) async fn spawn(
     let inner = Arc::new(Inner {
         identity,
         pty,
-        through_shell: launched.through_shell,
         batch: launched.batch,
         shell_ran: AtomicBool::new(false),
+        runtimes: runner.runtimes.clone(),
         job: launched.job,
         leader,
         slot,
@@ -530,7 +532,7 @@ struct StopFacts {
     batch: bool,
     /// The unit runs in a pseudo console.
     pty: bool,
-    /// An MSYS shell was a live member when the event went out.
+    /// An MSYS program was a live member when the stop began.
     shell_ran: bool,
 }
 
@@ -774,33 +776,18 @@ impl Inner {
     }
 
     /// Starts a stop: terminates the job for SIGKILL, otherwise asks politely
-    /// in the background so the supervisor keeps watching the deadline.
-    /// A pseudo console gets Ctrl-C as the key, which also reaches programs
-    /// that read the console raw, as a terminal's interrupt character would.
-    /// SIGTERM is Ctrl-C unless an MSYS shell runs in the unit, read from the
-    /// job once here. A frozen or throttled unit is put back at
-    /// `Power::Normal` first.
+    /// in the background so the supervisor keeps watching the deadline. The
+    /// background task puts a frozen or throttled unit back at
+    /// `Power::Normal`, reads the job once and asks as its [`StopPlan`]
+    /// says: the Ctrl-C key in a pseudo console, else one console event.
     fn begin_stop(self: &Arc<Self>, signal: StopSignal, deadline: Instant) {
         self.stopping.store(true, Ordering::Release);
-        let stop = signal.windows_stop(self.through_shell);
-        let check_shell = stop == WindowsStop::CtrlCUnlessShell;
-        let event = match stop {
-            WindowsStop::Terminate => {
-                self.terminate_job();
-                None
-            }
-            WindowsStop::CtrlC => Some(CtrlEvent::CtrlC),
-            WindowsStop::CtrlBreak => Some(CtrlEvent::CtrlBreak),
-            WindowsStop::CtrlCUnlessShell => None,
-        };
-        let deadline = deadline.into_std();
-        let holds_power = !self.holds_no_power();
-        if !holds_power && !check_shell {
-            if let Some(event) = event {
-                self.ask_to_stop(event, deadline);
-            }
+        if signal.windows_stop() == WindowsStop::Terminate {
+            self.terminate_job();
             return;
         }
+        let deadline = deadline.into_std();
+        let holds_power = !self.holds_no_power();
         let inner = Arc::clone(self);
         tokio::spawn(async move {
             // Suspended threads handle no console event, key or window
@@ -811,26 +798,41 @@ impl Inner {
                 let waking = Arc::clone(&inner);
                 let _ = blocking(move || waking.normal_for_stop()).await;
             }
-            let event = if check_shell {
-                let live = inner.live_members().await;
-                let shell = live.iter().any(|p| is_msys_shell(&p.name));
-                tracing::debug!(
-                    pid = inner.identity.pid,
-                    shell,
-                    "SIGTERM is Ctrl-Break when an MSYS shell runs, else Ctrl-C"
-                );
-                Some(if shell {
-                    CtrlEvent::CtrlBreak
-                } else {
-                    CtrlEvent::CtrlC
-                })
-            } else {
-                event
+            let planning = Arc::clone(&inner);
+            let plan = match blocking(move || planning.plan_stop(signal)).await {
+                Ok(Ok(plan)) => plan,
+                Ok(Err(error)) | Err(error) => {
+                    tracing::warn!(%error, pid = inner.identity.pid, "reading the unit's job failed");
+                    return;
+                }
             };
-            if let Some(event) = event {
-                inner.ask_to_stop(event, deadline);
-            }
+            let event = match plan.ask {
+                Ask::Terminate => {
+                    inner.terminate_job();
+                    return;
+                }
+                Ask::Key => {
+                    inner.write_input(Bytes::from_static(CTRL_C), true);
+                    None
+                }
+                Ask::Event(event) => Some(event),
+            };
+            let _ = blocking(move || inner.ask_to_close(plan.targets, event, deadline)).await;
         });
+    }
+
+    /// Reads the job once and plans the stop for `signal` from its members.
+    /// Blocking.
+    fn plan_stop(&self, signal: StopSignal) -> Result<StopPlan, Error> {
+        let plan = StopPlan::new(signal, self.pty, self.job.processes()?, &self.runtimes);
+        if plan
+            .targets
+            .iter()
+            .any(|p| stop::runs_msys(p, &self.runtimes))
+        {
+            self.shell_ran.store(true, Ordering::Release);
+        }
+        Ok(plan)
     }
 
     /// Whether the unit holds no suspension or efficiency mode, without
@@ -843,20 +845,6 @@ impl Inner {
             Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().is_normal(),
             Err(TryLockError::WouldBlock) => false,
         }
-    }
-
-    /// Sends the graceful part of a stop: Ctrl-C as a key to a pseudo
-    /// console, or `event` and `WM_CLOSE` through a blocking task.
-    fn ask_to_stop(self: &Arc<Self>, event: CtrlEvent, deadline: std::time::Instant) {
-        let event = match event {
-            CtrlEvent::CtrlC if self.pty => {
-                self.write_input(Bytes::from_static(CTRL_C), true);
-                None
-            }
-            event => Some(event),
-        };
-        let inner = Arc::clone(self);
-        task::spawn_blocking(move || inner.ask_to_close(event, deadline));
     }
 
     /// Queues `bytes` for the pseudo console's input without waiting for the
@@ -922,24 +910,16 @@ impl Inner {
         }
     }
 
-    /// Posts `WM_CLOSE` to the members' visible windows and sends `event`, if
-    /// any, once to the unit's console, through the leader while it runs, else
-    /// through another live member. Waits for the helper until `deadline`.
-    /// Blocking.
-    fn ask_to_close(&self, event: Option<CtrlEvent>, deadline: std::time::Instant) {
-        let live: Vec<ProcessEntry> = match self.job.processes() {
-            Ok(entries) => entries
-                .into_iter()
-                .filter(|entry| !entry.exited && !is_console_host(&entry.name))
-                .collect(),
-            Err(error) => {
-                tracing::warn!(%error, pid = self.identity.pid, "reading the unit's job failed");
-                return;
-            }
-        };
-        if live.iter().any(|p| is_msys_shell(&p.name)) {
-            self.shell_ran.store(true, Ordering::Release);
-        }
+    /// Posts `WM_CLOSE` to the visible windows of `live`, the stop plan's
+    /// targets, and sends `event`, if any, once to the unit's console, through
+    /// the leader while it runs, else through another of them. Waits for the
+    /// helper until `deadline`. Blocking.
+    fn ask_to_close(
+        &self,
+        live: Vec<ProcessEntry>,
+        event: Option<CtrlEvent>,
+        deadline: std::time::Instant,
+    ) {
         let targets: Vec<(u32, u64)> = live.iter().map(|p| (p.pid, p.start_time)).collect();
         match close_windows(&targets) {
             Ok(0) => {}
@@ -1136,10 +1116,11 @@ impl WindowsUnit {
     /// Stops the unit and returns its report, including escalation.
     ///
     /// SIGKILL terminates the job. Every other signal posts `WM_CLOSE` to the
-    /// unit's visible windows and sends one console event (see
-    /// [`StopSignal::windows_stop`]; SIGTERM is Ctrl-C unless an MSYS shell
-    /// runs in the unit) to its console; once only the console
-    /// host is left, or at `policy.timeout`, the job is terminated. A repeated
+    /// unit's visible windows and asks once, as the stop's [`StopPlan`] says:
+    /// SIGINT and SIGTERM type the Ctrl-C key into a pseudo console, and
+    /// without one send a Ctrl-C event, or Ctrl-Break while an MSYS program
+    /// runs in the unit; the other signals send Ctrl-Break. Once only the
+    /// console host is left, or at `policy.timeout`, the job is terminated. A repeated
     /// stop only shortens the timeout. Cancelling this future does not cancel
     /// the stop. Stopping an exited unit returns its existing report. If the
     /// supervisor task died, the job is terminated directly instead.

@@ -533,20 +533,19 @@ async fn pty_sigint_types_ctrl_c() {
     .await;
 }
 
-/// A `run:` string in a pseudo console stops on Ctrl-Break, shell and program.
+/// A `run:` string in a pseudo console gets the Ctrl-C key, which reaches the
+/// program `sh` started as Ctrl-C, so its handler runs, and the stop ends
+/// shell and program without escalating.
 #[tokio::test]
-async fn pty_shell_units_stop_on_ctrl_break() {
+async fn pty_shell_units_get_the_ctrl_c_key() {
+    devlanes_sys_windows::console::set_ctrl_c_ignored(false).expect("accept Ctrl-C");
     bounded(async {
         let shell = devlanes_shell_windows::windows_shell()
             .await
             .expect("Git for Windows' sh.exe");
         let dir = tempfile::tempdir().expect("tempdir");
         let fixture = fixture().to_string_lossy().replace('\\', "/");
-        // `sh` execs the program and passes on its code when the program ends
-        // first. A program that handles the event and exits 0 makes the code
-        // 0 or 512 depending on timing; one that the event ends gives 512 in
-        // either order.
-        let script = format!("'{fixture}' --port 0 --default-ctrl-handler");
+        let script = format!("'{fixture}' --port 0");
         let unit = runner()
             .with_shell(Some(shell))
             .spawn_unit(pty_spec("/bin/sh", &["-c", &script], dir.path(), env(&[])))
@@ -562,19 +561,14 @@ async fn pty_shell_units_stop_on_ctrl_break() {
             .iter()
             .map(devlanes_sys::ProcessInfo::identity)
             .collect();
+        let rest = tokio::spawn(drain(output));
         let report = unit
             .stop_with_report(policy(StopSignal::Terminate, GRACE))
             .await
             .expect("stop");
         assert_stopped(&report, StopSignal::Terminate, false);
-        // `sh -c` execs the fixture, and MSYS's exec stub either reports a
-        // SIGINT death (512, reported as CONTROL_C_EXIT) or passes on the
-        // fixture's own 0. Which one is a race inside the MSYS runtime: on
-        // GitHub's Windows Server 2025 runners 0 is the common case.
-        assert!(
-            [Some(0), Some(CONTROL_C_EXIT)].contains(&report.outcome.code),
-            "{report:?}"
-        );
+        let rest = text(&rest.await.expect("join"), OutputStream::Terminal);
+        assert!(plain(&rest).contains("STOPPING ctrl-c"), "{rest:?}");
         assert!(!any_alive(&members), "{members:?}");
     })
     .await;
@@ -838,47 +832,58 @@ async fn sigterm_sends_ctrl_c() {
     .await;
 }
 
-/// SIGTERM stays Ctrl-Break while Git's MSYS `sh` runs in the unit, as in an
-/// explicit `[sh, -c, ...]` list or a just recipe: the programs it starts
+/// SIGTERM and SIGINT are Ctrl-Break while an MSYS program runs in a unit
+/// without a terminal, whatever it is called: the native programs it starts
 /// ignore a Ctrl-C event and would only stop at the timeout.
 #[tokio::test]
-async fn sigterm_under_a_posix_shell_sends_ctrl_break() {
+async fn pipe_units_under_msys_get_ctrl_break() {
     bounded(async {
         let shell = devlanes_shell_windows::windows_shell()
             .await
             .expect("Git for Windows' sh.exe");
         let dir = tempfile::tempdir().expect("tempdir");
+        // Git's `sh.exe` under another name, next to the runtime it links.
+        let renamed = dir.path().join("acme-sh.exe");
+        std::fs::copy(&shell, &renamed).expect("copy sh.exe");
+        let runtime = shell.with_file_name("msys-2.0.dll");
+        std::fs::copy(&runtime, dir.path().join("msys-2.0.dll")).expect("copy msys-2.0.dll");
         let fixture = fixture().to_string_lossy().replace('\\', "/");
-        // A shell path, not `/bin/sh`, so the runner does not know it is a shell.
         let script = format!("'{fixture}' --port 0; echo done");
-        let unit = runner()
-            .spawn_unit(spec(
-                &shell.to_string_lossy(),
-                &["-c", &script],
-                dir.path(),
-                env(&[]),
-            ))
-            .await
-            .expect("spawn");
-        let _cleanup = Cleanup(unit.clone());
-        let mut output = unit.output();
-        read_until(&mut output, "LISTENING").await;
-        let members: Vec<ProcessIdentity> = unit
-            .processes()
-            .await
-            .expect("processes")
-            .iter()
-            .map(devlanes_sys::ProcessInfo::identity)
-            .collect();
-        let rest = tokio::spawn(drain(output));
-        let report = unit
-            .stop_with_report(policy(StopSignal::Terminate, GRACE))
-            .await
-            .expect("stop");
-        assert_stopped(&report, StopSignal::Terminate, false);
-        let rest = text(&rest.await.expect("join"), OutputStream::Stdout);
-        assert!(rest.contains("STOPPING ctrl-break"), "{rest:?}");
-        assert!(!any_alive(&members), "{members:?}");
+        for (program, signal) in [
+            (&shell, StopSignal::Terminate),
+            (&shell, StopSignal::Interrupt),
+            (&renamed, StopSignal::Terminate),
+        ] {
+            let case = format!("{} {signal:?}", program.display());
+            let unit = runner()
+                .spawn_unit(spec(
+                    &program.to_string_lossy(),
+                    &["-c", &script],
+                    dir.path(),
+                    env(&[]),
+                ))
+                .await
+                .expect("spawn");
+            let _cleanup = Cleanup(unit.clone());
+            let mut output = unit.output();
+            read_until(&mut output, "LISTENING").await;
+            let members: Vec<ProcessIdentity> = unit
+                .processes()
+                .await
+                .expect("processes")
+                .iter()
+                .map(devlanes_sys::ProcessInfo::identity)
+                .collect();
+            let rest = tokio::spawn(drain(output));
+            let report = unit
+                .stop_with_report(policy(signal, Duration::from_secs(5)))
+                .await
+                .expect("stop");
+            assert_stopped(&report, signal, false);
+            let rest = text(&rest.await.expect("join"), OutputStream::Stdout);
+            assert!(rest.contains("STOPPING ctrl-break"), "{case}: {rest:?}");
+            assert!(!any_alive(&members), "{case}: {members:?}");
+        }
     })
     .await;
 }
@@ -904,42 +909,6 @@ async fn sigint_sends_ctrl_c() {
             .expect("stop");
         assert_stopped(&report, StopSignal::Interrupt, false);
         assert_eq!(report.outcome.code, Some(0), "{report:?}");
-    })
-    .await;
-}
-
-/// SIGINT to a `run:` string is Ctrl-Break, since the shell's programs
-/// ignore Ctrl-C; it ends both the shell and the program.
-#[tokio::test]
-async fn sigint_through_the_shell_is_ctrl_break() {
-    bounded(async {
-        let shell = devlanes_shell_windows::windows_shell()
-            .await
-            .expect("Git for Windows' sh.exe");
-        let dir = tempfile::tempdir().expect("tempdir");
-        let fixture = fixture().to_string_lossy().replace('\\', "/");
-        let script = format!("'{fixture}' --port 0");
-        let unit = runner()
-            .with_shell(Some(shell))
-            .spawn_unit(spec("/bin/sh", &["-c", &script], dir.path(), env(&[])))
-            .await
-            .expect("spawn");
-        let _cleanup = Cleanup(unit.clone());
-        let mut output = unit.output();
-        read_until(&mut output, "LISTENING").await;
-        let members: Vec<ProcessIdentity> = unit
-            .processes()
-            .await
-            .expect("processes")
-            .iter()
-            .map(devlanes_sys::ProcessInfo::identity)
-            .collect();
-        let report = unit
-            .stop_with_report(policy(StopSignal::Interrupt, GRACE))
-            .await
-            .expect("stop");
-        assert_stopped(&report, StopSignal::Interrupt, false);
-        assert!(!any_alive(&members), "{members:?}");
     })
     .await;
 }
@@ -1130,12 +1099,15 @@ async fn fixture_tree(
 }
 
 /// An orphan stop asks each unit once (one helper, through the leader) with
-/// `WM_CLOSE` and Ctrl-Break: a unit that exits on it is not terminated; one
-/// that ignores it is terminated after the grace period, its unrecorded
-/// child and grandchild found through their parents.
+/// `WM_CLOSE` and, since no MSYS program runs in them, Ctrl-C: a unit that
+/// exits on it is not terminated; one that ignores it is terminated after the
+/// grace period, its unrecorded child and grandchild found through their
+/// parents.
 #[tokio::test]
 async fn orphan_stops_ask_each_unit_once_then_terminate() {
+    devlanes_sys_windows::console::set_ctrl_c_ignored(false).expect("accept Ctrl-C");
     bounded(async {
+        let runtimes = devlanes_runner_windows::Runtimes::default();
         let dir = tempfile::tempdir().expect("tempdir");
         let log = dir.path().join("helpers.log");
         let helper = counting_helper(&log);
@@ -1148,9 +1120,15 @@ async fn orphan_stops_ask_each_unit_once_then_terminate() {
 
         // Every process of the polite unit was recorded, as a daemon would.
         let (leader, members) = (polite_tree[0], polite_tree[1..].to_vec());
-        let polite_helper = helper.clone();
+        let (polite_helper, polite_runtimes) = (helper.clone(), runtimes.clone());
         let stop = tokio::task::spawn_blocking(move || {
-            devlanes_runner_windows::stop_orphan(Some(&polite_helper), leader, &members, GRACE)
+            devlanes_runner_windows::stop_orphan(
+                Some(&polite_helper),
+                &polite_runtimes,
+                leader,
+                &members,
+                GRACE,
+            )
         })
         .await
         .expect("join");
@@ -1161,7 +1139,13 @@ async fn orphan_stops_ask_each_unit_once_then_terminate() {
         // Only the stubborn unit's leader was recorded.
         let leader = stubborn_tree[0];
         let stop = tokio::task::spawn_blocking(move || {
-            devlanes_runner_windows::stop_orphan(Some(&helper), leader, &[], Duration::from_secs(1))
+            devlanes_runner_windows::stop_orphan(
+                Some(&helper),
+                &runtimes,
+                leader,
+                &[],
+                Duration::from_secs(1),
+            )
         })
         .await
         .expect("join");
@@ -1174,6 +1158,10 @@ async fn orphan_stops_ask_each_unit_once_then_terminate() {
 
         let helpers = std::fs::read_to_string(&log).expect("helper log");
         assert_eq!(helpers.lines().count(), 2, "{helpers}");
+        assert!(
+            helpers.lines().all(|line| line.ends_with(r#""c"]"#)),
+            "{helpers}"
+        );
     })
     .await;
 }

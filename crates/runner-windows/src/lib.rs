@@ -59,7 +59,9 @@ mod ctrl;
 mod foreground;
 mod orphan;
 mod output;
+mod runtime;
 mod spawn;
+mod stop;
 mod terminal;
 mod unit;
 
@@ -68,6 +70,7 @@ pub use devlanes_core::{ExitSweep, StderrMode};
 pub use devlanes_sys::{ListeningSocket, ProcessInfo};
 pub use foreground::{shell_exit_code, spawn_foreground};
 pub use orphan::{OrphanStop, stop_orphan};
+pub use runtime::Runtimes;
 pub use spawn::SpawnError;
 pub use unit::{ExitReport, StopOutcome, WindowsUnit};
 
@@ -75,8 +78,9 @@ pub use unit::{ExitReport, StopOutcome, WindowsUnit};
 /// Ctrl-Break ended.
 pub(crate) const CONTROL_C_EXIT: u32 = 0xC000_013A;
 
-/// Spawns units in job objects with piped output. Cheap to clone; holds only
-/// tuning values, the shell and the console helper's command.
+/// Spawns units in job objects with piped output. Cheap to clone; holds
+/// tuning values, the shell, the console helper's command and the shared
+/// [`Runtimes`] answers.
 #[derive(Debug, Clone)]
 pub struct WindowsRunner {
     pub(crate) stderr: StderrMode,
@@ -86,6 +90,7 @@ pub struct WindowsRunner {
     pub(crate) sweep_timeout: Duration,
     pub(crate) shell: Option<PathBuf>,
     pub(crate) helper: Option<ConsoleHelper>,
+    pub(crate) runtimes: Runtimes,
 }
 
 impl Default for WindowsRunner {
@@ -102,6 +107,7 @@ impl Default for WindowsRunner {
             sweep_timeout: Duration::from_secs(1),
             shell: None,
             helper: ConsoleHelper::current_exe().ok(),
+            runtimes: Runtimes::default(),
         }
     }
 }
@@ -132,6 +138,12 @@ impl WindowsRunner {
     pub fn with_console_helper(mut self, helper: ConsoleHelper) -> Self {
         self.helper = Some(helper);
         self
+    }
+
+    /// Which programs link the MSYS runtime, as this runner has read them;
+    /// pass it to [`stop_orphan`] so orphan stops share the answers.
+    pub fn runtimes(&self) -> &Runtimes {
+        &self.runtimes
     }
 
     /// Sets how often job membership is refreshed for subjects and stops.
