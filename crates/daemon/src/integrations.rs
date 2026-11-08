@@ -585,10 +585,10 @@ pub struct RouteEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<std::net::IpAddr>,
     /// For a box route, what the proxy keeps its idle upstream connections
-    /// by: the box that serves it now, and once published, the remote
-    /// assignment version (`alpha#3`). After a switch no request reuses a
-    /// connection that leads to the box the lane left, and after a switch
-    /// back none reuses one the first switch left draining.
+    /// by: the box that serves it and the remote assignment version
+    /// (`alpha#3`). After a switch no request reuses a connection that leads
+    /// to the box the lane left, and after a switch back none reuses one the
+    /// first switch left draining.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pool_key: Option<String>,
 }

@@ -716,7 +716,7 @@ impl Mirror {
         let mut standby = Vec::new();
         let mut relays = BTreeSet::new();
         let mut refused_hosts = Vec::new();
-        let box_https_port = lock(&self.conn.info).https_port;
+        let box_https_port = self.conn.handshake().0.https_port;
         for unit in &visible {
             let reference = lane_ref(&unit.key.lane);
             let is_mirrored = assignment.mirrors(&self.conn.name, &reference);
@@ -788,7 +788,8 @@ impl Mirror {
                     box_https_port,
                     // The local end is the mirror's listener, on either loopback.
                     address: None,
-                    pool_key: Some(self.conn.name.clone()),
+                    // Set with the assignment version when routes are built.
+                    pool_key: None,
                 };
                 if is_mirrored {
                     routes.push(route);

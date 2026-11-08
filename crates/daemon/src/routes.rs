@@ -82,16 +82,17 @@ impl Inner {
     /// mirrored from connected boxes, and the first claim of a host keeps it.
     pub(crate) fn route_entries(&self) -> Vec<RouteEntry> {
         let local = self.local_routes().entries;
-        let assignment = self.remote.assignment();
-        self.with_remote_routes(local, &assignment)
+        let (version, assignment) = self.remote.assignment();
+        self.with_remote_routes(local, version, &assignment)
     }
 
     /// Drops the routes of local lanes a chosen box lane is in use instead of, and
-    /// appends the mirrored routes of the box lanes `assignment` mirrors whose
-    /// hostnames no local route claims, in connect order.
+    /// appends the mirrored routes of the box lanes `assignment` (assignment
+    /// `version`) mirrors whose hostnames no local route claims, in connect order.
     fn with_remote_routes(
         &self,
         mut routes: Vec<RouteEntry>,
+        version: u64,
         assignment: &crate::remote::Assignment,
     ) -> Vec<RouteEntry> {
         routes.retain(|route| !assignment.yielded.contains_key(&route.lane));
@@ -100,7 +101,7 @@ impl Inner {
             (host, route.fallback)
         };
         let mut seen: BTreeSet<(String, bool)> = routes.iter().map(key).collect();
-        for route in self.remote.routes(assignment) {
+        for route in self.remote.routes(version, assignment) {
             if seen.insert(key(&route)) {
                 routes.push(route);
             }
@@ -342,17 +343,7 @@ impl Inner {
         // Local routes or lane states may have changed what clashes. A change
         // marks the snapshot dirty again, so the next pass publishes it.
         let (version, assignment) = self.reassign_with(&local.entries);
-        let mut routes = self.with_remote_routes(local.entries, &assignment);
-        // A box's connections stay open for a while after a switch away, so
-        // their answers get through. Keyed by the box alone, a switch back
-        // within that while would hand a request one of them, and it would
-        // be reset under the request.
-        for key in routes
-            .iter_mut()
-            .filter_map(|route| route.pool_key.as_mut())
-        {
-            key.push_str(&format!("#{version}"));
-        }
+        let routes = self.with_remote_routes(local.entries, version, &assignment);
         self.sync_hosts(&routes);
         self.integ.routes.publish(routes);
     }
