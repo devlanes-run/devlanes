@@ -604,11 +604,35 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 _ => ("the lane is already running".into(), None),
             }
         }
-        // `with --profile` on a lane whose running services lack the profile's settings.
+        // `with --profile` on a running lane whose profiles give units other settings.
         "profile_not_applied" => {
             let lane = text(data, "lane");
+            let names = |key: &str| {
+                let names: Vec<String> = list(data, key)
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(super::clean)
+                    .collect();
+                match names.as_slice() {
+                    [] => "no profile".to_owned(),
+                    [one] => format!("profile {one}"),
+                    many => format!("profiles {}", many.join(", ")),
+                }
+            };
+            let fields: Vec<String> = list(data, "fields")
+                .iter()
+                .filter_map(Value::as_str)
+                .map(super::clean)
+                .collect();
             (
-                super::clean(&text(data, "message")),
+                format!(
+                    "{} runs {}, whose settings differ from {} ({}); stop the lane first, run \
+                     devlanes with in another worktree, or name the services",
+                    super::clean(&lane),
+                    names("lane_profiles"),
+                    names("profiles"),
+                    fields.join(", "),
+                ),
                 (!lane.is_empty()).then(|| Hint::command(["stop", "--lane", lane.as_str()])),
             )
         }

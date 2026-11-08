@@ -322,17 +322,27 @@ fn mcp_call_variables_stay_in_the_process() {
 #[test]
 /// With `DEVLANES_ENV_FROM_LANE` the start of `with` sends no env, so the lane
 /// keeps its own, while the command still gets the shell's. It sends no `--env`
-/// values either, so the lane keeps those too.
+/// values either, so the lane keeps those too, and asks the daemon to refuse a
+/// lane whose profiles give units other settings, with or without `--keep`.
 fn with_reuses_the_lanes_env() {
-    let cli = Cli::parse_from(["devlanes", "with", "--", "pnpm", "test"]);
-    let Ok(Action::With(plan)) = cli.action_with(
-        &hooked(None, true),
-        PathBuf::from("/fixture/worktree"),
-        mcp_child_env,
-    ) else {
-        panic!("with plan");
-    };
-    assert!(plan.start.context.env.is_none());
-    assert_eq!(plan.start.params.get("env"), None, "{}", plan.start.params);
-    assert_eq!(plan.env["PATH"], "/bin");
+    for keep in [&[][..], &["--keep"]] {
+        let cli = Cli::parse_from(
+            ["devlanes", "with"]
+                .into_iter()
+                .chain(keep.iter().copied())
+                .chain(["--", "pnpm", "test"]),
+        );
+        let Ok(Action::With(plan)) = cli.action_with(
+            &hooked(None, true),
+            PathBuf::from("/fixture/worktree"),
+            mcp_child_env,
+        ) else {
+            panic!("with plan");
+        };
+        let params = &plan.start.params;
+        assert!(plan.start.context.env.is_none());
+        assert_eq!(params.get("env"), None, "{params}");
+        assert_eq!(params["needs_profile_settings"], true, "{params}");
+        assert_eq!(plan.env["PATH"], "/bin");
+    }
 }
