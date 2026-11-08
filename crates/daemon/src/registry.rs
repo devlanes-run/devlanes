@@ -1333,9 +1333,10 @@ impl Inner {
             if let Some(max) = primary_max.unwrap_or_else(|| literal(&config.lanes.max))
                 && used.len() >= usize::try_from(max).unwrap_or(usize::MAX)
             {
+                let reference = lane.st().reference(&project.name());
                 lane.st().unassigned = Some(RpcError::new(
                     "unassigned",
-                    json!({"reason": "lanes_max", "max": max}),
+                    json!({"lane": reference, "reason": "lanes_max", "max": max}),
                     1,
                 ));
                 continue;
@@ -1373,9 +1374,10 @@ impl Inner {
                     let mut st = lane.st();
                     st.record = None;
                     st.allocation = None;
+                    let reference = st.reference(&project.name());
                     st.unassigned = Some(RpcError::new(
                         "unassigned",
-                        json!({"reason": "pool_exhausted"}),
+                        json!({"lane": reference, "reason": "pool_exhausted"}),
                         1,
                     ));
                 }

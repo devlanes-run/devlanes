@@ -189,18 +189,13 @@ impl Inner {
         let config = {
             let st = lane.st();
             if st.record.is_none() {
-                let mut error = st
+                return Err(st
                     .unassigned
                     .clone()
                     .or_else(|| st.last_error.clone())
-                    .unwrap_or_else(|| RpcError::new("unassigned", json!({}), 1));
-                if error.data.is_null() {
-                    error.data = json!({});
-                }
-                if let Some(data) = error.data.as_object_mut() {
-                    data.entry("lane").or_insert(json!(reference));
-                }
-                return Err(error);
+                    .unwrap_or_else(|| {
+                        RpcError::new("unassigned", json!({"lane": reference}), 1)
+                    }));
             }
             match &st.config {
                 ConfigState::Loaded(_) => None,
