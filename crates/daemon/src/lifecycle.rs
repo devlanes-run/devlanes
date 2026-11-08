@@ -19,7 +19,7 @@ use devlanes_proto::{
     events,
 };
 use devlanes_resolve::{Launch, ReadySpec, ResolvedCommand, ResolvedLane, ResolvedService};
-use devlanes_state::{DesiredState, TaskRunInput};
+use devlanes_state::{CleanLane, DesiredState, TaskRunInput};
 use futures_util::{
     StreamExt,
     future::{BoxFuture, join_all},
@@ -34,10 +34,12 @@ use crate::{
     engine::{Inner, with_ownership},
     integrations::{InfraPortNeed, InfraSpec, ManagedUnit, PlannedUnit},
     model::{
-        EnvMap, Kind, LaneRt, ProjectRt, StartCtl, UnitRec, core_actor, is_mine, unit_summary,
+        Closing, EnvMap, Kind, LaneRt, ProjectRt, StartCtl, UnitRec, core_actor, is_mine,
+        unit_summary,
     },
     ready::Readiness,
     registry::{internal, store_error},
+    shared_infra::SharedInfraStop,
     stopping::StopSteps,
     units::{UnitHost, UnitInfo, UnitState, now_ms},
 };
@@ -257,6 +259,16 @@ pub(crate) enum Logs {
     /// worktree policy, the sweep after a re-list) keeps them, so what it
     /// last did can still be read.
     Keep,
+}
+
+/// What [`Inner::clean_lane`] did.
+#[derive(Debug)]
+pub(crate) enum Cleaned {
+    /// The lane ended; the `lane.clean` result.
+    Done(Value),
+    /// Another clean ended this lane first: the runtime is no longer the one its
+    /// project holds, or the project was forgotten. Nothing was changed.
+    Gone,
 }
 
 /// `<logs>/<project>/<lane index>/<unit>`, where a unit's log segments live.
@@ -777,7 +789,7 @@ impl LanePhase for InfraPhase {
             }
             // A hung `up` must not keep a stop waiting for the lane.
             None => tokio::select! {
-                up = engine.with_container_progress(cx, &spec, &mut shown, engine.integ.infra.up(&spec)).instrument(tracing::debug_span!("infra up")) => up,
+                up = engine.with_container_progress(cx, &spec, &mut shown, engine.infra_up(&cx.project, &spec)).instrument(tracing::debug_span!("infra up")) => up,
                 () = cx.cancel.cancelled() => {
                     engine.store_after_failed_up(&cx.lane, &spec).await;
                     return PhaseResult::Error(start_cancelled(cx));
@@ -4389,16 +4401,20 @@ impl Inner {
         Ok(result)
     }
 
-    /// `lane clean`: stop, `lane.clean` tasks, teardown, remove per-lane containers,
-    /// free the block and records, and with [`Logs::Delete`] the lane's logs.
-    /// Other lanes and shared infra stay untouched.
+    /// `lane clean`: stop, `lane.clean` tasks, teardown, remove per-lane
+    /// containers, then end the lane: its row goes with its block and history,
+    /// its runtime is retired, its data folder is deleted, and with
+    /// [`Logs::Delete`] its logs. A worktree that comes back as a lane is a new
+    /// lane. The clean of a project's last lane stops the project's shared
+    /// containers (data kept) and forgets the project; other lanes' containers
+    /// stay untouched.
     pub(crate) async fn clean_lane(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
         actor: Option<&Actor>,
         logs: Logs,
-    ) -> Result<Value, RpcError> {
+    ) -> Result<Cleaned, RpcError> {
         let actor = actor.cloned().unwrap_or_default();
         let reference = lane.st().reference(&project.name());
         // One hold of `op` from the stop to the release of the records: a start
@@ -4406,6 +4422,12 @@ impl Inner {
         self.cancel_queued(lane, &reference, None, None);
         lane.cancel_start();
         let _op = lane.op.write().await;
+        // A clean that resolved the same runtime and got `op` first ended the
+        // lane under it; this one has nothing left to do, and the shared
+        // containers are not its to stop.
+        if !self.holds(project, lane) {
+            return Ok(Cleaned::Gone);
+        }
         // `exec` and `run` take no `op`: interrupt runs and wait for spawns in
         // flight, so the stop below sees every unit and none appears until the
         // records are gone.
@@ -4448,8 +4470,7 @@ impl Inner {
             None => Value::Null,
         };
         let record = lane.st().record.clone();
-        let mut data_left = None;
-        if let Some(record) = &record {
+        if record.is_some() {
             // Every run must be finished before the lane's records may be released;
             // none is alive by now, so each row records a real exit.
             let runs: Vec<_> = lane
@@ -4467,43 +4488,69 @@ impl Inner {
                 // A row left unfinished makes `clean_lane` refuse with `active_runs`.
                 self.finish_run(id, outcome).await;
             }
-            // Setup records, once-only markers and task history go in the same
-            // transaction as the lane's block.
-            self.store
-                .clean_lane(record.id)
-                .await
-                .map_err(store_error)?;
-            // Last, so a clean that fails earlier keeps the data its teardown may need.
-            data_left = self.remove_lane_data(&project.name(), record.id).await;
-            // Every unit stopped and closed its log above.
-            if let (Logs::Delete, Some(index)) = (logs, index) {
-                self.remove_lane_logs(&project.name(), index).await;
-            }
         }
-        let present = {
-            let mut st = lane.st();
-            st.record = None;
-            // Cleaned, the worktree is no lane until devlanes runs in it again.
-            st.wanted = false;
-            st.allocation = None;
-            st.view = None;
-            st.view_error = None;
-            st.units.clear();
-            st.started_at_ms = None;
-            st.infra_ns = None;
-            st.infra_replaced();
-            st.infra_containers.clear();
-            st.usage.clear();
-            st.moves_to = None;
-            st.present
+        // Its stop, `lane.clean` tasks, teardown and container removal are done,
+        // so it no longer uses the shared containers.
+        lane.st().closing = Closing::Released;
+        let shared = self.stop_shared_infra_unless_used(project, lane).await;
+        let replacement = self.replacement(project, lane).await;
+        let data = record
+            .as_ref()
+            .map(|record| self.lane_data_path(&project.name(), record.id));
+        let (alias, listed) = {
+            let st = lane.st();
+            (st.alias().is_some(), st.listed())
         };
-        self.bus
-            .emit(events::LANE_REMOVED, json!({"lane": reference}));
-        if !present {
+        {
+            // After `op`, as `apply_move` takes them. Only the identity check, the
+            // store calls and the map changes run under it.
+            let _sync = project.sync.lock().await;
+            if !self.holds(project, lane) {
+                return Ok(Cleaned::Gone);
+            }
+            match (&record, &data) {
+                (Some(record), Some(data)) => self
+                    .store
+                    .clean_lane(CleanLane {
+                        lane: record.id,
+                        data: data.clone(),
+                        forget_worktree: alias,
+                    })
+                    .await
+                    .map_err(store_error)?,
+                _ if alias => self
+                    .store
+                    .forget_worktree(lane.worktree)
+                    .await
+                    .map_err(store_error)?,
+                _ => {}
+            }
+            // A request still holding this runtime fails with `unassigned`.
+            lane.st().record = None;
             project.st().lanes.remove(&lane.worktree);
             lane.watch.cancel();
+            // While another lane used the shared containers they may still run,
+            // and only a kept project keeps their block reserved.
+            let used = matches!(shared, SharedInfraStop::Used);
+            if (used || !self.forget_if_empty(project).await)
+                && let Some(replacement) = replacement
+            {
+                project.st().lanes.insert(lane.worktree, replacement);
+            }
         }
-        self.forget_if_empty(project).await;
+        // A file held open (Windows) keeps the folder; `lane gc` deletes it later.
+        let data_left = match data {
+            Some(path) => self.delete_data(path).await,
+            None => None,
+        };
+        // Every unit stopped and closed its log above.
+        if let (Logs::Delete, Some(index)) = (logs, index) {
+            self.remove_lane_logs(&project.name(), index).await;
+        }
+        if listed {
+            self.bus
+                .emit(events::LANE_REMOVED, json!({"lane": reference}));
+        }
         self.publish_routes();
         let mut result = json!({
             "lane": reference,
@@ -4512,29 +4559,78 @@ impl Inner {
             "teardown": teardown,
             "infra": infra,
         });
-        // A file held open (Windows) keeps the folder; only the user can close it.
+        if let Some(report) = shared.report() {
+            result["shared_infra"] = report;
+        }
         if let Some(path) = data_left {
             result["data_left"] = json!(path);
         }
-        Ok(result)
+        Ok(Cleaned::Done(result))
     }
 
-    /// Forgets a project whose every lane was cleaned: its rows go (the store
-    /// refuses while a run is unfinished) and so does it in memory, so neither a
-    /// daemon restart nor its watchers bring it back; the next command whose policy
-    /// registers projects (`start`, `status`, `env`, ...) run in its folder registers
-    /// it again, and reads there answer `project_not_started`.
-    pub(crate) async fn forget_if_empty(&self, project: &Arc<ProjectRt>) {
+    /// Whether `lane` is the runtime `project` holds for its worktree and
+    /// `project` is still registered. Identity, not key presence: a worktree
+    /// that is no extra lane keeps its key across a clean, since its
+    /// replacement goes in under the same `WorktreeId`, so only identity tells
+    /// the runtime a clean resolved from the one that replaced it. A clean
+    /// retires its runtime while it holds `op`, so a clean that waited for that
+    /// `op` sees it here.
+    fn holds(&self, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) -> bool {
+        let registered = crate::model::lock(&self.projects)
+            .get(&project.id)
+            .is_some_and(|known| Arc::ptr_eq(known, project));
+        registered
+            && project
+                .st()
+                .lanes
+                .get(&lane.worktree)
+                .is_some_and(|held| Arc::ptr_eq(held, lane))
+    }
+
+    /// The runtime that takes a cleaned lane's place: a new one for a present
+    /// worktree that is no extra lane, with its config already loaded, so the
+    /// config poller sees no change and assigns nothing. Built outside the map;
+    /// the clean inserts it unless it forgets the project.
+    async fn replacement(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+    ) -> Option<Arc<LaneRt>> {
+        let st = {
+            let st = lane.st();
+            if !st.present || st.alias().is_some() {
+                return None;
+            }
+            crate::model::LaneSt::new(
+                st.identity.clone(),
+                st.path.clone(),
+                st.branch.clone(),
+                true,
+            )
+        };
+        let replacement = crate::registry::new_lane(lane.worktree, st);
+        self.reload_config(project, &replacement).await;
+        Some(replacement)
+    }
+
+    /// Under `project.sync`: forgets a project none of whose runtimes is a lane
+    /// (`listed()`, so a lane waiting for one counts), runs something or is
+    /// busy. Its rows go (the store refuses while a run is unfinished) and so
+    /// does it in memory, so neither a daemon restart nor its watchers bring it
+    /// back; the next command whose policy registers projects (`start`,
+    /// `status`, `env`, ...) run in its folder registers it again, and reads
+    /// there answer `project_not_started`. Returns whether it forgot it.
+    async fn forget_if_empty(&self, project: &Arc<ProjectRt>) -> bool {
         let empty = project.lanes().iter().all(|lane| {
             let st = lane.st();
-            st.record.is_none() && !st.any_running() && st.busy.is_none()
+            !st.listed() && !st.any_running() && st.busy.is_none()
         });
         if !empty {
-            return;
+            return false;
         }
         if let Err(error) = self.store.delete_project(project.id).await {
             tracing::warn!(project = %project.name(), %error, "keeping a project whose lanes were all cleaned");
-            return;
+            return false;
         }
         crate::model::lock(&self.projects).remove(&project.id);
         project.watch.cancel();
@@ -4542,6 +4638,7 @@ impl Inner {
             lane.watch.cancel();
         }
         tracing::info!(project = %project.name(), "forgot a project whose lanes were all cleaned");
+        true
     }
 
     /// Worktree auto-start or setup with the project's last request env.

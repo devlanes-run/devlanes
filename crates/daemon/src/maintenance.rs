@@ -154,6 +154,9 @@ impl Inner {
                     STATE_INTERVAL
                 }
             };
+            // Folders a clean could not delete; `delete_data` logs the ones
+            // still held.
+            self.delete_pending_data().await;
         }
     }
 }

@@ -266,7 +266,7 @@ lanes:
 
 On Windows the folder is under `%USERPROFILE%\.devlanes\data`, `lanes.data_dir` may also start with `~\` or a drive letter, and `${{ lane.data_path }}`, `DEVLANES_LANE_DATA` and the Wrangler registry variables are written with `/` (`C:/Users/acme/.devlanes/data/acme/3`), which Windows programs accept and `sh` strings leave intact.
 
-devlanes creates the folder when the lane is created and again before each start, run and container start, so deleting it by hand is safe while the lane is stopped. `devlanes lane clean` deletes it after `lane.clean` tasks and teardown have run, and the project's folder goes with its last lane. A lane that comes back after a clean starts with an empty folder.
+devlanes creates the folder when the lane is created and again before each start, run and container start, so deleting it by hand is safe while the lane is stopped. `devlanes lane clean` deletes it after `lane.clean` tasks and teardown have run, and the project's folder goes with its last lane. A lane that comes back after a clean is a new lane with a new, empty folder.
 
 A worktree is per lane only while each lane has its own worktree. `devlanes lane new --name` adds a lane to a folder that already has one, and those lanes share everything inside the worktree: `.wrangler/`, `node_modules/.vite`, build output and any file a script generates there. Use the data folder for anything a lane writes while it runs.
 

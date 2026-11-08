@@ -303,7 +303,7 @@ fn plan(
     }
 }
 
-/// Resolves ownership through foreign-key records and rejects cleaned lanes.
+/// Resolves ownership through foreign-key records.
 fn owner_project(connection: &mut SqliteConnection, owner: BlockOwner) -> Result<ProjectId, Error> {
     match owner {
         BlockOwner::Project(id) => projects::table
@@ -315,12 +315,11 @@ fn owner_project(connection: &mut SqliteConnection, owner: BlockOwner) -> Result
             .ok_or(Error::NotFound("project")),
         BlockOwner::Lane(id) => lanes::table
             .find(id.0)
-            .filter(lanes::cleaned_at.is_null())
             .select(lanes::project_id)
             .first::<i64>(connection)
             .optional()?
             .map(ProjectId)
-            .ok_or(Error::NotFound("active lane")),
+            .ok_or(Error::NotFound("lane")),
     }
 }
 

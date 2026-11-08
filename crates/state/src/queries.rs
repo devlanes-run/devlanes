@@ -2,10 +2,7 @@
 
 use crate::{
     models::*,
-    schema::{
-        lane_setup, lanes, port_blocks, projects, task_completions, task_runs, unit_run_members,
-        unit_runs, worktrees,
-    },
+    schema::{data_deletes, lanes, projects, task_runs, unit_run_members, unit_runs, worktrees},
     *,
 };
 use devlanes_core::{
@@ -13,7 +10,10 @@ use devlanes_core::{
     refs::valid_project_name,
 };
 use diesel::{dsl::exists, prelude::*};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 impl Store {
     /// Inserts by name, or updates the paths and primary branch of the project
@@ -180,7 +180,8 @@ impl Store {
         })
         .await
     }
-    /// Registers a lane; conflicting active indices and foreign worktrees fail.
+    /// Registers a lane, or updates the one of its worktree; conflicting indices
+    /// and foreign worktrees fail.
     pub async fn upsert_lane(&self, input: LaneInput) -> Result<Lane, Error> {
         if input.name.is_empty() {
             return Err(Error::Invalid("empty lane name".into()));
@@ -203,13 +204,6 @@ impl Store {
                 {
                     return Err(Error::NotFound("project worktree"));
                 }
-                let revived = lanes::table
-                    .filter(lanes::worktree_id.eq(input.worktree_id.0))
-                    .select(lanes::cleaned_at)
-                    .first::<Option<i64>>(c)
-                    .optional()?
-                    .flatten()
-                    .is_some();
                 let row = NewLane {
                     project_id: input.project_id.0,
                     worktree_id: input.worktree_id.0,
@@ -230,15 +224,8 @@ impl Store {
                         lanes::desired_state.eq(&row.desired_state),
                         lanes::profile.eq(&row.profile),
                         lanes::profiles.eq(&row.profiles),
-                        lanes::cleaned_at.eq(None::<i64>),
                     ))
                     .execute(c)?;
-                // A cleaned lane coming back starts over, so its age does too.
-                if revived {
-                    diesel::update(lanes::table.filter(lanes::worktree_id.eq(row.worktree_id)))
-                        .set(lanes::created_at.eq(row.created_at))
-                        .execute(c)?;
-                }
                 lanes::table
                     .filter(lanes::worktree_id.eq(row.worktree_id))
                     .select(LaneRow::as_select())
@@ -248,7 +235,7 @@ impl Store {
         })
         .await
     }
-    /// Returns a lane, including cleaned history records.
+    /// Returns a lane; `None` once it was cleaned or deleted.
     pub async fn lane(&self, id: LaneId) -> Result<Option<Lane>, Error> {
         self.call(move |c| {
             lanes::table
@@ -308,14 +295,14 @@ impl Store {
         let profiles = encode_profiles(&profiles)?;
         self.call(move |c| {
             require_changed(
-                diesel::update(lanes::table.find(id.0).filter(lanes::cleaned_at.is_null()))
+                diesel::update(lanes::table.find(id.0))
                     .set((
                         lanes::desired_state.eq(desired.as_str()),
                         lanes::profile.eq(profile),
                         lanes::profiles.eq(profiles),
                     ))
                     .execute(c)?,
-                "active lane",
+                "lane",
             )
         })
         .await
@@ -335,7 +322,7 @@ impl Store {
         let services = encode_profiles(&services)?;
         self.call(move |c| {
             require_changed(
-                diesel::update(lanes::table.find(id.0).filter(lanes::cleaned_at.is_null()))
+                diesel::update(lanes::table.find(id.0))
                     .set((
                         lanes::desired_state.eq(desired.as_str()),
                         lanes::profile.eq(profile),
@@ -343,38 +330,65 @@ impl Store {
                         lanes::services.eq(services),
                     ))
                     .execute(c)?,
-                "active lane",
+                "lane",
             )
         })
         .await
     }
-    /// Frees the lane's range and active index after clean phases finish, and
-    /// forgets its setup records, once-only task markers and task history in the
-    /// same transaction, so a failed clean leaves the lane as it was. Unit run
-    /// history stays.
-    pub async fn clean_lane(&self, id: LaneId) -> Result<(), Error> {
+    /// Ends a lane after its clean phases finished: deletes its row, and with it
+    /// its port block, setup records, task markers, task runs and unit run
+    /// history; with `forget_worktree`, its worktree row; and records its data
+    /// folder as pending delete. One transaction, so a failed clean leaves the
+    /// lane as it was. A lane that comes back later is a new lane with a new id.
+    pub async fn clean_lane(&self, clean: CleanLane) -> Result<(), Error> {
+        let data = path_bytes(&clean.data);
         self.call(move |c| {
             c.immediate_transaction(|c| {
-                require_no_active_runs(c, Some(&[id.0]))?;
-                require_changed(
-                    diesel::update(lanes::table.find(id.0))
-                        .set((
-                            lanes::cleaned_at.eq(now()?),
-                            lanes::desired_state.eq("stopped"),
-                            lanes::services.eq("[]"),
-                        ))
-                        .execute(c)?,
-                    "lane",
-                )?;
-                diesel::delete(port_blocks::table.filter(port_blocks::lane_id.eq(id.0)))
+                let id = clean.lane.0;
+                require_no_active_runs(c, Some(&[id]))?;
+                let worktree: i64 = lanes::table
+                    .find(id)
+                    .select(lanes::worktree_id)
+                    .first(c)
+                    .optional()?
+                    .ok_or(Error::NotFound("lane"))?;
+                diesel::delete(lanes::table.find(id)).execute(c)?;
+                if clean.forget_worktree {
+                    forget_worktree(c, worktree)?;
+                }
+                diesel::insert_into(data_deletes::table)
+                    .values((data_deletes::path.eq(data), data_deletes::since.eq(now()?)))
+                    .on_conflict_do_nothing()
                     .execute(c)?;
-                diesel::delete(lane_setup::table.filter(lane_setup::lane_id.eq(id.0)))
-                    .execute(c)?;
-                diesel::delete(task_completions::table.filter(task_completions::lane_id.eq(id.0)))
-                    .execute(c)?;
-                diesel::delete(task_runs::table.filter(task_runs::lane_id.eq(id.0))).execute(c)?;
                 Ok(())
             })
+        })
+        .await
+    }
+    /// Deletes the worktree row of an extra lane cleaned before it got a lane
+    /// row. A worktree that has a lane stays.
+    pub async fn forget_worktree(&self, id: WorktreeId) -> Result<(), Error> {
+        self.call(move |c| forget_worktree(c, id.0)).await
+    }
+    /// Lane data folders a clean recorded and nobody deleted yet.
+    pub async fn data_deletes(&self) -> Result<Vec<PathBuf>, Error> {
+        self.call(|c| {
+            Ok(data_deletes::table
+                .order(data_deletes::since)
+                .select(data_deletes::path)
+                .load::<Vec<u8>>(c)?
+                .into_iter()
+                .map(path_from_bytes)
+                .collect())
+        })
+        .await
+    }
+    /// Forgets a pending delete once the folder is gone.
+    pub async fn data_deleted(&self, path: PathBuf) -> Result<(), Error> {
+        let path = path_bytes(&path);
+        self.call(move |c| {
+            diesel::delete(data_deletes::table.find(path)).execute(c)?;
+            Ok(())
         })
         .await
     }
@@ -398,14 +412,10 @@ impl Store {
         }
         self.call(move |c| {
             c.immediate_transaction(|c| {
-                if !diesel::select(exists(
-                    lanes::table
-                        .find(input.lane_id.0)
-                        .filter(lanes::cleaned_at.is_null()),
-                ))
-                .get_result::<bool>(c)?
+                if !diesel::select(exists(lanes::table.find(input.lane_id.0)))
+                    .get_result::<bool>(c)?
                 {
-                    return Err(Error::NotFound("active lane"));
+                    return Err(Error::NotFound("lane"));
                 }
                 let row = NewUnitRun {
                     lane_id: input.lane_id.0,
@@ -590,6 +600,15 @@ pub(crate) fn active_runs(
     let units: i64 = units.count().get_result(c)?;
     let tasks: i64 = tasks.count().get_result(c)?;
     Ok((from_sql_u64(units), from_sql_u64(tasks)))
+}
+
+/// Deletes worktree row `id` unless a lane still uses it.
+fn forget_worktree(c: &mut SqliteConnection, id: i64) -> Result<(), Error> {
+    diesel::delete(worktrees::table.find(id).filter(diesel::dsl::not(exists(
+        lanes::table.filter(lanes::worktree_id.eq(id)),
+    ))))
+    .execute(c)?;
+    Ok(())
 }
 
 /// Rejects cleanup while process or task identities remain unfinished.

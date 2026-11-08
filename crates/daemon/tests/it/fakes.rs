@@ -39,7 +39,7 @@ use devlanes_core::{
 use devlanes_daemon::integrations::{
     ContainerLogChunk, ContainerLogOptions, ExitDetails, InfraContainer, InfraError, InfraEvent,
     InfraPortNeed, InfraProvider, InfraSpec, InfraUp, ManagedUnit, PortScope, ProcessTable,
-    UnitRunner,
+    SharedInfraSpec, UnitRunner,
 };
 use devlanes_proto::{LeftProcess, PhaseContainer};
 use futures_util::{StreamExt, stream::BoxStream};
@@ -679,6 +679,12 @@ pub struct FakeInfra {
     /// `up` leaves the lane's `db` out of its containers, as for a lane whose
     /// containers a restarted daemon learned while `db` was down.
     pub up_omits_db: Arc<Mutex<bool>>,
+    /// When set, `down` waits for a notification between recording `down`
+    /// and `down done`.
+    pub down_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
+    /// `port_needs` builds its needs from the spec's plain containers as the
+    /// real provider does, instead of the fixed lane need `infra.db/5432`.
+    pub ports_from_spec: Arc<Mutex<bool>>,
 }
 
 impl FakeInfra {
@@ -765,8 +771,27 @@ impl FakeInfra {
 
 #[async_trait]
 impl InfraProvider for FakeInfra {
-    async fn port_needs(&self, _: &InfraSpec) -> Result<Vec<InfraPortNeed>, InfraError> {
+    async fn port_needs(&self, spec: &InfraSpec) -> Result<Vec<InfraPortNeed>, InfraError> {
         self.query("port_needs");
+        // As the real provider: one need per declared port, from the lane's block
+        // for a `per_lane` container and from the project's shared block otherwise.
+        if self.ports_from_spec.lock().is_ok_and(|on| *on) {
+            return Ok(spec
+                .containers
+                .iter()
+                .flat_map(|container| {
+                    container.ports.iter().map(|(name, _)| InfraPortNeed {
+                        scope: if container.per_lane {
+                            PortScope::Lane
+                        } else {
+                            PortScope::Shared
+                        },
+                        unit: format!("infra.{}", container.name),
+                        name: name.clone(),
+                    })
+                })
+                .collect());
+        }
         Ok(vec![InfraPortNeed {
             scope: PortScope::Lane,
             unit: "infra.db".into(),
@@ -820,9 +845,23 @@ impl InfraProvider for FakeInfra {
     fn events(&self) -> Option<broadcast::Receiver<InfraEvent>> {
         Some(self.sender().subscribe())
     }
-    async fn down(&self, _: &InfraSpec) -> Result<Value, InfraError> {
+    /// Records `down` on entry, waits for [`FakeInfra::down_gate`] when one is
+    /// set, then records `down done`.
+    async fn down(&self, _: &SharedInfraSpec) -> Result<Value, InfraError> {
         self.record("down".into());
+        let gate = self.down_gate.lock().ok().and_then(|gate| gate.clone());
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
+        self.record("down done".into());
         Ok(json!({"stopped": ["db"]}))
+    }
+    /// The spec's shared plain containers; the fake runs no Compose.
+    async fn shared_names(
+        &self,
+        spec: &SharedInfraSpec,
+    ) -> Result<std::collections::BTreeSet<String>, InfraError> {
+        Ok(spec.containers.iter().cloned().collect())
     }
     async fn remove_lane(&self, _: &str, lane: u32) -> Result<Value, InfraError> {
         self.record(format!("remove {lane}"));
@@ -962,7 +1001,8 @@ impl InfraProvider for FakeInfra {
     async fn doctor(&self) -> Value {
         json!({"docker": {"reachable": true}})
     }
-    async fn progress(&self, _: &InfraSpec) -> Vec<PhaseContainer> {
+    async fn progress(&self, spec: &InfraSpec) -> Vec<PhaseContainer> {
+        self.query(&format!("progress {}", spec.lane));
         let Ok(mut script) = self.progress.lock() else {
             return Vec::new();
         };

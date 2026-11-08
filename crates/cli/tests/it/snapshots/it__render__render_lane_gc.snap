@@ -4,7 +4,10 @@ expression: text
 ---
 --- human (exit 0)
 cleaned acme@5; removed 3 unused port offsets
+acme@5: stopped shared containers (data kept)
 --- plain (exit 0)
 cleaned acme@5; removed 3 unused port offsets
+acme@5: stopped shared containers (data kept)
 --- agent (exit 0)
 cleaned acme@5; removed 3 unused port offsets
+acme@5: stopped shared containers (data kept)

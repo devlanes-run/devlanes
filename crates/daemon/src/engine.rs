@@ -447,7 +447,7 @@ impl Inner {
                     && st.starts.is_empty()
                     && st.busy.is_none()
                     && st.spawning == 0
-                    && !st.closing
+                    && st.closing == crate::model::Closing::No
                     && !st.sweeping
             })
     }

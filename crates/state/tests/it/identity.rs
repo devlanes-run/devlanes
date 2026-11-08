@@ -2,7 +2,7 @@
 
 use super::{lane, project, schema};
 use devlanes_core::{Actor, ActorKind, ExitOutcome, LaneId, ProcessIdentity};
-use devlanes_state::{DesiredState, Error, LaneInput, Store, UnitRun, UnitRunInput};
+use devlanes_state::{Error, Store, UnitRun, UnitRunInput};
 use diesel::prelude::*;
 
 /// Records an unfinished run of `unit` under `boot`.
@@ -167,36 +167,4 @@ async fn a_corrupt_lane_row_does_not_hide_the_others() {
         .expect("corrupt");
     assert_eq!(store.lanes(Some(p.id)).await.expect("lanes"), [good]);
     assert!(matches!(store.lane(bad.id).await, Err(Error::Corrupt(_))));
-}
-
-#[tokio::test]
-/// Re-registering a cleaned lane revives it with a new creation time; updating
-/// an active lane keeps the original one.
-async fn reviving_a_cleaned_lane_resets_created_at() {
-    let dir = tempfile::tempdir().expect("dir");
-    let path = dir.path().join("state.db");
-    let store = Store::open(&path).await.expect("store");
-    let p = project(&store, "acme").await;
-    let original = lane(&store, p.id, 0).await;
-    let mut c = SqliteConnection::establish(path.to_str().expect("path")).expect("db");
-    diesel::update(schema::lanes::table.find(original.id.0))
-        .set(schema::lanes::created_at.eq(1_i64))
-        .execute(&mut c)
-        .expect("old clock");
-    let input = LaneInput {
-        project_id: p.id,
-        worktree_id: original.worktree_id,
-        index: 0,
-        name: original.name.clone(),
-        desired_state: DesiredState::Stopped,
-        profile: None,
-        profiles: Vec::new(),
-    };
-    let updated = store.upsert_lane(input.clone()).await.expect("update");
-    assert_eq!(updated.created_at, 1);
-    store.clean_lane(original.id).await.expect("clean");
-    let revived = store.upsert_lane(input).await.expect("revive");
-    assert_eq!(revived.id, original.id);
-    assert_eq!(revived.cleaned_at, None);
-    assert!(revived.created_at > 1, "{revived:?}");
 }
