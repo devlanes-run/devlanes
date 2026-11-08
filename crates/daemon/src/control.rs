@@ -1472,14 +1472,29 @@ impl Inner {
     }
 
     /// Brings the lane's live infra up to date before a `run`
-    /// ([`Self::current_infra`]): `run` reaches `infra.*` entries on a lane no
-    /// start brought up too, after a daemon restart for one, and the first
-    /// read that finds its containers fills its Compose env
-    /// (`COMPOSE_PROJECT_NAME` and the rest). Starts nothing; a lane without
-    /// infra, or Docker being down, leaves the env empty.
+    /// ([`Self::current_infra`]), and fills its Compose env
+    /// (`COMPOSE_PROJECT_NAME` and the rest) when no start or `infra up` did:
+    /// `run` reaches `infra.*` entries on a lane no start brought up too, after
+    /// a daemon restart for one. The env comes from the Compose files, so it
+    /// is there whether or not a container runs. Starts nothing.
     async fn ensure_infra_env(self: &Arc<Self>, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
         if let Err(error) = self.current_infra(project, lane).await {
             tracing::debug!(code = %error.code, "infra for a run unavailable");
+        }
+        if !lane.st().setup_env.is_empty() {
+            return;
+        }
+        let Ok(spec) = self.infra_spec(project, lane, &[]).await else {
+            return;
+        };
+        if spec.is_empty() {
+            return;
+        }
+        let env = self.integ.infra.setup_env(&spec).await;
+        let mut st = lane.st();
+        // A start that finished meanwhile knows better.
+        if st.setup_env.is_empty() {
+            st.setup_env = env;
         }
     }
 

@@ -62,9 +62,11 @@ impl From<RefreshFailed> for RpcError {
 }
 
 /// Stores what a bring-up read after its `up`, whose health wait confirmed
-/// every container that ran, and the setup env `up` gave. Returns whether the
-/// namespace changed.
-pub(crate) fn store_infra_up(lane: &LaneRt, read: InfraRead, up: InfraUp) -> bool {
+/// every container that ran, and the setup env `up` gave. Only for callers
+/// holding the lane's `op` (a start, `infra up`): a changed namespace marks
+/// the views for refreshing, which the start's resolve phase does, and which
+/// would keep `defer_refresh` from queuing its task if set outside `op`.
+pub(crate) fn store_infra_up(lane: &LaneRt, read: InfraRead, up: InfraUp) {
     let running: Vec<(String, Vec<ContainerRun>)> = read
         .after
         .iter()
@@ -74,12 +76,13 @@ pub(crate) fn store_infra_up(lane: &LaneRt, read: InfraRead, up: InfraUp) -> boo
         })
         .collect();
     let mut st = lane.st();
-    let changed = st.replace_infra(read);
+    if st.replace_infra(read) {
+        st.refresh_pending = true;
+    }
     for (key, runs) in &running {
         st.mark_infra_settled(key, runs);
     }
     st.setup_env = up.setup_env;
-    changed
 }
 
 /// The error of a check that ran out of time.
@@ -247,13 +250,7 @@ impl Inner {
                     return Ok(false);
                 }
                 let infra = self.read_infra(spec).await.map_err(read)?;
-                let setup_env = infra.up.setup_env.clone();
-                let mut st = lane.st();
-                // `run` reaches `infra.*` entries on a lane no start brought up.
-                if st.setup_env.is_empty() {
-                    st.setup_env = setup_env;
-                }
-                Ok(st.replace_infra(infra))
+                Ok(lane.st().replace_infra(infra))
             }
         }
     }
