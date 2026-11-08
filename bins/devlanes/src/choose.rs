@@ -93,10 +93,13 @@ pub async fn choose(
             let Some(lane) = found else {
                 let why = match here_error {
                     Some(error) if error.code == "no_config" => NoOptions::NoConfig { cwd },
-                    // Several projects or `-p` without a lane: the daemon's words
-                    // say what to name.
+                    // Several projects, `-p` without a lane, or a project nobody
+                    // started: the daemon's words say what to name or run.
                     Some(error)
-                        if matches!(error.code.as_str(), "project_ambiguous" | "lane_required") =>
+                        if matches!(
+                            error.code.as_str(),
+                            "project_ambiguous" | "lane_required" | "project_not_started"
+                        ) =>
                     {
                         return Err(error);
                     }
