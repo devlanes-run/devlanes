@@ -545,7 +545,7 @@ impl Inner {
                 .await
                 .map(|result| self.with_update(result)),
             Method::LaneList => self.lane_list(&context).await,
-            Method::LaneNew => self.lane_new(params, &context, &session).await,
+            Method::LaneNew => self.lane_new(params, &context).await,
             Method::LaneClean => self.lane_clean_method(params, &context).await,
             Method::LaneCleanPlan => self.lane_clean_plan_method(params, &context).await,
             Method::LaneGc => self.lane_gc(&context).await,

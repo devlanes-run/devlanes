@@ -40,7 +40,7 @@ impl Hello {
 
 /// Names a daemon lists in [`Hello::features`].
 pub mod features {
-    /// `start`, `restart`, `resume`, `lane.new` with `start` and `wait` given
+    /// `start`, `restart`, `resume` and `wait` given
     /// `"events": true` stream their lanes' `lane.phase` (own starts only, by
     /// `start_id`), `task`, `unit.changed` and `lane.changed` events on the
     /// request itself, all before its response. Older daemons ignore the flag.

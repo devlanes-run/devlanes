@@ -329,8 +329,8 @@ first lane. With --lane, adds the lane on that lane's folder.
 For a lane on another branch, create a worktree with `git worktree add <path> <branch>`
 and run `devlanes start` in it.
 
-Without --start, a terminal asks whether to start the new lane right away. --start uses
-this shell's environment and --env, as start does.
+Without --start, a terminal asks whether to start the new lane right away. --start then
+starts it as start --lane <name> does, with this shell's environment, --env and --timeout.
 
 ```text
 devlanes lane new [OPTIONS]
