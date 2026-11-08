@@ -214,15 +214,10 @@ pub(crate) struct Look {
     pub detail: String,
 }
 
-/// `exit 3` for the detail column.
-fn exit_words(code: i32) -> String {
-    format!("exit {code}")
-}
-
 /// How a unit's state is drawn, by its role (visual.md's glyph table).
 pub(crate) fn unit_look(theme: &Theme, unit: &UnitSummary, spin: u64) -> Look {
     let task = matches!(tree::role(unit), Role::Task | Role::Setup | Role::Teardown);
-    let exit = unit.exit_code.map(exit_words);
+    let exit = unit.exit_code.map(|code| format!("exit {code}"));
     let look = |glyph, tone, word: &str, word_tone, detail: Option<String>| Look {
         glyph,
         tone,
@@ -400,7 +395,7 @@ pub(crate) fn task_look(theme: &Theme, info: Option<&crate::api::TaskInfo>, spin
         Some("failed") => {
             let exit = run
                 .and_then(|r| r.exit_code)
-                .map(exit_words)
+                .map(|code| format!("exit {code}"))
                 .unwrap_or_default();
             look(
                 theme.glyph(Glyph::Failed),
