@@ -287,6 +287,45 @@ async fn a_task_past_its_own_timeout_failed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A teardown entry past its own `timeout:` reads `failed` in the clean's
+/// result, with the reason the client words, not as a success without a code.
+async fn lane_clean_reports_a_teardown_entry_past_its_timeout() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: tidyup\ninfra:\n  containers:\n    db: { image: \"postgres:16\", ports: { pg: 5432 }, per_lane: true }\n  teardown:\n    database: { run: sleep, timeout: 300ms }\nservices:\n  api: { run: sleep }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let yes = Context {
+            yes: true,
+            ..cx(&main)
+        };
+        let cleaned = h
+            .call(Method::LaneClean, json!({}), yes)
+            .await
+            .expect("clean");
+        let entry = &cleaned["teardown"][0];
+        assert_eq!(
+            (&entry["entry"], &entry["state"], &entry["reason"]["code"]),
+            (&json!("database"), &json!("failed"), &json!("task_timeout")),
+            "{cleaned}"
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// A step stopped by name ends its task `stopped` even when its process exits
 /// 0 on the signal: the next step never runs and the task is not marked done.
 async fn a_step_stopped_by_name_stops_its_task() {
