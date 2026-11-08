@@ -202,4 +202,32 @@ pub struct UnitRun {
     /// Boot the run was recorded in; `None` for rows from before boot tracking.
     #[serde(default)]
     pub boot_id: Option<String>,
+    /// What ended the run. `None` while unfinished and whenever nobody knows:
+    /// rows from before it was recorded, runs an earlier boot left unfinished
+    /// and orphans that ended while no daemon watched.
+    #[serde(default)]
+    pub ended_by: Option<EndedBy>,
+}
+
+/// What ended a finished run, as far as the daemon that watched it knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndedBy {
+    /// A stop asked for it: `stop`, a restart, a lane clean, a cancel.
+    Requested,
+    /// Its own time limit (a task's `timeout:`) stopped it.
+    TimedOut,
+    /// It ended with no stop.
+    Itself,
+}
+
+impl EndedBy {
+    /// Returns the stable database representation.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Requested => "requested",
+            Self::TimedOut => "timed_out",
+            Self::Itself => "itself",
+        }
+    }
 }

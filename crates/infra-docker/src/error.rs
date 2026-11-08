@@ -68,6 +68,37 @@ impl Error {
         )
     }
 
+    /// The engine is not running: its Unix socket file is absent, or its socket,
+    /// TCP endpoint or Windows named pipe refused the connection or does not
+    /// exist. Read from the typed error and its sources, never from the message.
+    /// A timeout, a permission problem, a busy pipe or an engine that answered
+    /// with an error is something else: the engine may run.
+    pub fn is_engine_stopped(&self) -> bool {
+        let stopped = |error: &std::io::Error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+            )
+        };
+        match self {
+            Error::Io(error) => stopped(error),
+            Error::Docker(bollard::errors::Error::SocketNotFoundError(_)) => true,
+            // `IOError` is transparent, so its `source` skips the I/O error itself.
+            Error::Docker(bollard::errors::Error::IOError { err }) => stopped(err),
+            Error::Docker(error) => {
+                let mut source = std::error::Error::source(error);
+                while let Some(error) = source {
+                    if let Some(io) = error.downcast_ref::<std::io::Error>() {
+                        return stopped(io);
+                    }
+                    source = error.source();
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     /// A pause or unpause that lost a race: the container is gone (404), already
     /// paused or no longer running (409), or not paused. Docker answers the last
     /// one with a plain 500, so only its message tells it apart.
@@ -107,5 +138,29 @@ mod tests {
         assert!(response(500, "Container abc is not paused").is_state_race());
         assert!(!response(500, "cannot pause: permission denied").is_state_race());
         assert!(!Error::UnknownContext("x".into()).is_state_race());
+    }
+
+    /// A request to an engine endpoint with nothing behind it reads as a
+    /// stopped engine, through bollard's wrapping on each OS.
+    #[tokio::test]
+    async fn stopped_engine_is_recognised() {
+        #[cfg(unix)]
+        let (_dir, host) = {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let path = dir.path().join("docker.sock");
+            // The socket file stays after the listener is gone, so the
+            // request is refused instead of failing to find the file.
+            drop(std::os::unix::net::UnixListener::bind(&path).expect("bind"));
+            let host = format!("unix://{}", path.display());
+            (dir, host)
+        };
+        #[cfg(windows)]
+        let host = format!("npipe:////./pipe/devlanes-test-{}-none", std::process::id());
+        let docker = crate::DockerInfra::from_client(
+            bollard::Docker::connect_with_host(&host).expect("client"),
+        );
+        let error = docker.server_version().await.expect_err("nothing answers");
+        assert!(error.is_engine_stopped(), "{error:?}");
+        assert!(!response(500, "engine error").is_engine_stopped());
     }
 }
