@@ -214,10 +214,9 @@ pub(crate) struct Look {
     pub detail: String,
 }
 
-/// `exit 3` for the detail column, or the CLI's words for a code that has
-/// them (a Windows Ctrl-C exit).
+/// `exit 3` for the detail column.
 fn exit_words(code: i32) -> String {
-    devlanes_cli::exit::words(code.into()).map_or_else(|| format!("exit {code}"), str::to_owned)
+    format!("exit {code}")
 }
 
 /// How a unit's state is drawn, by its role (visual.md's glyph table).

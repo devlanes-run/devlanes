@@ -56,6 +56,7 @@ use devlanes_core::{Error, LaunchSpec, Runner, Unit};
 
 mod command;
 mod ctrl;
+mod exit;
 mod foreground;
 mod orphan;
 mod output;

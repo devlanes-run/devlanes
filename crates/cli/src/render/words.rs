@@ -542,8 +542,7 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
         ),
         "exited" => (
             match int(data, "code") {
-                Some(code) => crate::exit::words(code)
-                    .map_or_else(|| format!("exited with code {code}"), str::to_owned),
+                Some(code) => format!("exited with code {code}"),
                 None => match int(data, "signal") {
                     Some(signal) => format!("killed by signal {signal}"),
                     None => "exited".into(),
@@ -1009,10 +1008,7 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             let task = text(data, "task");
             (
                 match int(data, "exit_code") {
-                    Some(code) => match crate::exit::words(code) {
-                        Some(words) => format!("task {task} was {words}"),
-                        None => format!("task {task} failed with exit code {code}"),
-                    },
+                    Some(code) => format!("task {task} failed with exit code {code}"),
                     None => format!("task {task} failed"),
                 },
                 (!task.is_empty()).then(|| {
@@ -2000,8 +1996,7 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
         ),
         "exited" => (
             match int(data, "code") {
-                Some(code) => crate::exit::words(code)
-                    .map_or_else(|| format!("exited with code {code}"), str::to_owned),
+                Some(code) => format!("exited with code {code}"),
                 None => format!("killed by signal {}", field(data, "signal")),
             },
             Some(Hint::logs(lane, unit, 200)),
@@ -2012,8 +2007,7 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
                 int(data, "exit_code"),
                 data.get("signal").and_then(Value::as_i64),
             ) {
-                (Some(code), _) => crate::exit::words(code)
-                    .map_or_else(|| format!("exit code {code}"), str::to_owned),
+                (Some(code), _) => format!("exit code {code}"),
                 (None, Some(signal)) => format!("signal {signal}"),
                 _ => "no exit status".into(),
             };

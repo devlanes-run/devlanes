@@ -594,8 +594,7 @@ fn failure_card(
     let red = theme.tone(Tone::Failure);
     let plain = Style::new();
     let mut what = match unit.exit_code {
-        Some(code) => devlanes_cli::exit::words(code.into())
-            .map_or_else(|| format!("exited with code {code}"), str::to_owned),
+        Some(code) => format!("exited with code {code}"),
         None => "failed".to_owned(),
     };
     if let Some(finished) = unit.finished_at_ms {
