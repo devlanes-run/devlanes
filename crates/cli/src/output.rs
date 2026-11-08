@@ -88,6 +88,17 @@ pub trait Reporter: Send + Sync {
 
     /// JSON is serialized unchanged; text modes shape data on the client only.
     fn result(&self, report: &Report<'_>) -> Result<Rendered, serde_json::Error> {
+        let hidden;
+        let report = if report.method == Method::Env && self.runtime().hide_env_values {
+            hidden = render::hide_env_values(report.data);
+            &Report {
+                method: report.method,
+                data: &hidden,
+                more: report.more.clone(),
+            }
+        } else {
+            report
+        };
         let exit_code = if report.method == Method::Doctor {
             u8::from(crate::render::doctor_failed(report.data, self.runtime()))
         } else {

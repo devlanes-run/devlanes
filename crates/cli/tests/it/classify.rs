@@ -182,6 +182,63 @@ fn json_out_copies_json_output() {
 }
 
 #[test]
+/// `env` results hide secret-looking values, and copies of them, where the
+/// output ends up in transcripts and bug reports, on stdout and in the
+/// `DEVLANES_JSON_OUT` copy alike; where scripts read them, values stay real.
+fn env_values_are_hidden_where_read() {
+    const TOKEN: &str = "tok-4711-very-secret";
+    let alias = format!("Bearer {TOKEN}");
+    let listed =
+        json!({"lane": "acme@0", "unit": "api", "env": {"API_TOKEN": TOKEN, "ALIAS": alias}});
+    let explained = json!({
+        "lane": "acme@0",
+        "unit": "api",
+        "items": [
+            {"key": "API_TOKEN", "value": TOKEN, "layer": "service"},
+            {"key": "ALIAS", "value": alias, "layer": "service"},
+        ],
+        "notes": [],
+        "truncated": false,
+        "next_cursor": null,
+    });
+    for (args, hidden) in [
+        (
+            &["--output", "plain", "env", "show", "api", "--explain"][..],
+            true,
+        ),
+        (&["--json", "env", "show", "api", "--explain"], true),
+        (&["--output", "plain", "env", "show", "api"], false),
+    ] {
+        let cli = Cli::try_parse_from(std::iter::once("devlanes").chain(args.iter().copied()))
+            .expect("parse");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("out.json");
+        let runtime = Runtime::resolve(
+            &cli,
+            Signals {
+                json_out: Some(path.clone()),
+                ..Signals::default()
+            },
+        )
+        .expect("runtime");
+        let data = if args.contains(&"--explain") {
+            &explained
+        } else {
+            &listed
+        };
+        let rendered = runtime
+            .reporter()
+            .result(&Report::new(Method::Env, data))
+            .expect("render");
+        let copy = std::fs::read_to_string(&path).expect("json out");
+        for output in [&rendered.stdout, &copy] {
+            assert_eq!(output.contains(TOKEN), !hidden, "{args:?}:\n{output}");
+            assert_eq!(output.contains("[redacted]"), hidden, "{args:?}:\n{output}");
+        }
+    }
+}
+
+#[test]
 /// With `DEVLANES_ENV_FROM_LANE` the process-starting requests carry no client
 /// env, so the daemon uses the lane's; without it they carry the shell's.
 fn env_from_lane_sends_no_env() {

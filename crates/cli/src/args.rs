@@ -1750,6 +1750,19 @@ impl Cli {
             || matches!(&self.command, Some(Command::Status(args)) if args.watch)
     }
 
+    /// Whether the result of this command shows environment values hidden by
+    /// [`devlanes_core::redact::Redactor::screen`]: `env show --explain`, whose
+    /// table ends up in transcripts and bug reports. Plain `env show`, `--json`
+    /// and `env export` keep real values for scripts and `eval`.
+    pub fn hides_env_values(&self) -> bool {
+        matches!(
+            &self.command,
+            Some(Command::Env {
+                command: EnvCommand::Show { explain: true, .. }
+            })
+        )
+    }
+
     /// Why this command cannot run without a terminal, for callers that have none
     /// (`devlanes mcp`): it opens a screen, reads a password or answer, or follows
     /// output until interrupted because it has no `--timeout`. `None` when it can.

@@ -9,9 +9,7 @@ use std::{
 
 use devlanes_cli::{OutputMode, Rendered, Runtime};
 use devlanes_client::{Client, Context, Method, Paths};
-use devlanes_core::env::{
-    REDACTED, SecretValues, hide_url_passwords, hide_values, secret_name, secret_values,
-};
+use devlanes_core::redact::Redactor;
 use devlanes_proto::RpcError;
 use serde_json::{Value, json};
 
@@ -29,7 +27,10 @@ pub async fn run(
     context: Context,
 ) -> Result<u8, RpcError> {
     let paths = Paths::discover().map_err(|error| io(error.to_string()))?;
-    let redactor = Redactor::from_env(std::env::vars());
+    let redactor = Redactor::archive(
+        std::env::vars(),
+        devlanes_core::paths::user_home().as_deref(),
+    );
     let staging = tempfile::Builder::new()
         .prefix("devlanes-debug-")
         .tempdir()
@@ -65,13 +66,13 @@ pub async fn run(
         "daemon": daemon,
         "output": {"mode": runtime.mode.as_str(), "reason": runtime.reason},
     });
-    files.push(("versions.json", redactor.json(&versions)));
-    files.push(("doctor.json", redactor.json(&ask(Method::Doctor).await)));
+    files.push(("versions.json", pretty(&redactor, versions)));
+    files.push(("doctor.json", pretty(&redactor, ask(Method::Doctor).await)));
     files.push((
         "config-check.json",
-        redactor.json(&ask(Method::ConfigCheck).await),
+        pretty(&redactor, ask(Method::ConfigCheck).await),
     ));
-    files.push(("status.json", redactor.json(&ask(Method::Status).await)));
+    files.push(("status.json", pretty(&redactor, ask(Method::Status).await)));
     let log = tail_file(paths.logs.join("daemon.log"), log_lines).await;
     files.push(("daemon.log", redactor.text(&log)));
     if !args.is_empty() {
@@ -233,190 +234,10 @@ fn io(message: String) -> RpcError {
     RpcError::new("io", json!({"message": message}), 1)
 }
 
-/// Replaces secrets in text and JSON: values of this shell's secret-looking
-/// variables wherever they appear, `NAME=value` and `"name": value` pairs with
-/// secret-looking names, values under an `env` object, URL passwords and the
-/// home directory.
-pub(crate) struct Redactor {
-    /// Longest first, so a value containing another is replaced whole.
-    values: Vec<String>,
-    home: Option<String>,
-}
-
-impl Redactor {
-    /// Learns the secret values of `vars` (the client's environment).
-    pub(crate) fn from_env(vars: impl Iterator<Item = (String, String)>) -> Self {
-        let vars: Vec<(String, String)> = vars.collect();
-        let home = vars
-            .iter()
-            .find(|(name, value)| name == "HOME" && value.len() > 1)
-            .map(|(_, value)| value.clone());
-        Self {
-            values: secret_values(vars, SecretValues::Broad),
-            home,
-        }
-    }
-
-    /// Pretty JSON of `value`, redacted.
-    pub(crate) fn json(&self, value: &Value) -> String {
-        let mut value = value.clone();
-        hide_json(&mut value, false);
-        let text = serde_json::to_string_pretty(&value).unwrap_or_default();
-        self.text(&format!("{text}\n"))
-    }
-
-    /// `text`, redacted; lines that are JSON documents are redacted as JSON too.
-    pub(crate) fn text(&self, text: &str) -> String {
-        let mut out = String::with_capacity(text.len());
-        for line in text.split_inclusive('\n') {
-            let body = line.trim_end_matches('\n');
-            match serde_json::from_str::<Value>(body) {
-                Ok(mut value) if value.is_object() || value.is_array() => {
-                    hide_json(&mut value, false);
-                    out.push_str(&value.to_string());
-                    out.push_str(&line[body.len()..]);
-                }
-                _ => out.push_str(line),
-            }
-        }
-        let mut out = hide_assignments(&hide_url_passwords(&hide_values(&out, &self.values)));
-        if let Some(home) = &self.home {
-            out = out.replace(home.as_str(), "~");
-        }
-        out
-    }
-}
-
-/// Hides string values under secret-looking keys, and every value of an `env`
-/// object (`hide_all`).
-fn hide_json(value: &mut Value, hide_all: bool) {
-    match value {
-        Value::Object(map) => {
-            for (key, entry) in map.iter_mut() {
-                if entry.is_string() && (hide_all || secret_name(key)) {
-                    *entry = json!(REDACTED);
-                } else {
-                    hide_json(entry, hide_all || key == "env");
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                hide_json(item, hide_all);
-            }
-        }
-        Value::String(text) if hide_all => *text = REDACTED.into(),
-        _ => {}
-    }
-}
-
-/// `NAME=value` with an upper-case, secret-looking NAME: the value hidden up to
-/// whitespace or a quote. Lower-case names are diagnostic fields such as
-/// `env_keys=A,B`, which list names only.
-fn hide_assignments(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(index) = rest.find('=') {
-        let (before, after) = rest.split_at(index);
-        let name_start = before
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .map_or(0, |i| i + 1);
-        let name = &before[name_start..];
-        out.push_str(before);
-        out.push('=');
-        let after = &after[1..];
-        let upper = !name.is_empty()
-            && name
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
-        if upper && secret_name(name) {
-            let end = after
-                .find(|c: char| c.is_whitespace() || "\"'".contains(c))
-                .unwrap_or(after.len());
-            if end > 0 {
-                out.push_str(REDACTED);
-            }
-            rest = &after[end..];
-        } else {
-            rest = after;
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A redactor that knows one secret and a home directory.
-    fn redactor() -> Redactor {
-        Redactor::from_env(
-            [
-                ("ACME_API_TOKEN", "tok-4711-very-secret"),
-                ("DB_PASS", "s3cr3t"),
-                ("ACME_SECRET", "correcthorsebattery"),
-                ("ACME_PASSPHRASE", "staple gun river"),
-                ("HOME", "/Users/someone"),
-                ("PATH", "/usr/bin:/bin"),
-                ("CI_PASS", "1"),
-            ]
-            .into_iter()
-            .map(|(k, v)| (k.to_owned(), v.to_owned())),
-        )
-    }
-
-    #[test]
-    /// Secret values, URL passwords, secret assignments, env objects and the home
-    /// directory are hidden; diagnostics fields and ordinary values stay.
-    fn hides_secrets_everywhere() {
-        let redactor = redactor();
-        let text = "\
-   0.1s DEBUG daemon +3ms devlanes_daemon::lifecycle: spawning program=fixture-server env_keys=ACME_API_TOKEN,PORT\n\
-ACME_API_TOKEN=tok-4711-very-secret\n\
-GITHUB_TOKEN=ghp_other PORT=3000\n\
-DATABASE_URL=postgres://postgres:hunter22@127.0.0.1:5432/app\n\
-log line mentioning tok-4711-very-secret in passing\n\
-copied under neutral names: pin=s3cr3t word=correcthorsebattery phrase=\"staple gun river\"\n\
-{\"env\":{\"ACME_API_TOKEN\":\"tok-4711-very-secret\",\"PORT\":\"3000\"},\"api_key\":\"k-123456\",\"lane\":\"acme@0\"}\n\
-cwd=/Users/someone/src/acme\n";
-        let out = redactor.text(text);
-        for secret in [
-            "tok-4711-very-secret",
-            // Short, all-letter and multi-word secrets are searched for in a bundle,
-            // unlike in `env show --explain`.
-            "s3cr3t",
-            "correcthorsebattery",
-            "staple gun river",
-            "ghp_other",
-            "hunter22",
-            "k-123456",
-            "/Users/someone",
-        ] {
-            assert!(!out.contains(secret), "{secret} leaked:\n{out}");
-        }
-        assert!(out.contains("env_keys=ACME_API_TOKEN,PORT"), "{out}");
-        assert!(out.contains("PORT=3000"), "{out}");
-        assert!(
-            out.contains("postgres://postgres:[redacted]@127.0.0.1:5432/app"),
-            "{out}"
-        );
-        assert!(out.contains("\"lane\":\"acme@0\""), "{out}");
-        assert!(out.contains("cwd=~/src/acme"), "{out}");
-        // Short values of secret-looking names are not hunted down everywhere.
-        assert!(redactor.text("exit 1\n").contains("exit 1"));
-    }
-
-    #[test]
-    /// JSON documents keep their shape with secret values replaced.
-    fn json_keeps_its_shape() {
-        let out = redactor().json(&json!({
-            "daemon": {"version": "0.1.0", "token": "abcdefgh"},
-            "items": [{"env": {"A": "b"}}],
-        }));
-        let parsed: Value = serde_json::from_str(&out).expect("json");
-        assert_eq!(parsed["daemon"]["version"], "0.1.0");
-        assert_eq!(parsed["daemon"]["token"], REDACTED);
-        assert_eq!(parsed["items"][0]["env"]["A"], REDACTED);
-    }
+/// `value` redacted for the archive, as pretty JSON. Strings are redacted
+/// before serialization, where escaping would hide Windows paths.
+fn pretty(redactor: &Redactor, mut value: Value) -> String {
+    redactor.json(&mut value);
+    let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+    format!("{text}\n")
 }
