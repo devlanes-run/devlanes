@@ -26,7 +26,7 @@ use crate::{
     Handler, Session, Shutdown, ShutdownReason,
     bus::EventBus,
     integrations::Integrations,
-    model::{LaneRt, ProjectRt, lock},
+    model::{LaneRt, ProjectRt, StartCtl, lock},
     stopping::StopSteps,
 };
 
@@ -680,14 +680,22 @@ pub(crate) fn match_units(
         .collect())
 }
 
-/// Adds `lane` and `started` to an error so `devlanes with` can tear down.
-pub(crate) fn with_ownership(mut error: RpcError, lane: &str, started: &[String]) -> RpcError {
+/// Adds what the start `ctl` brought up to its error: `lane`, `started`, `ran`
+/// and `whole_lane`, as in [`devlanes_proto::StartResult`], so `devlanes with`
+/// can tear down. `reference` is the lane's canonical reference.
+pub(crate) fn with_ownership(mut error: RpcError, reference: &str, ctl: &StartCtl) -> RpcError {
     if !error.data.is_object() {
         error.data = json!({"detail": error.data});
     }
+    let brought = ctl.brought();
+    let canonical = |units: Vec<String>| -> Vec<String> {
+        units.iter().map(|u| format!("{reference}:{u}")).collect()
+    };
     if let Some(map) = error.data.as_object_mut() {
-        map.entry("lane").or_insert_with(|| json!(lane));
-        map.insert("started".into(), json!(started));
+        map.entry("lane").or_insert_with(|| json!(reference));
+        map.insert("started".into(), json!(canonical(brought.started)));
+        map.insert("ran".into(), json!(canonical(brought.ran)));
+        map.insert("whole_lane".into(), json!(brought.whole_lane));
     }
     error
 }

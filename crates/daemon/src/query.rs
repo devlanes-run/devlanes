@@ -557,7 +557,7 @@ impl Inner {
                             .map(|(name, rec)| (name.clone(), rec.host.clone()))
                             .collect(),
                     };
-                    (hosts, st.busy.is_some(), runs_to_exit)
+                    (hosts, st.is_busy(), runs_to_exit)
                 };
                 let states: Vec<UnitState> = hosts.iter().map(|(_, host)| host.state()).collect();
                 let failed: Vec<usize> = states
@@ -768,7 +768,7 @@ impl Inner {
         let push = |reasons: &mut Vec<Value>, code: &str, data: Value| {
             reasons.push(json!({"code": code, "data": data}))
         };
-        let (host, service, view_error, needs_env, config, busy, unassigned, orphan, saved) = {
+        let (host, service, view_error, needs_env, config, starting, unassigned, orphan, saved) = {
             let st = lane.st();
             let orphan = st.orphan_error(&project.name(), &name);
             // A start by name adds to these, and a plain start brings them back.
@@ -788,7 +788,7 @@ impl Inner {
                 st.view_error.clone(),
                 st.env.is_none(),
                 st.config.clone(),
-                st.busy,
+                st.starts_in_phases() > 0,
                 st.unassigned.clone(),
                 orphan,
                 saved,
@@ -877,7 +877,7 @@ impl Inner {
                 );
             }
         }
-        if busy == Some("starting")
+        if starting
             && let Some(config) = config.loaded()
             && let Some(task) = config.tasks.get(&name)
             && task.after.is_some()

@@ -34,8 +34,8 @@ use crate::{
     engine::{Inner, with_ownership},
     integrations::{InfraPortNeed, InfraSpec, ManagedUnit, PlannedUnit},
     model::{
-        Closing, EnvMap, Kind, LaneRt, ProjectRt, StartCtl, UnitRec, core_actor, is_mine,
-        unit_summary,
+        Brought, Closing, EnvMap, Kind, LaneRt, ProjectRt, StartCtl, StartSlot, UnitRec,
+        core_actor, is_mine, unit_summary,
     },
     ready::Readiness,
     registry::{internal, store_error},
@@ -592,9 +592,6 @@ pub(crate) struct StartCx {
     pub session: Option<Session>,
     pub resolved: Option<Arc<ResolvedLane>>,
     pub deadline: Instant,
-    pub started: Vec<String>,
-    /// Setup entries (`setup.<name>`) and tasks this start ran to success.
-    pub ran: Vec<String>,
     /// `StartedAt` of the setup entries' containers, when the infra phase read
     /// them already; the setup phase takes it instead of asking again.
     pub setup_started_at: Option<BTreeMap<String, String>>,
@@ -1190,7 +1187,7 @@ impl LanePhase for SetupPhase {
                 {
                     return PhaseResult::Error(store_error(error));
                 }
-                cx.ran.push(format!("setup.{name}"));
+                cx.ctl.push_ran(format!("setup.{name}"));
                 continue;
             }
             let unit = format!("setup.{name}");
@@ -1357,7 +1354,7 @@ impl LanePhase for TasksPhase {
                 cx.leftovers.extend(outcome.leftovers.iter().cloned());
             }
             match outcome {
-                Ok(TaskOutcome { code: Some(0), .. }) => cx.ran.push(name),
+                Ok(TaskOutcome { code: Some(0), .. }) => cx.ctl.push_ran(name),
                 Ok(TaskOutcome { code, host, .. }) => {
                     let mut failure = match &host {
                         Some(host) => failure_of(&cx.reference, &name, host).await,
@@ -1406,8 +1403,8 @@ impl LanePhase for ServicesPhase {
             Ok(joined) => joined,
             Err(result) => return result,
         };
-        let selected: Vec<String> = cx
-            .started
+        let started = cx.ctl.started();
+        let selected: Vec<String> = started
             .iter()
             .chain(&cx.already_running)
             .filter(|unit| cx.ctl.withdrawn_by(unit).is_none())
@@ -1429,7 +1426,7 @@ impl LanePhase for ServicesPhase {
         }
         record_failed_units(cx, &selected).await;
         cx.services_ready = !cx.timed_out && cx.failures.is_empty();
-        if cx.services_ready && (!cx.started.is_empty() || joined) {
+        if cx.services_ready && (!started.is_empty() || joined) {
             // From this task, so subscribers see the units ready before the milestone.
             engine.emit_lane(&cx.project, &cx.lane);
             engine.phase_event(cx, self.name(), "ready", None, None);
@@ -2026,22 +2023,6 @@ impl Inner {
     }
 }
 
-/// One start's share of the lane's `starting` state.
-struct StartingMark {
-    lane: Arc<LaneRt>,
-}
-
-impl Drop for StartingMark {
-    /// Lets the lane read its own state again once no start is in its phases.
-    fn drop(&mut self) {
-        let mut st = self.lane.st();
-        st.starting = st.starting.saturating_sub(1);
-        if st.starting == 0 && st.busy == Some("starting") {
-            st.busy = None;
-        }
-    }
-}
-
 /// `kept` and then `planned`, without repeats and without the services a stop
 /// took out of the start (a unit is `name` or `name.<replica>`).
 fn remembered_services(kept: &[String], planned: &[String], ctl: &StartCtl) -> Vec<String> {
@@ -2586,6 +2567,7 @@ impl Inner {
             }),
             1,
         );
+        let started = cx.ctl.started();
         let summaries = {
             let mut st = lane.st();
             let units: Vec<String> = st
@@ -2604,7 +2586,7 @@ impl Inner {
                         })
                         .map(|service| service.unit.clone())
                         .filter(|unit| {
-                            !cx.started.contains(unit)
+                            !started.contains(unit)
                                 && !cx.already_running.contains(unit)
                                 && cx.ctl.withdrawn_by(unit).is_none()
                         })
@@ -3255,10 +3237,28 @@ impl Inner {
         // Before anything that can wait, so the units read `queued` the moment
         // the request arrives.
         self.mark_waiting(project, lane, &options, start_id);
-        let result = self.run_start(project, lane, options, slot).await;
+        let result = self.run_start(project, lane, options, &slot).await;
+        // `run_start` ends the phases itself before it answers; this covers
+        // its early returns.
+        slot.ctl.end_phases();
         // Whatever the start did not get to goes back to its own state.
         self.forget_waiting(project, lane, start_id);
+        self.end_start(project, lane, slot);
         result
+    }
+
+    /// Ends a start, whatever it returned: uninstalls its control from the
+    /// lane, emits the lane's `lane.changed`, then `start.ended`. Consumes the
+    /// slot, so it runs once per start id.
+    pub(crate) fn end_start(&self, project: &ProjectRt, lane: &LaneRt, slot: StartSlot) {
+        let start_id = slot.ctl.start_id();
+        drop(slot);
+        self.emit_lane(project, lane);
+        let reference = lane.st().reference(&project.name());
+        self.bus.emit(
+            events::START_ENDED,
+            json!({"lane": reference, "start_id": start_id}),
+        );
     }
 
     /// The body of [`Self::start_lane`], from the wait for `op` to the answer.
@@ -3267,7 +3267,7 @@ impl Inner {
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
         options: StartOptions,
-        slot: crate::model::StartSlot,
+        slot: &StartSlot,
     ) -> Result<StartResult, RpcError> {
         use tracing::Instrument as _;
         let start_id = slot.ctl.start_id();
@@ -3287,7 +3287,7 @@ impl Inner {
             return Err(with_ownership(
                 RpcError::new("start_cancelled", json!({"lane": reference}), 1),
                 &reference,
-                &[],
+                &slot.ctl,
             ));
         };
         let whole_lane = lease.brings_up();
@@ -3296,16 +3296,15 @@ impl Inner {
             lane: lane.clone(),
             start_id,
         });
-        // Counted from here, so other starts and refreshes leave the block and
-        // index this one plans on alone; ends however the start returns.
-        lane.st().starting += 1;
-        let starting = StartingMark { lane: lane.clone() };
+        // From here other starts and refreshes leave the block and index this
+        // one plans on alone, until its phases end.
+        slot.ctl.mark_lease(whole_lane);
         // Units already running are left alone, so a frozen lane would stay frozen.
         self.wake_lane(project, lane, Some(Activity::Command))
             .instrument(tracing::debug_span!("wake"))
             .await;
         let initial = lane.st().reference(&project.name());
-        let fail = |error: RpcError| with_ownership(error, &initial, &[]);
+        let fail = |error: RpcError| with_ownership(error, &initial, &slot.ctl);
         {
             let st = lane.st();
             if let Some(reason) = &st.unassigned {
@@ -3364,7 +3363,7 @@ impl Inner {
             self.refresh_views_held(project, lane).await;
         }
         let reference = lane.st().reference(&project.name());
-        let fail = |error: RpcError| with_ownership(error, &reference, &[]);
+        let fail = |error: RpcError| with_ownership(error, &reference, &slot.ctl);
         let config = lane.st().config.require(&reference).map_err(fail)?;
         let (relative, _) = project.config_path();
         let config_dir = lane.st().path.join(relative);
@@ -3416,7 +3415,6 @@ impl Inner {
         });
         {
             let mut st = lane.st();
-            st.busy = Some("starting");
             st.last_error = None;
             if whole_lane {
                 st.started_at_ms = Some(now_ms());
@@ -3447,8 +3445,6 @@ impl Inner {
             session: options.session.clone(),
             resolved: None,
             deadline: Instant::now() + options.timeout,
-            started: Vec::new(),
-            ran: Vec::new(),
             setup_started_at: None,
             already_running: Vec::new(),
             failures: Vec::new(),
@@ -3580,21 +3576,14 @@ impl Inner {
         if whole_lane {
             lane.st().skipped_tasks = cx.skipped_tasks.clone();
         }
-        drop(starting);
+        slot.ctl.end_phases();
         drop(lease);
-        let started: Vec<String> = cx
-            .started
-            .iter()
-            .map(|u| format!("{reference}:{u}"))
-            .collect();
         if let Some(error) = hard_error {
             lane.st().last_error = Some(error.clone());
-            self.emit_lane(project, lane);
             timings.log(&reference, start_id, whole_lane, &slot.ctl, &error.code);
-            return Err(with_ownership(error, &reference, &started));
+            return Err(with_ownership(error, &reference, &slot.ctl));
         }
-        let result = self.finish_start(cx, whole_lane).await;
-        self.emit_lane(project, lane);
+        let result = self.finish_start(cx).await;
         let outcome = if result.ready {
             "ready"
         } else if result.timed_out {
@@ -3603,18 +3592,20 @@ impl Inner {
             "failed"
         };
         timings.log(&reference, start_id, whole_lane, &slot.ctl, outcome);
-        // Answered: stops no longer reach this start.
-        drop(slot);
         Ok(result)
     }
 
     /// Assembles the [`StartResult`] once the services phase waited for the
     /// units. Units a stop or restart withdrew are not failures: they are
     /// listed as `stopped` with a `cancelled_by_stop` reason.
-    async fn finish_start(self: &Arc<Self>, mut cx: StartCx, whole_lane: bool) -> StartResult {
+    async fn finish_start(self: &Arc<Self>, mut cx: StartCx) -> StartResult {
         let withdrawn = cx.ctl.withdrawn();
-        let selected: Vec<String> = cx
-            .started
+        let Brought {
+            mut started,
+            ran,
+            whole_lane,
+        } = cx.ctl.brought();
+        let selected: Vec<String> = started
             .iter()
             .chain(&cx.already_running)
             .filter(|unit| !withdrawn.contains_key(*unit))
@@ -3636,7 +3627,7 @@ impl Inner {
         let all_ready = units.iter().all(|u| u.state == "ready");
         if !withdrawn.is_empty() {
             units.extend(self.withdrawn_summaries(&cx, &withdrawn));
-            cx.started.retain(|unit| !withdrawn.contains_key(unit));
+            started.retain(|unit| !withdrawn.contains_key(unit));
             cx.already_running
                 .retain(|unit| !withdrawn.contains_key(unit));
             cx.failures
@@ -3664,20 +3655,18 @@ impl Inner {
             );
         }
         // What it spawned matches the file, unless the file changed during the start.
-        let spawned = self.settle_drift(&cx.project, &cx.lane, &cx.config, &cx.started);
+        let spawned = self.settle_drift(&cx.project, &cx.lane, &cx.config, &started);
         // The units it left alone may lack the new profiles' settings.
         if cx.recheck_drift && !spawned {
             self.spawn_drift(&cx.project, &cx.lane);
         }
         StartResult {
             warnings,
-            started: cx
-                .started
+            started: started
                 .iter()
                 .map(|u| format!("{}:{u}", cx.reference))
                 .collect(),
-            ran: cx
-                .ran
+            ran: ran
                 .iter()
                 .map(|u| format!("{}:{u}", cx.reference))
                 .collect(),
@@ -3705,12 +3694,8 @@ impl Inner {
         cx: &StartCx,
         withdrawn: &BTreeMap<String, &'static str>,
     ) -> Vec<UnitSummary> {
-        let mut ours: BTreeSet<String> = cx
-            .started
-            .iter()
-            .chain(&cx.already_running)
-            .cloned()
-            .collect();
+        let mut ours: BTreeSet<String> = cx.ctl.started().into_iter().collect();
+        ours.extend(cx.already_running.iter().cloned());
         if let Some(resolved) = &cx.resolved {
             for name in &cx.services {
                 ours.extend(resolved.units_of(name).map(|service| service.unit.clone()));
@@ -4174,16 +4159,33 @@ impl Inner {
         }
         let start_id = options.start_id.unwrap_or_else(|| self.new_start_id());
         let slot = lane.begin_start(&self.shutdown, start_id);
+        let result = self
+            .run_restart(project, lane, selectors, options, &slot)
+            .await
+            .map_err(|error| {
+                let reference = lane.st().reference(&project.name());
+                with_ownership(error, &reference, &slot.ctl)
+            });
+        self.end_start(project, lane, slot);
+        result
+    }
+
+    /// The body of [`Self::restart_units`], from the wait for `op` to the answer.
+    async fn run_restart(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+        selectors: &[String],
+        options: StartOptions,
+        slot: &StartSlot,
+    ) -> Result<StartResult, RpcError> {
+        let start_id = slot.ctl.start_id();
         let ctl = slot.ctl.clone();
         let op = tokio::select! {
             op = lane.op.read() => op,
             () = ctl.cancel.cancelled() => {
                 let reference = lane.st().reference(&project.name());
-                return Err(with_ownership(
-                    RpcError::new("start_cancelled", json!({"lane": reference}), 1),
-                    &reference,
-                    &[],
-                ));
+                return Err(RpcError::new("start_cancelled", json!({"lane": reference}), 1));
             }
         };
         // With `op` held no freeze can begin after this.
@@ -4202,13 +4204,7 @@ impl Inner {
             let config = lane.st().config.loaded().cloned();
             if let Some(config) = config {
                 let selection = devlanes_resolve::select_profiles(&config, &options.profiles, &[])
-                    .map_err(|error| {
-                        with_ownership(
-                            crate::resolve::resolve_error(&error, &reference),
-                            &reference,
-                            &[],
-                        )
-                    })?;
+                    .map_err(|error| crate::resolve::resolve_error(&error, &reference))?;
                 lane.st().profiles = selection.profiles.clone();
                 let _desired = lane.desired.lock().await;
                 let record = lane.st().record.clone();
@@ -4239,11 +4235,7 @@ impl Inner {
             )
         };
         let units = crate::engine::match_units(&selectors, &candidates, &reference)?;
-        let config = lane
-            .st()
-            .config
-            .require(&reference)
-            .map_err(|error| with_ownership(error, &reference, &[]))?;
+        let config = lane.st().config.require(&reference)?;
         // A container that restarted may publish other ports than the lane
         // stored; the background refresh may not have read them yet.
         if !lane.st().infra_restarted.is_empty() {
@@ -4261,12 +4253,11 @@ impl Inner {
                     1,
                 )),
             };
-            settled.map_err(|error| with_ownership(error, &reference, &[]))?;
+            settled?;
         }
         let resolved = self
             .resolve_config(project, lane, config.clone(), None)
-            .await
-            .map_err(|e| with_ownership(e, &reference, &[]))?;
+            .await?;
         // A previous daemon's process is replaced like a running one: terminate it
         // first, so its ports are free for the new run.
         let orphans = self.terminate_orphans(project, lane, &units).await;
@@ -4274,14 +4265,10 @@ impl Inner {
             for port in orphan.ports.values() {
                 if !wait_port_free(*port, PORT_RELEASE).await {
                     let pid = self.integ.ports.holder(*port).await;
-                    return Err(with_ownership(
-                        RpcError::new(
-                            "port_in_use",
-                            json!({"port": port, "pid": pid, "unit": orphan.name}),
-                            1,
-                        ),
-                        &reference,
-                        &[],
+                    return Err(RpcError::new(
+                        "port_in_use",
+                        json!({"port": port, "pid": pid, "unit": orphan.name}),
+                        1,
                     ));
                 }
             }
@@ -4310,14 +4297,10 @@ impl Inner {
             for port in ports {
                 if !wait_port_free(*port, PORT_RELEASE).await {
                     let pid = self.integ.ports.holder(*port).await;
-                    return Err(with_ownership(
-                        RpcError::new(
-                            "port_in_use",
-                            json!({"port": port, "pid": pid, "unit": unit}),
-                            1,
-                        ),
-                        &reference,
-                        &[],
+                    return Err(RpcError::new(
+                        "port_in_use",
+                        json!({"port": port, "pid": pid, "unit": unit}),
+                        1,
                     ));
                 }
             }
@@ -4345,8 +4328,6 @@ impl Inner {
             session: options.session.clone(),
             resolved: Some(resolved),
             deadline: Instant::now() + options.timeout,
-            started: Vec::new(),
-            ran: Vec::new(),
             setup_started_at: None,
             already_running: Vec::new(),
             failures: Vec::new(),
@@ -4397,16 +4378,9 @@ impl Inner {
         drop(desired);
         drop(op);
         if let PhaseResult::Error(error) = result {
-            let started: Vec<String> = cx
-                .started
-                .iter()
-                .map(|u| format!("{reference}:{u}"))
-                .collect();
-            return Err(with_ownership(error, &reference, &started));
+            return Err(error);
         }
-        let result = self.finish_start(cx, false).await;
-        drop(slot);
-        Ok(result)
+        Ok(self.finish_start(cx).await)
     }
 
     /// `lane clean`: stop, `lane.clean` tasks, teardown, remove per-lane
@@ -4631,7 +4605,7 @@ impl Inner {
     async fn forget_if_empty(&self, project: &Arc<ProjectRt>) -> bool {
         let empty = project.lanes().iter().all(|lane| {
             let st = lane.st();
-            !st.listed() && !st.any_running() && st.busy.is_none()
+            !st.listed() && !st.any_running() && !st.is_busy()
         });
         if !empty {
             return false;

@@ -318,6 +318,8 @@ pub(crate) struct LaneSt {
     pub profiles: Vec<String>,
     pub units: BTreeMap<String, UnitRec>,
     pub started_at_ms: Option<u64>,
+    /// `stopping` while a stop of the whole lane runs. Starts in their phases
+    /// are [`Self::starts_in_phases`].
     pub busy: Option<&'static str>,
     pub view: Option<Arc<LaneView>>,
     pub allocation: Option<Allocation>,
@@ -364,9 +366,6 @@ pub(crate) struct LaneSt {
     /// meanwhile add their units to the lane it brings up instead of bringing
     /// it up again.
     pub bringup: Option<Bringup>,
-    /// Starts between their decision to run and the end of their phases. The
-    /// lane reads `starting` until the last of them is done.
-    pub starting: usize,
     /// Starts and `infra up`s that passed their checks and have not returned.
     /// The lane counts as running for box lanes that clash with it while
     /// one is, so a start that fails its checks takes nothing from a box.
@@ -568,7 +567,6 @@ impl LaneSt {
             starts: Vec::new(),
             waiting: BTreeMap::new(),
             bringup: None,
-            starting: 0,
             claiming: 0,
             claim_ran: false,
             spawning: 0,
@@ -807,7 +805,7 @@ impl LaneSt {
     }
 
     /// Lifecycle word for `LaneSummary.state`: `starting` while a start runs
-    /// its phases or a service is still starting. Queued services make it
+    /// its phases ([`Self::starts_in_phases`]) or a service is still starting. Queued services make it
     /// `starting` too, in [`crate::engine::Inner::fill_queued`], since the lane does not
     /// see the gate.
     pub(crate) fn state_word(&self) -> &'static str {
@@ -824,6 +822,9 @@ impl LaneSt {
         }
         if let Some(busy) = self.busy {
             return busy;
+        }
+        if self.starts_in_phases() > 0 {
+            return "starting";
         }
         let failed = self.units.iter().any(|(name, unit)| {
             unit.kind == Kind::Service
@@ -846,6 +847,17 @@ impl LaneSt {
         } else {
             "idle"
         }
+    }
+
+    /// Starts that hold the lane's lease and have not ended their phases. A
+    /// start counts itself while it runs.
+    pub(crate) fn starts_in_phases(&self) -> usize {
+        self.starts.iter().filter(|start| start.in_phases()).count()
+    }
+
+    /// Whether a stop of the whole lane or a start in its phases is under way.
+    pub(crate) fn is_busy(&self) -> bool {
+        self.busy.is_some() || self.starts_in_phases() > 0
     }
 
     /// Whether `start`/`resume` from a shell is needed before services can run.
@@ -1037,11 +1049,32 @@ impl Drop for SpawnGuard {
     }
 }
 
-/// What a `stop` or `restart` of single units can do to the start (or restart)
-/// running on their lane without waiting for its `op`.
+/// What a start brought up, which its answer and its error report.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Brought {
+    /// Service units it spawned, and units still queued at its deadline.
+    pub started: Vec<String>,
+    /// Setup entries (`setup.<name>`) and tasks it ran to success.
+    pub ran: Vec<String>,
+    /// It brought the lane up instead of adding units to it.
+    pub whole_lane: bool,
+}
+
+/// The one record of a start (or restart), installed on its lane from the
+/// request until [`crate::engine::Inner::end_start`]: its id, how to cancel
+/// it, how far it got and what it brought up. A `stop` or `restart` of single
+/// units reaches it here without waiting for its `op`.
 pub(crate) struct StartCtl {
     /// The `start_id` of the start's events and result.
     start_id: u64,
+    /// What the start brought up so far.
+    brought: Mutex<Brought>,
+    /// The start holds the lane's lease, so other starts and refreshes leave
+    /// the block and index it plans on alone.
+    holds_lease: AtomicBool,
+    /// The start finished its phases; the lane no longer reads `starting`
+    /// for it.
+    phases_ended: AtomicBool,
     /// Ends the start as `start_cancelled`: a whole-lane stop, clean, reset or
     /// shutdown fires it, and so does a stop of the task the start runs.
     pub cancel: CancellationToken,
@@ -1075,6 +1108,9 @@ impl StartCtl {
     pub(crate) fn new(parent: &CancellationToken, start_id: u64) -> Self {
         Self {
             start_id,
+            brought: Mutex::new(Brought::default()),
+            holds_lease: AtomicBool::new(false),
+            phases_ended: AtomicBool::new(false),
             cancel: parent.child_token(),
             spawning: Mutex::new(BTreeSet::new()),
             gate_waits: Mutex::new(Vec::new()),
@@ -1090,6 +1126,44 @@ impl StartCtl {
     /// The `start_id` of this start.
     pub(crate) fn start_id(&self) -> u64 {
         self.start_id
+    }
+
+    /// Records a service unit the start spawned (or left queued at its deadline).
+    pub(crate) fn push_started(&self, unit: String) {
+        lock(&self.brought).started.push(unit);
+    }
+
+    /// Records a setup entry (`setup.<name>`) or task the start ran.
+    pub(crate) fn push_ran(&self, unit: String) {
+        lock(&self.brought).ran.push(unit);
+    }
+
+    /// The service units the start spawned so far.
+    pub(crate) fn started(&self) -> Vec<String> {
+        lock(&self.brought).started.clone()
+    }
+
+    /// Everything the start brought up so far.
+    pub(crate) fn brought(&self) -> Brought {
+        lock(&self.brought).clone()
+    }
+
+    /// Records that the start took the lane's lease, bringing the lane up when
+    /// `whole_lane`. From here the lane reads `starting` until
+    /// [`Self::end_phases`].
+    pub(crate) fn mark_lease(&self, whole_lane: bool) {
+        lock(&self.brought).whole_lane = whole_lane;
+        self.holds_lease.store(true, Ordering::Release);
+    }
+
+    /// Records that the start finished its phases.
+    pub(crate) fn end_phases(&self) {
+        self.phases_ended.store(true, Ordering::Release);
+    }
+
+    /// Between [`Self::mark_lease`] and [`Self::end_phases`].
+    fn in_phases(&self) -> bool {
+        self.holds_lease.load(Ordering::Acquire) && !self.phases_ended.load(Ordering::Acquire)
     }
 
     /// Records how long `unit` waited for its start slot.
@@ -1200,7 +1274,8 @@ impl Drop for TaskGuard {
     }
 }
 
-/// A start's control installed on its lane ([`LaneRt::begin_start`]).
+/// A start's control installed on its lane ([`LaneRt::begin_start`]). A start
+/// ends by handing it to [`crate::engine::Inner::end_start`].
 pub(crate) struct StartSlot {
     lane: Arc<LaneRt>,
     pub ctl: Arc<StartCtl>,
@@ -1208,7 +1283,8 @@ pub(crate) struct StartSlot {
 
 impl Drop for StartSlot {
     /// Uninstalls the control and releases restarts waiting for the services
-    /// phase.
+    /// phase. Emits nothing: `end_start` tells clients, and a slot dropped
+    /// anywhere else is a start unwinding.
     fn drop(&mut self) {
         self.ctl.services_done.cancel();
         self.lane

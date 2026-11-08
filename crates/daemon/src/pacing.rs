@@ -280,7 +280,7 @@ impl Inner {
         for (unit, mut task) in tasks {
             match tokio::time::timeout_at(cx.deadline, &mut task).await {
                 // `start_one` recorded the outcome for joined starts already.
-                Ok(Ok(Paced::Spawned)) => cx.started.push(unit),
+                Ok(Ok(Paced::Spawned)) => cx.ctl.push_started(unit),
                 Ok(Ok(Paced::Failed(error))) => {
                     cx.failures.push(UnitFailureData {
                         lane: cx.reference.clone(),
@@ -307,7 +307,7 @@ impl Inner {
                 }
                 Err(_) => {
                     cx.timed_out = true;
-                    cx.started.push(unit);
+                    cx.ctl.push_started(unit);
                 }
             }
         }
