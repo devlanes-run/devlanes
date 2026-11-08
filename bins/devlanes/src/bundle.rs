@@ -27,10 +27,10 @@ pub async fn run(
     context: Context,
 ) -> Result<u8, RpcError> {
     let paths = Paths::discover().map_err(|error| io(error.to_string()))?;
-    let redactor = Redactor::archive(
-        std::env::vars(),
-        devlanes_core::paths::user_home().as_deref(),
-    );
+    let homes = tokio::task::spawn_blocking(home_spellings)
+        .await
+        .unwrap_or_default();
+    let redactor = Redactor::archive(std::env::vars(), &homes);
     let staging = tempfile::Builder::new()
         .prefix("devlanes-debug-")
         .tempdir()
@@ -132,6 +132,22 @@ pub async fn run(
         });
     }
     Ok(0)
+}
+
+/// The paths that name the user's home: [`devlanes_core::paths::user_home`],
+/// and on Windows also its 8.3 short spelling (`C:\Users\JOHNSM~1`), which
+/// `TEMP` and other variables often hold, when that differs.
+fn home_spellings() -> Vec<PathBuf> {
+    let Some(home) = devlanes_core::paths::user_home() else {
+        return Vec::new();
+    };
+    #[cfg(windows)]
+    if let Ok(short) = devlanes_sys_windows::file::short_path(&home)
+        && short != home
+    {
+        return vec![home, short];
+    }
+    vec![home]
 }
 
 /// What the archive holds, for whoever opens it.
