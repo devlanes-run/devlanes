@@ -140,7 +140,8 @@ memory.",
     (
         "env_show",
         "Use it to check the variables a unit gets, including those devlanes adds that no .env \
-file shows.",
+file shows. Secret-looking values come back as [redacted]; a command that needs them gets them \
+through exec or with.",
     ),
     (
         "lane_ls",

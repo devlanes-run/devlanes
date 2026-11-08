@@ -221,7 +221,7 @@ impl Runtime {
             terminal: devlanes_term::Features::default(),
             json_out: signals.json_out.map(crate::JsonOut::new),
             env_from_lane: signals.env_from_lane,
-            hide_env_values: cli.hides_env_values(),
+            hide_env_values: cli.hides_env_values(mode),
         })
     }
 
