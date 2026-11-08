@@ -607,7 +607,7 @@ async fn setup_and_task_history() {
         .await
         .expect("start");
     assert!(matches!(
-        store.clean_lane(lane.id).await,
+        store.clean_lane(crate::clean(&lane)).await,
         Err(Error::ActiveRuns { units: 0, tasks: 1 })
     ));
     assert_eq!(
@@ -622,7 +622,7 @@ async fn setup_and_task_history() {
     assert!(abandoned[0].ended_at.is_some() && abandoned[0].exit_code.is_none());
     assert_eq!(store.abandon_task_runs().await.expect("abandon"), 0);
 
-    store.clean_lane(lane.id).await.expect("clean");
+    store.clean_lane(crate::clean(&lane)).await.expect("clean");
     assert!(
         store
             .setup_records(lane.id)

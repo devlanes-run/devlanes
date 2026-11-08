@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     Session,
     engine::{Inner, LanePair, carries_env, confirmation, params, required},
-    lifecycle::{SpawnRequest, StartOptions, TaskOutcome},
+    lifecycle::{Cleaned, SpawnRequest, StartOptions, TaskOutcome},
     model::{EnvMap, Kind, LaneRt, LaneView, ProjectRt, is_mine, lane_summary, lock, unit_summary},
     registry::{PrimaryWorktree, internal, store_error},
     stream::LaneEvents,
@@ -601,7 +601,7 @@ impl Inner {
         let (project, lane) = self.lane(context, Policy::of(Method::LaneNew)).await?;
         let path = lane.st().path.clone();
         let base = Self::lane_at(&project, &path).unwrap_or(lane);
-        let (lane, extra, data_left) = self
+        let (lane, extra) = self
             .extra_lane(&project, &base, args.name.as_deref())
             .await?;
         let name = project.name();
@@ -618,9 +618,6 @@ impl Inner {
             path.join(config_dir)
         };
         let mut result = json!({"lane": summary, "name": extra, "folder": folder});
-        if let Some(path) = data_left {
-            result["data_left"] = json!(path);
-        }
         if args.start {
             // Older CLIs send no environment for `lane new --start`.
             let env = carries_env(context).or_else(|| project.st().last_env.clone());
@@ -653,26 +650,18 @@ impl Inner {
         Ok(result)
     }
 
-    /// Another lane for `base`'s folder (`lane new`): its own
-    /// worktree row, `<base identity>#lane=<name>`, so it gets its own index,
-    /// ports and domain while the folder's first lane stays the default. A
-    /// cleaned extra lane's name is free again, and using it creates a new lane
-    /// with empty data and history; the old lane's data folder comes back when
-    /// it could not be deleted.
+    /// Another lane for `base`'s folder (`lane new`): its own worktree row,
+    /// `<base identity>#lane=<name>`, so it gets its own index, ports and domain
+    /// while the folder's first lane stays the default. The row and the runtime
+    /// exist while the lane does or waits for one (`lanes.max`), and the name
+    /// stays taken that long; `lane clean` ends both, so the name gives a new
+    /// lane afterwards.
     async fn extra_lane(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         base: &Arc<crate::model::LaneRt>,
         name: Option<&str>,
-    ) -> Result<
-        (
-            Arc<crate::model::LaneRt>,
-            String,
-            Option<std::path::PathBuf>,
-        ),
-        RpcError,
-    > {
-        let _lane_new = project.lane_new.lock().await;
+    ) -> Result<(Arc<crate::model::LaneRt>, String), RpcError> {
         self.claim_lane(project, base).await;
         let (identity, path, branch, reason) = {
             let st = base.st();
@@ -697,13 +686,15 @@ impl Inner {
                 )
             }));
         }
-        // The lane a name already reaches. A cleaned extra lane holds none, so its
-        // name can be used again; record names (`main`, `lane<N>`) are refused below.
+        // Under `sync` from the name check until the lane is in the map, so two
+        // requests cannot both take one name.
+        let sync = project.sync.lock().await;
+        // The lane a name already reaches; record names (`main`, `lane<N>`) are
+        // refused below.
         let holder = |candidate: &str| {
             project.lanes().iter().find_map(|lane| {
                 let st = lane.st();
-                let holds = (st.record.is_some()
-                    && st.alias().is_some_and(|(_, alias)| alias == candidate))
+                let holds = st.alias().is_some_and(|(_, alias)| alias == candidate)
                     || st.branch.as_deref() == Some(candidate);
                 holds.then(|| st.reference(&project.name()))
             })
@@ -757,18 +748,12 @@ impl Inner {
             })
             .await
             .map_err(store_error)?;
-        let data_left = self.forget_cleaned_lane(project, record.id).await?;
-        // The name check above leaves only a lane without a record here: a cleaned
-        // one, which still holds its last start's env, overrides, profiles and
-        // errors. The new lane starts without any of that.
         let lane = crate::registry::new_lane(
             record.id,
             crate::model::LaneSt::new(identity, path, branch, true),
         );
-        let replaced = project.st().lanes.insert(record.id, lane.clone());
-        if let Some(old) = replaced {
-            old.watch.cancel();
-        }
+        project.st().lanes.insert(record.id, lane.clone());
+        drop(sync);
         self.reload_config(project, &lane).await;
         self.claim_lane(project, &lane).await;
         if lane.st().record.is_none() {
@@ -781,38 +766,11 @@ impl Inner {
                 )
             }));
         }
-        Ok((lane, name, data_left))
+        Ok((lane, name))
     }
 
-    /// Deletes the cleaned lane row of an extra lane's worktree before its name
-    /// is used again, with the run history, setup and task records that cascade
-    /// from it. The next claim then inserts a new row, whose new id gives a data
-    /// folder the old lane never had, even when `lane clean` could not delete
-    /// the old one (a file held open on Windows). That delete is retried here;
-    /// the old folder is returned when it still fails, since no row names it
-    /// any more.
-    async fn forget_cleaned_lane(
-        &self,
-        project: &ProjectRt,
-        worktree: devlanes_core::WorktreeId,
-    ) -> Result<Option<std::path::PathBuf>, RpcError> {
-        let lanes = self
-            .store
-            .lanes(Some(project.id))
-            .await
-            .map_err(store_error)?;
-        let Some(old) = lanes
-            .into_iter()
-            .find(|lane| lane.worktree_id == worktree && lane.cleaned_at.is_some())
-        else {
-            return Ok(None);
-        };
-        let left = self.remove_lane_data(&project.name(), old.id).await;
-        self.store.delete_lane(old.id).await.map_err(store_error)?;
-        Ok(left)
-    }
-
-    /// `lane.clean` (requires `yes`).
+    /// `lane.clean` (requires `yes`). A lane another clean ended first is
+    /// `not_found`.
     pub(crate) async fn lane_clean_method(
         self: &Arc<Self>,
         value: Value,
@@ -829,19 +787,29 @@ impl Inner {
         if !context.yes {
             return Err(confirmation(json!({"lane": name, "flag": "--yes"})));
         }
-        self.clean_lane(
-            &project,
-            &lane,
-            Some(&context.actor),
-            crate::lifecycle::Logs::Delete,
-        )
-        .await
+        match self
+            .clean_lane(
+                &project,
+                &lane,
+                Some(&context.actor),
+                crate::lifecycle::Logs::Delete,
+            )
+            .await?
+        {
+            Cleaned::Done(result) => Ok(result),
+            Cleaned::Gone => Err(RpcError::new(
+                "not_found",
+                json!({"reference": name, "candidates": []}),
+                3,
+            )),
+        }
     }
 
     /// `lane.gc`: cleans lanes whose worktrees are gone or whose worktree no longer
     /// holds the project's file (deleted, or naming another project after a rename),
-    /// and drops port offsets no config uses any more. Needs `yes` only when there are
-    /// lanes to clean; the confirmation lists them under `lanes`.
+    /// drops port offsets no config uses any more, and deletes the lane data folders
+    /// a clean could not (`data_left` lists the ones still held). Needs `yes` only
+    /// when there are lanes to clean; the confirmation lists them under `lanes`.
     pub(crate) async fn lane_gc(self: &Arc<Self>, context: &Context) -> Result<Value, RpcError> {
         // At a folder shared by several projects, each of them is re-listed; in a
         // project nobody started, none.
@@ -890,23 +858,23 @@ impl Inner {
                 kept_running.push(reference);
                 continue;
             }
-            if !assigned {
-                project.st().lanes.remove(&lane.worktree);
-                lane.watch.cancel();
+            // Gone only after the check above: it was not confirmed. A gone
+            // worktree that never was a lane is dropped unasked.
+            if assigned && !context.yes {
                 continue;
             }
-            // Gone only after the check above: it was not confirmed.
-            if !context.yes {
-                continue;
+            let done = self
+                .clean_lane(
+                    &project,
+                    &lane,
+                    Some(&context.actor),
+                    crate::lifecycle::Logs::Keep,
+                )
+                .await?;
+            // `Gone`: another clean got there first.
+            if assigned && matches!(done, Cleaned::Done(_)) {
+                cleaned.push(reference);
             }
-            self.clean_lane(
-                &project,
-                &lane,
-                Some(&context.actor),
-                crate::lifecycle::Logs::Keep,
-            )
-            .await?;
-            cleaned.push(reference);
         }
         let mut removed = 0;
         for project in self.all_projects() {
@@ -969,7 +937,13 @@ impl Inner {
         for project in self.all_projects() {
             self.refresh_views(&project).await;
         }
-        Ok(json!({"cleaned": cleaned, "kept_running": kept_running, "offsets_removed": removed}))
+        let mut result =
+            json!({"cleaned": cleaned, "kept_running": kept_running, "offsets_removed": removed});
+        let data_left = self.delete_pending_data().await;
+        if !data_left.is_empty() {
+            result["data_left"] = json!(data_left);
+        }
+        Ok(result)
     }
 
     /// `exec`: an ad-hoc unit in the cwd's lane (kind `exec`).
@@ -1608,7 +1582,7 @@ impl Inner {
         // The containers bind the lane's ports, so box lanes it clashes with
         // give them up first. Its own containers keep it counted once up.
         let claim = self.claim_ports(&lane).await;
-        let up = match self.integ.infra.up(&spec).await {
+        let up = match self.infra_up(&project, &spec).await {
             Ok(up) => up,
             Err(error) => {
                 // Before the claim drops, so what runs anyway keeps the lane.
@@ -1636,7 +1610,9 @@ impl Inner {
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<Value, RpcError> {
-        let ((project, _), spec) = self.infra_for(context, Method::InfraDown).await?;
+        let (project, lane) = self.lane(context, Policy::of(Method::InfraDown)).await?;
+        let env = lane.st().env.clone();
+        let spec = self.shared_infra_spec(&project, env.as_deref()).await?;
         let running: Vec<String> = project
             .lanes()
             .iter()
@@ -1648,7 +1624,9 @@ impl Inner {
                 json!({"lanes_running": running, "flag": "--yes"}),
             ));
         }
-        self.integ.infra.down(&spec).await.map_err(RpcError::from)
+        self.infra_down(&project, &spec)
+            .await
+            .map_err(RpcError::from)
     }
 
     /// `infra.status` for the request's lane.

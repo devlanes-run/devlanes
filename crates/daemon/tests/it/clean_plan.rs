@@ -94,9 +94,13 @@ async fn a_plan_reports_the_clean_and_changes_nothing() {
                 "data_dir",
                 "logs_bytes",
                 "ports",
+                "history",
+                "shared_infra",
             ]),
             "{plan}"
         );
+        assert_eq!(plan["history"], true);
+        assert_eq!(plan["shared_infra"], "stop", "the project's only lane");
         assert_eq!(plan["lane"], "tidy@0");
         assert_eq!(plan["project"], "tidy");
         assert_eq!(plan["index"], 0);

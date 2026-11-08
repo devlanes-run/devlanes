@@ -1,5 +1,7 @@
 //! `lane.clean.plan` (`lane clean --dry-run`): what a clean of a lane would
-//! stop, run and delete, read without stopping, running or deleting anything.
+//! stop, run and delete, read without stopping, running or deleting anything:
+//! with a lane record also its run and task history (`history`), and the
+//! project's shared containers when it is the last lane (`shared_infra`).
 
 use std::{collections::BTreeSet, path::Path, sync::Arc};
 
@@ -10,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::{
     engine::{Inner, params},
+    shared_infra::declares_containers,
     target::Policy,
 };
 
@@ -156,6 +159,10 @@ impl Inner {
             .unwrap_or((None, None));
             plan["data_dir"] = json!({"path": data, "bytes": data_bytes});
             plan["logs_bytes"] = json!(logs_bytes);
+            plan["history"] = json!(true);
+        }
+        if let Some(shared) = self.shared_on_clean(&project, &lane).await.plan() {
+            plan["shared_infra"] = shared;
         }
         Ok(plan)
     }
@@ -179,13 +186,6 @@ fn clean_units(config: &ProjectConfig) -> BTreeSet<String> {
         }
     }
     units
-}
-
-/// Whether the lane's config runs containers (Compose files or
-/// `infra.containers`); `true` when it did not load, since it may.
-fn declares_containers(config: Option<&ProjectConfig>) -> bool {
-    config
-        .is_none_or(|config| config.infra.compose.is_some() || !config.infra.containers.is_empty())
 }
 
 /// The command of task `name` as the config writes it, expressions left as

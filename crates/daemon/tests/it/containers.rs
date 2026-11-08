@@ -834,3 +834,190 @@ async fn metrics_carry_system_lanes_and_container_state() {
     .await
     .expect("timeout");
 }
+
+/// How long a step of the tests below may take.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// A project whose `db` container is shared by its lanes.
+const SHARED: &str = r#"project: demo
+infra:
+  containers:
+    db: { image: "postgres:16", ports: { pg: 5432 } }
+services:
+  api: { run: sleep }
+"#;
+
+/// `lane clean --yes` of `lane`, from `main`.
+fn clean_params(main: &std::path::Path, lane: &str) -> (Value, devlanes_proto::Context) {
+    (
+        json!({"lane": lane}),
+        devlanes_proto::Context {
+            yes: true,
+            ..cx(main)
+        },
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Cleaning a lane while another is left keeps the shared containers; cleaning
+/// the project's last lane, which forgets the project and its shared ports,
+/// stops them first.
+async fn cleaning_the_last_lane_stops_shared_containers() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", SHARED);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        h.call(Method::LaneNew, json!({"name": "review"}), cx(&main))
+            .await
+            .expect("lane new");
+        let before = h.infra.calls.entries().len();
+        let (params, context) = clean_params(&main, "review");
+        let kept = h
+            .call(Method::LaneClean, params, context)
+            .await
+            .expect("clean review");
+        assert_eq!(h.infra.calls.entries()[before..], ["remove 1"]);
+        assert_eq!(kept.get("shared_infra"), None, "{kept}");
+
+        let (params, context) = clean_params(&main, "0");
+        let last = h
+            .call(Method::LaneClean, params, context)
+            .await
+            .expect("clean lane 0");
+        assert_eq!(
+            h.infra.calls.entries()[before + 1..],
+            ["remove 0", "down", "down done"]
+        );
+        assert_eq!(last["shared_infra"], json!({"stopped": ["db"]}), "{last}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A start of another lane that reaches its infra while the last lane's clean
+/// stops the shared containers waits for that stop, so its `up` brings them
+/// back instead of running before the `down`; the project is kept for it.
+async fn the_last_clean_orders_its_down_before_a_new_start() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", SHARED);
+        let wt = tmp.path.join("wt");
+        crate::worktree(&main, &wt, "feat/wt");
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let before = h.infra.calls.entries().len();
+        let gate = Arc::new(tokio::sync::Notify::new());
+        *h.infra.down_gate.lock().expect("gate") = Some(gate.clone());
+        let mut events = h.engine.subscribe();
+        let (params, context) = clean_params(&main, "0");
+        // On a session of its own, whose frames stay open: a dropped receiver
+        // reads as a client that left.
+        let (session, _frames) = h.session();
+        let engine = h.engine.clone();
+        let cleaning = tokio::spawn(async move {
+            let request = devlanes_proto::Request {
+                id: 1,
+                method: Method::LaneClean,
+                params,
+                context,
+            };
+            devlanes_daemon::Handler::handle(&engine, request, session).await
+        });
+        let entered = crate::eventually(SETTLE, || async {
+            h.infra
+                .calls
+                .entries()
+                .contains(&"down".to_owned())
+                .then_some(())
+        })
+        .await;
+        assert!(entered.is_some(), "the clean decided to stop them");
+
+        let starting = h.call(Method::Start, json!({}), cx(&wt));
+        tokio::pin!(starting);
+        // The infra phase begins before it reaches `up`.
+        loop {
+            tokio::select! {
+                event = events.recv() => {
+                    let event = event.expect("event");
+                    if event.event == devlanes_proto::events::PHASE
+                        && event.data["phase"] == "infra"
+                        && event.data["state"] == "started"
+                    {
+                        break;
+                    }
+                }
+                done = &mut starting => panic!("the start ended first: {done:?}"),
+            }
+        }
+        // `progress` is asked once the work has been pending a while; `up` is
+        // asked on the first poll unless something holds it back.
+        let waiting = crate::eventually(SETTLE, || async {
+            h.infra
+                .queries
+                .entries()
+                .iter()
+                .any(|entry| entry.starts_with("progress "))
+                .then_some(())
+        });
+        tokio::pin!(waiting);
+        tokio::select! {
+            found = &mut waiting => assert!(found.is_some(), "the start waits for its up"),
+            done = &mut starting => panic!("the start ended first: {done:?}"),
+        }
+        assert_eq!(h.infra.calls.entries()[before..], ["remove 0", "down"]);
+        gate.notify_one();
+
+        let started = starting.await.expect("start");
+        let cleaned = cleaning.await.expect("join").expect("clean");
+        assert_eq!(
+            cleaned["shared_infra"],
+            json!({"stopped": ["db"]}),
+            "{cleaned}"
+        );
+        assert_eq!(
+            h.infra.calls.entries()[before..before + 4],
+            ["remove 0", "down", "down done", "up 1"],
+            "{started}"
+        );
+        let page: Page<LaneSummary> = serde_json::from_value(
+            h.call(Method::Status, json!({}), cx(&wt))
+                .await
+                .expect("the project was kept"),
+        )
+        .expect("page");
+        let lane = page
+            .items
+            .iter()
+            .find(|lane| lane.reference == "demo@1")
+            .expect("the worktree's lane");
+        assert_eq!(lane.state, "running", "{lane:?}");
+        h.call(Method::Stop, json!({}), cx(&wt))
+            .await
+            .expect("stop");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}

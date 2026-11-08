@@ -61,7 +61,6 @@ pub(crate) struct LaneRow {
     pub profile: Option<String>,
     pub profiles: String,
     pub created_at: i64,
-    pub cleaned_at: Option<i64>,
     pub services: String,
 }
 #[derive(Insertable)]
@@ -312,7 +311,6 @@ impl TryFrom<LaneRow> for Lane {
             profiles,
             services,
             created_at: row.created_at,
-            cleaned_at: row.cleaned_at,
         })
     }
 }

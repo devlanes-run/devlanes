@@ -24,7 +24,7 @@ use devlanes_daemon::{
         ContainerLogChunk, ContainerLogOptions, InfraContainer, InfraError, InfraEvent,
         InfraPortNeed, InfraProvider, InfraSpec, InfraUp, Integrations, LaunchCheck, ManagedUnit,
         PlannedUnit, PortInspector, PortScope, PresetEntry, RouteEntry, RouteSink, RouteStatus,
-        SysProcesses, UnitRunner, unavailable,
+        SharedInfraSpec, SysProcesses, UnitRunner, unavailable,
     },
 };
 use devlanes_proto::RpcError;
@@ -1644,7 +1644,7 @@ impl ContainerInfra {
     }
 
     /// Shared compose project description.
-    fn shared(spec: &InfraSpec) -> devlanes_infra_compose::SharedInfra {
+    fn shared(spec: &SharedInfraSpec) -> devlanes_infra_compose::SharedInfra {
         devlanes_infra_compose::SharedInfra {
             project_name: spec.project_name.clone(),
             primary_dir: spec.primary_dir.clone(),
@@ -1869,7 +1869,11 @@ impl ContainerInfra {
         let lane_project = Self::has_lane_services(spec)
             .then(|| devlanes_infra_compose::lane_project_name(&spec.project, spec.lane).ok())
             .flatten();
-        match self.compose.shared_project(&Self::shared(spec)).await {
+        match self
+            .compose
+            .shared_project(&Self::shared(&spec.shared()))
+            .await
+        {
             Ok((project, _)) => {
                 devlanes_infra_compose::setup_env(&project, lane_project.as_deref())
                     .unwrap_or_default()
@@ -1933,7 +1937,7 @@ impl InfraProvider for ContainerInfra {
             let shared = self
                 .compose
                 .shared_up(
-                    &Self::shared(spec),
+                    &Self::shared(&spec.shared()),
                     devlanes_infra_compose::UpOptions::default(),
                 )
                 .await
@@ -2031,7 +2035,10 @@ impl InfraProvider for ContainerInfra {
                 if spec.compose_files.is_empty() {
                     return None;
                 }
-                self.compose.shared_status(&Self::shared(spec)).await.ok()
+                self.compose
+                    .shared_status(&Self::shared(&spec.shared()))
+                    .await
+                    .ok()
             },
             async {
                 if !Self::has_lane_services(spec) {
@@ -2115,7 +2122,7 @@ impl InfraProvider for ContainerInfra {
         if !spec.compose_files.is_empty() {
             let shared = self
                 .compose
-                .shared_status(&Self::shared(spec))
+                .shared_status(&Self::shared(&spec.shared()))
                 .await
                 .map_err(compose_error)?;
             report.insert("shared".into(), json!(shared));
@@ -2147,7 +2154,7 @@ impl InfraProvider for ContainerInfra {
 
     /// Stops shared compose services and shared plain containers; data stays.
     /// `containers` names every container that ran before the stop.
-    async fn down(&self, spec: &InfraSpec) -> Result<Value, InfraError> {
+    async fn down(&self, spec: &SharedInfraSpec) -> Result<Value, InfraError> {
         let mut report = serde_json::Map::new();
         let mut stopped = Vec::new();
         if !spec.compose_files.is_empty() {
@@ -2353,7 +2360,10 @@ impl InfraProvider for ContainerInfra {
                 devlanes_infra_compose::lane_project_name(&spec.project, spec.lane).ok()
             } else {
                 if shared_name.is_none() {
-                    let resolved = self.compose.shared_name(&Self::shared(spec)).await;
+                    let resolved = self
+                        .compose
+                        .shared_name(&Self::shared(&spec.shared()))
+                        .await;
                     shared_name = Some(resolved.ok());
                 }
                 shared_name.clone().flatten()
@@ -2491,7 +2501,10 @@ impl InfraProvider for ContainerInfra {
                 if spec.compose_files.is_empty() {
                     return None;
                 }
-                self.compose.shared_health(&Self::shared(spec)).await.ok()
+                self.compose
+                    .shared_health(&Self::shared(&spec.shared()))
+                    .await
+                    .ok()
             },
             async {
                 if !Self::has_lane_services(spec) {

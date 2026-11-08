@@ -39,7 +39,7 @@ use devlanes_core::{
 use devlanes_daemon::integrations::{
     ContainerLogChunk, ContainerLogOptions, ExitDetails, InfraContainer, InfraError, InfraEvent,
     InfraPortNeed, InfraProvider, InfraSpec, InfraUp, ManagedUnit, PortScope, ProcessTable,
-    UnitRunner,
+    SharedInfraSpec, UnitRunner,
 };
 use devlanes_proto::{LeftProcess, PhaseContainer};
 use futures_util::{StreamExt, stream::BoxStream};
@@ -679,6 +679,9 @@ pub struct FakeInfra {
     /// `up` leaves the lane's `db` out of its containers, as for a lane whose
     /// containers a restarted daemon learned while `db` was down.
     pub up_omits_db: Arc<Mutex<bool>>,
+    /// When set, `down` waits for a notification between recording `down`
+    /// and `down done`.
+    pub down_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
 }
 
 impl FakeInfra {
@@ -820,8 +823,15 @@ impl InfraProvider for FakeInfra {
     fn events(&self) -> Option<broadcast::Receiver<InfraEvent>> {
         Some(self.sender().subscribe())
     }
-    async fn down(&self, _: &InfraSpec) -> Result<Value, InfraError> {
+    /// Records `down` on entry, waits for [`FakeInfra::down_gate`] when one is
+    /// set, then records `down done`.
+    async fn down(&self, _: &SharedInfraSpec) -> Result<Value, InfraError> {
         self.record("down".into());
+        let gate = self.down_gate.lock().ok().and_then(|gate| gate.clone());
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
+        self.record("down done".into());
         Ok(json!({"stopped": ["db"]}))
     }
     async fn remove_lane(&self, _: &str, lane: u32) -> Result<Value, InfraError> {
@@ -962,7 +972,8 @@ impl InfraProvider for FakeInfra {
     async fn doctor(&self) -> Value {
         json!({"docker": {"reachable": true}})
     }
-    async fn progress(&self, _: &InfraSpec) -> Vec<PhaseContainer> {
+    async fn progress(&self, spec: &InfraSpec) -> Vec<PhaseContainer> {
+        self.query(&format!("progress {}", spec.lane));
         let Ok(mut script) = self.progress.lock() else {
             return Vec::new();
         };

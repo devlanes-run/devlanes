@@ -44,6 +44,7 @@ mod routes;
 mod sampler;
 mod screen;
 mod setup;
+mod shared_infra;
 mod spawn_error;
 mod stopping;
 mod stream;

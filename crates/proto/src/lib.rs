@@ -165,7 +165,9 @@ pub enum Method {
     /// message when the containers could not be listed; `data_dir` `{path,
     /// bytes}` or `null` without a lane record; `logs_bytes` the size of the
     /// logs it deletes; `ports` the block it frees as `{start, size}`. Sizes are
-    /// `null` when unknown.
+    /// `null` when unknown. Optional: `history: true` when the lane's run and
+    /// task history goes with it; `shared_infra`, for the project's last lane,
+    /// `"stop"` or `{skipped, message}` when what to stop is unknown.
     #[serde(rename = "lane.clean.plan")]
     LaneCleanPlan,
     #[serde(rename = "lane.gc")]

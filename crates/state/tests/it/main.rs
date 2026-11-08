@@ -16,8 +16,8 @@ use devlanes_core::{
     ports::{PortName, PortPool},
 };
 use devlanes_state::{
-    AllocationRequest, BlockOwner, DesiredState, Error, Lane, LaneInput, Project, ProjectInput,
-    SCHEMA_VERSION, Store, UnitRunInput, WorktreeInput,
+    AllocationRequest, BlockOwner, CleanLane, DesiredState, Error, Lane, LaneInput, Project,
+    ProjectInput, SCHEMA_VERSION, Store, UnitRunInput, WorktreeInput,
 };
 use std::{collections::BTreeSet, path::PathBuf};
 
@@ -32,6 +32,15 @@ async fn project(store: &Store, name: &str) -> Project {
         })
         .await
         .expect("project")
+}
+
+/// A clean of `lane` whose data folder is a test path that never exists.
+fn clean(lane: &Lane) -> CleanLane {
+    CleanLane {
+        lane: lane.id,
+        data: format!("/test/data/{}", lane.id.0).into(),
+        forget_worktree: false,
+    }
 }
 
 /// Registers a worktree and lane without invoking Git or starting processes.
@@ -185,17 +194,9 @@ async fn registry_moves_resume_and_reopen() {
         .await
         .expect("missing");
     assert!(!store.worktrees(project.id).await.expect("worktrees")[0].present);
-    store.clean_lane(lane.id).await.expect("clean");
+    store.clean_lane(clean(&lane)).await.expect("clean");
     assert!(store.port_blocks().await.expect("blocks").is_empty());
-    assert!(
-        store
-            .lane(lane.id)
-            .await
-            .expect("query")
-            .expect("lane")
-            .cleaned_at
-            .is_some()
-    );
+    assert_eq!(store.lane(lane.id).await.expect("query"), None);
     store.delete_project(project.id).await.expect("delete");
     assert!(store.projects().await.expect("projects").is_empty());
 }
@@ -557,7 +558,7 @@ async fn unit_identity_actor_and_exit_roundtrip_without_environment_columns() {
         "{second:?}"
     );
     assert!(matches!(
-        store.clean_lane(lane.id).await,
+        store.clean_lane(clean(&lane)).await,
         Err(Error::ActiveRuns { units: 1, tasks: 0 })
     ));
     assert!(matches!(
@@ -586,11 +587,6 @@ async fn unit_identity_actor_and_exit_roundtrip_without_environment_columns() {
     let history = store.unit_runs(lane.id, 10).await.expect("history");
     assert_eq!(history[0].outcome, Some(outcome));
     assert!(history[0].ended_at.is_some());
-    store.clean_lane(lane.id).await.expect("clean");
-    assert_eq!(
-        store.unit_runs(lane.id, 10).await.expect("history").len(),
-        1
-    );
 }
 
 /// A path that is not valid UTF-8: a stray byte on Unix.
@@ -833,6 +829,125 @@ async fn every_diesel_migration_prefix_upgrades_and_down_scripts_work() {
             SCHEMA_VERSION as usize
         );
     }
+}
+
+#[tokio::test]
+/// Migration 013 deletes lanes earlier daemons kept as cleaned, with their run
+/// history, and the worktree rows of extra lanes that have no lane, so a lane
+/// registered again gets a new id.
+async fn migration_drops_cleaned_lanes() {
+    use diesel::migration::MigrationSource;
+    use schema::{lanes as l, projects as p, worktrees as w};
+    const MIGRATIONS: diesel_migrations::EmbeddedMigrations = embed_migrations!("migrations");
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("cleaned.db");
+    let mut c = SqliteConnection::establish(path.to_str().expect("path")).expect("db");
+    c.batch_execute("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000")
+        .expect("connection settings");
+    c.applied_migrations().expect("ledger");
+    let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
+        .expect("migrations");
+    c.run_migrations(&migrations[..SCHEMA_VERSION as usize - 1])
+        .expect("previous version");
+    let project: i64 = diesel::insert_into(p::table)
+        .values((
+            p::name.eq("acme"),
+            p::identity.eq(b"acme".to_vec()),
+            p::root_path.eq(native("/test/acme")),
+            p::primary_branch.eq("main"),
+        ))
+        .returning(p::id)
+        .get_result(&mut c)
+        .expect("project");
+    let mut worktree = |identity: &str| -> i64 {
+        diesel::insert_into(w::table)
+            .values((
+                w::project_id.eq(project),
+                w::identity.eq(identity),
+                w::path.eq(native("/test/acme")),
+                w::present.eq(1),
+                w::first_seen.eq(1_i64),
+                w::last_seen.eq(1_i64),
+            ))
+            .returning(w::id)
+            .get_result(&mut c)
+            .expect("worktree")
+    };
+    let main = worktree("main");
+    let wt = worktree("wt");
+    let review = worktree("main#lane=review");
+    worktree("main#lane=waiting");
+    let mut lane = |worktree: i64, index: i64| -> i64 {
+        diesel::insert_into(l::table)
+            .values((
+                l::project_id.eq(project),
+                l::worktree_id.eq(worktree),
+                l::lane_index.eq(index),
+                l::name.eq(format!("lane{index}")),
+                l::desired_state.eq("stopped"),
+                l::created_at.eq(1_i64),
+            ))
+            .returning(l::id)
+            .get_result(&mut c)
+            .expect("lane")
+    };
+    let active = lane(main, 0);
+    let cleaned = lane(wt, 2);
+    let cleaned_review = lane(review, 1);
+    // Cleaned rows did not hold their index, so one may share the active lane's.
+    c.batch_execute(&format!(
+        "UPDATE lanes SET cleaned_at = 5 WHERE id IN ({cleaned}, {cleaned_review});
+         UPDATE lanes SET lane_index = 0 WHERE id = {cleaned};
+         INSERT INTO unit_runs (id, lane_id, unit, pid, sid, process_start_time, started_at, ended_at, actor_kind)
+         VALUES (1, {cleaned}, 'web', 10, 10, '1', 1, 2, 'human');
+         INSERT INTO run_summaries (unit_run_id, series, started_at, ended_at, samples, mem_p50, mem_p95, mem_peak, cpu_p50, cpu_p95, cpu_peak, rss_peak)
+         VALUES (1, 's', 1, 2, 1, 1, 1, 1, 0.0, 0.0, 0.0, 1);"
+    ))
+    .expect("cleaned lanes and their history");
+
+    let store = Store::open(&path).await.expect("upgrade");
+    let lanes: Vec<i64> = store
+        .lanes(None)
+        .await
+        .expect("lanes")
+        .iter()
+        .map(|lane| lane.id.0)
+        .collect();
+    assert_eq!(lanes, [active]);
+    let worktrees: Vec<String> = store
+        .worktrees(ProjectId(project))
+        .await
+        .expect("worktrees")
+        .into_iter()
+        .map(|worktree| worktree.identity)
+        .collect();
+    assert_eq!(worktrees, ["main", "wt"]);
+    let count = |c: &mut SqliteConnection, table: &str| -> i64 {
+        #[derive(diesel::QueryableByName)]
+        struct Count {
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            n: i64,
+        }
+        diesel::sql_query(format!("SELECT COUNT(*) AS n FROM {table}"))
+            .get_result::<Count>(c)
+            .expect("count")
+            .n
+    };
+    assert_eq!(count(&mut c, "unit_runs"), 0);
+    assert_eq!(count(&mut c, "run_summaries"), 0);
+    let again = store
+        .upsert_lane(LaneInput {
+            project_id: ProjectId(project),
+            worktree_id: devlanes_core::WorktreeId(wt),
+            index: 1,
+            name: "lane1".into(),
+            desired_state: DesiredState::Stopped,
+            profile: None,
+            profiles: Vec::new(),
+        })
+        .await
+        .expect("lane registered again");
+    assert_ne!(again.id.0, cleaned);
 }
 
 /// A path as the store writes it into a BLOB column on Unix.

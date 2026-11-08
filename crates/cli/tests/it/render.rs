@@ -93,6 +93,7 @@ pub(crate) fn lane_clean_plan() -> Value {
         "data_dir": {"path": "/home/dev/.devlanes/data/acme/7", "bytes": 325_058_560_u64},
         "logs_bytes": 12_345,
         "ports": {"start": 20040, "size": 10},
+        "history": true,
     })
 }
 
