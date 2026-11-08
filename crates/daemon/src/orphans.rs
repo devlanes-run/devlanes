@@ -27,18 +27,11 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(2);
 /// Attempts to finish a run row before giving up until the next chance.
 const FINISH_ATTEMPTS: u32 = 3;
 
-/// Exit recorded when this daemon terminated an orphan (SIGTERM, maybe SIGKILL).
-#[cfg(unix)]
+/// Exit recorded when this daemon terminated an orphan (SIGTERM, maybe
+/// SIGKILL; on Windows the console event that stands for SIGTERM).
 const TERMINATED: ExitOutcome = ExitOutcome {
     code: None,
     signal: Some(15),
-};
-/// Exit recorded when this daemon terminated an orphan: Windows has no
-/// signals, and terminated processes exit with code 1.
-#[cfg(windows)]
-const TERMINATED: ExitOutcome = ExitOutcome {
-    code: Some(1),
-    signal: None,
 };
 /// Exit recorded for an orphan whose process ended on its own: unknown.
 const GONE: ExitOutcome = ExitOutcome {

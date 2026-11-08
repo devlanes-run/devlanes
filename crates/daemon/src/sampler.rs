@@ -13,7 +13,7 @@ use devlanes_metrics::{
     COARSE_CAPACITY, COARSE_INTERVAL_MS, ContainerTarget, History, RAW_CAPACITY, RunTracker,
     Sample, SampleRequest, Series, Subject, UnitKey, UnitTarget, Window, aggregate,
 };
-use devlanes_proto::{Context, LaneSummary, RpcError, UnitPeak};
+use devlanes_proto::{Context, LaneSummary, Method, RpcError, UnitPeak};
 use devlanes_state::{RollupRow, RunSummaryRow};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use crate::{
     engine::{Inner, params},
     model::{LaneRt, UnitUsage, lock, unit_summary},
+    target::{Policy, ReadScope},
     units::now_ms,
 };
 
@@ -661,7 +662,7 @@ impl Inner {
             self.sample_once().await;
         }
         if args.peaks {
-            let (project, lane) = self.target_lane(context).await?;
+            let (project, lane) = self.lane(context, Policy::of(Method::Metrics)).await?;
             let st = lane.st();
             let reference = st.reference(&project.name());
             let mut names: Vec<String> = st.units.keys().cloned().collect();
@@ -709,17 +710,18 @@ impl Inner {
         };
         // Before the lock below, a std mutex that must not be held across an await.
         let scope = self
-            .read_scope(context, args.all, crate::query::Strictness::Lenient)
+            .read_scope(context, args.all, Policy::of(Method::Metrics))
             .await?;
         // Remembered and container rows of the scope: a project's, or one lane's
         // plus its project's shared containers.
         let keep: Box<dyn Fn(&Subject) -> bool + Send> = match &scope {
-            crate::query::ReadScope::All(_) => Box::new(|_| true),
-            crate::query::ReadScope::Projects(projects) => {
+            ReadScope::All(_) => Box::new(|_| true),
+            ReadScope::Projects(projects) => {
                 let ids: Vec<_> = projects.iter().map(|project| project.id).collect();
                 Box::new(move |subject| subject.project().is_some_and(|id| ids.contains(&id)))
             }
-            crate::query::ReadScope::Lane((project, lane)) => {
+            ReadScope::Unregistered(_) => Box::new(|_| false),
+            ReadScope::Lane((project, lane)) => {
                 let (project, lane) = (project.id, lane.st().record.as_ref().map(|r| r.id));
                 Box::new(move |subject| match subject.lane() {
                     Some(id) => Some(id) == lane,

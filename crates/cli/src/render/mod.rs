@@ -326,17 +326,6 @@ pub(crate) fn int(value: &Value, key: &str) -> Option<i64> {
     value.get(key).and_then(Value::as_i64)
 }
 
-/// The ` exit=N` field of an agent line. Left off for a stopped unit whose
-/// code has words (a Windows console event), as a Unix stop by signal
-/// carries no code.
-pub(crate) fn exit_field(state: &str, code: i64) -> String {
-    if state == "stopped" && crate::exit::words(code).is_some() {
-        String::new()
-    } else {
-        format!(" exit={code}")
-    }
-}
-
 /// Array field, empty when absent.
 pub(crate) fn list<'a>(value: &'a Value, key: &str) -> &'a [Value] {
     value

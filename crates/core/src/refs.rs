@@ -1,7 +1,7 @@
 //! Pure parsing and resolution of CLI lane and unit references.
 
 use crate::{
-    LaneId, ProjectId,
+    LaneId, ProjectId, WorktreeId,
     paths::{path_starts_with, same_path},
 };
 use serde::{Deserialize, Serialize};
@@ -189,19 +189,49 @@ impl FromStr for UnitRef {
 /// Minimal lane metadata for resolution; no filesystem access is performed.
 #[derive(Debug, Clone)]
 pub struct LaneCandidate {
-    pub id: LaneId,
+    /// `None` for a lane without a record yet.
+    pub id: Option<LaneId>,
+    /// The key a caller maps a match back with; every candidate has its own.
+    pub worktree: WorktreeId,
     pub project_id: ProjectId,
     pub project: String,
-    pub index: u32,
+    /// `None` for a lane without a record yet.
+    pub index: Option<u32>,
     pub branch: Option<String>,
+    /// An extra lane's own name, else the record name (`main`, `lane<N>`); empty
+    /// for a worktree without a record, so it never matches by name.
     pub name: String,
+    /// Empty for an extra lane, so its base's folder and path keep naming the base.
     pub path: PathBuf,
+    /// A lane the caller lists. A candidate that is no lane (a worktree nobody
+    /// ran devlanes in) is matched by folder name only when no lane matched.
+    pub lane: bool,
+}
+
+impl LaneCandidate {
+    /// `project@<index>`, else `project@<name>` when the name is set, else
+    /// `project@<folder name>`: a reference that resolves to this candidate.
+    pub fn label(&self) -> String {
+        match (self.index, self.name.is_empty()) {
+            (Some(index), _) => format!("{}@{index}", self.project),
+            (None, false) => format!("{}@{}", self.project, self.name),
+            (None, true) => format!(
+                "{}@{}",
+                self.project,
+                self.path.file_name().map_or_else(
+                    || self.path.display().to_string(),
+                    |name| { name.to_string_lossy().into_owned() }
+                )
+            ),
+        }
+    }
 }
 
 /// Explicit context takes precedence over context inferred by the caller from cwd.
 #[derive(Debug, Default)]
 pub struct ResolveContext {
-    pub project: Option<ProjectId>,
+    /// Projects a reference without `project@` resolves in; empty means all.
+    pub projects: Vec<ProjectId>,
     pub lane: Option<LaneId>,
     pub cwd: PathBuf,
     pub home: Option<PathBuf>,
@@ -227,7 +257,7 @@ pub fn resolve_units<'a>(
     let (lane, selector) = resolve_unit(reference, lanes, context)?;
     let eligible: Vec<_> = units
         .iter()
-        .filter(|unit| unit.lane_id == lane.id)
+        .filter(|unit| Some(unit.lane_id) == lane.id)
         .collect();
     let mut matches: Vec<_> = if let Some(tag) = selector.strip_prefix('+') {
         eligible
@@ -249,7 +279,7 @@ pub fn resolve_units<'a>(
     if matches.is_empty() {
         let mut candidates: Vec<_> = eligible
             .iter()
-            .map(|unit| format!("{}@{}:{}", lane.project, lane.index, unit.name))
+            .map(|unit| format!("{}:{}", lane.label(), unit.name))
             .collect();
         candidates.sort();
         return Err(ReferenceError::NotFound {
@@ -261,31 +291,34 @@ pub fn resolve_units<'a>(
 }
 
 /// Resolves by number, branch, lane name, directory name, then lexical path.
-/// Paths supplied by the caller should already use a consistent absolute spelling.
+/// Candidates that are no lane are matched by directory name only, and only
+/// when no lane matched, so they never take a name from a lane. Two matches at
+/// one rank are ambiguous. Paths supplied by the caller should already use a
+/// consistent absolute spelling.
 pub fn resolve_lane<'a>(
     reference: &LaneRef,
     lanes: &'a [LaneCandidate],
     context: &ResolveContext,
 ) -> Result<&'a LaneCandidate, ReferenceError> {
-    let eligible: Vec<_> = lanes
-        .iter()
-        .filter(|lane| match &reference.project {
-            Some(project) => &lane.project == project,
-            None => context
-                .project
-                .is_none_or(|project| lane.project_id == project),
-        })
-        .collect();
+    let in_scope = |lane: &&LaneCandidate| match &reference.project {
+        Some(project) => &lane.project == project,
+        None => context.projects.is_empty() || context.projects.contains(&lane.project_id),
+    };
+    let (eligible, others): (Vec<_>, Vec<_>) =
+        lanes.iter().filter(in_scope).partition(|lane| lane.lane);
     let selector = reference.selector.as_str();
     let numeric = selector.bytes().all(|b| b.is_ascii_digit());
     let path = expand_path(selector, context);
     let ranks = if numeric { 0..1 } else { 1..5 };
-    for rank in ranks {
-        let matches: Vec<_> = eligible
+    let passes = ranks
+        .map(|rank| (rank, &eligible))
+        .chain(std::iter::once((3, &others)));
+    for (rank, candidates) in passes {
+        let matches: Vec<_> = candidates
             .iter()
             .copied()
             .filter(|lane| match rank {
-                0 => selector.parse::<u32>().ok() == Some(lane.index),
+                0 => lane.index.is_some() && selector.parse::<u32>().ok() == lane.index,
                 1 => lane.branch.as_deref() == Some(selector),
                 2 => lane.name == selector,
                 3 => lane.path.file_name().is_some_and(|name| name == selector),
@@ -324,12 +357,11 @@ pub fn resolve_unit<'a, 'r>(
         let matches: Vec<_> = lanes
             .iter()
             .filter(|lane| {
-                context
-                    .project
-                    .is_none_or(|project| project == lane.project_id)
+                lane.lane
+                    && (context.projects.is_empty() || context.projects.contains(&lane.project_id))
                     && context.lane.map_or_else(
                         || path_starts_with(&context.cwd, &lane.path),
-                        |id| id == lane.id,
+                        |id| Some(id) == lane.id,
                     )
             })
             .collect();
@@ -338,7 +370,9 @@ pub fn resolve_unit<'a, 'r>(
             [] => {
                 return Err(ReferenceError::NotFound {
                     reference: reference.selector.clone(),
-                    candidates: candidate_names(&lanes.iter().collect::<Vec<_>>()),
+                    candidates: candidate_names(
+                        &lanes.iter().filter(|lane| lane.lane).collect::<Vec<_>>(),
+                    ),
                 });
             }
             _ => {
@@ -354,10 +388,7 @@ pub fn resolve_unit<'a, 'r>(
 
 /// Produces stable candidate ordering without depending on database result order.
 fn candidate_names(lanes: &[&LaneCandidate]) -> Vec<String> {
-    let mut names: Vec<_> = lanes
-        .iter()
-        .map(|lane| format!("{}@{}", lane.project, lane.index))
-        .collect();
+    let mut names: Vec<_> = lanes.iter().map(|lane| lane.label()).collect();
     names.sort();
     names.dedup();
     names
@@ -399,13 +430,15 @@ mod tests {
     /// Constructs candidates whose path basename matches the branch.
     fn lane(index: u32, branch: &str, name: &str) -> LaneCandidate {
         LaneCandidate {
-            id: LaneId(i64::from(index)),
+            id: Some(LaneId(i64::from(index))),
+            worktree: WorktreeId(i64::from(index)),
             project_id: ProjectId(1),
             project: "demo".into(),
-            index,
+            index: Some(index),
             branch: Some(branch.into()),
             name: name.into(),
             path: PathBuf::from(format!("/work/{branch}")),
+            lane: true,
         }
     }
 
@@ -436,7 +469,7 @@ mod tests {
                 resolve_lane(&reference, &lanes, &context)
                     .expect("resolved")
                     .index,
-                expected
+                Some(expected)
             );
         }
         assert!(resolve_lane(&"99".parse().expect("valid"), &lanes, &context).is_err());
@@ -574,7 +607,7 @@ mod tests {
                 resolve_lane(&reference, &lanes, &context)
                     .expect("resolved")
                     .index,
-                expected,
+                Some(expected),
                 "{input}"
             );
         }
@@ -584,7 +617,7 @@ mod tests {
         };
         let (lane, _) =
             resolve_unit(&"web".parse().expect("valid"), &lanes, &inside).expect("the cwd's lane");
-        assert_eq!(lane.index, 0);
+        assert_eq!(lane.index, Some(0));
     }
 
     #[test]

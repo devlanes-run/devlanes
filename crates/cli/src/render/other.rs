@@ -2501,6 +2501,25 @@ pub(super) fn config_check(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         text(data, "project"),
         display_value(&data["path"])
     )];
+    // Hostnames of a lane laid out from the file, so a worktree that gets another
+    // lane does not read them as its own.
+    let provisional = text(data, "provisional");
+    let hosts = list(data, "warnings")
+        .iter()
+        .any(|warning| text(warning, "code") == "host_outside_ca");
+    if !provisional.is_empty() && hosts {
+        lines.push(format!(
+            "hostname warnings for {provisional}, laid out from the file"
+        ));
+    }
+    if list(data, "skipped")
+        .iter()
+        .any(|skipped| skipped.as_str() == Some("hostnames"))
+    {
+        lines.push(
+            "hostnames not checked: they need a lane; check again after `devlanes start`".into(),
+        );
+    }
     for warning in list(data, "warnings") {
         let message = match text(warning, "code").as_str() {
             "unknown_platform" => {
@@ -2532,7 +2551,11 @@ pub(super) fn config_check(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 /// the whole output still parses as a project file. Unset fields and empty mappings
 /// are left out of the YAML; `--json` keeps them.
 pub(super) fn config_show(data: &Value) -> Vec<String> {
-    let mut lines = vec![format!("# lane {}", text(data, "lane"))];
+    let mut lines = vec![match text(data, "lane") {
+        // A project nobody started: the file as it stands, with no lane yet.
+        lane if lane.is_empty() => format!("# project {}, no lane yet", text(data, "project")),
+        lane => format!("# lane {lane}"),
+    }];
     for file in list(data, "files") {
         lines.push(format!("# from {}", clean(&display_value(file))));
     }

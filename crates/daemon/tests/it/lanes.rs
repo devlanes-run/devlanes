@@ -522,7 +522,8 @@ async fn a_project_named_outside_its_folders_uses_its_main_lane() {
                 .map(|lane| lane.reference)
                 .collect()
         };
-        // A worktree the daemon has not listed yet is its own lane, not lane 0.
+        // A worktree the daemon has not listed yet is its own worktree, not lane 0,
+        // and a stop there makes no lane of it.
         let late = tmp.path.join("late");
         worktree(&main, &late, "feat/late");
         h.call(
@@ -556,11 +557,11 @@ async fn a_project_named_outside_its_folders_uses_its_main_lane() {
             assert_eq!(error.code, "lane_required", "{method:?}");
             assert_eq!(
                 error.data["candidates"],
-                json!(["demo@0", "demo@1", "demo@2"]),
+                json!(["demo@0", "demo@1"]),
                 "{method:?}"
             );
         }
-        assert_eq!(lanes(&h, &main).await.len(), 3, "nothing cleaned");
+        assert_eq!(lanes(&h, &main).await.len(), 2, "nothing cleaned");
         let created = h
             .call(
                 Method::LaneNew,

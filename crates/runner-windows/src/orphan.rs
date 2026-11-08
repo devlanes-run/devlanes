@@ -4,14 +4,18 @@
 
 use std::time::{Duration, Instant};
 
-use devlanes_core::ProcessIdentity;
+use devlanes_core::{ProcessIdentity, StopSignal};
 use devlanes_sys_windows::{
-    console::CtrlEvent,
     proc::{self, Held, ProcessEntry, Terminated},
     window::close_windows,
 };
 
-use crate::{ConsoleHelper, spawn::is_console_host};
+use crate::{
+    ConsoleHelper,
+    runtime::Runtimes,
+    spawn::is_console_host,
+    stop::{Ask, StopPlan},
+};
 
 /// Exit code of the orphaned processes this ends.
 const TERMINATED: u32 = 1;
@@ -32,16 +36,19 @@ pub struct OrphanStop {
 }
 
 /// Stops an orphaned unit: the recorded `leader` and `members` and the live
-/// descendants of those that still verify. Like a stop of a running unit, it
-/// asks first: `WM_CLOSE` to the processes' visible windows and one
-/// Ctrl-Break to the unit's console through `helper`, attached through the
-/// leader while it verifies, else through the first live recorded member
-/// that is not the console host. Never one event per process: everything on
-/// the console gets the one event. After `grace`, or once every process has
-/// exited, whatever still runs of that tree is terminated with exit code 1,
-/// each checked by start time on the handle that ends it. Blocking.
+/// descendants of those that still verify. Like a SIGTERM stop of a running
+/// unit without a terminal (orphans never have one), it asks first:
+/// `WM_CLOSE` to the processes' visible windows and one console event
+/// through `helper`, Ctrl-C, or Ctrl-Break when one of the processes links
+/// the MSYS runtime as `runtimes` reads it. The event goes through the leader
+/// while it verifies, else through the first live recorded member that is not
+/// the console host. Never one event per process: everything on the console
+/// gets the one event. After `grace`, or once every process has exited,
+/// whatever still runs of that tree is terminated with exit code 1, each
+/// checked by start time on the handle that ends it. Blocking.
 pub fn stop_orphan(
     helper: Option<&ConsoleHelper>,
+    runtimes: &Runtimes,
     leader: ProcessIdentity,
     members: &[ProcessIdentity],
     grace: Duration,
@@ -79,8 +86,9 @@ pub fn stop_orphan(
             .find(|(entry, _)| (entry.pid, entry.start_time) == *key)
             .map(|(_, handle)| handle)
     });
-    if let (Some(helper), Some(target)) = (helper, through) {
-        match helper.send(target, CtrlEvent::CtrlBreak, deadline) {
+    let plan = StopPlan::new(StopSignal::Terminate, false, tree.clone(), runtimes);
+    if let (Some(helper), Some(target), Ask::Event(event)) = (helper, through, plan.ask) {
+        match helper.send(target, event, deadline) {
             Ok(()) => stop.asked_through = Some(target.pid()),
             Err(error) => {
                 tracing::warn!(%error, pid = target.pid(), "console event to an orphan not sent");

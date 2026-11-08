@@ -26,9 +26,7 @@ use crate::{
     Config, UI_EXTENSION, app,
     child::{Calls, Output, Runner},
     command::{Call, Rejected, Tool as Source},
-    host,
-    progress::{self, Phases},
-    shell_env, text,
+    host, progress, shell_env, text,
     tools::{self, Catalog, Generated},
     view,
 };
@@ -522,15 +520,14 @@ pub(crate) async fn execute(
 ) -> Result<(Output, Vec<String>), String> {
     let started = std::time::Instant::now();
     let mut notes = Vec::new();
-    let mut phases = Phases::of(call.cli.lane.as_deref());
-    let progress = |limit: Option<Duration>| limit.filter(|_| call.starts());
+    let mut sent = 0;
     let mut output = run(
         runner,
         &call.args,
         cwd,
-        progress(limit),
+        call.starts(),
         true,
-        &mut phases,
+        &mut sent,
         context,
     )
     .await?;
@@ -568,25 +565,16 @@ pub(crate) async fn execute(
                 &runner,
                 &args,
                 cwd,
-                progress(limit),
+                call.starts(),
                 false,
-                &mut phases,
+                &mut sent,
                 context,
             )
             .await?;
             notes.push(shell_env::resolved_note(&shell.shell));
         }
         Err(error) => {
-            output = run(
-                runner,
-                &args,
-                cwd,
-                progress(limit),
-                false,
-                &mut phases,
-                context,
-            )
-            .await?;
+            output = run(runner, &args, cwd, call.starts(), false, &mut sent, context).await?;
             notes.push(
                 "note: the lane had no environment from a shell, so it got the environment of \
                  the devlanes mcp server"
@@ -607,30 +595,35 @@ fn command_not_found(output: &Output) -> bool {
     output.stdout.contains(NOT_FOUND) || output.stderr.contains(NOT_FOUND)
 }
 
-/// One run of `args`. With `progress`, the limit of a start, its phases go to
-/// the client when the request asked for progress.
+/// One run of `args`. For a command that `starts` a lane, its phases go to
+/// the client as they come when the request asked for progress, numbered on
+/// from `sent`.
 async fn run(
     runner: &Runner,
     args: &[String],
     cwd: &Path,
-    progress: Option<Duration>,
+    starts: bool,
     from_lane: bool,
-    phases: &mut Phases,
+    sent: &mut u32,
     context: &RequestContext<RoleServer>,
 ) -> Result<Output, String> {
-    let token = context.meta.get_progress_token();
-    let follow = async {
-        if let (Some(token), Some(limit)) = (token, progress) {
-            progress::follow(runner, cwd, limit, context.peer.clone(), token, phases).await;
+    let (phases, messages) = if starts {
+        let (phases, messages) = tokio::sync::mpsc::unbounded_channel();
+        (Some(phases), Some(messages))
+    } else {
+        (None, None)
+    };
+    let notify = async {
+        if let Some(messages) = messages {
+            let token = context.meta.get_progress_token();
+            progress::notify(messages, token, context.peer.clone(), sent).await;
         }
-        std::future::pending::<()>().await;
     };
-    let run = runner.run(cwd, args, from_lane, &context.ct);
-    // `follow` never ends, so the command's end decides.
-    let output = tokio::select! {
-        output = run => output,
-        () = follow => unreachable!("following progress never ends"),
-    };
+    // The channel closes once the command's pipe ended, so both finish.
+    let (output, ()) = tokio::join!(
+        runner.run(cwd, args, from_lane, &context.ct, phases),
+        notify
+    );
     output.map_err(|error| {
         format!(
             "could not run {} in {}: {error}",
@@ -786,7 +779,7 @@ async fn consent_message(
 ) -> String {
     let mut message = question.to_owned();
     if let Some(plan) = call.clean_plan()
-        && let Ok(output) = runner.run(cwd, &plan, true, &context.ct).await
+        && let Ok(output) = runner.run(cwd, &plan, true, &context.ct, None).await
         && output.exit_code == 0
         && !output.stdout.trim().is_empty()
     {

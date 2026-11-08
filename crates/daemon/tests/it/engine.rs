@@ -86,7 +86,8 @@ async fn config_show_prints_the_merged_config() {
             .await
             .expect("config show");
         assert_eq!(shown["project"], "acme", "{shown}");
-        assert_eq!(shown["lane"], "acme@0", "{shown}");
+        // Nothing started acme, so the file answers without a lane.
+        assert_eq!(shown["lane"], Value::Null, "{shown}");
         assert_eq!(
             shown["files"],
             json!([main.join("devlanes.yaml"), main.join("devlanes.local.yaml")]),
@@ -1266,7 +1267,7 @@ async fn exec_leaves_out_values_that_wait_on_infra() {
             )
             .await
             .expect_err("env.MISSING has no value");
-        assert_eq!(refused.code, "lane_env_unresolved", "{refused:?}");
+        assert_eq!(refused.code, "unresolved_value", "{refused:?}");
         assert_eq!(refused.data["path"], "global_env.GREETING");
         h.close().await;
     })

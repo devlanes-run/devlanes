@@ -3,6 +3,7 @@
 
 use std::{
     fmt, io,
+    path::PathBuf,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError, TryLockError,
         atomic::{AtomicBool, Ordering},
@@ -32,9 +33,12 @@ use tokio::{
 };
 
 use crate::{
-    CONTROL_C_EXIT, ConsoleHelper, WindowsRunner,
+    ConsoleHelper, WindowsRunner,
+    exit::{self, Leader},
     output::{self, Slot},
-    spawn::{self, is_console_host, is_msys_shell},
+    runtime::Runtimes,
+    spawn::{self, is_console_host},
+    stop::{Ask, StopPlan},
     terminal::Terminal,
 };
 
@@ -44,8 +48,11 @@ const EXIT_POLL: Duration = Duration::from_millis(50);
 /// Ctrl-C as a key: a console with processed input (the default) turns it
 /// into `CTRL_C_EVENT` for every process attached to it.
 const CTRL_C: &[u8] = b"\x03";
-/// The answer to `cmd.exe`'s "Terminate batch job (Y/N)?".
-const TERMINATE_BATCH: &[u8] = b"Y\r";
+/// The answer to `cmd.exe`'s "Terminate batch job (Y/N)?". `N` lets the
+/// batch go on and return its program's code, as `cmd.exe` does in a pipe
+/// unit when it reads end of input at the prompt; `Y` would make it exit 255
+/// whatever the program returned.
+const TERMINATE_BATCH: &[u8] = b"N\r";
 /// How long an answer to that prompt may go unheeded before it is typed again.
 /// An answer typed while `cmd.exe` is still getting to the prompt can be lost,
 /// which on a busy machine left the stop waiting for its timeout.
@@ -61,11 +68,11 @@ const FREEZE_PASSES: usize = 5;
 /// Everything known about a finished unit. Shared by all waiters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExitReport {
-    /// The leader's exit code; `None` if it could not be read. Windows has no
-    /// signals, so `signal` is always `None`; a process ended by a console
-    /// event reports `STATUS_CONTROL_C_EXIT` (`0xC000013A`) as its code, and
-    /// so does a stopped batch shim in a pseudo console or MSYS shell, whose
-    /// own code only says that the event reached it.
+    /// The leader's exit, decoded as on Unix: signal 9 when the runner
+    /// terminated the job before the leader exited, signal 2 for a leader a
+    /// console event ended (`STATUS_CONTROL_C_EXIT`), signal `s` for an MSYS
+    /// leader that reports `s << 8`, otherwise the code. Both `None` when the
+    /// code could not be read.
     pub outcome: ExitOutcome,
     /// Present when an explicit stop ended the unit.
     pub stop: Option<StopOutcome>,
@@ -96,12 +103,14 @@ pub struct WindowsUnit {
 struct Inner {
     identity: ProcessIdentity,
     pty: bool,
-    /// The leader is Git's `sh.exe` standing in for `/bin/sh`.
-    through_shell: bool,
-    /// The leader is `cmd.exe` running a batch file.
-    batch: bool,
-    /// An MSYS shell was a live member when the stop's event went out.
-    shell_ran: AtomicBool,
+    /// What the leader is, which decides how its exit code reads.
+    leader_kind: Leader,
+    /// The runner terminated the job while the leader still ran.
+    terminated: AtomicBool,
+    /// `<System32>\cmd.exe`, whose batch prompt a stop answers.
+    system_cmd: PathBuf,
+    /// Which programs link the MSYS runtime, shared with the runner.
+    runtimes: Runtimes,
     job: Job,
     /// Held so the leader's PID stays its own until the unit is dropped.
     leader: Arc<Child>,
@@ -335,7 +344,9 @@ pub(crate) async fn spawn(
 ) -> Result<Arc<WindowsUnit>, Error> {
     let stderr = runner.stderr;
     let shell = runner.shell.clone();
-    let mut launched = blocking(move || spawn::launch(spec, stderr, shell.as_deref())).await??;
+    let runtimes = runner.runtimes.clone();
+    let mut launched =
+        blocking(move || spawn::launch(spec, stderr, shell.as_deref(), &runtimes)).await??;
     let (terminal, size) = match launched.terminal.take() {
         Some((terminal, size)) => (Some(terminal), size),
         None => (None, TerminalSize::default()),
@@ -375,9 +386,10 @@ pub(crate) async fn spawn(
     let inner = Arc::new(Inner {
         identity,
         pty,
-        through_shell: launched.through_shell,
-        batch: launched.batch,
-        shell_ran: AtomicBool::new(false),
+        leader_kind: launched.leader_kind,
+        terminated: AtomicBool::new(false),
+        system_cmd: launched.system_cmd,
+        runtimes: runner.runtimes.clone(),
         job: launched.job,
         leader,
         slot,
@@ -488,18 +500,17 @@ async fn supervise(
         signal: s.signal,
         escalated: s.escalated,
     });
-    let facts = StopFacts {
-        asked: inner.asked.load(Ordering::Acquire),
-        answered: lock(&inner.answered).is_some(),
-        batch: inner.batch,
-        pty: inner.pty,
-        shell_ran: inner.shell_ran.load(Ordering::Acquire),
-    };
+    let outcome = inner.outcome(code);
+    if code.is_some_and(|code| outcome.code != Some(code.cast_signed())) {
+        tracing::debug!(
+            pid = inner.identity.pid,
+            code,
+            ?outcome,
+            "leader exit decoded"
+        );
+    }
     inner.finish(ExitReport {
-        outcome: ExitOutcome {
-            code: stop_code(code, stop, facts),
-            signal: None,
-        },
+        outcome,
         stop,
         swept: sweep.swept,
         escaped: sweep.escaped,
@@ -508,59 +519,14 @@ async fn supervise(
 }
 
 /// The leader's exit code from the waiter thread, `None` when it was lost.
-fn exit_code(result: Result<io::Result<u32>, oneshot::error::RecvError>) -> Option<i32> {
+fn exit_code(result: Result<io::Result<u32>, oneshot::error::RecvError>) -> Option<u32> {
     match result {
-        Ok(Ok(code)) => Some(code.cast_signed()),
+        Ok(Ok(code)) => Some(code),
         Ok(Err(error)) => {
             tracing::warn!(%error, "waiting for a unit leader failed");
             None
         }
         Err(_) => None,
-    }
-}
-
-/// What a stop did, for [`stop_code`].
-#[derive(Debug, Clone, Copy, Default)]
-struct StopFacts {
-    /// The stop's console event or Ctrl-C key went out.
-    asked: bool,
-    /// `cmd.exe`'s "Terminate batch job (Y/N)?" was answered.
-    answered: bool,
-    /// The leader is `cmd.exe` running a batch file.
-    batch: bool,
-    /// The unit runs in a pseudo console.
-    pty: bool,
-    /// An MSYS shell was a live member when the event went out.
-    shell_ran: bool,
-}
-
-/// How MSYS reports a death by SIGINT to a Windows parent: `signal << 8`.
-const MSYS_SIGINT_EXIT: i32 = 2 << 8;
-
-/// The code to report for a leader that exited with `code` after `stop`:
-/// `STATUS_CONTROL_C_EXIT` when the code is only a reaction to the stop's
-/// event, otherwise `code`.
-///
-/// After a stop, a batch shim in a pseudo console exits 255 once its
-/// "Terminate batch job (Y/N)?" was answered, whatever the program it ran
-/// returned, and 512 is MSYS's report of a shell that SIGINT ended, which
-/// native wrappers such as just pass on. Neither drops anything the leader
-/// still had. A shim in a pipe unit reads end of input at the prompt and
-/// returns the program's code, so it is kept. Only a stop whose event went
-/// out and that did not escalate is mapped.
-fn stop_code(code: Option<i32>, stop: Option<StopOutcome>, facts: StopFacts) -> Option<i32> {
-    let Some(stop) = stop else {
-        return code;
-    };
-    if stop.escalated || stop.signal == StopSignal::Kill || !facts.asked {
-        return code;
-    }
-    let shim = facts.batch && facts.pty && facts.answered && code.is_some_and(|c| c != 0);
-    let shell = facts.shell_ran && code == Some(MSYS_SIGINT_EXIT);
-    if shim || shell {
-        Some(CONTROL_C_EXIT.cast_signed())
-    } else {
-        code
     }
 }
 
@@ -774,33 +740,18 @@ impl Inner {
     }
 
     /// Starts a stop: terminates the job for SIGKILL, otherwise asks politely
-    /// in the background so the supervisor keeps watching the deadline.
-    /// A pseudo console gets Ctrl-C as the key, which also reaches programs
-    /// that read the console raw, as a terminal's interrupt character would.
-    /// SIGTERM is Ctrl-C unless an MSYS shell runs in the unit, read from the
-    /// job once here. A frozen or throttled unit is put back at
-    /// `Power::Normal` first.
+    /// in the background so the supervisor keeps watching the deadline. The
+    /// background task puts a frozen or throttled unit back at
+    /// `Power::Normal`, reads the job once and asks as its [`StopPlan`]
+    /// says: the Ctrl-C key in a pseudo console, else one console event.
     fn begin_stop(self: &Arc<Self>, signal: StopSignal, deadline: Instant) {
         self.stopping.store(true, Ordering::Release);
-        let stop = signal.windows_stop(self.through_shell);
-        let check_shell = stop == WindowsStop::CtrlCUnlessShell;
-        let event = match stop {
-            WindowsStop::Terminate => {
-                self.terminate_job();
-                None
-            }
-            WindowsStop::CtrlC => Some(CtrlEvent::CtrlC),
-            WindowsStop::CtrlBreak => Some(CtrlEvent::CtrlBreak),
-            WindowsStop::CtrlCUnlessShell => None,
-        };
-        let deadline = deadline.into_std();
-        let holds_power = !self.holds_no_power();
-        if !holds_power && !check_shell {
-            if let Some(event) = event {
-                self.ask_to_stop(event, deadline);
-            }
+        if signal.windows_stop() == WindowsStop::Terminate {
+            self.terminate_job();
             return;
         }
+        let deadline = deadline.into_std();
+        let holds_power = !self.holds_no_power();
         let inner = Arc::clone(self);
         tokio::spawn(async move {
             // Suspended threads handle no console event, key or window
@@ -811,26 +762,38 @@ impl Inner {
                 let waking = Arc::clone(&inner);
                 let _ = blocking(move || waking.normal_for_stop()).await;
             }
-            let event = if check_shell {
-                let live = inner.live_members().await;
-                let shell = live.iter().any(|p| is_msys_shell(&p.name));
-                tracing::debug!(
-                    pid = inner.identity.pid,
-                    shell,
-                    "SIGTERM is Ctrl-Break when an MSYS shell runs, else Ctrl-C"
-                );
-                Some(if shell {
-                    CtrlEvent::CtrlBreak
-                } else {
-                    CtrlEvent::CtrlC
-                })
-            } else {
-                event
+            let planning = Arc::clone(&inner);
+            let plan = match blocking(move || planning.plan_stop(signal)).await {
+                Ok(Ok(plan)) => plan,
+                Ok(Err(error)) | Err(error) => {
+                    tracing::warn!(%error, pid = inner.identity.pid, "reading the unit's job failed");
+                    return;
+                }
             };
-            if let Some(event) = event {
-                inner.ask_to_stop(event, deadline);
-            }
+            let event = match plan.ask {
+                Ask::Terminate => {
+                    inner.terminate_job();
+                    return;
+                }
+                Ask::Key => {
+                    inner.write_input(Bytes::from_static(CTRL_C), true);
+                    None
+                }
+                Ask::Event(event) => Some(event),
+            };
+            let _ = blocking(move || inner.ask_to_close(plan.targets, event, deadline)).await;
         });
+    }
+
+    /// Reads the job once and plans the stop for `signal` from its members.
+    /// Blocking.
+    fn plan_stop(&self, signal: StopSignal) -> Result<StopPlan, Error> {
+        Ok(StopPlan::new(
+            signal,
+            self.pty,
+            self.job.processes()?,
+            &self.runtimes,
+        ))
     }
 
     /// Whether the unit holds no suspension or efficiency mode, without
@@ -843,20 +806,6 @@ impl Inner {
             Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().is_normal(),
             Err(TryLockError::WouldBlock) => false,
         }
-    }
-
-    /// Sends the graceful part of a stop: Ctrl-C as a key to a pseudo
-    /// console, or `event` and `WM_CLOSE` through a blocking task.
-    fn ask_to_stop(self: &Arc<Self>, event: CtrlEvent, deadline: std::time::Instant) {
-        let event = match event {
-            CtrlEvent::CtrlC if self.pty => {
-                self.write_input(Bytes::from_static(CTRL_C), true);
-                None
-            }
-            event => Some(event),
-        };
-        let inner = Arc::clone(self);
-        task::spawn_blocking(move || inner.ask_to_close(event, deadline));
     }
 
     /// Queues `bytes` for the pseudo console's input without waiting for the
@@ -883,21 +832,23 @@ impl Inner {
         self.pty
     }
 
-    /// Answers "Terminate batch job (Y/N)?" with `Y`: a `.cmd` shim
-    /// (`npm.cmd`) asks that on the console after Ctrl-C or Ctrl-Break once
-    /// what it ran has exited, and would otherwise hold the stop until its
-    /// timeout. This is expected cleanup, so it is not an escalation. Done
-    /// after the stop's event went out, when only `cmd.exe` processes are
-    /// left, and again every [`ANSWER_AGAIN`] while they still are. In a pipe
-    /// unit `cmd.exe` reads end of input from `NUL` there and goes on by itself.
+    /// Answers "Terminate batch job (Y/N)?" with `N`: the system's `cmd.exe`
+    /// asks that on the console after Ctrl-C or Ctrl-Break while it runs a
+    /// batch file (a `.cmd` shim such as `npm.cmd`), and would otherwise hold
+    /// the stop until its timeout. `N` lets the batch go on and return its
+    /// program's code. This is expected cleanup, so it is not an escalation.
+    /// Done after the stop's key or event went out, when every live member is
+    /// `<System32>\cmd.exe` by its image path, and again every
+    /// [`ANSWER_AGAIN`] while they still are. A wrong guess is harmless: `N`
+    /// reaches a `cmd.exe` that is about to exit or continues a batch. In a
+    /// pipe unit `cmd.exe` reads end of input from `NUL` there and goes on by
+    /// itself.
     async fn answer_batch_prompt(self: &Arc<Self>) {
         if !self.awaits_batch_answer() || !self.asked.load(Ordering::Acquire) {
             return;
         }
-        let live = self.live_members().await;
-        let shims_only =
-            !live.is_empty() && live.iter().all(|p| p.name.eq_ignore_ascii_case("cmd.exe"));
-        if !shims_only {
+        let inner = Arc::clone(self);
+        if !matches!(blocking(move || inner.only_system_cmd()).await, Ok(true)) {
             return;
         }
         let due = {
@@ -914,6 +865,28 @@ impl Inner {
         }
     }
 
+    /// Whether the job's live members, read now, are all the system's
+    /// `cmd.exe`, compared by the image path of the handle the refresh holds
+    /// for each, ignoring case. A member without a held handle, or a failed
+    /// read, makes it `false`. Blocking.
+    fn only_system_cmd(&self) -> bool {
+        let Ok(live) = self.refresh_blocking() else {
+            return false;
+        };
+        let held = lock(&self.held);
+        !live.is_empty()
+            && live.iter().all(|process| {
+                held.iter()
+                    .find(|(p, _)| p.pid == process.pid && p.start_time == process.start_time)
+                    .and_then(|(_, handle)| handle.image_path().ok())
+                    .is_some_and(|image| {
+                        image
+                            .as_os_str()
+                            .eq_ignore_ascii_case(self.system_cmd.as_os_str())
+                    })
+            })
+    }
+
     /// Closes the pseudo console, which ends its output, off the executor.
     async fn close_terminal(&self) {
         let terminal = lock(&self.terminal).take();
@@ -922,24 +895,16 @@ impl Inner {
         }
     }
 
-    /// Posts `WM_CLOSE` to the members' visible windows and sends `event`, if
-    /// any, once to the unit's console, through the leader while it runs, else
-    /// through another live member. Waits for the helper until `deadline`.
-    /// Blocking.
-    fn ask_to_close(&self, event: Option<CtrlEvent>, deadline: std::time::Instant) {
-        let live: Vec<ProcessEntry> = match self.job.processes() {
-            Ok(entries) => entries
-                .into_iter()
-                .filter(|entry| !entry.exited && !is_console_host(&entry.name))
-                .collect(),
-            Err(error) => {
-                tracing::warn!(%error, pid = self.identity.pid, "reading the unit's job failed");
-                return;
-            }
-        };
-        if live.iter().any(|p| is_msys_shell(&p.name)) {
-            self.shell_ran.store(true, Ordering::Release);
-        }
+    /// Posts `WM_CLOSE` to the visible windows of `live`, the stop plan's
+    /// targets, and sends `event`, if any, once to the unit's console, through
+    /// the leader while it runs, else through another of them. Waits for the
+    /// helper until `deadline`. Blocking.
+    fn ask_to_close(
+        &self,
+        live: Vec<ProcessEntry>,
+        event: Option<CtrlEvent>,
+        deadline: std::time::Instant,
+    ) {
         let targets: Vec<(u32, u64)> = live.iter().map(|p| (p.pid, p.start_time)).collect();
         match close_windows(&targets) {
             Ok(0) => {}
@@ -977,8 +942,14 @@ impl Inner {
         }
     }
 
-    /// Ends every process in the job, the console host included.
+    /// Ends every process in the job, the console host included. Records it
+    /// when the leader still ran, so its exit reads as SIGKILL; checked on
+    /// the leader's own handle, since the waiter thread reports an exit a
+    /// moment late.
     fn terminate_job(&self) {
+        if matches!(self.leader.exit_code(), Ok(None)) {
+            self.terminated.store(true, Ordering::Release);
+        }
         if let Err(error) = self.job.terminate(TERMINATED) {
             tracing::warn!(%error, pid = self.identity.pid, "terminating the unit's job failed");
         }
@@ -1026,12 +997,18 @@ impl Inner {
         sweep
     }
 
-    /// The leader's outcome without waiting: its code once it exited.
+    /// The leader's outcome without waiting, once it exited.
     fn leader_outcome(&self) -> ExitOutcome {
-        ExitOutcome {
-            code: self.leader.exit_code().ok().flatten().map(u32::cast_signed),
-            signal: None,
-        }
+        self.outcome(self.leader.exit_code().ok().flatten())
+    }
+
+    /// The outcome of a leader that exited with `code`; see [`exit::outcome`].
+    fn outcome(&self, code: Option<u32>) -> ExitOutcome {
+        exit::outcome(
+            code,
+            self.leader_kind,
+            self.terminated.load(Ordering::Acquire),
+        )
     }
 
     /// Publishes the report and closes the subscription source.
@@ -1136,10 +1113,11 @@ impl WindowsUnit {
     /// Stops the unit and returns its report, including escalation.
     ///
     /// SIGKILL terminates the job. Every other signal posts `WM_CLOSE` to the
-    /// unit's visible windows and sends one console event (see
-    /// [`StopSignal::windows_stop`]; SIGTERM is Ctrl-C unless an MSYS shell
-    /// runs in the unit) to its console; once only the console
-    /// host is left, or at `policy.timeout`, the job is terminated. A repeated
+    /// unit's visible windows and asks once, as the stop's [`StopPlan`] says:
+    /// SIGINT and SIGTERM type the Ctrl-C key into a pseudo console, and
+    /// without one send a Ctrl-C event, or Ctrl-Break while an MSYS program
+    /// runs in the unit; the other signals send Ctrl-Break. Once only the
+    /// console host is left, or at `policy.timeout`, the job is terminated. A repeated
     /// stop only shortens the timeout. Cancelling this future does not cancel
     /// the stop. Stopping an exited unit returns its existing report. If the
     /// supervisor task died, the job is terminated directly instead.
@@ -1181,10 +1159,7 @@ impl WindowsUnit {
             )));
         };
         let report = ExitReport {
-            outcome: ExitOutcome {
-                code: Some(code.cast_signed()),
-                signal: None,
-            },
+            outcome: self.inner.outcome(Some(code)),
             stop: Some(StopOutcome {
                 signal,
                 escalated: signal != StopSignal::Kill,
@@ -1315,96 +1290,5 @@ impl Unit for WindowsUnit {
     /// screen, not what the programs wrote; the reader marks each new size.
     fn renders_screen(&self) -> bool {
         self.inner.pty
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A shim's or MSYS shell's reaction to a stop reads as interrupted; any
-    /// code that could be the program's own, or that came without a clean
-    /// stop, is kept.
-    #[test]
-    fn stop_codes() {
-        const INTERRUPTED: Option<i32> = Some(CONTROL_C_EXIT.cast_signed());
-        let stop = |signal, escalated| Some(StopOutcome { signal, escalated });
-        let term = stop(StopSignal::Terminate, false);
-        let asked = StopFacts {
-            asked: true,
-            ..StopFacts::default()
-        };
-        let pipe_shim = StopFacts {
-            batch: true,
-            ..asked
-        };
-        let pty_shim = StopFacts {
-            pty: true,
-            ..pipe_shim
-        };
-        let answered = StopFacts {
-            answered: true,
-            ..pty_shim
-        };
-        let shell = StopFacts {
-            shell_ran: true,
-            ..asked
-        };
-        let cases = [
-            (
-                "pty shim after its prompt",
-                Some(255),
-                term,
-                answered,
-                INTERRUPTED,
-            ),
-            ("shell ended by SIGINT", Some(512), term, shell, INTERRUPTED),
-            (
-                "pipe shim passes its program's code",
-                Some(3),
-                term,
-                pipe_shim,
-                Some(3),
-            ),
-            ("no stop", Some(255), None, answered, Some(255)),
-            (
-                "escalated",
-                Some(1),
-                stop(StopSignal::Terminate, true),
-                answered,
-                Some(1),
-            ),
-            (
-                "SIGKILL",
-                Some(1),
-                stop(StopSignal::Kill, false),
-                answered,
-                Some(1),
-            ),
-            (
-                "event never sent",
-                Some(255),
-                term,
-                StopFacts {
-                    asked: false,
-                    ..answered
-                },
-                Some(255),
-            ),
-            ("shim exited 0", Some(0), term, answered, Some(0)),
-            (
-                "pty shim not prompted",
-                Some(255),
-                term,
-                pty_shim,
-                Some(255),
-            ),
-            ("not a batch file", Some(255), term, asked, Some(255)),
-            ("512 without a shell", Some(512), term, asked, Some(512)),
-            ("shell with its own code", Some(3), term, shell, Some(3)),
-        ];
-        for (case, code, stop, facts, expected) in cases {
-            assert_eq!(stop_code(code, stop, facts), expected, "{case}");
-        }
     }
 }
