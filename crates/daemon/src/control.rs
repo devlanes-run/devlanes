@@ -198,6 +198,7 @@ impl Inner {
                 selectors,
                 profiles: selection.profile_names(),
                 transient: selection.transient,
+                needs_profile_settings: selection.needs_profile_settings,
                 env: carries_env(context),
                 overrides: selection.env.clone(),
                 actor: context.actor.clone(),
@@ -350,6 +351,7 @@ impl Inner {
             selectors: selectors.clone(),
             profiles: selection.profile_names(),
             transient: false,
+            needs_profile_settings: false,
             env: carries_env(context),
             overrides: selection.env.clone(),
             actor: context.actor.clone(),
@@ -412,6 +414,7 @@ impl Inner {
                             selectors: Vec::new(),
                             profiles: Vec::new(),
                             transient: false,
+                            needs_profile_settings: false,
                             env: Some(env.clone()),
                             overrides: Some(EnvMap::new()),
                             actor: context.actor.clone(),
@@ -483,6 +486,7 @@ impl Inner {
                             selectors: planned.units,
                             profiles: planned.profiles,
                             transient: false,
+                            needs_profile_settings: false,
                             env,
                             overrides: Some(EnvMap::new()),
                             actor: context.actor.clone(),
@@ -930,7 +934,7 @@ impl Inner {
             return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
         }
         let (resolved, layers) = self
-            .resolve_lane_env(&project, &lane, Arc::default(), None)
+            .resolve_lane_env(&project, &lane, Arc::default())
             .await?;
         let mut left_out = layers.unset.clone();
         left_out.retain(|key, _| !args.env.contains_key(key));

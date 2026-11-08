@@ -1282,6 +1282,8 @@ impl Cli {
                     events: start_events,
                     // What `--keep` leaves running stays, like a plain start's.
                     transient: !args.keep,
+                    // The command runs under the profiles, with or without `--keep`.
+                    needs_profile_settings: true,
                     ..Selection::default()
                 })?;
                 return Ok(Action::With(crate::WithPlan {

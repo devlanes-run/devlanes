@@ -581,7 +581,8 @@ pub(crate) struct StartCx {
     /// `Selection::autostart_pending`: entries of `services` that resolution drops
     /// when their `autostart` expression evaluates to false.
     pub autostart_pending: Vec<String>,
-    /// Profiles in effect, in the order given.
+    /// Profiles of the selection, in the order given. Units are planned under the
+    /// lane's profiles, which a start that does not store these keeps.
     pub profiles: Vec<String>,
     /// False when the profiles turn infra off. Set from the selection before infra
     /// (literal values), then from [`ResolvedLane::infra_enabled`] once resolved.
@@ -622,7 +623,8 @@ pub(crate) struct StartCx {
     pub arrival: Option<devlanes_core::gate::Arrival>,
     /// Saved profiles and services the config no longer has, reported as warnings.
     pub dropped: Dropped,
-    /// The start names profiles other than the ones the lane had before it.
+    /// This start wrote new profiles to the lane: it named profiles other than
+    /// the ones the lane had, and stored them.
     pub profiles_changed: bool,
     /// Recompute drift once the start ends: it changed a running lane's profiles,
     /// which the units it left alone may not have.
@@ -960,13 +962,7 @@ impl LanePhase for ResolvePhase {
                 .collect()
         });
         match engine
-            .resolve_start(
-                &cx.project,
-                &cx.lane,
-                cx.config.clone(),
-                only.as_ref(),
-                &cx.profiles,
-            )
+            .resolve_config(&cx.project, &cx.lane, cx.config.clone(), only.as_ref())
             .await
         {
             Ok(resolved) => {
@@ -1667,15 +1663,13 @@ impl Dropped {
     }
 }
 
-/// `profile_not_applied`: a start changed a running lane's profiles, and `stale`
-/// units it left running differ from what those profiles plan, in these fields.
-/// `stored` says the start made them the lane's profiles; only then do `status`
-/// and `reload` see the difference.
+/// `profile_not_applied`: a start made new profiles the profiles of a running
+/// lane, and `stale` units it left running differ from what those profiles plan,
+/// in these fields. `status` and `reload` see the difference.
 fn profile_not_applied(
     lane: &str,
     profiles: &[String],
     stale: &[(String, Vec<String>)],
-    stored: bool,
 ) -> devlanes_proto::LaneWarning {
     let names: Vec<&str> = stale.iter().map(|(unit, _)| unit.as_str()).collect();
     let fields: Vec<String> = stale
@@ -1687,16 +1681,12 @@ fn profile_not_applied(
     } else {
         format!("profiles {}", profiles.join(", "))
     };
-    let mut message = format!(
-        "{} run with other settings than {profile} gives them ({})",
+    let message = format!(
+        "{} run with other settings than {profile} gives them ({}); devlanes status lists every \
+         unit devlanes reload --lane {lane} restarts",
         names.join(", "),
         fields.join("; "),
     );
-    if stored {
-        message.push_str(&format!(
-            "; devlanes status lists every unit devlanes reload --lane {lane} restarts"
-        ));
-    }
     devlanes_proto::LaneWarning {
         code: "profile_not_applied".into(),
         data: json!({
@@ -1709,6 +1699,52 @@ fn profile_not_applied(
             "message": message,
         }),
     }
+}
+
+/// The `profile_not_applied` error of a start that runs something under
+/// `profiles` (`devlanes with`) on a lane that is up, whose `lane_profiles` give
+/// units other settings, in `fields`. `run_start` returns it before anything on
+/// the lane changes.
+///
+/// `lane` is the reference from before `apply_move`, on purpose: the check runs
+/// before the lane's writes so a refusal changes nothing, and it fires only on a
+/// lane that runs something, which `apply_move` never renumbers, so that
+/// reference is the lane's. Do not switch it to the post-move reference or move
+/// the check below the writes.
+///
+/// A concurrent `start --profile` that changes the lane's profiles after this
+/// check wins: the start then plans its units, and `with` its command, under
+/// those profiles. One check, so there is no second comparison in the resolve
+/// phase.
+fn profile_settings_differ(
+    lane: &str,
+    profiles: &[String],
+    lane_profiles: &[String],
+    fields: &[String],
+) -> RpcError {
+    let named = |names: &[String]| match names {
+        [] => "no profile".to_owned(),
+        [one] => format!("profile {one}"),
+        many => format!("profiles {}", many.join(", ")),
+    };
+    let message = format!(
+        "{lane} runs {}, whose settings differ from {} ({}); stop the lane first, run devlanes \
+         with in another worktree, or name the services",
+        named(lane_profiles),
+        named(profiles),
+        fields.join(", "),
+    );
+    RpcError::new(
+        "profile_not_applied",
+        json!({
+            "lane": lane,
+            "profiles": profiles,
+            "lane_profiles": lane_profiles,
+            "fields": fields,
+            "message": message,
+        }),
+        1,
+    )
 }
 
 /// Splits saved service or unit names into the services the config still declares,
@@ -1744,12 +1780,16 @@ fn start_selection(
     whole_lane: bool,
 ) -> Result<(devlanes_resolve::Selection, Dropped), devlanes_resolve::ResolveError> {
     let mut dropped = Dropped::default();
-    // The saved record, not the profiles in effect: a transient start changes
-    // those but must not be what the next plain start picks up.
-    let mut requested = if options.profiles.is_empty() {
+    // A bring-up reads the saved record, not the profiles in effect: a transient
+    // start changes those but must not be what the next plain start picks up. A
+    // start that adds units to a lane that is up plans them under the profiles in
+    // effect, so every unit of the lane has the lane's settings.
+    let mut requested = if !options.profiles.is_empty() {
+        options.profiles.clone()
+    } else if whole_lane {
         saved.map_or_else(|| lane_profiles.to_vec(), |r| r.profiles.clone())
     } else {
-        options.profiles.clone()
+        lane_profiles.to_vec()
     };
     if options.profiles.is_empty() || options.restoring {
         let (known, gone): (Vec<String>, Vec<String>) = requested.into_iter().partition(|name| {
@@ -2072,6 +2112,9 @@ pub(crate) struct StartOptions {
     /// Leaves the lane's saved profiles, services and desired state alone
     /// (`devlanes with`).
     pub transient: bool,
+    /// Refuse on a lane that is up whose profiles give units other settings
+    /// than `profiles` (`Selection::needs_profile_settings`).
+    pub needs_profile_settings: bool,
     pub env: Option<Arc<EnvMap>>,
     /// `--env` values; `Some` (also empty) replaces the ones the lane keeps from
     /// earlier requests, `None` keeps them.
@@ -3316,6 +3359,37 @@ impl Inner {
                 )));
             }
         }
+        // Selected before anything on the lane changes, so a start the profile
+        // check refuses leaves the lane as it was. `apply_move` and the refresh
+        // below change neither the config nor the record this reads. Selection
+        // errors name the pre-move reference too, so a typo on an idle lane that
+        // `apply_move` then renumbers names its old index.
+        let config = lane.st().config.require(&initial).map_err(fail)?;
+        let (saved, lane_profiles) = {
+            let st = lane.st();
+            (st.record.clone(), st.profiles.clone())
+        };
+        let (selection, dropped) = start_selection(
+            &config,
+            saved.as_ref(),
+            &lane_profiles,
+            &options,
+            whole_lane,
+        )
+        .map_err(|error| fail(crate::resolve::resolve_error(&error, &initial)))?;
+        if options.needs_profile_settings && !whole_lane && !options.profiles.is_empty() {
+            let fields = selection
+                .settings
+                .differences(&devlanes_resolve::profile_settings(&config, &lane_profiles));
+            if !fields.is_empty() {
+                return Err(fail(profile_settings_differ(
+                    &initial,
+                    &selection.profiles,
+                    &lane_profiles,
+                    &fields,
+                )));
+            }
+        }
         {
             let mut st = lane.st();
             if let Some(env) = options.env.clone() {
@@ -3346,33 +3420,22 @@ impl Inner {
         }
         let reference = lane.st().reference(&project.name());
         let fail = |error: RpcError| with_ownership(error, &reference, &slot.ctl);
-        let config = lane.st().config.require(&reference).map_err(fail)?;
         let (relative, _) = project.config_path();
         let config_dir = lane.st().path.join(relative);
         check_compose_files(&config, config_dir)
             .instrument(tracing::debug_span!("compose files"))
             .await
             .map_err(fail)?;
-        let (saved, lane_profiles) = {
-            let st = lane.st();
-            (st.record.clone(), st.profiles.clone())
-        };
-        let (selection, dropped) = start_selection(
-            &config,
-            saved.as_ref(),
-            &lane_profiles,
-            &options,
-            whole_lane,
-        )
-        .map_err(|error| fail(crate::resolve::resolve_error(&error, &reference)))?;
-        let profiles_changed = !options.profiles.is_empty() && selection.profiles != lane_profiles;
         // Kept only once valid, so a typo does not stick to the lane. A transient
-        // start that only adds units (`with`) plans with its profiles without making
-        // them the lane's: restoring them afterwards would race a concurrent
-        // `start --profile`.
-        if !options.transient || whole_lane {
+        // start that only adds units (`with`) leaves the lane's profiles alone:
+        // restoring them afterwards would race a concurrent `start --profile`.
+        let stores_profiles = !options.transient || whole_lane;
+        if stores_profiles {
             lane.st().profiles = selection.profiles.clone();
         }
+        // This start wrote new profiles to the lane.
+        let profiles_changed =
+            stores_profiles && !options.profiles.is_empty() && selection.profiles != lane_profiles;
         // From here the lane counts as running for box lanes that clash with
         // it, whatever it starts, so it takes their hostnames and ports and a
         // choice of a box for them is cleared. Not before: a start its checks
@@ -3381,20 +3444,14 @@ impl Inner {
             .claim_ports(lane)
             .instrument(tracing::debug_span!("claim ports"))
             .await;
-        let infra_enabled = !matches!(
-            selection
-                .profile_options
-                .as_ref()
-                .and_then(|o| o.infra.as_ref()),
-            Some(Templated::Literal(false))
-        );
-        let infra_templated = selection.profiles.iter().any(|name| {
-            matches!(
-                config.profiles.get(name),
-                Some(devlanes_config::ProfileConfig::Object(options))
-                    if matches!(options.infra, Some(Templated::Expression(_)))
-            )
-        });
+        let infra = &selection.settings.infra;
+        let infra_enabled = infra.is_empty()
+            || !infra
+                .iter()
+                .all(|value| matches!(value, Templated::Literal(false)));
+        let infra_templated = infra
+            .iter()
+            .any(|value| matches!(value, Templated::Expression(_)));
         {
             let mut st = lane.st();
             st.last_error = None;
@@ -3443,7 +3500,7 @@ impl Inner {
             arrival: options.arrival,
             dropped,
             profiles_changed,
-            recheck_drift: profiles_changed && !whole_lane && !options.transient,
+            recheck_drift: profiles_changed && !whole_lane,
             profile_stale: Vec::new(),
         };
         tracing::debug!(
@@ -3626,7 +3683,6 @@ impl Inner {
                 &cx.reference,
                 &cx.profiles,
                 &cx.profile_stale,
-                cx.recheck_drift,
             ));
         }
         for warning in &warnings {
@@ -4621,6 +4677,7 @@ impl Inner {
                 selectors: Vec::new(),
                 profiles: Vec::new(),
                 transient: false,
+                needs_profile_settings: false,
                 env,
                 overrides: Some(EnvMap::new()),
                 actor: Actor::default(),
@@ -4960,7 +5017,7 @@ impl Inner {
         if let Ok(read) = self.read_infra(spec).await {
             store_read(&cx.lane, read);
         }
-        self.resolve_start(&cx.project, &cx.lane, cx.config.clone(), None, &cx.profiles)
+        self.resolve_config(&cx.project, &cx.lane, cx.config.clone(), None)
             .await
             .ok()
             .is_none_or(|resolved| resolved.infra_enabled)
@@ -5170,6 +5227,7 @@ mod tests {
             selectors: vec!["web.1".into(), "web.2".into(), "gone".into()],
             profiles: vec!["front".into(), "old".into()],
             transient: false,
+            needs_profile_settings: false,
             env: None,
             overrides: None,
             actor: Actor::default(),

@@ -6,9 +6,8 @@ use std::{
 };
 
 use devlanes_config::{
-    Env, ExpressionContext, Extensions, InfraCommand, PreparedContext, ProfileConfig,
-    ProfileOptions, ReadyConfig, Run, Scalar, ServiceConfig, StopConfig, SyncConfig, TaskAfter,
-    TaskConfig, TcpReady, Templated,
+    Env, ExpressionContext, Extensions, InfraCommand, PreparedContext, ProfileConfig, ReadyConfig,
+    Run, Scalar, ServiceConfig, StopConfig, SyncConfig, TaskAfter, TaskConfig, TcpReady, Templated,
 };
 use devlanes_core::{
     StopPolicy, StopSignal,
@@ -27,7 +26,7 @@ use crate::{
     DEFAULT_READY_TIMEOUT, LaneLayers, Launch, Ready, ReadySpec, ResolveError, ResolveInput,
     ResolvedCommand, ResolvedLane, ResolvedService, ResolvedTask, ServiceLayout, SyncSpec,
     layout::{self, Namespaces, env_namespace, replica_value},
-    select::{active_profiles, merge_options},
+    select::{ProfileSettings, active_profiles, profile_settings},
     util::shell_quote,
 };
 
@@ -77,7 +76,7 @@ async fn plan_lane<E: Extensions>(
     let profiles = active_profiles(config, &requested)?;
     // Only the merged `run_scripts` is used from this; env layers stay per profile
     // so error paths name the profile that failed.
-    let remap = merge_options(config, &profiles);
+    let settings = profile_settings(config, &profiles);
     let base_env = env_namespace(input.client_env, input.dotenv);
     let (layout, ns) = {
         let _span = tracing::debug_span!("layout").entered();
@@ -138,7 +137,7 @@ async fn plan_lane<E: Extensions>(
         ns: &ns,
         env: base_env,
         global,
-        remap: remap.as_ref(),
+        settings: &settings,
         profile_envs,
         contributors,
         memo: ContribMemo::default(),
@@ -246,8 +245,8 @@ struct Planner<'p, 'a, E: Extensions> {
     env: Value,
     /// `global_env` in declaration order, from [`shared_globals`].
     global: Vec<Option<Result<String, ResolveError>>>,
-    /// Merged profile options; only `run_scripts` is read.
-    remap: Option<&'p ProfileOptions>,
+    /// Merged profile settings; only `run_scripts` is read.
+    settings: &'p ProfileSettings,
     /// Each profile's `env` with its config path, in the order given.
     profile_envs: Vec<(String, &'a Env)>,
     contributors: Vec<Arc<dyn Contributor>>,
@@ -334,9 +333,12 @@ impl<E: Extensions> Planner<'_, '_, E> {
         let script = match &service.run_script {
             Some(script) => {
                 let (source, name) = script
-                    .file_and_name_for_profile(self.remap)
+                    .file_and_name()
                     .map_err(|e| ResolveError::expression(format!("{path}.run_script"), e))?;
-                Some((source.to_owned(), name.to_owned()))
+                Some((
+                    source.to_owned(),
+                    self.settings.remap_script(name).to_owned(),
+                ))
             }
             None => None,
         };

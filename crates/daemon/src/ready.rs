@@ -3,7 +3,6 @@
 
 use std::{
     collections::BTreeMap,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::atomic::{AtomicU16, Ordering},
     time::Duration,
 };
@@ -528,19 +527,11 @@ where
     }
 }
 
-/// 127.0.0.1 first, then ::1, because some dev servers bind only one family.
+/// Reaches the port the way the proxy does, since some dev servers bind only one family.
 async fn connect(port: u16) -> Option<TcpStream> {
-    for address in [
-        SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
-        SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
-    ] {
-        if let Ok(Ok(stream)) =
-            timeout(Duration::from_millis(500), TcpStream::connect(address)).await
-        {
-            return Some(stream);
-        }
-    }
-    None
+    devlanes_loopback::connect_loopback(port, Duration::from_millis(500))
+        .await
+        .ok()
 }
 
 /// The port accepts a connection.
@@ -693,6 +684,8 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
 
     #[tokio::test]

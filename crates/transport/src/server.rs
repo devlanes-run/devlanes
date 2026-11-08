@@ -9,7 +9,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
-use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout};
@@ -40,17 +39,14 @@ pub struct LoopbackDialer;
 #[async_trait]
 impl Dialer for LoopbackDialer {
     async fn dial(&self, target: &AuthorizedTarget) -> io::Result<BoxDuplex> {
+        // The session bounds the whole dial by `ServeOptions::dial_timeout`.
+        let unbounded = Duration::MAX;
         let port = target.port();
-        if let Some(address) = target.address() {
-            return Ok(Box::new(TcpStream::connect((address, port)).await?));
-        }
-        match TcpStream::connect(("127.0.0.1", port)).await {
-            Ok(stream) => Ok(Box::new(stream)),
-            Err(v4) => match TcpStream::connect(("::1", port)).await {
-                Ok(stream) => Ok(Box::new(stream)),
-                Err(_) => Err(v4),
-            },
-        }
+        let stream = match target.address() {
+            Some(address) => devlanes_loopback::connect((address, port).into(), unbounded).await?,
+            None => devlanes_loopback::connect_loopback(port, unbounded).await?,
+        };
+        Ok(Box::new(stream))
     }
 }
 

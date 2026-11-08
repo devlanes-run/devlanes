@@ -78,9 +78,6 @@ struct EnvParams {
     explain: bool,
     #[serde(default)]
     lane_env: bool,
-    /// The lane env under these profiles instead of the lane's (`with`).
-    #[serde(default)]
-    profiles: Vec<String>,
 }
 
 /// `subscribe` parameters.
@@ -984,7 +981,6 @@ impl Inner {
                     &project,
                     &lane,
                     crate::engine::carries_env(context).unwrap_or_default(),
-                    (!args.profiles.is_empty()).then_some(args.profiles.as_slice()),
                 )
                 .await?;
             let env = devlanes_core::env::assemble([

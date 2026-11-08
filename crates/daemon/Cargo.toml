@@ -16,6 +16,7 @@ devlanes-proto = { path = "../proto" }
 devlanes-ipc = { path = "../ipc" }
 devlanes-core = { path = "../core" }
 devlanes-logs = { path = "../logs" }
+devlanes-loopback = { path = "../loopback" }
 devlanes-config = { path = "../config" }
 devlanes-git = { path = "../git" }
 devlanes-metrics = { path = "../metrics" }
