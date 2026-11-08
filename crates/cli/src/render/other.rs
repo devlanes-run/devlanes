@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use devlanes_core::redact::Redactor;
 use devlanes_proto::{Event, LogLine, Method, RpcError, events};
 use serde_json::{Value, json};
 
@@ -319,6 +320,38 @@ pub(super) fn tasks(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 /// Escapes line breaks so one variable stays on one line.
 fn one_line(value: &str) -> String {
     clean(&value.replace('\r', "\\r").replace('\n', "\\n"))
+}
+
+/// `data`, an `env` result in either shape (`env` map or `--explain` items),
+/// with each value as [`Redactor::screen`] of the same variables shows it.
+pub(crate) fn hide_env_values(data: &Value) -> Value {
+    let mut data = data.clone();
+    if let Some(env) = data.get_mut("env").and_then(Value::as_object_mut) {
+        let redactor = Redactor::screen(
+            env.iter()
+                .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned()))),
+        );
+        for (key, value) in env.iter_mut() {
+            if let Some(text) = value.as_str() {
+                *value = redactor.value(key, text).into();
+            }
+        }
+    }
+    if let Some(items) = data.get_mut("items").and_then(Value::as_array_mut) {
+        let pair = |item: &Value| {
+            Some((
+                item.get("key")?.as_str()?.to_owned(),
+                item.get("value")?.as_str()?.to_owned(),
+            ))
+        };
+        let redactor = Redactor::screen(items.iter().filter_map(pair));
+        for item in items.iter_mut() {
+            if let Some((key, value)) = pair(item) {
+                item["value"] = redactor.value(&key, &value).into();
+            }
+        }
+    }
+    data
 }
 
 /// `env`: `KEY=VALUE` lines, or with `--explain` a `KEY VALUE LAYER` table.

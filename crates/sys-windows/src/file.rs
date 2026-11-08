@@ -1,5 +1,5 @@
 //! File identity, renames and removals that ride out brief sharing
-//! violations, and the System32 directory.
+//! violations, short (8.3) path spellings and the System32 directory.
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -15,7 +15,7 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
     FILE_ID_INFO, FILE_READ_ATTRIBUTES, FileIdInfo, GetFileInformationByHandle,
-    GetFileInformationByHandleEx,
+    GetFileInformationByHandleEx, GetShortPathNameW,
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 
@@ -164,6 +164,31 @@ pub fn system_directory() -> io::Result<PathBuf> {
             .map_err(|_| io::Error::other("system directory path too long"))?;
         // SAFETY: `buffer` holds `capacity` writable UTF-16 units.
         let len = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), capacity) };
+        if len == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // A result larger than the buffer is the size needed, NUL included.
+        if len >= capacity {
+            buffer.resize(len as usize, 0);
+            continue;
+        }
+        buffer.truncate(len as usize);
+        return Ok(PathBuf::from(OsString::from_wide(&buffer)));
+    }
+}
+
+/// The 8.3 short spelling of the existing `path` (`C:\Users\JOHNSM~1`), as
+/// `GetShortPathNameW` gives it. It equals `path` where every component is
+/// already short or the volume keeps no short names.
+pub fn short_path(path: &Path) -> io::Result<PathBuf> {
+    let wide = crate::util::wide(path.as_os_str())?;
+    let mut buffer = vec![0_u16; 260];
+    loop {
+        let capacity =
+            u32::try_from(buffer.len()).map_err(|_| io::Error::other("short path too long"))?;
+        // SAFETY: `wide` is NUL-terminated and outlives the call; `buffer`
+        // holds `capacity` writable UTF-16 units.
+        let len = unsafe { GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), capacity) };
         if len == 0 {
             return Err(io::Error::last_os_error());
         }

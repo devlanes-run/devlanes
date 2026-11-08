@@ -979,22 +979,11 @@ impl Inner {
                     (!args.profiles.is_empty()).then_some(args.profiles.as_slice()),
                 )
                 .await?;
-            let mut env = devlanes_core::env::assemble([
+            let env = devlanes_core::env::assemble([
                 (EnvLayer::Devlanes, resolved.lane_env().clone()),
                 (EnvLayer::Global, layers.global),
                 (EnvLayer::Profile, layers.profile),
             ]);
-            // `--explain` output ends up in transcripts and bug reports; the plain
-            // listing keeps real values for `eval` and subshells.
-            if args.explain {
-                let secrets = devlanes_core::env::secret_values(
-                    env.values.iter(),
-                    devlanes_core::env::SecretValues::Credentials,
-                );
-                for (key, value) in env.values.iter_mut() {
-                    *value = devlanes_core::env::redact_value(key, value, &secrets);
-                }
-            }
             let reference = lane.st().reference(&project.name());
             let mut result = json!({"lane": reference, "env": env.values});
             if !layers.unset.is_empty() {
@@ -1060,16 +1049,11 @@ impl Inner {
             }
         };
         let mut result = if args.explain {
-            let secrets = devlanes_core::env::secret_values(
-                env.values.iter(),
-                devlanes_core::env::SecretValues::Credentials,
-            );
             let items: Vec<Value> = env
                 .values
                 .iter()
                 .map(|(key, value)| {
                     let layer = env.sources.get(key).copied().unwrap_or(EnvLayer::Client);
-                    let value = devlanes_core::env::redact_value(key, value, &secrets);
                     json!({"key": key, "value": value, "layer": layer_word(layer)})
                 })
                 .collect();

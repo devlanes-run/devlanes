@@ -1642,13 +1642,6 @@ async fn lane_env_and_explain() {
             .expect("env");
         assert_eq!(env["env"]["GREETING"], "hi");
         assert_eq!(env["env"]["ACME_SECRET"], "tok-4711-very-secret");
-        // The lane's own env hides secrets too when explained.
-        let lane_explained = h
-            .call(Method::Env, json!({"explain": true}), cx(&main))
-            .await
-            .expect("lane explain");
-        assert_eq!(lane_explained["env"]["GREETING"], "hi");
-        assert_eq!(lane_explained["env"]["ACME_SECRET"], "[redacted]");
         assert_eq!(env["env"]["DEVLANES_LANE"], "0");
         assert_eq!(env["env"]["DEVLANES_LANE_PROJECT"], "demo");
         assert_eq!(
@@ -1660,25 +1653,15 @@ async fn lane_env_and_explain() {
                 .as_str()
                 .is_some_and(|u| u.starts_with("http://127.0.0.1:"))
         );
-        let mut shell = cx(&main);
-        let env = shell.env.as_mut().expect("env");
-        env.insert("ACME_API_TOKEN".into(), "tok-4711-very-secret".into());
-        env.insert("ALIAS".into(), "tok-4711-very-secret".into());
         let explained = h
-            .call(Method::Env, json!({"unit": "web", "explain": true}), shell)
+            .call(
+                Method::Env,
+                json!({"unit": "web", "explain": true}),
+                cx(&main),
+            )
             .await
             .expect("explain");
         let items = explained["items"].as_array().expect("items");
-        let value = |key: &str| {
-            items
-                .iter()
-                .find(|i| i["key"] == key)
-                .map(|i| i["value"].clone())
-        };
-        // Secret-looking values are hidden, under their own name or a copy.
-        assert_eq!(value("ACME_API_TOKEN"), Some(json!("[redacted]")));
-        assert_eq!(value("ALIAS"), Some(json!("[redacted]")));
-        assert!(!explained.to_string().contains("tok-4711-very-secret"));
         let port = items.iter().find(|i| i["key"] == "PORT").expect("PORT");
         assert_eq!(port["layer"], "devlanes");
         assert!(
