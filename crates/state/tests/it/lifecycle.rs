@@ -73,7 +73,7 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
 /// `exited`, another code `failed`, none `stopped`; a run still going has none.
 async fn migration_names_how_earlier_task_runs_ended() {
     use devlanes_core::LaneId;
-    use diesel::{migration::MigrationSource, prelude::*};
+    use diesel::{connection::SimpleConnection, migration::MigrationSource, prelude::*};
     use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
     const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
     let dir = tempfile::tempdir().expect("directory");
@@ -89,8 +89,10 @@ async fn migration_names_how_earlier_task_runs_ended() {
         ("killed", Some(5), None),
         ("going", None, None),
     ];
+    // The rows need no lane: only the migration reads them.
+    c.batch_execute("PRAGMA foreign_keys = OFF")
+        .expect("connection settings");
     for (task, ended_at, exit_code) in runs {
-        // Foreign keys are off on this connection, so no lane row is needed.
         diesel::insert_into(schema::task_runs::table)
             .values((
                 schema::task_runs::lane_id.eq(1_i64),
