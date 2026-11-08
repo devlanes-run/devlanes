@@ -55,7 +55,7 @@ async fn start_cerbos() -> Result<(), Error> {
 - `DockerInfra`: `ensure`, `health`, `wait_healthy`, `list_managed`, `compose_containers`, `started_at`, `stop`, `remove_lane`, `events`, `project_events`, `logs`.
 - `DockerConnector`: makes the client on the first call that can and keeps it, so an engine started after the caller is found by a later call.
 - `Error::is_engine_stopped`: whether an error means no engine runs at the endpoint (socket or pipe absent, connection refused).
-- `DockerInfra::watch`: events of every container on the engine, subscribed again after the engine restarts, with a `WatchEvent::Ended` item when a subscription ends and a `WatchEvent::Reconnected` item to say events may have been missed.
+- `DockerInfra::watch`: events of every container on the engine, subscribed again after the engine restarts, with a `WatchEvent::Ended` item when a subscription ends and a `WatchEvent::Reconnected` item after every resubscription, since events may have been missed.
 - `DockerInfra::pause_lane` / `unpause_lane`: pause or unpause a frozen lane's own containers and return how many changed; shared containers are never touched.
 - `LogOptions` / `LogChunk`: a container's stdout and stderr as a stream of chunks, with optional tail, follow, since and timestamps.
 - `ContainerSpec`: an evaluated `infra.containers` entry with host ports already taken from the block.
