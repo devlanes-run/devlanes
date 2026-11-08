@@ -1124,6 +1124,40 @@ fn lane_lines(app: &App, lane: &LaneSummary, width: usize) -> Vec<Line<'static>>
             theme.quiet(),
         ));
         lines.push(Line::from(""));
+    } else if let Some(reason) = lane
+        .reason
+        .as_ref()
+        .filter(|r| r.code == "unresolved_value")
+    {
+        // The file loads; one of its values has nothing to read in this lane.
+        let data = &reason.data;
+        let text = |key: &str| data.get(key).and_then(serde_json::Value::as_str).map(clean);
+        lines.extend(sentence(
+            &format!(
+                "{} has no value in this lane",
+                text("path").unwrap_or_default()
+            ),
+            width,
+            Vec::new(),
+            plain,
+        ));
+        lines.push(Line::from(""));
+        let message = text("message").unwrap_or_else(|| words::rpc(reason).summary);
+        lines.extend(field(
+            theme,
+            "error",
+            &message,
+            width,
+            theme.tone(Tone::Attention),
+        ));
+        lines.extend(field(
+            theme,
+            "next",
+            "set it in the shell or .env, then s starts the lane",
+            width,
+            plain,
+        ));
+        lines.push(Line::from(""));
     } else if let Some(reason) = lane.reason.as_ref().filter(|_| !missing) {
         let worded = words::rpc(reason);
         // The daemon keeps a failed start as the lane's reason; show it once.

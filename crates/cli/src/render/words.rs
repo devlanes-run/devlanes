@@ -161,6 +161,18 @@ fn config_invalid(data: &Value) -> String {
     }
 }
 
+/// `global_env.API_KEY has no value in lane acme@2: ...`: a value of a file that
+/// loads did not evaluate, such as `${{ env.X }}` the shell does not set. The
+/// file is valid, so there is no `config check` hint.
+fn unresolved_value(data: &Value) -> String {
+    format!(
+        "{} has no value in {}: {}",
+        field(data, "path"),
+        or_this_lane(&text(data, "lane")),
+        text(data, "message")
+    )
+}
+
 /// What woke or last kept a lane awake (`LanePower.last_activity`,
 /// `lane.thawed.activity`) as words: `a request`, `a stop`.
 pub(crate) fn activity(word: &str) -> String {
@@ -465,17 +477,8 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             config_invalid(data),
             Some(Hint::command(["config", "check"])),
         ),
-        // A lane-level value of a file that loads did not evaluate (`exec`, `env
-        // show`), such as `${{ env.X }}` the shell does not set: not an invalid file.
-        "lane_env_unresolved" => (
-            format!(
-                "{} has no value in {}: {}",
-                field(data, "path"),
-                or_this_lane(&text(data, "lane")),
-                text(data, "message")
-            ),
-            None,
-        ),
+        // 0.12.0 daemons send `lane_env_unresolved` for the lane env.
+        "unresolved_value" | "lane_env_unresolved" => (unresolved_value(data), None),
         // `config get|set|unset` with a key the user config does not have.
         "unknown_setting" => (
             text(data, "message"),
@@ -1943,6 +1946,7 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
             config_invalid(data),
             Some(Hint::command(["config", "check"])),
         ),
+        "unresolved_value" => (unresolved_value(data), None),
         "port_in_use" => (
             match data.get("pid").filter(|pid| !pid.is_null()) {
                 Some(pid) => format!(

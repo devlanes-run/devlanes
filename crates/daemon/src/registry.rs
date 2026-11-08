@@ -1597,6 +1597,7 @@ impl Inner {
         infra: &[InfraPortNeed],
         access: LaneAccess,
     ) -> Result<devlanes_state::Allocation, RpcError> {
+        let reference = lane.st().reference(&project.name());
         let (config, record, facts_env) = {
             let st = lane.st();
             let config = st
@@ -1611,7 +1612,7 @@ impl Inner {
             (config, record, st.env.clone())
         };
         let needs = devlanes_resolve::port_needs(&config, &self.integ.contributors)
-            .map_err(|error| crate::resolve::resolve_error(&error))?;
+            .map_err(|error| crate::resolve::resolve_error(&error, &reference))?;
         let mut names = needs.names.clone();
         for need in infra.iter().filter(|n| n.scope == PortScope::Lane) {
             names.insert(PortName::new(need.unit.clone(), need.name.clone()));
@@ -1623,7 +1624,7 @@ impl Inner {
         let client_env = facts_env.map(|env| (*env).clone()).unwrap_or_default();
         let fixed_start =
             devlanes_resolve::fixed_block_start(&config, &facts, &client_env, &dotenv)
-                .map_err(|error| crate::resolve::resolve_error(&error))?;
+                .map_err(|error| crate::resolve::resolve_error(&error, &reference))?;
         let fixed_size = literal(&config.lanes.block_size);
         // Running units keep the block they were spawned with (plan 5.8): a
         // config that needs another block waits for the next whole-lane start.
@@ -2073,7 +2074,9 @@ impl Inner {
         for lane in lanes {
             let index = lane.st().index();
             if index.is_none() {
-                lane.st().view = None;
+                let mut st = lane.st();
+                st.view = None;
+                st.view_error = None;
                 continue;
             }
             let owned = held.is_some_and(|held| Arc::ptr_eq(held, &lane));
@@ -2117,23 +2120,16 @@ impl Inner {
                     }
                     let mut st = lane.st();
                     st.view = Some(Arc::new(view));
-                    if st
-                        .last_error
-                        .as_ref()
-                        .is_some_and(|e| e.code == "config_error")
-                    {
-                        st.last_error = None;
-                    }
+                    st.view_error = None;
                 }
                 Err(error) => {
                     let mut st = lane.st();
                     st.view = None;
-                    if !matches!(
+                    st.view_error = (!matches!(
                         st.config,
                         ConfigState::Missing | ConfigState::Invalid(_) | ConfigState::Elsewhere(_)
-                    ) {
-                        st.last_error = Some(error);
-                    }
+                    ))
+                    .then_some(error);
                 }
             }
         }
@@ -2197,14 +2193,15 @@ impl Inner {
         let dotenv = read_dotenv(lane_dir, primary_dir).await;
         let client_env = env.map(|env| (*env).clone()).unwrap_or_default();
         let infra = infra_ns.unwrap_or(Value::Null);
+        let reference = lane.st().reference(&project.name());
         let view = self.view_of(
+            &reference,
             &config,
             &facts,
             (allocation.block, &allocation.offsets),
             (&client_env, &dotenv, &infra),
             lanes_main,
         )?;
-        let reference = lane.st().reference(&project.name());
         let own = crate::external::lane_ports(
             &reference,
             view.services
@@ -2218,10 +2215,11 @@ impl Inner {
         Ok(view)
     }
 
-    /// Layout of a lane with `facts`, its port block and offsets, and its client
-    /// env, `.env` and infra endpoints. Stores and reserves nothing.
+    /// Layout of lane `reference` with `facts`, its port block and offsets, and
+    /// its client env, `.env` and infra endpoints. Stores and reserves nothing.
     pub(crate) fn view_of(
         &self,
+        reference: &str,
         config: &ProjectConfig,
         facts: &LaneFacts,
         (block, offsets): (devlanes_core::ports::PortBlock, &BTreeMap<PortName, u16>),
@@ -2239,7 +2237,7 @@ impl Inner {
         let https_port = self.integ.routes.https_port();
         input.public_https_port = https_port;
         let layout = devlanes_resolve::lane_layout(&input)
-            .map_err(|error| crate::resolve::resolve_error(&error))?;
+            .map_err(|error| crate::resolve::resolve_error(&error, reference))?;
         let services = layout
             .services
             .values()

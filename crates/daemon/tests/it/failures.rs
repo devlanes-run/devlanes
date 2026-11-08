@@ -353,7 +353,11 @@ async fn unresolved_service_is_failed_unless_running() {
         let _ = h.call(Method::Start, json!({}), cx(&main)).await;
         let bad = unit_summary(&h, &main, "bad").await.expect("bad");
         assert_eq!(bad.state, "failed");
-        assert_eq!(bad.reason.expect("reason").code, "config_error");
+        let reason = bad.reason.expect("reason");
+        assert_eq!(
+            (reason.code.as_str(), &reason.data["lane"]),
+            ("unresolved_value", &json!("acme@0"))
+        );
         let logs = h
             .call(
                 Method::Logs,
@@ -375,7 +379,7 @@ async fn unresolved_service_is_failed_unless_running() {
 
         std::fs::write(main.join("devlanes.yaml"), invalid).expect("break");
         let again = h.call(Method::Start, json!({}), cx(&main)).await;
-        assert_unit_failed(again, "bad", "config_error");
+        assert_unit_failed(again, "bad", "unresolved_value");
         let bad = unit_summary(&h, &main, "bad").await.expect("bad");
         assert_eq!((bad.state.as_str(), bad.pid), ("ready", pid));
         let stopped = h
