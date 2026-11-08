@@ -445,7 +445,7 @@ impl Inner {
                 };
                 !st.any_running()
                     && st.starts.is_empty()
-                    && st.busy.is_none()
+                    && !st.stopping
                     && st.spawning == 0
                     && st.closing == crate::model::Closing::No
                     && !st.sweeping

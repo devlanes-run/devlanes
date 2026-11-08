@@ -3238,9 +3238,6 @@ impl Inner {
         // the request arrives.
         self.mark_waiting(project, lane, &options, start_id);
         let result = self.run_start(project, lane, options, &slot).await;
-        // `run_start` ends the phases itself before it answers; this covers
-        // its early returns.
-        slot.ctl.end_phases();
         // Whatever the start did not get to goes back to its own state.
         self.forget_waiting(project, lane, start_id);
         self.end_start(project, lane, slot);
@@ -3297,8 +3294,8 @@ impl Inner {
             start_id,
         });
         // From here other starts and refreshes leave the block and index this
-        // one plans on alone, until its phases end.
-        slot.ctl.mark_lease(whole_lane);
+        // one plans on alone; ends however the start returns.
+        let phases = slot.ctl.mark_lease(whole_lane);
         // Units already running are left alone, so a frozen lane would stay frozen.
         self.wake_lane(project, lane, Some(Activity::Command))
             .instrument(tracing::debug_span!("wake"))
@@ -3576,7 +3573,7 @@ impl Inner {
         if whole_lane {
             lane.st().skipped_tasks = cx.skipped_tasks.clone();
         }
-        slot.ctl.end_phases();
+        drop(phases);
         drop(lease);
         if let Some(error) = hard_error {
             lane.st().last_error = Some(error.clone());
@@ -3970,7 +3967,7 @@ impl Inner {
             (targets, orphans)
         };
         if owns_lane && (!targets.is_empty() || !orphans.is_empty()) {
-            lane.st().busy = Some("stopping");
+            lane.st().stopping = true;
             self.emit_lane(project, lane);
         }
         let stops: Vec<(&String, UnitHost, StopPolicy)> = {
@@ -4052,7 +4049,7 @@ impl Inner {
         }
         drop(desired);
         if owns_lane {
-            lane.st().busy = None;
+            lane.st().stopping = false;
         }
         self.emit_lane(project, lane);
         let st = lane.st();

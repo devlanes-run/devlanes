@@ -318,9 +318,9 @@ pub(crate) struct LaneSt {
     pub profiles: Vec<String>,
     pub units: BTreeMap<String, UnitRec>,
     pub started_at_ms: Option<u64>,
-    /// `stopping` while a stop of the whole lane runs. Starts in their phases
-    /// are [`Self::starts_in_phases`].
-    pub busy: Option<&'static str>,
+    /// A stop of the whole lane runs. Starts in their phases are
+    /// [`Self::starts_in_phases`].
+    pub stopping: bool,
     pub view: Option<Arc<LaneView>>,
     pub allocation: Option<Allocation>,
     pub infra_ns: Option<Value>,
@@ -548,7 +548,7 @@ impl LaneSt {
             profiles: Vec::new(),
             units: BTreeMap::new(),
             started_at_ms: None,
-            busy: None,
+            stopping: false,
             view: None,
             allocation: None,
             infra_ns: None,
@@ -820,8 +820,8 @@ impl LaneSt {
         if self.record.is_none() {
             return "unassigned";
         }
-        if let Some(busy) = self.busy {
-            return busy;
+        if self.stopping {
+            return "stopping";
         }
         if self.starts_in_phases() > 0 {
             return "starting";
@@ -857,7 +857,7 @@ impl LaneSt {
 
     /// Whether a stop of the whole lane or a start in its phases is under way.
     pub(crate) fn is_busy(&self) -> bool {
-        self.busy.is_some() || self.starts_in_phases() > 0
+        self.stopping || self.starts_in_phases() > 0
     }
 
     /// Whether `start`/`resume` from a shell is needed before services can run.
@@ -1149,15 +1149,17 @@ impl StartCtl {
     }
 
     /// Records that the start took the lane's lease, bringing the lane up when
-    /// `whole_lane`. From here the lane reads `starting` until
-    /// [`Self::end_phases`].
-    pub(crate) fn mark_lease(&self, whole_lane: bool) {
+    /// `whole_lane`. The lane reads `starting` for it until the returned mark
+    /// drops, however the start returns.
+    #[must_use = "the start's phases end when the mark drops"]
+    pub(crate) fn mark_lease(self: &Arc<Self>, whole_lane: bool) -> PhasesMark {
         lock(&self.brought).whole_lane = whole_lane;
         self.holds_lease.store(true, Ordering::Release);
+        PhasesMark(self.clone())
     }
 
     /// Records that the start finished its phases.
-    pub(crate) fn end_phases(&self) {
+    fn end_phases(&self) {
         self.phases_ended.store(true, Ordering::Release);
     }
 
@@ -1250,6 +1252,16 @@ impl StartCtl {
     /// Whether the start runs a task unit named `unit` right now.
     pub(crate) fn runs_task(&self, unit: &str) -> bool {
         lock(&self.tasks).contains_key(unit)
+    }
+}
+
+/// A start in its phases, until dropped ([`StartCtl::mark_lease`]).
+pub(crate) struct PhasesMark(Arc<StartCtl>);
+
+impl Drop for PhasesMark {
+    /// Ends the start's phases.
+    fn drop(&mut self) {
+        self.0.end_phases();
     }
 }
 

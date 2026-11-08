@@ -93,9 +93,7 @@ fn used_by_another(project: &ProjectRt, leaving: &Arc<LaneRt>) -> bool {
         match st.closing {
             Closing::Released => false,
             Closing::Hooks => true,
-            Closing::No => {
-                st.listed() || st.any_running() || st.busy.is_some() || !st.starts.is_empty()
-            }
+            Closing::No => st.listed() || st.any_running() || st.stopping || !st.starts.is_empty(),
         }
     })
 }

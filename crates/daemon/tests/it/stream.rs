@@ -398,7 +398,7 @@ async fn running_phases_report_their_detail() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// Each start, whether it timed out or failed, ends with one `start.ended`,
-/// right after a `lane.changed` that follows all of its phases.
+/// after a `lane.changed` that follows all of its phases.
 async fn a_start_ends_once_after_its_last_lane_change() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -444,16 +444,24 @@ async fn a_start_ends_once_after_its_last_lane_change() {
         assert_eq!(ended.len(), 2, "{error:?} {seen:?}");
         assert_eq!(ended[0].1, first, "{seen:?}");
         assert_ne!(ended[1].1, first, "{seen:?}");
+        // A `lane.changed` lies between a start's last phase (or the previous
+        // start's end) and its own end, and none of its phases comes later.
+        let mut from = 0;
         for (at, id) in ended {
-            let before = &lane[at - 1];
-            assert_eq!(before.event, events::LANE_CHANGED, "{seen:?}");
-            let last_phase = lane
-                .iter()
-                .filter(|event| event.event == events::PHASE && event.data["start_id"] == json!(id))
-                .map(|event| event.seq)
-                .max()
-                .unwrap_or_default();
-            assert!(before.seq > last_phase, "{seen:?}");
+            let phases: Vec<usize> = (0..lane.len())
+                .filter(|&i| {
+                    lane[i].event == events::PHASE && lane[i].data["start_id"] == json!(id)
+                })
+                .collect();
+            assert!(phases.iter().all(|&i| i < at), "{seen:?}");
+            let after = phases.last().map_or(from, |&i| i.max(from));
+            assert!(
+                lane[after..at]
+                    .iter()
+                    .any(|event| event.event == events::LANE_CHANGED),
+                "{seen:?}"
+            );
+            from = at + 1;
         }
     })
     .await
