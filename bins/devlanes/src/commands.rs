@@ -146,6 +146,10 @@ fn apply_start_restore(action: Action) -> Action {
             request: adjust(request),
             forced,
         },
+        Action::LaneNewThenStart { create, start } => Action::LaneNewThenStart {
+            create,
+            start: adjust(start),
+        },
         other => other,
     }
 }
@@ -203,6 +207,37 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             .map_err(|error| usage(&error))?;
             let action = cli.action(runtime).map_err(|error| usage(&error))?;
             Box::pin(run(&cli, runtime, action)).await
+        }
+        Action::LaneNewThenStart { create, mut start } => {
+            let data = match call(create.clone()).await {
+                Ok(data) => data,
+                Err(error) => {
+                    let rendered = runtime
+                        .reporter()
+                        .error(&error, hint_for(&error, &create).as_ref());
+                    emit(&rendered);
+                    return Ok(rendered.exit_code);
+                }
+            };
+            let code = render_result(runtime, create.method, &data, None)?;
+            let Some(lane) = data.pointer("/lane/reference").and_then(Value::as_str) else {
+                return Ok(code);
+            };
+            start.context.lane = Some(lane.to_owned());
+            match cli.start_in_ui(runtime) {
+                Some(forced) => {
+                    Box::pin(run(
+                        cli,
+                        runtime,
+                        Action::StartUi {
+                            request: start,
+                            forced,
+                        },
+                    ))
+                    .await
+                }
+                None => rpc(cli, runtime, start).await,
+            }
         }
         Action::Ui(context) => ui(runtime, context).await,
         Action::StartUi { request, forced } => {

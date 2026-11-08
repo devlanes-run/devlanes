@@ -873,8 +873,8 @@ DEVLANES_LANE_NAME stay `lane<N>`. Commands run in the folder keep using the fol
 first lane. With --lane, adds the lane on that lane's folder.\n\n\
 For a lane on another branch, create a worktree with `git worktree add <path> <branch>`\n\
 and run `devlanes start` in it.\n\n\
-Without --start, a terminal asks whether to start the new lane right away. --start uses\n\
-this shell's environment and --env, as start does."
+Without --start, a terminal asks whether to start the new lane right away. --start then\n\
+starts it as start --lane <name> does, with this shell's environment, --env and --timeout."
     )]
     New {
         /// Name of the extra lane, a lane reference for --lane and <name>:unit; not a number, main or lane<N> [default: <folder>-<n>]
@@ -1040,6 +1040,13 @@ pub enum Action {
     /// `lane new` without `--start` where a person can answer: the lane is
     /// created, then they are asked whether to start it like `devlanes start`.
     RpcThenOfferStart(Request),
+    /// `lane new --start`: `create` (`lane.new`) makes the lane, then `start`
+    /// runs on it as `devlanes start` would, its `context.lane` set to the lane
+    /// `create` returned.
+    LaneNewThenStart {
+        create: Request,
+        start: Request,
+    },
     /// A start that runs inside the TUI: the request is sent first, and the TUI
     /// opens once the daemon accepted it. `forced` (`start --attach`) overrides
     /// `tui.open_on_start: false` in the user config.
@@ -1162,12 +1169,6 @@ impl Cli {
             });
             env
         };
-        let lane_new_start = matches!(
-            &self.command,
-            Some(Command::Lane {
-                command: LaneCommand::New { start: true, .. }
-            })
-        );
         let send_env = match self.sends_env() {
             SendsEnv::Always => true,
             SendsEnv::UnlessFromLane => !runtime.env_from_lane,
@@ -1176,9 +1177,15 @@ impl Cli {
         if !self.env.is_empty()
             && !(matches!(
                 &self.command,
-                Some(Command::Start(_) | Command::Restart(_) | Command::Exec(_))
-            ) || matches!(&self.command, Some(Command::Run(args)) if !args.list)
-                || lane_new_start)
+                Some(
+                    Command::Start(_)
+                        | Command::Restart(_)
+                        | Command::Exec(_)
+                        | Command::Lane {
+                            command: LaneCommand::New { start: true, .. }
+                        }
+                )
+            ) || matches!(&self.command, Some(Command::Run(args)) if !args.list))
         {
             return Err(Error::Usage(
                 "--env is supported only by start, restart, run TASK, exec and lane new --start"
@@ -1238,6 +1245,18 @@ impl Cli {
                 ..Selection::default()
             })
         };
+        // A `start`, also the one that starts the lane `lane new --start` created.
+        let start = |units: &[String], profiles: &[String], all_at_once| {
+            serde_json::to_value(Selection {
+                units: units.to_vec(),
+                env: Some(self.env.iter().cloned().collect()),
+                profiles: profiles.to_vec(),
+                timeout_ms: Some(timeout_ms.unwrap_or(180_000)),
+                all_at_once,
+                events: start_events,
+                ..Selection::default()
+            })
+        };
         let (method, params) = match &self.command {
             None if runtime.mode == OutputMode::Human
                 && runtime.stdout_tty
@@ -1278,20 +1297,10 @@ impl Cli {
                     keep: args.keep,
                 }));
             }
-            Some(Command::Start(args)) => {
-                let mut params = selection(
-                    &args.units,
-                    Some(&self.env),
-                    &args.profiles,
-                    false,
-                    args.all_at_once,
-                )?;
-                params["timeout_ms"] = json!(timeout_ms.unwrap_or(180_000));
-                if start_events {
-                    params["events"] = json!(true);
-                }
-                (Method::Start, params)
-            }
+            Some(Command::Start(args)) => (
+                Method::Start,
+                start(&args.units, &args.profiles, args.all_at_once)?,
+            ),
             Some(Command::Stop(args)) => (
                 Method::Stop,
                 selection(&args.units, None, &[], args.mine, false)?,
@@ -1448,15 +1457,28 @@ impl Cli {
                     json!({"timeout_ms": timeout_ms, "all_at_once": all_at_once, "events": start_events}),
                 ),
                 LaneCommand::Ls => (Method::LaneList, json!({})),
-                LaneCommand::New { name, start, .. } => (
-                    Method::LaneNew,
-                    json!({
-                        "name": name,
-                        "start": start,
-                        "events": start_events,
-                        "env": self.env.iter().cloned().collect::<BTreeMap<_, _>>(),
-                    }),
-                ),
+                LaneCommand::New {
+                    name, start: true, ..
+                } => {
+                    let create = Request {
+                        id: 0,
+                        method: Method::LaneNew,
+                        params: json!({"name": name}),
+                        context: context.clone(),
+                    };
+                    // The new lane has no env of its own (`SendsEnv::Always`).
+                    context.env = send_env.then(environment);
+                    return Ok(Action::LaneNewThenStart {
+                        create,
+                        start: Request {
+                            id: 0,
+                            method: Method::Start,
+                            params: start(&[], &[], false)?,
+                            context,
+                        },
+                    });
+                }
+                LaneCommand::New { name, .. } => (Method::LaneNew, json!({"name": name})),
                 LaneCommand::Clean { lane, dry_run } => {
                     context.lane.clone_from(lane);
                     let method = if *dry_run {
@@ -1791,6 +1813,9 @@ impl Cli {
                     | Command::Wait { .. }
                     | Command::Debug {
                         command: DebugCommand::Events { .. }
+                    }
+                    | Command::Lane {
+                        command: LaneCommand::New { start: true, .. }
                     }
             )
         ) || matches!(&self.command, Some(Command::Run(args)) if !args.list && !args.detach)

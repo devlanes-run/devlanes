@@ -57,10 +57,6 @@ fn long_commands_get_a_title_and_short_ones_none() {
         (&["restart"][..], "devlanes restart"),
         (&["reload", "web"][..], "devlanes reload web"),
         (&["lane", "resume"][..], "devlanes lane resume"),
-        (
-            &["lane", "new", "--name", "review", "--start"][..],
-            "devlanes lane new review",
-        ),
         (&["wait", "api"][..], "devlanes wait api"),
         (&["logs", "-f", "api"][..], "devlanes logs -f api"),
         (&["attach", "api"][..], "devlanes attach api"),

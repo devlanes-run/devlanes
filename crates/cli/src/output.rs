@@ -804,7 +804,6 @@ pub(crate) fn result_exit_code(method: Method, data: &Value) -> u8 {
                 }),
         },
         Method::Start | Method::Restart | Method::Reload => start_exit_code(data),
-        Method::LaneNew => data.get("start").map_or(exit::OK, start_exit_code),
         Method::Resume => data
             .get("items")
             .and_then(Value::as_array)
