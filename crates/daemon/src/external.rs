@@ -211,8 +211,8 @@ impl Inner {
                     }
                 }
             }
-            if let Some(infra) = st.infra_ns.as_ref().filter(|_| !same) {
-                for (path, port) in infra_ports(infra) {
+            if !same {
+                for (path, port) in infra_ports(&st.infra().namespace_value()) {
                     taken.push(PortUse::unit(port, &path, &reference));
                 }
             }

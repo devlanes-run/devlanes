@@ -289,7 +289,7 @@ impl Inner {
                     .collect();
                 let reference = st.reference(&project_name);
                 // Shared infra appears in every lane's list; one row per container.
-                for container in &st.infra_containers {
+                for container in st.infra().containers() {
                     let subject = Subject::Container {
                         project: project.id,
                         lane: (!container.shared).then_some(record.id),

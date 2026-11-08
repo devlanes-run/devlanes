@@ -132,6 +132,7 @@ async fn escaped_members_round_trip_and_follow_their_run() {
                 code: Some(0),
                 signal: None,
             },
+            None,
         )
         .await
         .expect("finish");

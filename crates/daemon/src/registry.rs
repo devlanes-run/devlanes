@@ -45,7 +45,7 @@ fn sweepable(st: &LaneSt) -> bool {
     !st.present
         && st.record.is_some()
         && !st.any_running()
-        && st.busy.is_none()
+        && !st.is_busy()
         && matches!(removed_policy(st), RemovedWorktrees::Clean)
 }
 
@@ -1435,9 +1435,11 @@ impl Inner {
             let st = lane.st();
             // A lane that runs something keeps its index, domain and ports.
             match st.moves_to {
-                // The calling start counts in `starting`; another one may have
-                // planned on the current index.
-                Some(target) if st.record.is_some() && !st.any_running() && st.starting <= 1 => {
+                // The calling start counts itself among the starts in their
+                // phases; another one may have planned on the current index.
+                Some(target)
+                    if st.record.is_some() && !st.any_running() && st.starts_in_phases() <= 1 =>
+                {
                     target
                 }
                 _ => return Ok(()),
@@ -1452,7 +1454,7 @@ impl Inner {
             let Ok(_holder_op) = holder.op.try_write() else {
                 return Ok(());
             };
-            if holder.st().any_running() || holder.st().busy.is_some() {
+            if holder.st().any_running() || holder.st().is_busy() {
                 return Ok(());
             }
             let used: BTreeSet<u32> = project
@@ -1531,8 +1533,8 @@ impl Inner {
         let st = lane.st();
         // Another start holding the lane planned on the current block, even
         // while its units still wait for a start slot. A `held` caller that is
-        // a start counts itself in `starting`.
-        let others = st.starting.saturating_sub(usize::from(held));
+        // a start counts itself among the starts in their phases.
+        let others = st.starts_in_phases().saturating_sub(usize::from(held));
         let access = if st.any_running() || st.spawning > 0 || others > 0 {
             LaneAccess::Running
         } else {
@@ -2221,13 +2223,18 @@ impl Inner {
                 .allocation
                 .clone()
                 .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "no_ports"}), 1))?;
-            (config, allocation, st.env.clone(), st.infra_ns.clone())
+            (
+                config,
+                allocation,
+                st.env.clone(),
+                st.infra().namespace_value(),
+            )
         };
         let facts = self.facts(project, lane)?;
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
         let dotenv = read_dotenv(lane_dir, primary_dir).await;
         let client_env = env.map(|env| (*env).clone()).unwrap_or_default();
-        let infra = infra_ns.unwrap_or(Value::Null);
+        let infra = infra_ns;
         let reference = lane.st().reference(&project.name());
         let view = self.view_of(
             &reference,
@@ -2633,7 +2640,6 @@ pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
         desired: tokio::sync::Mutex::new(()),
         decide: tokio::sync::Mutex::new(()),
         setup: tokio::sync::Mutex::new(()),
-        infra_refresh: tokio::sync::Mutex::new(()),
     })
 }
 
