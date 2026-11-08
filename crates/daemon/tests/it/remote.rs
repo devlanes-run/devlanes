@@ -483,10 +483,15 @@ struct ProxyRoutes {
     shutdown: CancellationToken,
     /// Every published table's box routes, as `(host, port)`, in order.
     published: Published,
+    /// Every published box route's `(host, pool_key)`, in order.
+    pool_keys: PoolKeys,
 }
 
 /// The box routes of each table a client published, oldest first.
 type Published = Arc<std::sync::Mutex<Vec<Vec<(String, u16)>>>>;
+
+/// The pool key of each box route a client published, oldest first.
+type PoolKeys = Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
 
 impl ProxyRoutes {
     /// Feeds `proxy`, with HTTPS on `tls` when set; `shutdown` stops box ports.
@@ -495,6 +500,7 @@ impl ProxyRoutes {
         tls: Option<(u16, Arc<CertificateAuthority>)>,
         shutdown: CancellationToken,
         published: Published,
+        pool_keys: PoolKeys,
     ) -> Self {
         Self {
             proxy,
@@ -502,6 +508,7 @@ impl ProxyRoutes {
             box_ports: devlanes_proxy::ScopedPorts::default(),
             shutdown,
             published,
+            pool_keys,
         }
     }
 }
@@ -537,6 +544,12 @@ impl RouteSink for ProxyRoutes {
             .map(|entry| (entry.host.clone(), entry.port))
             .collect();
         self.published.lock().expect("published").push(remote);
+        self.pool_keys.lock().expect("pool keys").extend(
+            routes
+                .iter()
+                .filter(|entry| entry.remote)
+                .map(|entry| (entry.host.clone(), entry.pool_key.clone())),
+        );
         let routes = routes
             .into_iter()
             .map(|entry| {
@@ -561,7 +574,7 @@ impl RouteSink for ProxyRoutes {
                 route.remote = entry.remote;
                 route.certificate_names = entry.certificate_names;
                 route.listen_port = entry.box_https_port;
-                route.pool_key = entry.upstream_box;
+                route.pool_key = entry.pool_key;
                 route
             })
             .collect();
@@ -581,6 +594,8 @@ struct ClientSide {
     box_engines: BTreeMap<String, Engine>,
     /// The box routes of every table the client published.
     published: Published,
+    /// The pool key of every box route the client published.
+    pool_keys: PoolKeys,
 }
 
 impl ClientSide {
@@ -643,6 +658,7 @@ impl ClientSide {
             controls: controls.clone(),
         });
         let published = Published::default();
+        let pool_keys = PoolKeys::default();
         let h = engine_with(
             &tmp.path.join(name),
             ports,
@@ -652,6 +668,7 @@ impl ClientSide {
                 tls,
                 proxy_stop.clone(),
                 published.clone(),
+                pool_keys.clone(),
             ))),
         )
         .await;
@@ -665,6 +682,7 @@ impl ClientSide {
                 .map(|(name, side)| ((*name).to_owned(), side.h.engine.clone()))
                 .collect(),
             published,
+            pool_keys,
         }
     }
 

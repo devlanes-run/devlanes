@@ -134,6 +134,61 @@ struct LogSignals {
     finish: AtomicBool,
 }
 
+/// How far the log thread has written this run's log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Logged {
+    /// Every line with a sequence below this one is in the log.
+    Through(u64),
+    /// Later lines of this run are not logged: the writer failed, or the log
+    /// thread ended without finishing the log (a poisoned lock, a panic, or a
+    /// thread that could not be spawned).
+    Failed,
+}
+
+/// Owns the [`Logged`] sender for the log thread. Dropped on every way the
+/// thread can end; anything but a finished log publishes [`Logged::Failed`].
+struct LoggedGuard {
+    sender: watch::Sender<Logged>,
+    finished: bool,
+}
+
+impl LoggedGuard {
+    /// Publishes `Through(next)` when it moves the value forward.
+    fn through(&self, next: u64) {
+        self.sender.send_if_modified(|logged| {
+            let advanced = matches!(logged, Logged::Through(seen) if *seen < next);
+            if advanced {
+                *logged = Logged::Through(next);
+            }
+            advanced
+        });
+    }
+
+    /// Marks the log finished, so dropping the guard closes the watch on the
+    /// last `Through` value.
+    fn finish(&mut self) {
+        self.finished = true;
+    }
+
+    /// Publishes [`Logged::Failed`] once.
+    fn fail(&self) {
+        self.sender.send_if_modified(|logged| {
+            let first = *logged != Logged::Failed;
+            *logged = Logged::Failed;
+            first
+        });
+    }
+}
+
+impl Drop for LoggedGuard {
+    /// Reports a thread that ended without finishing the log.
+    fn drop(&mut self) {
+        if !self.finished {
+            self.fail();
+        }
+    }
+}
+
 /// Shared handle; cloning is cheap and never affects the process.
 #[derive(Clone)]
 pub struct UnitHost {
@@ -142,6 +197,10 @@ pub struct UnitHost {
 
 struct Inner {
     info: UnitInfo,
+    /// When the host started watching the spawned unit, on the monotonic
+    /// clock the readiness window is measured with; `info.started_at_ms` is
+    /// the wall-clock time shown to users.
+    spawned: tokio::time::Instant,
     unit: Arc<dyn Unit>,
     identity: Option<ProcessIdentity>,
     state: watch::Sender<UnitState>,
@@ -165,6 +224,8 @@ struct Inner {
     first_seq: u64,
     /// Flips once the log thread closed the log, so segment metadata is final.
     log_done: watch::Sender<bool>,
+    /// How far the log thread has written, for readers that wait for lines.
+    logged: watch::Receiver<Logged>,
     /// Claimed by whoever publishes the exit first: the waiter, or a stop whose bound
     /// expired after the process was already gone.
     exit_claimed: std::sync::atomic::AtomicBool,
@@ -306,6 +367,7 @@ impl UnitHost {
         state: UnitState,
         first_seq: Option<u64>,
     ) -> Result<Self, RpcError> {
+        let spawned = tokio::time::Instant::now();
         let log = open_log(
             info.log_dir.clone(),
             info.name.replace('#', "_"),
@@ -318,6 +380,13 @@ impl UnitHost {
         let (log_tx, log_rx) = std::sync::mpsc::channel();
         let log_signals = Arc::new(LogSignals::default());
         let log_done = watch::channel(false).0;
+        let (sender, logged) = watch::channel(Logged::Through(next_seq));
+        // Built here rather than in the thread, so a thread that fails to spawn
+        // drops it unfinished and readers see `Failed`.
+        let logged_guard = LoggedGuard {
+            sender,
+            finished: false,
+        };
         let model = Model::for_unit(unit.as_ref(), next_seq);
         spawn_log_thread(
             log.clone(),
@@ -325,10 +394,12 @@ impl UnitHost {
             log_signals.clone(),
             info.name.clone(),
             log_done.clone(),
+            logged_guard,
         );
         let host = Self {
             inner: Arc::new(Inner {
                 info,
+                spawned,
                 unit,
                 identity,
                 state: watch::channel(state).0,
@@ -343,6 +414,7 @@ impl UnitHost {
                 pump_done: watch::channel(false).0,
                 first_seq,
                 log_done,
+                logged,
                 exit_claimed: std::sync::atomic::AtomicBool::new(false),
                 ended_at_ms: AtomicU64::new(0),
             }),
@@ -353,6 +425,11 @@ impl UnitHost {
     /// Run facts for summaries.
     pub fn info(&self) -> &UnitInfo {
         &self.inner.info
+    }
+
+    /// When the host started watching the spawned unit, on tokio's monotonic clock.
+    pub fn spawned(&self) -> tokio::time::Instant {
+        self.inner.spawned
     }
 
     /// The process identity recorded in `unit_runs`, if the runner reported one.
@@ -371,9 +448,12 @@ impl UnitHost {
     }
 
     /// Moves to a new state unless the run already reached a terminal state.
+    /// Only a starting run becomes ready: a run a stop reached first stays
+    /// `stopping`.
     pub fn set_state(&self, next: UnitState) {
         self.inner.state.send_if_modified(|state| {
-            if state.is_terminal() || *state == next {
+            let stale_ready = next == UnitState::Ready && *state != UnitState::Starting;
+            if state.is_terminal() || *state == next || stale_ready {
                 return false;
             }
             *state = next;
@@ -671,13 +751,21 @@ impl UnitHost {
         *self.inner.log_done.borrow()
     }
 
-    /// Queries this unit's logs off the executor.
+    /// Queries this unit's logs off the executor, once the log thread applied
+    /// every line queued before the call.
     pub async fn logs(&self, query: LogQuery) -> Result<Page<LogLine>, RpcError> {
         let (synced, applied) = tokio::sync::oneshot::channel();
         // A finished log thread has nothing queued; its send failure is fine.
         if self.inner.log_tx.send(LogCommand::Sync(synced)).is_ok() {
             let _ = tokio::time::timeout(PUMP_DRAIN, applied).await;
         }
+        self.read_log(query).await
+    }
+
+    /// Queries what the log thread has written so far, off the executor,
+    /// without waiting for queued lines. Every line below the sequence
+    /// [`Self::watch_logged`] reports is included.
+    pub(crate) async fn read_log(&self, query: LogQuery) -> Result<Page<LogLine>, RpcError> {
         let log = self.inner.log.clone();
         tokio::task::spawn_blocking(move || {
             // The snapshot flushes under the lock; reading happens after releasing it,
@@ -712,17 +800,8 @@ impl UnitHost {
         .unwrap_or_default()
     }
 
-    /// The last lines of this run, ANSI stripped, for failure reports and `log`
-    /// ready checks. Earlier runs share the log directory and are left out.
-    pub async fn tail(&self, lines: usize) -> Vec<String> {
-        self.tail_lines(lines, false)
-            .await
-            .into_iter()
-            .map(|line| line.text)
-            .collect()
-    }
-
-    /// [`UnitHost::tail`] as log lines, with their colors when `styled`.
+    /// The last lines of this run, with their colors when `styled`, for failure
+    /// reports. Earlier runs share the log directory and are left out.
     pub async fn tail_lines(&self, lines: usize, styled: bool) -> Vec<LogLine> {
         let query = LogQuery {
             tail: Some(lines),
@@ -757,7 +836,13 @@ impl UnitHost {
         ))
     }
 
-    /// Subscribes to raw output (for `log` ready checks and followers).
+    /// Watches how far the log thread has written this run's log; it changes
+    /// after each stored batch of lines and when the writer stops.
+    pub(crate) fn watch_logged(&self) -> watch::Receiver<Logged> {
+        self.inner.logged.clone()
+    }
+
+    /// Subscribes to raw output (for followers).
     pub fn subscribe_output(&self) -> broadcast::Receiver<Bytes> {
         self.inner.live.subscribe()
     }
@@ -1055,6 +1140,7 @@ fn spawn_log_thread(
     signals: Arc<LogSignals>,
     unit: String,
     done: watch::Sender<bool>,
+    mut logged: LoggedGuard,
 ) {
     use std::sync::mpsc::RecvTimeoutError;
     std::thread::Builder::new()
@@ -1078,12 +1164,23 @@ fn spawn_log_thread(
                     if let Err(error) = log.finish(now_ms()) {
                         tracing::warn!(unit, %error, "log finish failed");
                     }
+                    // Even a failed final flush loses no line a reader waits
+                    // for: the exit was published before `Finish`.
+                    logged.finish();
                     return;
                 }
                 let mut result = match command {
-                    Ok(LogCommand::Lines(lines, ts)) => lines
-                        .iter()
-                        .try_for_each(|line| log.append_line(line, ts)),
+                    Ok(LogCommand::Lines(lines, ts)) => {
+                        let appended = lines
+                            .iter()
+                            .try_for_each(|line| log.append_line(line, ts));
+                        // Under the log lock, which `reader()` also takes to
+                        // flush, so a reader that sees the value finds the lines.
+                        if appended.is_ok() {
+                            logged.through(log.next_sequence());
+                        }
+                        appended
+                    }
                     Ok(LogCommand::Sync(done)) => {
                         let _ = done.send(());
                         Ok(())
@@ -1112,6 +1209,7 @@ fn spawn_log_thread(
                     && !warned
                 {
                     warned = true;
+                    logged.fail();
                     tracing::warn!(unit, %error, "log write failed; later output of this run is not logged");
                 }
             }
@@ -1341,6 +1439,67 @@ mod tests {
             .expect("stop succeeds");
     }
 
+    /// A check that passed leaves the unit `starting` until the early-exit
+    /// window ends, so an exit inside the window fails it instead of
+    /// following a `ready` that `after: services` tasks would trust.
+    #[tokio::test(start_paused = true)]
+    async fn a_passed_check_waits_out_the_early_exit_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let unit = ScriptedUnit::start(None, gone_identity_cached());
+        let output = unit
+            .output
+            .lock()
+            .expect("output lock")
+            .clone()
+            .expect("output open");
+        let host = host(unit.clone(), &dir).await;
+        let mut logged = host.watch_logged();
+        output
+            .send(OutputChunk {
+                stream: OutputStream::Terminal,
+                bytes: Bytes::from_static(b"up\r\n"),
+            })
+            .expect("send");
+        // Logged before the check begins, so its first read passes. While the
+        // log thread writes, the paused clock jumps to the next timer: the
+        // pump's 200 ms pause, or a bound on this wait, which is why there is
+        // none. nextest's limit ends a hang.
+        loop {
+            let page = host.read_log(LogQuery::default()).await.expect("read");
+            if page.items.iter().any(|line| line.text == "up") {
+                break;
+            }
+            logged.changed().await.expect("log writer runs");
+        }
+        assert!(
+            tokio::time::Instant::now() < host.spawned() + crate::ready::EARLY_EXIT,
+            "the window ended before the check began"
+        );
+        let check = tokio::spawn({
+            let host = host.clone();
+            async move {
+                let ready = crate::ready::Readiness::Log {
+                    pattern: "up".into(),
+                };
+                let limit = Duration::from_secs(3600);
+                crate::ready::run_check(&host, ready, limit, || async { Vec::new() }).await;
+            }
+        });
+        // The paused clock moves only once nothing runs or reads the log, so
+        // by then the check has passed and waits out the window.
+        let last = host.spawned() + crate::ready::EARLY_EXIT - Duration::from_millis(1);
+        tokio::time::sleep_until(last).await;
+        assert_eq!(host.state(), UnitState::Starting);
+        drop(output);
+        unit.end(Some(1), None);
+        check.await.expect("the check ends with the exit");
+        assert!(
+            matches!(host.state(), UnitState::Failed(_)),
+            "{:?}",
+            host.state()
+        );
+    }
+
     /// The log tick flushes partial lines and the file buffer, so a read-only query of
     /// a live unit's directory sees its output without taking the writer's lock, and a
     /// query of a missing directory creates nothing.
@@ -1381,7 +1540,6 @@ mod tests {
             assert!(Instant::now() < deadline, "{lines:?}");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert_eq!(host.tail(10).await, ["hello", "prompt>"]);
         // A real unit's output closes with its exit; a sender kept here would
         // make the stop wait out the pump drain.
         drop(output);
@@ -1520,17 +1678,30 @@ mod tests {
             .clone()
             .expect("output open");
         let host = host_with(unit, &dir, false).await;
+        let mut logged = host.watch_logged();
+        let Logged::Through(first) = *logged.borrow() else {
+            panic!("the log thread is running");
+        };
         output
             .send(OutputChunk {
                 stream: OutputStream::Stdout,
                 bytes: Bytes::from_static(b"line 1\nline 2\n"),
             })
             .expect("send");
-        let deadline = Instant::now() + STEP;
-        while host.tail(10).await != ["line 1", "line 2"] {
-            assert!(Instant::now() < deadline, "output never logged");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        tokio::time::timeout(
+            STEP,
+            logged.wait_for(|logged| matches!(logged, Logged::Through(n) if *n >= first + 2)),
+        )
+        .await
+        .expect("output logged")
+        .expect("log thread alive");
+        let lines: Vec<_> = host
+            .tail_lines(10, false)
+            .await
+            .into_iter()
+            .map(|line| line.text)
+            .collect();
+        assert_eq!(lines, ["line 1", "line 2"]);
         let (snapshot, _) = host.attach(None).await;
         let cells = |n| std::num::NonZeroU16::new(n).expect("nonzero");
         let mut parser = vt100::Parser::new(cells(5), cells(20), 0);

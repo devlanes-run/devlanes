@@ -1390,7 +1390,7 @@ impl LanePhase for ServicesPhase {
         let selected = cx.services.clone();
         for name in &selected {
             if let Some(error) = resolved.errors.get(&format!("services.{name}")) {
-                let error = crate::resolve::resolve_error(error);
+                let error = crate::resolve::resolve_error(error, &cx.reference);
                 engine.record_unresolved(cx, name, &error).await;
                 cx.failures.push(UnitFailureData {
                     lane: cx.reference.clone(),
@@ -2906,7 +2906,7 @@ impl Inner {
                 ));
             }
             if let Some(error) = resolved.errors.get(&format!("tasks.{name}")) {
-                return Err(crate::resolve::resolve_error(error));
+                return Err(crate::resolve::resolve_error(error, &reference));
             }
             let task = resolved.tasks.get(name).ok_or_else(|| {
                 RpcError::new(
@@ -3308,7 +3308,7 @@ impl Inner {
             &options,
             whole_lane,
         )
-        .map_err(|error| fail(crate::resolve::resolve_error(&error)))?;
+        .map_err(|error| fail(crate::resolve::resolve_error(&error, &reference)))?;
         let profiles_changed = !options.profiles.is_empty() && selection.profiles != lane_profiles;
         // Kept only once valid, so a typo does not stick to the lane. A transient
         // start that only adds units (`with`) plans with its profiles without making
@@ -3558,16 +3558,6 @@ impl Inner {
         if !wait_settled(&hosts, cx.deadline).await {
             cx.timed_out = true;
         }
-        // `ready: started` calls a unit ready at once; one that exits right after
-        // its spawn (a bad flag, a missing file) failed to start all the same.
-        let fresh: Vec<UnitHost> = {
-            let st = cx.lane.st();
-            cx.started
-                .iter()
-                .filter_map(|unit| st.units.get(unit).map(|rec| rec.host.clone()))
-                .collect()
-        };
-        settle_early_exits(&fresh, cx.deadline).await;
         // Withdrawals may have come in while waiting.
         let withdrawn = cx.ctl.withdrawn();
         let selected: Vec<String> = selected
@@ -3606,7 +3596,7 @@ impl Inner {
         }
         let branch = cx.lane.st().branch.clone();
         let mut warnings = cx.dropped.warnings(&cx.reference);
-        warnings.extend(self.ca_warnings(&cx.reference, &cx.lane.st()));
+        warnings.extend(self.ca_warnings(&cx.reference, cx.lane.st().view.as_deref()));
         let path = cx.lane.st().path.clone();
         warnings.extend(self.windows_drive_warning(&cx.reference, &path).await);
         cx.profile_stale
@@ -4192,7 +4182,11 @@ impl Inner {
             if let Some(config) = config {
                 let selection = devlanes_resolve::select_profiles(&config, &options.profiles, &[])
                     .map_err(|error| {
-                        with_ownership(crate::resolve::resolve_error(&error), &reference, &[])
+                        with_ownership(
+                            crate::resolve::resolve_error(&error, &reference),
+                            &reference,
+                            &[],
+                        )
                     })?;
                 lane.st().profiles = selection.profiles.clone();
                 let _desired = lane.desired.lock().await;
@@ -4493,6 +4487,7 @@ impl Inner {
             st.wanted = false;
             st.allocation = None;
             st.view = None;
+            st.view_error = None;
             st.units.clear();
             st.started_at_ms = None;
             st.infra_ns = None;
@@ -4526,8 +4521,9 @@ impl Inner {
 
     /// Forgets a project whose every lane was cleaned: its rows go (the store
     /// refuses while a run is unfinished) and so does it in memory, so neither a
-    /// daemon restart nor its watchers bring it back; the next command run in its
-    /// folder registers it again.
+    /// daemon restart nor its watchers bring it back; the next command whose policy
+    /// registers projects (`start`, `status`, `env`, ...) run in its folder registers
+    /// it again, and reads there answer `project_not_started`.
     pub(crate) async fn forget_if_empty(&self, project: &Arc<ProjectRt>) {
         let empty = project.lanes().iter().all(|lane| {
             let st = lane.st();
@@ -5034,28 +5030,6 @@ async fn finish_within(host: &UnitHost, timeout: Option<Duration>) -> ExitOutcom
         },
         None => host.wait_exit().await,
     }
-}
-
-/// How long after its spawn a unit's exit still counts as a failed start.
-const EARLY_EXIT: Duration = Duration::from_millis(500);
-
-/// Waits until each live unit of `hosts` has run for [`EARLY_EXIT`] (or the
-/// start's deadline passed), returning early once all of them exited.
-async fn settle_early_exits(hosts: &[UnitHost], deadline: Instant) {
-    let now = now_ms();
-    let youngest = hosts
-        .iter()
-        .filter(|host| host.is_alive())
-        .map(|host| host.info().started_at_ms)
-        .max();
-    let Some(started) = youngest else {
-        return;
-    };
-    let early = u64::try_from(EARLY_EXIT.as_millis()).unwrap_or(u64::MAX);
-    let left = Duration::from_millis((started + early).saturating_sub(now));
-    let until = (Instant::now() + left).min(deadline);
-    let all_exited = join_all(hosts.iter().map(UnitHost::wait_exit));
-    let _ = tokio::time::timeout_at(until, all_exited).await;
 }
 
 /// Polls a TCP port until nothing accepts on it.

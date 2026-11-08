@@ -1463,13 +1463,13 @@
               "type": "null"
             }
           ],
-          "description": "What devlanes does when a worktree gets its lane: only reserve it, also set it up, or also start it. Defaults to `register`. A worktree gets a lane the first time devlanes runs in it, not merely because it exists.",
+          "description": "What devlanes does when a worktree gets its lane: only reserve it, also set it up, or also start it. Defaults to `register`. A worktree gets a lane the first time `start`, `status` or another command that acts on lanes runs in it, not merely because it exists.",
           "examples": [
             "register",
             "setup",
             "start"
           ],
-          "markdownDescription": "What devlanes does when a worktree gets its lane: only reserve it, also set it up, or also start it. Defaults to `register`. A worktree gets a lane the first time devlanes runs in it, not merely because it exists."
+          "markdownDescription": "What devlanes does when a worktree gets its lane: only reserve it, also set it up, or also start it. Defaults to `register`. A worktree gets a lane the first time `start`, `status` or another command that acts on lanes runs in it, not merely because it exists."
         },
         "primary": {
           "description": "Branch whose worktree is lane 0, the main lane (`lanes.main` in expressions) and the only worktree that gets a lane by itself. Defaults to the remote's default branch, else `main` or `master`. In CI (a variable such as `CI` or `GITHUB_ACTIONS` is set) the checkout takes lane 0 on any branch when lane 0 is free.",
@@ -1821,11 +1821,11 @@
               "type": "null"
             }
           ],
-          "description": "Ready once a line of output matches this regular expression, with colors and other terminal escape codes removed; recent lines printed before the check began count too. Suits workers without a port: have them print a line once connected.",
+          "description": "Ready once a line of the unit's log, as `devlanes logs` shows it (for a container, its Docker log), matches this regular expression, with colors removed; lines printed before the check began count too. Suits workers without a port: have them print a line once connected.",
           "examples": [
             "Connected to Redis"
           ],
-          "markdownDescription": "Ready once a line of output matches this regular expression, with colors and other terminal escape codes removed; recent lines printed before the check began count too. Suits workers without a port: have them print a line once connected."
+          "markdownDescription": "Ready once a line of the unit's log, as `devlanes logs` shows it (for a container, its Docker log), matches this regular expression, with colors removed; lines printed before the check began count too. Suits workers without a port: have them print a line once connected."
         },
         "tcp": {
           "anyOf": [
@@ -2331,7 +2331,7 @@
               "type": "null"
             }
           ],
-          "description": "When the service counts as up: `devlanes start` waits for it, and `after: services` tasks run once every started service is ready. Write `started` (ready once the process runs) or a mapping with one of `tcp`, `http`, `log` or `cmd`, plus `timeout` (default 60s). Without it, a service with `hosts` waits for TCP on its port and one without hosts uses `started`. A check that times out marks the service failed, which also skips `after: services` tasks; the process keeps running and is not restarted.",
+          "description": "When the service counts as up: once its check passed and it has run half a second. `devlanes start` waits for it, and `after: services` tasks run once every started service is ready. Write `started` (no probe) or a mapping with one of `tcp`, `http`, `log` or `cmd`, plus `timeout` (default 60s). Without it, a service with `hosts` waits for TCP on its port and one without hosts uses `started`. A service that exits within that half second failed to start. A check that times out marks the service failed, which also skips `after: services` tasks; the process keeps running and is not restarted.",
           "examples": [
             "started",
             {
@@ -2343,7 +2343,7 @@
               "tcp": true
             }
           ],
-          "markdownDescription": "When the service counts as up: `devlanes start` waits for it, and `after: services` tasks run once every started service is ready. Write `started` (ready once the process runs) or a mapping with one of `tcp`, `http`, `log` or `cmd`, plus `timeout` (default 60s). Without it, a service with `hosts` waits for TCP on its port and one without hosts uses `started`. A check that times out marks the service failed, which also skips `after: services` tasks; the process keeps running and is not restarted."
+          "markdownDescription": "When the service counts as up: once its check passed and it has run half a second. `devlanes start` waits for it, and `after: services` tasks run once every started service is ready. Write `started` (no probe) or a mapping with one of `tcp`, `http`, `log` or `cmd`, plus `timeout` (default 60s). Without it, a service with `hosts` waits for TCP on its port and one without hosts uses `started`. A service that exits within that half second failed to start. A check that times out marks the service failed, which also skips `after: services` tasks; the process keeps running and is not restarted."
         },
         "replicas": {
           "description": "Number of copies of this service to run, each with its own port, for example several queue workers. They run as `<name>.1` to `<name>.N`, `${{ replica.index }}` counts from 1, and `services.<name>` in expressions means the first copy; use `${{ replica.index }}` in `hosts` to give each copy its own hostname. A plain number of at least 1, the same in every lane, because each copy reserves ports in every lane's block; `${{ ... }}` expressions are not allowed. Defaults to 1.",
@@ -2542,14 +2542,14 @@
         "started"
       ],
       "enumDescriptions": [
-        "Count the unit ready as soon as it runs, without probing anything. A dev server whose program crashed under a file watcher still counts as ready, so prefer a check when there is something to probe."
+        "Count the unit ready once it runs, without probing anything; a service once it has run half a second. A dev server whose program crashed under a file watcher still counts as ready, so prefer a check when there is something to probe."
       ],
       "examples": [
         "started"
       ],
       "markdownDescription": "Readiness without a probe.",
       "markdownEnumDescriptions": [
-        "Count the unit ready as soon as it runs, without probing anything. A dev server whose program crashed under a file watcher still counts as ready, so prefer a check when there is something to probe."
+        "Count the unit ready once it runs, without probing anything; a service once it has run half a second. A dev server whose program crashed under a file watcher still counts as ready, so prefer a check when there is something to probe."
       ],
       "type": "string"
     },

@@ -345,8 +345,9 @@ devlanes lane new [OPTIONS]
 Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes).
 
 The worktree gets a lane again, with an empty data folder and possibly other ports,
-the next time a devlanes command runs in it. The primary worktree's lane comes back on
-the next command for its project. A lane added with `lane new` does not come back;
+the next time `start`, `status` or another command that acts on lanes runs in it. The
+primary worktree's lane comes back on the next such command for its project. Reads such
+as `logs` and `url ls` leave it cleaned. A lane added with `lane new` does not come back;
 `lane new --name <name>` creates it again.
 
 ```text

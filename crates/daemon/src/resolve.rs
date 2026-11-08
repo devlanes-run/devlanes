@@ -23,12 +23,23 @@ use crate::{
 /// Folder under the lane's data folder that holds the generated Compose override.
 pub(crate) const COMPOSE_DIR: &str = "compose";
 
-/// Shapes resolution failures as machine codes with data.
-pub(crate) fn resolve_error(error: &ResolveError) -> RpcError {
+/// Shapes resolution failures in lane `lane` (its reference) as machine codes
+/// with data. A value that does not evaluate in this lane (an unset
+/// `${{ env.X }}`) is `unresolved_value`: the file is valid, so `config_error`
+/// would send the user to `config check`. Both name the lane, since a value
+/// can resolve in one lane and not in another.
+pub(crate) fn resolve_error(error: &ResolveError, lane: &str) -> RpcError {
     let (code, data, exit) = match error {
-        ResolveError::Expression { path, message } | ResolveError::Invalid { path, message } => {
-            ("config_error", json!({"path": path, "message": message}), 1)
-        }
+        ResolveError::Expression { path, message } => (
+            "unresolved_value",
+            json!({"lane": lane, "path": path, "message": message}),
+            1,
+        ),
+        ResolveError::Invalid { path, message } => (
+            "config_error",
+            json!({"lane": lane, "path": path, "message": message}),
+            1,
+        ),
         ResolveError::UnknownProfile { name, available } => (
             "unknown_profile",
             json!({"profile": name, "candidates": available}),
@@ -165,10 +176,8 @@ impl Inner {
     /// ([`ResolvedLane::lane_env`] and its [`LaneLayers`]) that `exec`, `with`
     /// and `env show` use. The stored client env wins over `fallback`. While the
     /// lane runs something, a project file that does not load leaves the last
-    /// good config in use, as for the lane's view. A value that does not evaluate
-    /// in a file that loads fails with `lane_env_unresolved`, never `config_error`,
-    /// which would call the file invalid. `profiles` replaces the lane's, for
-    /// `with`, whose transient start on a running lane does not store them.
+    /// good config in use, as for the lane's view. `profiles` replaces the lane's,
+    /// for `with`, whose transient start on a running lane does not store them.
     pub(crate) async fn resolve_lane_env(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -177,7 +186,7 @@ impl Inner {
         profiles: Option<&[String]>,
     ) -> Result<(Arc<ResolvedLane>, LaneLayers), RpcError> {
         let reference = lane.st().reference(&project.name());
-        let (config, loads) = {
+        let config = {
             let st = lane.st();
             if st.record.is_none() {
                 let mut error = st
@@ -194,23 +203,9 @@ impl Inner {
                 return Err(error);
             }
             match &st.config {
-                ConfigState::Loaded(_) => (None, true),
-                _ => {
-                    let kept = st.last_good.clone().filter(|_| st.any_running());
-                    let loads = kept.is_some();
-                    (kept, loads)
-                }
+                ConfigState::Loaded(_) => None,
+                _ => st.last_good.clone().filter(|_| st.any_running()),
             }
-        };
-        let unresolved = |mut error: RpcError| {
-            // Only evaluation errors name a config path; a cycle is the file's own.
-            if loads && error.code == "config_error" && error.data.get("path").is_some() {
-                error.code = "lane_env_unresolved".into();
-                if let Some(data) = error.data.as_object_mut() {
-                    data.insert("lane".into(), json!(reference));
-                }
-            }
-            error
         };
         let resolved = self
             .resolve_planned(
@@ -223,11 +218,10 @@ impl Inner {
                 profiles,
                 false,
             )
-            .await
-            .map_err(unresolved)?;
+            .await?;
         let layers = resolved
             .lane_layers()
-            .map_err(|error| unresolved(resolve_error(error)))?
+            .map_err(|error| resolve_error(error, &reference))?
             .clone();
         Ok((resolved, layers))
     }
@@ -389,7 +383,7 @@ impl Inner {
                 planned = only.map_or(-1, |only| only.len() as i64)
             ))
             .await
-            .map_err(|error| resolve_error(&error))?;
+            .map_err(|error| resolve_error(&error, &reference))?;
         // A unit must never be spawned on a port the config leaves to a server
         // devlanes does not run.
         let own = crate::external::lane_ports(
@@ -452,6 +446,7 @@ impl Inner {
         lane: &Arc<LaneRt>,
         needs: &[InfraPortNeed],
     ) -> Result<InfraSpec, RpcError> {
+        let reference = lane.st().reference(&project.name());
         let (config, allocation, view, env, infra_ns) = {
             let st = lane.st();
             let config = st
@@ -577,7 +572,7 @@ impl Inner {
                 Some(ready) => {
                     let cwd = if per_lane { &lane_dir } else { &primary_dir };
                     devlanes_resolve::container_ready(ready, cwd, &raw, &format!("{path}.ready"))
-                        .map_err(|error| resolve_error(&error))?
+                        .map_err(|error| resolve_error(&error, &reference))?
                 }
                 None => None,
             };

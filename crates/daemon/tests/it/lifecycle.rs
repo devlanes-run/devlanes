@@ -982,23 +982,34 @@ async fn wait_ends_when_its_client_leaves() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// An anchored `ready.log` pattern matches a row of a unit that renders its
-/// screen, where rows are placed with cursor moves instead of line breaks.
-async fn ready_log_anchors_match_rendered_rows() {
+/// An anchored `ready.log` pattern matches a row placed with cursor moves
+/// instead of a line break, as `devlanes logs` shows it, whether the unit
+/// renders its screen or its output is replayed.
+async fn ready_log_anchors_match_logged_rows() {
     tokio::time::timeout(LIMIT, async {
-        let tmp = temp();
-        let config = "project: drawn\nservices:\n  app: { run: \"render; draw 1 booting; nap 50; draw 2 worker ready; hold\", ready: { log: \"^worker ready\", timeout: 5s } }\n";
-        let main = repo(&tmp.path, "r", config);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
-        let started: StartResult = serde_json::from_value(
-            h.call(Method::Start, json!({}), cx(&main))
-                .await
-                .expect("start"),
-        )
-        .expect("start result");
-        assert!(started.ready, "{started:?}");
-        h.runner.release();
-        h.close().await;
+        for (model, script) in [
+            (
+                "rendered",
+                "render; draw 1 booting; nap 50; draw 2 worker ready; hold",
+            ),
+            ("replayed", "draw 1 booting; nap 50; draw 2 worker ready; hold"),
+        ] {
+            let tmp = temp();
+            let config = format!(
+                "project: drawn\nservices:\n  app: {{ run: \"{script}\", ready: {{ log: \"^worker ready\", timeout: 5s }} }}\n"
+            );
+            let main = repo(&tmp.path, "r", &config);
+            let h = harness(&tmp.path.join("home"), Setup::default()).await;
+            let started: StartResult = serde_json::from_value(
+                h.call(Method::Start, json!({}), cx(&main))
+                    .await
+                    .expect("start"),
+            )
+            .expect("start result");
+            assert!(started.ready, "{model}: {started:?}");
+            h.runner.release();
+            h.close().await;
+        }
     })
     .await
     .expect("timeout");

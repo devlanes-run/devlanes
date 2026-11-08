@@ -102,7 +102,8 @@ pub struct LanesConfig {
     pub primary: Option<String>,
     /// What devlanes does when a worktree gets its lane: only reserve it, also set it up,
     /// or also start it. Defaults to `register`. A worktree gets a lane the first time
-    /// devlanes runs in it, not merely because it exists.
+    /// `start`, `status` or another command that acts on lanes runs in it, not merely
+    /// because it exists.
     pub new_worktrees: Option<NewWorktrees>,
     /// What happens to a lane whose worktree folder is deleted, for example by `git worktree
     /// remove` after a merge. Defaults to `stop`, which stops its processes and keeps its
@@ -535,7 +536,7 @@ pub enum HostHeader {
 /// run only once every started service is ready. Write `started`, or a mapping with one of
 /// `tcp`, `http`, `log` or `cmd` and an optional `timeout`.
 pub enum ReadyConfig {
-    /// Ready as soon as the unit runs, without a probe.
+    /// Ready once the unit runs, without a probe.
     #[schemars(extend("examples" = ["started"]))]
     Started(Started),
     /// Ready once a `tcp`, `http`, `log` or `cmd` check passes.
@@ -548,9 +549,9 @@ pub enum ReadyConfig {
 #[schemars(extend("examples" = ["started"]))]
 /// Readiness without a probe.
 pub enum Started {
-    /// Count the unit ready as soon as it runs, without probing anything. A dev server
-    /// whose program crashed under a file watcher still counts as ready, so prefer a check
-    /// when there is something to probe.
+    /// Count the unit ready once it runs, without probing anything; a service once it has
+    /// run half a second. A dev server whose program crashed under a file watcher still
+    /// counts as ready, so prefer a check when there is something to probe.
     #[schemars(extend("examples" = ["started"]))]
     Started,
 }
@@ -570,9 +571,10 @@ pub struct ReadyCheck {
     /// app has a health route that fails while it is broken. Each request sends
     /// `User-Agent: devlanes-ready`, so an app can leave the checks out of its request logs.
     pub http: Option<Box<HttpReady>>,
-    /// Ready once a line of output matches this regular expression, with colors and other
-    /// terminal escape codes removed; recent lines printed before the check began count
-    /// too. Suits workers without a port: have them print a line once connected.
+    /// Ready once a line of the unit's log, as `devlanes logs` shows it (for a container,
+    /// its Docker log), matches this regular expression, with colors removed; lines
+    /// printed before the check began count too. Suits workers without a port: have them
+    /// print a line once connected.
     #[schemars(extend("examples" = ["Connected to Redis"]))]
     pub log: Option<Templated<String>>,
     #[schemars(extend("examples" = ["curl -fsS ${{ self.url }}/healthz"]))]

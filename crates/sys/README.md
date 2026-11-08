@@ -35,6 +35,7 @@ All functions block. Call them from `spawn_blocking` in async code.
 - `resume_verified` (Windows only): takes one suspension off a verified process, for processes a crashed daemon left frozen.
 - `set_background` (macOS only): moves a verified process into the background priority band (`PRIO_DARWIN_BG`) or back out.
 - `open_file`, `holders`: find processes that still hold a PTY slave or pipe open.
+- `make_fifo`: creates a FIFO only this user can open, which `devlanes mcp` reads a command's JSON from while it runs.
 - `raise_nofile_limit`, `child_nofile_limit`: raise the daemon's open-file limit and keep the original for children.
 - `wsl`: whether this Linux process runs in a WSL distro (distro name, WSL 1 or 2, interop, systemd), detected once from the kernel release, the WSL interop binfmt entry and `WSL_DISTRO_NAME`. A container on Docker Desktop's WSL kernel is not WSL. Always `None` on macOS.
 - `windows_drives`, `windows_system32`: the Windows drives mounted into a WSL distro, and where Windows' `System32` is among them. Empty outside WSL.

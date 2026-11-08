@@ -334,6 +334,10 @@ pub(crate) struct LaneSt {
     /// refresh that read Docker before that drops its result.
     pub infra_generation: u64,
     pub setup_env: EnvMap,
+    /// Why the last layout of the lane (`view`) did not resolve, such as a
+    /// `lanes.vars` value with no value here. The next layout that resolves
+    /// clears it. A file that does not load is the config state's to report.
+    pub view_error: Option<RpcError>,
     pub last_error: Option<RpcError>,
     pub skipped_tasks: Vec<String>,
     /// Per-unit CPU and memory over the current lane start.
@@ -538,6 +542,7 @@ impl LaneSt {
             infra_refresh_queued: false,
             infra_generation: 0,
             setup_env: EnvMap::new(),
+            view_error: None,
             last_error: None,
             skipped_tasks: Vec::new(),
             usage: BTreeMap::new(),
@@ -712,11 +717,13 @@ impl LaneSt {
         }
     }
 
-    /// Canonical reference: `project@index`, or `project@<dir>` while unassigned.
+    /// Canonical reference: `project@index`; while unassigned, an extra lane's
+    /// `project@<name>`, else `project@<dir>`.
     pub(crate) fn reference(&self, project: &str) -> String {
-        match self.index() {
-            Some(index) => format!("{project}@{index}"),
-            None => format!("{project}@{}", dir_name(&self.path)),
+        match (self.index(), self.alias()) {
+            (Some(index), _) => format!("{project}@{index}"),
+            (None, Some((_, name))) => format!("{project}@{name}"),
+            (None, None) => format!("{project}@{}", dir_name(&self.path)),
         }
     }
 
@@ -1514,6 +1521,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
             ConfigState::Elsewhere(other) => Some(elsewhere_error(other, Some(&reference))),
             _ => None,
         })
+        .or_else(|| lane.view_error.clone())
         .or_else(|| lane.last_error.clone());
     let profiles = if lane.profiles.is_empty() {
         lane.record
