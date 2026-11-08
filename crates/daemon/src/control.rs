@@ -623,10 +623,9 @@ impl Inner {
         if base.st().record.is_none() {
             // The folder's first lane comes first; it could not get one.
             return Err(reason.unwrap_or_else(|| {
-                RpcError::new(
-                    "unassigned",
-                    json!({"lane": base.st().reference(&project.name())}),
-                    1,
+                crate::model::unassigned(
+                    &base.st().reference(&project.name()),
+                    crate::model::Unassigned::NoRecord,
                 )
             }));
         }
@@ -703,10 +702,9 @@ impl Inner {
         if lane.st().record.is_none() {
             let st = lane.st();
             return Err(st.unassigned.clone().unwrap_or_else(|| {
-                RpcError::new(
-                    "unassigned",
-                    json!({"lane": st.reference(&project.name())}),
-                    1,
+                crate::model::unassigned(
+                    &st.reference(&project.name()),
+                    crate::model::Unassigned::NoRecord,
                 )
             }));
         }

@@ -236,9 +236,11 @@ fn docker_setup_entries_run_by_hand_stay_done() -> Result<()> {
         Duration::from_secs(600),
     )?;
     let runs = lab.home().join("setup-runs");
+    // Forward slashes: a Windows path's backslashes are escapes in a double-quoted
+    // YAML string, and the run shell (sh) accepts `C:/...`.
     lab.write(
         "devlanes.yaml",
-        &BACKED.replace("{runs}", &runs.to_string_lossy()),
+        &BACKED.replace("{runs}", &runs.to_string_lossy().replace('\\', "/")),
     )?;
     let ran = || -> Vec<String> {
         let mut lines: Vec<String> = std::fs::read_to_string(&runs)

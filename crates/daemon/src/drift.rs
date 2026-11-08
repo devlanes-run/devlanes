@@ -615,7 +615,10 @@ impl Inner {
                 return Err(reason.clone());
             }
             if st.record.is_none() {
-                return Err(RpcError::new("unassigned", json!({"lane": reference}), 1));
+                return Err(crate::model::unassigned(
+                    &reference,
+                    crate::model::Unassigned::NoRecord,
+                ));
             }
             if options.env.is_none() && st.env.is_none() {
                 return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
