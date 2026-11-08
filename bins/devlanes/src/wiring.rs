@@ -2072,28 +2072,6 @@ impl ContainerInfra {
             state: state.map(str::to_owned),
         }));
     }
-
-    /// Setup env for `infra.setup` entries. The shared project comes from the
-    /// `config` cache, which `up` and `namespace` filled just before.
-    async fn setup_env(&self, spec: &InfraSpec) -> BTreeMap<String, String> {
-        if spec.compose_files.is_empty() {
-            return BTreeMap::new();
-        }
-        let lane_project = Self::has_lane_services(spec)
-            .then(|| devlanes_infra_compose::lane_project_name(&spec.project, spec.lane).ok())
-            .flatten();
-        match self
-            .compose
-            .shared_project(&Self::shared(&spec.shared()))
-            .await
-        {
-            Ok((project, _)) => {
-                devlanes_infra_compose::setup_env(&project, lane_project.as_deref())
-                    .unwrap_or_default()
-            }
-            Err(_) => BTreeMap::new(),
-        }
-    }
 }
 
 #[async_trait]
@@ -2310,6 +2288,28 @@ impl InfraProvider for ContainerInfra {
             answers.entry(key.clone()).or_insert(Observation::Unknown);
         }
         answers
+    }
+
+    /// The Compose env of the shared project and the lane's own, from the
+    /// cached Compose model (`config` at most); no container needs to run.
+    async fn setup_env(&self, spec: &InfraSpec) -> BTreeMap<String, String> {
+        if spec.compose_files.is_empty() {
+            return BTreeMap::new();
+        }
+        let lane_project = Self::has_lane_services(spec)
+            .then(|| devlanes_infra_compose::lane_project_name(&spec.project, spec.lane).ok())
+            .flatten();
+        match self
+            .compose
+            .shared_project(&Self::shared(&spec.shared()))
+            .await
+        {
+            Ok((project, _)) => {
+                devlanes_infra_compose::setup_env(&project, lane_project.as_deref())
+                    .unwrap_or_default()
+            }
+            Err(_) => BTreeMap::new(),
+        }
     }
 
     /// The shared names ([`Self::shared_names`]), the lane's own plain

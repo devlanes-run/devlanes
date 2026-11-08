@@ -532,6 +532,13 @@ pub trait InfraProvider: Send + Sync {
     /// the shared Compose services and the lane's own ones. Read from the files,
     /// never from the engine.
     async fn declared(&self, spec: &InfraSpec) -> Result<BTreeSet<String>, InfraError>;
+    /// The env `infra.setup` entries get (`COMPOSE_PROJECT_NAME`,
+    /// `COMPOSE_FILE` and the rest), as [`InfraUp::setup_env`] carries it.
+    /// Read from the files, never from the engine, so no container needs to
+    /// run. Empty when the provider cannot tell.
+    async fn setup_env(&self, _spec: &InfraSpec) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
     /// Health and endpoints of a project's infra.
     async fn status(&self, spec: &InfraSpec) -> Result<Value, InfraError>;
     /// Stops the project's shared containers, keeping their data (`infra down`,

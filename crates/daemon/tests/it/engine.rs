@@ -796,6 +796,9 @@ async fn run_infra_entry_gets_the_compose_env_without_a_start() {
             },
         )
         .await;
+        // None of the lane's containers runs: the env comes from the files.
+        *h.infra.namespace_db_state.lock().expect("lock") = Some("exited 0".into());
+        *h.infra.cache_down.lock().expect("lock") = true;
         h.call(
             Method::Run,
             json!({"task": "infra.setup.database"}),
@@ -819,6 +822,12 @@ async fn run_infra_entry_gets_the_compose_env_without_a_start() {
                 .iter()
                 .any(|call| call.starts_with("up")),
             "nothing started"
+        );
+        let lanes = status(&h, cx(&main), json!({})).await;
+        assert!(
+            lanes[0].containers.is_empty(),
+            "status does not show infra that never came up: {:?}",
+            lanes[0].containers
         );
         h.close().await;
     })

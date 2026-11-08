@@ -745,13 +745,17 @@ fn infra_error(error: crate::integrations::InfraError) -> RpcError {
     RpcError::from(error)
 }
 
-/// Stores a read of the lane's infra taken without bringing it up, with the
-/// setup env it gives. Returns whether the namespace changed.
-fn store_read(lane: &LaneRt, read: crate::model::InfraRead) -> bool {
+/// Stores a read of the lane's infra a start took without bringing it up,
+/// with the setup env it gives. The start holds the lane's `op`, so a changed
+/// namespace marks the views for its resolve phase to refresh, as
+/// [`crate::infra_restarts::store_infra_up`] does.
+fn store_read(lane: &LaneRt, read: crate::model::InfraRead) {
     let setup_env = read.up.setup_env.clone();
     let mut st = lane.st();
     st.setup_env = setup_env;
-    st.replace_infra(read)
+    if st.replace_infra(read) {
+        st.refresh_pending = true;
+    }
 }
 
 #[async_trait]
@@ -821,9 +825,11 @@ impl LanePhase for InfraPhase {
         } else {
             None
         };
-        // The containers' state last reported on `progress` events.
+        // The containers' state last reported on `progress` events. The views
+        // route to the containers; the stores below mark them for resolution
+        // to refresh when the namespace it plans with changed.
         let mut shown = Vec::new();
-        let changed = match &skip {
+        match &skip {
             Some(_) => {
                 match engine
                     .read_infra(&spec)
@@ -833,7 +839,6 @@ impl LanePhase for InfraPhase {
                     Ok(read) => store_read(&cx.lane, read),
                     Err(error) => {
                         tracing::debug!(code = %error.code, "infra namespace unavailable");
-                        false
                     }
                 }
             }
@@ -854,11 +859,6 @@ impl LanePhase for InfraPhase {
                     }
                 }
             }
-        };
-        // The views route to the containers; resolution refreshes them when
-        // the namespace it plans with changed.
-        if changed {
-            cx.lane.st().refresh_pending = true;
         }
         if skip.is_none() {
             // Setup and services rely on the containers, so their `ready` checks

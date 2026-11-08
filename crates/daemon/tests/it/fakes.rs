@@ -921,6 +921,10 @@ impl InfraProvider for FakeInfra {
     ) -> Result<std::collections::BTreeSet<String>, InfraError> {
         Ok(["cache", "db"].map(String::from).into())
     }
+    /// As Compose's provider: the env `up` gives, whatever runs.
+    async fn setup_env(&self, _: &InfraSpec) -> BTreeMap<String, String> {
+        BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())])
+    }
     async fn status(&self, _: &InfraSpec) -> Result<Value, InfraError> {
         Ok(json!({"db": "healthy"}))
     }
