@@ -1368,7 +1368,10 @@ impl Inner {
         }
         // A clean, reset or shutdown that fired the token is no timeout, and a task
         // that succeeded just as the limit fired still succeeded.
-        let succeeded = matches!(&outcome, Ok(outcome) if outcome.code == Some(0));
+        let succeeded = matches!(
+            &outcome,
+            Ok(outcome) if matches!(outcome.state, crate::units::UnitState::Exited(_))
+        );
         let expired = expired.load(std::sync::atomic::Ordering::SeqCst);
         if expired && !self.shutdown.is_cancelled() && !succeeded {
             return Err(RpcError::new("timeout", json!({"task": task}), 124));

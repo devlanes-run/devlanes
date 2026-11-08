@@ -4149,7 +4149,17 @@ impl Inner {
                 )
                 .await;
             results.push(match outcome {
-                Ok(outcome) => json!({"task": name, "exit_code": outcome.code}),
+                Ok(outcome) => {
+                    let mut result = json!({
+                        "task": name,
+                        "exit_code": outcome.code,
+                        "state": outcome.state.word(),
+                    });
+                    if let UnitState::Failed(Some(reason)) = &outcome.state {
+                        result["reason"] = json!(reason);
+                    }
+                    result
+                }
                 Err(error) => {
                     json!({"task": name, "error": {"code": error.code, "data": error.data}})
                 }

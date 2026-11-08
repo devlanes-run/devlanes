@@ -464,7 +464,12 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::LaneClean,
             json!({
                 "lane": "acme@2", "stopped": ["api", "web"],
-                "tasks": [{"task": "drop-db", "exit_code": 0}],
+                // `drop-db` from a daemon before `state`; `archive` ran past its own timeout.
+                "tasks": [
+                    {"task": "drop-db", "exit_code": 0},
+                    {"task": "archive", "exit_code": null, "state": "failed",
+                     "reason": {"code": "task_timeout", "data": {"timeout_ms": 60_000}, "exit_code": 1}},
+                ],
                 "teardown": [{"entry": "vhost", "exit_code": 3, "ignored": false}],
                 "infra": {"compose": "acme-2"},
             }),
@@ -1177,14 +1182,21 @@ fn daemon_stop_reports_units_and_failed_tasks() {
             {"lane": "acme@0", "task": "flush", "exit_code": 0},
             {"lane": "acme@0", "task": "notify", "exit_code": 3},
             {"lane": "acme@1", "task": "slow", "error": {"code": "cancelled", "data": null}},
+            {"lane": "acme@1", "task": "backup", "exit_code": null, "state": "failed",
+             "reason": {"code": "task_timeout", "data": {"timeout_ms": 60_000}, "exit_code": 1}},
+            {"lane": "acme@1", "task": "tidy", "exit_code": 0, "state": "exited"},
         ],
     });
     let text = render_text(Method::DaemonShutdown, &data);
     assert!(text.contains("stopped the daemon and 2 units"), "{text}");
-    assert!(text.contains("ran 3 lane.stop tasks"), "{text}");
+    assert!(text.contains("ran 5 lane.stop tasks"), "{text}");
     assert!(text.contains("acme@0 notify: exit 3"), "{text}");
     assert!(text.contains("acme@1 slow: cancelled"), "{text}");
-    assert!(!text.contains("flush"), "{text}");
+    assert!(
+        text.contains("acme@1 backup: failed, stopped by its timeout of 1m 0s"),
+        "{text}"
+    );
+    assert!(!text.contains("flush") && !text.contains("tidy"), "{text}");
     let idle = json!({"stopping": true, "processes": 0, "stopped": [], "tasks": []});
     let text = render_text(Method::DaemonShutdown, &idle);
     assert!(text.contains("stopped the daemon\n"), "{text}");

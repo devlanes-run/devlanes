@@ -657,6 +657,17 @@ async fn setup_and_task_history() {
             ..
         })
     ));
+    // A run stopped by request whose process exited 0 on the signal did not succeed.
+    let stopped = seed(&store).await;
+    store
+        .finish_task_run(stopped.id, Some(0), "stopped".into(), Some("seed-3".into()))
+        .await
+        .expect("finish stopped");
+    assert_eq!(
+        completion(&store).await.and_then(|marker| marker.spec_hash),
+        None,
+        "the marker keeps the last success"
+    );
 
     // A clean refused for an unfinished task changes nothing.
     let pending = store

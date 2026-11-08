@@ -288,8 +288,8 @@ impl Store {
         .await
     }
     /// Completes a task once with `state`, how it ended, and retains its
-    /// successful-once marker across retention. A success stores `spec_hash` on
-    /// the marker, replacing the previous one.
+    /// successful-once marker across retention. A success (`state` is `exited`)
+    /// stores `spec_hash` on the marker, replacing the previous one.
     pub async fn finish_task_run(
         &self,
         id: TaskRunId,
@@ -316,7 +316,8 @@ impl Store {
                 .returning((task_runs::lane_id, task_runs::task))
                 .get_result::<(i64, String)>(c)
                 .optional()?;
-                if let Some((lane, task)) = row.filter(|_| exit_code == Some(0)) {
+                // Only a run that ended `exited` succeeded: a stopped one can exit 0 too.
+                if let Some((lane, task)) = row.filter(|_| state == "exited") {
                     diesel::insert_into(task_completions::table)
                         .values((
                             task_completions::lane_id.eq(lane),

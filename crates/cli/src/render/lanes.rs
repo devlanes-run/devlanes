@@ -6,7 +6,9 @@ use serde_json::Value;
 
 use super::{
     Ctx, Outcome, bytes, clean, display_value, exit_field, int, leftover_notes, leftover_notes_of,
-    list, percent, plural, table, tail_lines, text, tree, words,
+    list,
+    other::{HookTaskEnd, hook_task_end},
+    percent, plural, table, tail_lines, text, tree, words,
 };
 use crate::{Hint, OutputMode};
 
@@ -1160,14 +1162,30 @@ pub(super) fn lane_clean(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .chain(teardown.iter().map(|t| (t, "entry")))
     {
         let ignored = entry.get("ignored").and_then(Value::as_bool) == Some(true);
-        if let Some(error) = entry.get("error") {
-            lines.push(format!(
-                "  {} {}: {}",
-                cx.state("failed"),
-                text(entry, key),
-                text(error, "code")
-            ));
-        } else if let Some(code) = int(entry, "exit_code").filter(|code| *code != 0) {
+        match hook_task_end(entry) {
+            HookTaskEnd::Exited => continue,
+            HookTaskEnd::Error(code) => {
+                lines.push(format!(
+                    "  {} {}: {code}",
+                    cx.state("failed"),
+                    text(entry, key)
+                ));
+                continue;
+            }
+            HookTaskEnd::Ended(state, detail) => {
+                let detail = detail.map(|detail| format!(": {detail}"));
+                lines.push(format!(
+                    "  {} {}{}",
+                    cx.state(&state),
+                    text(entry, key),
+                    detail.unwrap_or_default()
+                ));
+                continue;
+            }
+            // Teardown entries, and tasks from daemons before `state`.
+            HookTaskEnd::Unnamed => {}
+        }
+        if let Some(code) = int(entry, "exit_code").filter(|code| *code != 0) {
             let note = if ignored { " (ignored)" } else { "" };
             lines.push(format!(
                 "  {} {} exit={code}{note}",
