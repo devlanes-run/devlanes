@@ -25,9 +25,10 @@ use crate::{
     model::{LaneSt, lock},
 };
 
-/// How long `remote.use` waits for the mirrors to show a choice in
-/// `host.list`. Nothing in a reconcile waits for a box, so this is a bound
-/// for a busy machine only.
+/// How long `remote.use` waits for the chosen box's mirror to build its
+/// lanes, and then for the mirrors to show the choice in `host.list`.
+/// Nothing in a reconcile waits for a box, so this is a bound for a busy
+/// machine only.
 const APPLY_WAIT: Duration = Duration::from_secs(2);
 
 impl Remotes {
@@ -384,6 +385,19 @@ impl Inner {
             ));
         }
         self.load_choices().await;
+        // The box's registry lists its lanes as soon as `remote connect`
+        // returns, the assignment only once the mirror built them. Deciding
+        // in between would find the lane on the box and still answer that it
+        // is not mirrored.
+        let chosen = args.host.as_ref().and_then(|host| {
+            lock(&self.remote.hosts)
+                .get(host)
+                .filter(|conn| !conn.ended())
+                .cloned()
+        });
+        if let Some(conn) = chosen {
+            conn.lanes_built(APPLY_WAIT).await;
+        }
         // One at a time, and against `remote disconnect`: the check, the
         // store and memory see the same choices.
         let choosing = self.remote.connecting.lock().await;

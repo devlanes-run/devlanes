@@ -198,6 +198,16 @@ impl View {
     }
 }
 
+/// The lanes of `registry` a mirror builds routes for ([`View::built`]):
+/// those with a unit this machine may mirror.
+pub(super) fn buildable(registry: &Registry) -> BTreeSet<String> {
+    registry
+        .units()
+        .filter(|unit| unit.mirrorable())
+        .map(|unit| lane_ref(&unit.key.lane))
+        .collect()
+}
+
 /// The reason `remote ls` shows next to a skipped lane: the lane in use.
 pub(super) fn skip_reason(skip: &Skip) -> String {
     let lane = &skip.winner_lane;
@@ -851,10 +861,7 @@ impl Mirror {
             refused_hosts,
             open_errors: BTreeMap::new(),
             warned: BTreeMap::new(),
-            built: visible
-                .iter()
-                .map(|unit| lane_ref(&unit.key.lane))
-                .collect(),
+            built: buildable(registry),
         };
         let routes_changed = {
             let mut current = lock(&self.conn.view);

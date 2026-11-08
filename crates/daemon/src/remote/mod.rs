@@ -691,6 +691,28 @@ impl HostConn {
         let _ = tokio::time::timeout(RECORD_WAIT, recorded.wait_for(|done| *done)).await;
     }
 
+    /// Waits, at most `limit`, until the mirror built routes for every lane
+    /// the box's registry lists, or the link ended. The registry holds a new
+    /// session's lanes before the link counts as connected, but the
+    /// assignment counts a lane only once the mirror built it, in its next
+    /// reconcile.
+    pub(super) async fn lanes_built(&self, limit: Duration) {
+        // Subscribed before the first look: a reconcile that ends after it wakes the loop.
+        let mut applied = self.applied.subscribe();
+        let wait = async {
+            loop {
+                let wanted = mirror::buildable(&self.registry.current());
+                if self.ended() || wanted.is_subset(&lock(&self.view).built) {
+                    return;
+                }
+                if applied.changed().await.is_err() {
+                    return;
+                }
+            }
+        };
+        let _ = tokio::time::timeout(limit, wait).await;
+    }
+
     /// `remote.state` payload for the current state, with the command that
     /// resumes a link waiting for a sign-in or pairing as `fix`.
     fn state_json(&self) -> Value {
