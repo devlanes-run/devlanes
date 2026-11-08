@@ -314,6 +314,7 @@ async fn starts_report_progress_from_their_command() {
         let address = gate.local_addr().expect("gate address").to_string();
         let client = TestClient::new();
         let progress = client.progress.clone();
+        let progressed = client.progressed.clone();
         let harness = connect(client, Lifecycle::Initialize, |config| {
             config.env.insert("FAKE_PHASES_GATE".into(), address);
         })
@@ -327,9 +328,7 @@ async fn starts_report_progress_from_their_command() {
         // client has it.
         let release = async {
             let (mut command, _) = gate.accept().await.expect("the command waits");
-            while seen().is_empty() {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
+            progressed.notified().await;
             assert_eq!(seen(), ["acme@1 infra started"]);
             tokio::io::AsyncWriteExt::write_all(&mut command, b"1")
                 .await

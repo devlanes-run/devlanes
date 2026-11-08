@@ -1193,7 +1193,11 @@ impl Cli {
         // Starts stream their lane events for phase lines, NDJSON and CI groups.
         // Agent output prints none of them, but the JSON copy `devlanes mcp`
         // reads takes them for its progress. `wait` streams them only for the bar.
-        let start_events = runtime.mode != OutputMode::Agent || runtime.json_out.is_some();
+        let start_events = (runtime.mode != OutputMode::Agent || runtime.json_out.is_some())
+            && self
+                .command
+                .as_ref()
+                .is_some_and(Command::streams_start_events);
         let wait_events =
             runtime.mode == OutputMode::Human && runtime.stdout_tty && runtime.ci.is_none();
         let selection =
@@ -1421,7 +1425,7 @@ impl Cli {
                     json!({
                         "name": name,
                         "start": start,
-                        "events": *start && start_events,
+                        "events": start_events,
                         "env": self.env.iter().cloned().collect::<BTreeMap<_, _>>(),
                     }),
                 ),
@@ -1845,6 +1849,23 @@ impl Cli {
 }
 
 impl Command {
+    /// Whether the command starts a lane and asks the daemon to stream that
+    /// start's events (`events` in its request) whenever its output wants
+    /// them: human, plain and JSON output, or agent output with a JSON copy
+    /// (`devlanes mcp`, which reports their `lane.phase` events as progress).
+    pub fn streams_start_events(&self) -> bool {
+        matches!(
+            self,
+            Self::Start(_)
+                | Self::Restart(_)
+                | Self::Reload(_)
+                | Self::With(_)
+                | Self::Lane {
+                    command: LaneCommand::Resume { .. } | LaneCommand::New { start: true, .. }
+                }
+        )
+    }
+
     /// Whether the command only reads: it starts, stops and changes nothing a later
     /// command would see (`devlanes mcp --read-only` runs only these). Every
     /// command is listed, so a new one does not compile until it is classified.

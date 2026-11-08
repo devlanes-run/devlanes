@@ -155,24 +155,14 @@ impl Call {
         )
     }
 
-    /// Whether the command starts a lane and so, run with a JSON copy, streams
-    /// the start's events into it: every request the CLI sends with `events`
-    /// (`start`, `restart`, `reload`, `with`, `lane resume`, `lane new
-    /// --start`). Its `lane.phase` events are the call's progress, and none of
-    /// its events are the call's data.
+    /// Whether the command, run with a JSON copy, streams its start's events
+    /// into it ([`Command::streams_start_events`]). Its `lane.phase` events
+    /// are the call's progress, and none of its events are the call's data.
     pub fn starts(&self) -> bool {
-        matches!(
-            &self.cli.command,
-            Some(
-                Command::Start(_)
-                    | Command::Restart(_)
-                    | Command::Reload(_)
-                    | Command::With(_)
-                    | Command::Lane {
-                        command: LaneCommand::Resume { .. } | LaneCommand::New { start: true, .. }
-                    }
-            )
-        )
+        self.cli
+            .command
+            .as_ref()
+            .is_some_and(Command::streams_start_events)
     }
 
     /// Adds `--timeout` to a blocking command that has none, so it returns

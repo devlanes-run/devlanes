@@ -377,7 +377,9 @@ reporter!(JsonReporter, Json);
 /// Where [`Runtime::json_out`] points: a file, or the pipe `devlanes mcp`
 /// reads while the command runs. Opened on the first write and kept open by
 /// every reporter of the invocation, so a pipe has one writer from first line
-/// to exit. Cheap to clone; clones share the handle.
+/// to exit. The path must be new, a fresh pipe or file: writing starts at
+/// offset 0 without truncating, so an existing file would keep a stale tail.
+/// Cheap to clone; clones share the handle.
 #[derive(Debug, Clone)]
 pub struct JsonOut {
     path: std::path::PathBuf,

@@ -47,6 +47,8 @@ pub struct TestClient {
     ui: bool,
     pub asked: Arc<Mutex<Vec<String>>>,
     pub progress: Arc<Mutex<Vec<String>>>,
+    /// Notified after each progress message is recorded.
+    pub progressed: Arc<tokio::sync::Notify>,
 }
 
 impl Default for TestClient {
@@ -58,6 +60,7 @@ impl Default for TestClient {
             ui: false,
             asked: Arc::default(),
             progress: Arc::default(),
+            progressed: Arc::default(),
         }
     }
 }
@@ -129,7 +132,7 @@ impl ClientHandler for TestClient {
         ))
     }
 
-    /// Records the progress message.
+    /// Records the progress message, then wakes a waiter (or the next one).
     async fn on_progress(
         &self,
         params: ProgressNotificationParam,
@@ -138,6 +141,7 @@ impl ClientHandler for TestClient {
         if let Ok(mut progress) = self.progress.lock() {
             progress.push(params.message.unwrap_or_default());
         }
+        self.progressed.notify_one();
     }
 }
 
