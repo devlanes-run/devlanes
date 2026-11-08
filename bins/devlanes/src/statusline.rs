@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use devlanes_cli::{StatuslineInput, statusline, statusline_lane};
+use devlanes_cli::{StatuslineInput, statusline};
 use devlanes_client::{Client, Paths};
 use devlanes_proto::{Context, LaneSummary, Method, Page};
 use serde_json::json;
@@ -72,14 +72,24 @@ async fn line() -> Option<String> {
     let paths = Paths::discover().ok()?;
     // `connect` never spawns a daemon, unlike the other commands' connect.
     let mut client = Client::connect(&paths).await.ok()?;
-    // `all` lists the lanes without registering the directory's project or
-    // giving its worktree a lane, which a plain `status` there would do.
+    // `all` lists the lanes, and `here` names the directory's own, without
+    // registering its project or giving its worktree a lane, which a plain
+    // `status` there would do.
+    let context = Context {
+        cwd,
+        ..Context::default()
+    };
     let data = client
-        .request(Method::Status, json!({"all": true}), Context::default())
+        .request(
+            Method::Status,
+            json!({"all": true, "here_for": Method::Status}),
+            context,
+        )
         .await
         .ok()?;
+    let here = data["here"].as_str()?.to_owned();
     let lanes: Page<LaneSummary> = serde_json::from_value(data).ok()?;
-    let lane = statusline_lane(&lanes.items, &cwd)?;
+    let lane = lanes.items.iter().find(|lane| lane.reference == here)?;
     let color = std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty());
     Some(statusline(lane, input.session_id.as_deref(), color))
 }

@@ -78,7 +78,6 @@ pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
         // The process's environment, zone and directory.
         env: None,
         time_zone: None,
-        cwd: None,
         scope: None,
         reopen: crate::relaunch::reopen(),
         setup_check: Some(setup_check(paths.clone())),

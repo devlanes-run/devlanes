@@ -95,6 +95,55 @@ pub fn quote_msys(arg: &str) -> String {
     out
 }
 
+/// Characters that never need quotes in a `cmd.exe` argument; std's list.
+/// Every other ASCII symbol is quoted, so `cmd.exe` cannot read it as an
+/// operator.
+const CMD_UNQUOTED: &str = r"#$*+-./:?@\_";
+
+/// `arg` quoted for a command line `cmd.exe` parses, the way std's
+/// `append_bat_arg` quotes batch file arguments: quoted when empty, ending in
+/// `\` (so `"%~1"` in a script does not escape its own closing quote), or
+/// holding any ASCII symbol outside a small safe set or a control character;
+/// quotes doubled; `%` defused. A line break cannot be made safe; callers
+/// refuse it.
+pub fn quote_for_cmd(arg: &str) -> String {
+    let quoted = arg.is_empty()
+        || arg.ends_with('\\')
+        || arg.chars().any(|character| {
+            (character.is_ascii()
+                && !(character.is_ascii_alphanumeric() || CMD_UNQUOTED.contains(character)))
+                || character.is_control()
+        });
+    let mut out = String::with_capacity(arg.len() + 2);
+    if quoted {
+        out.push('"');
+    }
+    let mut backslashes = 0;
+    for character in arg.chars() {
+        if character == '\\' {
+            backslashes += 1;
+        } else {
+            if character == '"' {
+                // n backslashes before a quote become 2n, and the quote doubles.
+                out.extend(std::iter::repeat_n('\\', backslashes));
+                out.push('"');
+            } else if character == '%' {
+                // `%%cd:~,%` expands to nothing (a zero-length substring of the
+                // always-set `cd`), and it keeps cmd.exe from pairing this `%`
+                // with another one into a variable reference.
+                out.push_str("%%cd:~,");
+            }
+            backslashes = 0;
+        }
+        out.push(character);
+    }
+    if quoted {
+        out.extend(std::iter::repeat_n('\\', backslashes));
+        out.push('"');
+    }
+    out
+}
+
 /// Directories under a Git for Windows root that hold the native `git.exe`
 /// (`clangarm64` on ARM64, `mingw32` in 32-bit installs).
 const TOOLCHAIN_DIRS: [&str; 3] = ["mingw64", "clangarm64", "mingw32"];
@@ -203,6 +252,30 @@ fn root_from_exe(git: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Quoting for `cmd.exe` quotes everything it could read as syntax and
+    /// defuses `%`, as std does for batch file arguments.
+    #[test]
+    fn cmd_quoting() {
+        for (arg, expected) in [
+            ("plain", "plain"),
+            ("safe-arg_1.txt", "safe-arg_1.txt"),
+            (r"C:\dir\file", r"C:\dir\file"),
+            ("", r#""""#),
+            ("a b", r#""a b""#),
+            (r"C:\dir\", r#""C:\dir\\""#),
+            (r#"a"b"#, r#""a""b""#),
+            (r#"a\"b"#, r#""a\\""b""#),
+            ("&calc", r#""&calc""#),
+            ("a|b<c>d^e", r#""a|b<c>d^e""#),
+            ("%PATH%", r#""%%cd:~,%PATH%%cd:~,%""#),
+            ("!x!", r#""!x!""#),
+            ("tab\there", "\"tab\there\""),
+            ("ünï", "ünï"),
+        ] {
+            assert_eq!(quote_for_cmd(arg), expected, "{arg:?}");
+        }
+    }
 
     /// `--exec-path` output, with either separator, gives the install root;
     /// POSIX paths and paths too short to have one give none.

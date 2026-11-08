@@ -1,9 +1,9 @@
-//! `status --statusline`: the line for each lane state, its colors, the stdin
-//! fields it reads and the lane it picks for a directory.
+//! `status --statusline`: the line for each lane state, its colors and the
+//! stdin fields it reads.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use devlanes_cli::{StatuslineInput, statusline, statusline_lane};
+use devlanes_cli::{StatuslineInput, statusline};
 use devlanes_proto::LaneSummary;
 use serde_json::{Value, json};
 
@@ -168,39 +168,4 @@ fn input_prefers_the_workspace_directory() {
         StatuslineInput::default()
     );
     assert_eq!(StatuslineInput::parse(""), StatuslineInput::default());
-}
-
-#[test]
-fn the_lane_is_the_deepest_worktree_holding_the_directory() {
-    let at = |reference: &str, path: &str| {
-        let mut value = lane(Some(0), "main", "running", vec![]);
-        value["reference"] = json!(reference);
-        value["path"] = json!(path);
-        value
-    };
-    let mut extra = at("acme@2", "/work/acme");
-    extra["name"] = json!("review");
-    let mut missing = at("acme@3", "/work/acme/.worktrees/gone");
-    missing["reason"] =
-        json!({"code": "worktree_missing", "data": {"path": "/work/gone"}, "exit_code": 3});
-    let lanes: Vec<LaneSummary> = [
-        extra,
-        at("acme@0", "/work/acme"),
-        at("acme@1", "/work/acme/.worktrees/feat"),
-        missing,
-    ]
-    .into_iter()
-    .map(summary)
-    .collect();
-    let pick =
-        |cwd: &str| statusline_lane(&lanes, Path::new(cwd)).map(|lane| lane.reference.as_str());
-    assert_eq!(
-        pick("/work/acme/src"),
-        Some("acme@0"),
-        "the folder's own lane"
-    );
-    assert_eq!(pick("/work/acme/.worktrees/feat/web"), Some("acme@1"));
-    assert_eq!(pick("/work/acme/.worktrees/gone"), Some("acme@0"));
-    assert_eq!(pick("/work/acme-other"), None, "whole components only");
-    assert_eq!(pick("/elsewhere"), None);
 }

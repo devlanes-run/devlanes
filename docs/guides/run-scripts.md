@@ -60,7 +60,7 @@ The first runner whose file name matches wins, in this order.
 
 | File | Runner | Command built |
 | --- | --- | --- |
-| `package.json` | npm | `<pm> run <name>`; the package manager is detected |
+| `package.json` | npm | `<pm> run <name>`; the package manager is detected (npm scripts on Windows run without npm, below) |
 | `GNUmakefile`, `makefile`, `Makefile`, `*.mk`, `*.mak` | make | `make [-f <file>] <target>` |
 | `justfile`, `.justfile` (any case), `*.just` | just | `just [--justfile <file>] <recipe>` |
 | `deno.json`, `deno.jsonc` | deno | `deno task [--config deno.jsonc] <name>` |
@@ -84,6 +84,8 @@ Two lockfiles of different managers in one directory is an error; delete the sta
 Preset flags are appended after the script name. Only npm gets a `--` separator (`npm run dev -- --port 20012`); pnpm, yarn and bun forward a literal `--` to the script, which makes Vite ignore what follows, so they get `pnpm run dev --port 20012`.
 
 `devlanes env show api --explain` prints the detection as a note, for example `npm: pnpm 10.4.1 (packageManager in package.json)`.
+
+On Windows, npm turns any stop of its script into exit code 1, so devlanes runs npm scripts there without starting npm. Each of `pre<name>`, the script with its arguments and `post<name>` runs as npm runs it, as `cmd /d /s /c "<step>"` in the package directory, and the steps stop at the first one that fails, with its code. A `script-shell` set in `.npmrc` (the package directory's, the worktree's or the one in your profile directory) runs the steps with `-c` instead. `node_modules\.bin` of the package directory and every parent comes first on `PATH`, and the script sees npm's package and lifecycle variables (`npm_package_name`, `npm_package_version`, `npm_package_config_*`, `npm_lifecycle_event`, ...), but not npm's `npm_config_*` settings, `npm_execpath` or `npm_config_user_agent`. The steps reach `cmd.exe` in the variables `DEVLANES_NPM_PRE`, `DEVLANES_NPM_SCRIPT` and `DEVLANES_NPM_POST`, which the script therefore also sees. pnpm, yarn and bun scripts still run through their manager.
 
 ### Makefile
 

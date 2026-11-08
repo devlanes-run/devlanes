@@ -589,8 +589,14 @@ async fn u_on_an_outdated_daemon_closes_to_update() -> TestResult {
 #[tokio::test]
 async fn a_reopened_tui_opens_on_the_lane_and_view_it_had() -> TestResult {
     let api = FakeApi::with_lanes(mixed_lanes());
+    let home = || {
+        Msg::Home(devlanes_tui::api::Home {
+            lanes: Vec::new(),
+            here: Some("acme@0".into()),
+        })
+    };
     let mut app = App::new(140, 24);
-    app.prefer_path("/work/acme/main".into());
+    app.update(home());
     let mut effects = Vec::new();
     app.reopen(
         &Reopen {
@@ -610,9 +616,9 @@ async fn a_reopened_tui_opens_on_the_lane_and_view_it_had() -> TestResult {
         Some("shop@0")
     );
 
-    // A lane that is gone falls back to the working directory's.
+    // A lane that is gone falls back to the directory's own, as the daemon said.
     let mut app = App::new(140, 24);
-    app.prefer_path("/work/acme/main".into());
+    app.update(home());
     app.reopen(
         &Reopen {
             lane: Some("gone@9".into()),

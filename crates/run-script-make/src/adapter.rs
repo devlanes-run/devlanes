@@ -51,6 +51,8 @@ impl ScriptRunner for MakeTargets {
             body: None,
             notes: Vec::new(),
             detail: None,
+            env: Default::default(),
+            path: Vec::new(),
         })
     }
 }

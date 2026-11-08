@@ -562,6 +562,22 @@ async fn a_project_named_outside_its_folders_uses_its_main_lane() {
             );
         }
         assert_eq!(lanes(&h, &main).await.len(), 2, "nothing cleaned");
+        // Clients completing those commands are told what the commands would do.
+        let here = |method: &'static str| {
+            let named = named.clone();
+            let h = &h;
+            async move {
+                h.call(
+                    Method::Status,
+                    json!({"all": true, "here_for": method}),
+                    named,
+                )
+                .await
+                .expect("status")
+            }
+        };
+        assert_eq!(here("logs").await["here"], "demo@0");
+        assert_eq!(here("exec").await["here_error"]["code"], "lane_required");
         let created = h
             .call(
                 Method::LaneNew,

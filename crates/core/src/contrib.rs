@@ -270,6 +270,14 @@ pub struct ScriptPlan {
     /// `pnpm 10.4.1 (packageManager in package.json)`. Shown with the notes.
     #[serde(default)]
     pub detail: Option<String>,
+    /// Variables the script runs with, as its tool would set them (npm's
+    /// `npm_package_*`). Layered under the unit's own `env`.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// Directories put in front of the unit's `PATH`, first wins (npm's
+    /// `node_modules/.bin` directories).
+    #[serde(default)]
+    pub path: Vec<PathBuf>,
 }
 
 /// Renders `run_script` references for one kind of source file

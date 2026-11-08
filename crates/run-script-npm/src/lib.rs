@@ -17,6 +17,8 @@ mod detect;
 mod manager;
 mod npm;
 mod pnpm;
+#[cfg(windows)]
+mod windows;
 mod yarn;
 
 pub use adapter::NpmScripts;
@@ -59,6 +61,11 @@ pub struct LaunchPlan {
     pub notes: Vec<String>,
     /// The script's command line, for presets that reject hardcoded flags.
     pub script_body: String,
+    /// Variables the script runs with besides the unit's (npm's package and
+    /// lifecycle variables when npm itself is not started).
+    pub env: BTreeMap<String, String>,
+    /// Directories to put in front of `PATH`, first wins.
+    pub path: Vec<PathBuf>,
 }
 
 impl LaunchPlan {
@@ -135,6 +142,9 @@ pub enum NpmError {
         dir: PathBuf,
         lockfiles: Vec<String>,
     },
+    /// A script argument `cmd.exe` would cut short (a line break).
+    #[error("argument {0:?} cannot be passed to an npm script through cmd.exe")]
+    UnsafeArgument(String),
 }
 
 /// Formats the script list for [`NpmError::MissingScript`].
@@ -160,6 +170,23 @@ pub(crate) struct Manifest {
     /// Presence marks an npm, yarn or bun workspace root.
     #[serde(default)]
     pub(crate) workspaces: Option<serde_json::Value>,
+    /// The fields npm exposes to scripts as `npm_package_*` variables, which
+    /// only the Windows plan sets itself.
+    #[cfg(windows)]
+    #[serde(default)]
+    pub(crate) name: Option<serde_json::Value>,
+    #[cfg(windows)]
+    #[serde(default)]
+    pub(crate) version: Option<serde_json::Value>,
+    #[cfg(windows)]
+    #[serde(default)]
+    pub(crate) config: Option<serde_json::Value>,
+    #[cfg(windows)]
+    #[serde(default)]
+    pub(crate) engines: Option<serde_json::Value>,
+    #[cfg(windows)]
+    #[serde(default)]
+    pub(crate) bin: Option<serde_json::Value>,
 }
 
 /// Parses a `package.json`, returning `None` when the file does not exist.
@@ -191,10 +218,20 @@ pub fn handles(path: &Path) -> bool {
 ///
 /// Fails when the file is missing, is not valid JSON or has no such script.
 pub fn read_script(manifest: &Path, name: &str) -> Result<PackageScript, NpmError> {
-    let parsed = read_manifest(manifest)?.ok_or_else(|| NpmError::Read {
+    let parsed = read_existing(manifest)?;
+    script_of(&parsed, manifest, name)
+}
+
+/// [`read_manifest`] for a file that must exist.
+fn read_existing(manifest: &Path) -> Result<Manifest, NpmError> {
+    read_manifest(manifest)?.ok_or_else(|| NpmError::Read {
         path: manifest.to_owned(),
         error: std::io::ErrorKind::NotFound.into(),
-    })?;
+    })
+}
+
+/// Script `name` of `parsed`, read from `manifest`.
+fn script_of(parsed: &Manifest, manifest: &Path, name: &str) -> Result<PackageScript, NpmError> {
     match parsed.scripts.get(name) {
         Some(body) => Ok(PackageScript {
             manifest: manifest.to_owned(),
@@ -204,12 +241,18 @@ pub fn read_script(manifest: &Path, name: &str) -> Result<PackageScript, NpmErro
         None => Err(NpmError::MissingScript {
             file: manifest.to_owned(),
             name: name.to_owned(),
-            available: parsed.scripts.into_keys().collect(),
+            available: parsed.scripts.keys().cloned().collect(),
         }),
     }
 }
 
 /// Resolves a script reference into the command to spawn.
+///
+/// On Windows an npm-managed script runs without npm: its `pre`, main and
+/// `post` steps run as npm runs them, with npm's package variables and
+/// `node_modules\.bin` directories (see `windows.rs`), because npm turns any
+/// stop of its script into exit code 1 there. Elsewhere, and for the other
+/// managers, the plan is `<pm> run <name>`.
 ///
 /// Errors when the source escapes the worktree, the script is missing or,
 /// without a declared field, lockfiles of different managers share a
@@ -224,12 +267,13 @@ pub fn plan(request: &ScriptRequest<'_>) -> Result<LaunchPlan, NpmError> {
     if !handles(&file) {
         return Err(NpmError::NotManifest { file });
     }
-    let script = read_script(&file, request.name)?;
+    let manifest = read_existing(&file)?;
+    let script = script_of(&manifest, &file, request.name)?;
     let cwd = file
         .parent()
         .map_or_else(|| worktree.clone(), Path::to_path_buf);
     let detection = detect_package_manager(&cwd, &worktree)?;
-    Ok(LaunchPlan {
+    let launch = LaunchPlan {
         argv: detection.manager.run_argv(request.name, request.extra_args),
         cwd,
         manager: detection.manager,
@@ -237,7 +281,45 @@ pub fn plan(request: &ScriptRequest<'_>) -> Result<LaunchPlan, NpmError> {
         version: detection.version,
         notes: detection.notes,
         script_body: script.body,
-    })
+        env: BTreeMap::new(),
+        path: Vec::new(),
+    };
+    #[cfg(windows)]
+    let launch = if launch.manager == PackageManager::Npm {
+        without_npm(launch, &file, &manifest, &worktree, request)?
+    } else {
+        launch
+    };
+    Ok(launch)
+}
+
+/// `launch` for an npm script, run without npm (see [`plan`]).
+#[cfg(windows)]
+fn without_npm(
+    mut launch: LaunchPlan,
+    file: &Path,
+    manifest: &Manifest,
+    worktree: &Path,
+    request: &ScriptRequest<'_>,
+) -> Result<LaunchPlan, NpmError> {
+    let home = std::env::var_os("USERPROFILE").map(PathBuf::from);
+    let npm = windows::npm_plan(
+        file,
+        manifest,
+        worktree,
+        home.as_deref(),
+        request.name,
+        &launch.script_body,
+        request.extra_args,
+    )?;
+    launch.argv = npm.argv;
+    launch.env = npm.env;
+    launch.path = npm.path;
+    launch.notes.push(format!(
+        "on Windows npm scripts run through {} without npm",
+        npm.shell
+    ));
+    Ok(launch)
 }
 
 /// Rejects names the package manager would parse as one of its own options.

@@ -33,7 +33,7 @@ The `devlanes` binary dispatches `devlanes __console-ctrl <pid> <c|break>` to `c
 - `WindowsUnit`: implements `Unit`. Also provides `identity`, `processes`, `listening_ports`, `size`, `set_power`, `terminate`, `exit_report`, `wait_report` and `stop_with_report`.
 - `ExitReport`: exit code or signal, stop details and the processes swept after the leader exited.
 - `SpawnError`: why a unit did not start, with a stable `code()` such as `shell_missing` or `unsafe_batch_argument`. Converted to `devlanes_core::Error::Io` with a `devlanes_core::SpawnRefusal` source that carries the code.
-- `spawn_foreground` and `shell_exit_code`: run a command on this process's console with the same resolution (the test command of `devlanes with`) and map its exit code the way a shell reports it.
+- `spawn_foreground` and `shell_exit_code`: run a command on this process's console with the same resolution and quoting as units (the test command of `devlanes with`) and map its exit code the way a shell reports it.
 - `console_ctrl_main` and `ConsoleHelper`: the helper that sends Ctrl-C or Ctrl-Break to a unit's console.
 - `stop_orphan`: stops a unit a previous daemon left running; pass it `WindowsRunner::runtimes()` so it shares the runner's reads of which programs link the MSYS runtime.
 
@@ -49,7 +49,7 @@ A `pty: true` leader runs in a pseudo console (ConPTY) of `LaunchSpec::size`, or
 
 When the unit ends or is stopped, its job is terminated and waited for before the console is closed, which ends the output. The console closes with the daemon too, so `pty: true` units end about 5 seconds after a daemon crash and are not found as orphans.
 
-A bare program name is looked up on the unit's `PATH` with `PATHEXT` (`.COM`, `.EXE`, `.BAT` and `.CMD` only). Batch files run through `<System32>\cmd.exe /e:ON /v:OFF /d /c` with std's escaping, and an argument `cmd.exe` cannot take safely (a line break) is refused. A program relative to a drive's current directory (`C:tool`) and a working directory of 260 characters or more are refused too.
+A bare program name is looked up on the unit's `PATH` with `PATHEXT` (`.COM`, `.EXE`, `.BAT` and `.CMD` only). Batch files run through `<System32>\cmd.exe /e:ON /v:OFF /d /c` with std's escaping, and an argument `cmd.exe` cannot take safely (a line break) is refused. A program relative to a drive's current directory (`C:tool`) and a working directory of 260 characters or more are refused too. A program that links the MSYS2 runtime (`Runtimes` reads its import table) gets every argument in double quotes with `\` and `"` escaped, which that runtime reads back exactly without expanding `*` or `~`; every other program gets the C runtime's quoting, as std's `Command` does.
 
 `/bin/sh`, which `run:` strings resolve to, runs as Git for Windows' `usr\bin\sh.exe` with `MSYS_NO_PATHCONV=1` and `MSYS2_ARG_CONV_EXCL=*`; without it such units fail with `shell_missing`. Git's `usr\bin` is appended to the end of the unit's `PATH`, so scripts find `sleep`, `grep` and `sed` while programs found earlier on `PATH` still win.
 

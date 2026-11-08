@@ -745,6 +745,51 @@ async fn foreground_commands_resolve_like_units() {
             devlanes_runner_windows::spawn_foreground("no-such-tool", &[], &env(&[]), dir.path())
                 .expect_err("missing");
         assert_eq!(missing.code(), "not_found");
+
+        // A user's `[cmd, /c, <path with a space>, ...]` keeps the C
+        // runtime's quoting, and an MSYS program gets its arguments exactly,
+        // so `*` is not expanded against the folder's files.
+        let shell = devlanes_shell_windows::windows_shell()
+            .await
+            .expect("Git for Windows' sh.exe");
+        let git = shell
+            .ancestors()
+            .nth(3)
+            .expect("Git's install directory")
+            .join(r"cmd\git.exe");
+        std::fs::write(dir.path().join("acme.txt"), "").expect("file");
+        for (program, args) in [
+            (
+                "cmd".to_owned(),
+                vec![
+                    "/c".to_owned(),
+                    git.display().to_string(),
+                    "--version".to_owned(),
+                ],
+            ),
+            (
+                shell.display().to_string(),
+                ["-c", r#"test "$1" = '*'"#, "sh", "*"]
+                    .map(str::to_owned)
+                    .to_vec(),
+            ),
+        ] {
+            let (path, case) = (dir.path().to_path_buf(), format!("{program} {args:?}"));
+            let code = tokio::task::spawn_blocking(move || {
+                let child =
+                    devlanes_runner_windows::spawn_foreground(&program, &args, &env(&[]), &path)
+                        .expect("spawn");
+                let exited = child.wait_timeout(LIMIT).expect("wait");
+                if exited.is_none() {
+                    let _ = child.terminate(1);
+                }
+                exited
+            })
+            .await
+            .expect("join")
+            .expect("exited in time");
+            assert_eq!(code, 0, "{case}");
+        }
     })
     .await;
 }
@@ -799,7 +844,7 @@ exit 4"#;
         assert_eq!(unit.wait().await.expect("exit").code, Some(4));
 
         let unit = runner()
-            .with_shell(Some(shell))
+            .with_shell(Some(shell.clone()))
             .spawn_unit(spec(
                 "/bin/sh",
                 &["-c", "kill -INT $$"],
@@ -816,6 +861,22 @@ exit 4"#;
                 signal: Some(2)
             }
         );
+
+        // An explicit list naming Git's `sh.exe` gets its arguments exactly:
+        // `*` is not expanded against the folder's files.
+        std::fs::write(dir.path().join("acme.txt"), "").expect("file");
+        let unit = runner()
+            .spawn_unit(spec(
+                &shell.to_string_lossy(),
+                &["-c", r#"printf '%s\n' "$1""#, "sh", "*"],
+                dir.path(),
+                env(&[]),
+            ))
+            .await
+            .expect("spawn");
+        let _cleanup = Cleanup(unit.clone());
+        let output = text(&drain(unit.output()).await, OutputStream::Stdout);
+        assert_eq!(output, "*\n");
     })
     .await;
 }

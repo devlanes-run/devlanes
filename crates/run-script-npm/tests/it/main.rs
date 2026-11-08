@@ -7,6 +7,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+mod windows;
+
 const ALL: [PackageManager; 5] = [
     PackageManager::Npm,
     PackageManager::Pnpm,
@@ -424,19 +427,42 @@ async fn adapter_resolves_through_core_trait() {
         extra_args: &args,
     };
     let plan = runner.resolve(&request).await.expect("resolve");
-    assert_eq!(plan.argv, ["npm", "run", "dev", "--", "--port", "1"]);
+    // On Windows npm turns every stop into exit code 1, so its scripts run
+    // without it.
+    if cfg!(windows) {
+        assert_eq!(
+            plan.argv,
+            [
+                "cmd.exe",
+                "/v:on",
+                "/d",
+                "/s",
+                "/c",
+                "cmd /d /s /c !DEVLANES_NPM_SCRIPT!"
+            ]
+        );
+        assert_eq!(
+            plan.env.get("DEVLANES_NPM_SCRIPT").map(String::as_str),
+            Some(r#""vite --port 1""#)
+        );
+        assert_eq!(plan.path[0], temp.path().join(r"web\node_modules\.bin"));
+    } else {
+        assert_eq!(plan.argv, ["npm", "run", "dev", "--", "--port", "1"]);
+        assert!(plan.env.is_empty() && plan.path.is_empty());
+    }
     assert_eq!(plan.cwd, temp.path().join("web"));
     assert_eq!(plan.body.as_deref(), Some("vite"));
     assert_eq!(
         plan.detail.as_deref(),
         Some("npm (lockfile package-lock.json)")
     );
-    assert_eq!(
-        plan.notes,
-        [
-            r#"no packageManager field; detected npm from package-lock.json. Add "packageManager": "npm@<version>" to package.json"#
-        ]
-    );
+    let mut notes = vec![
+        r#"no packageManager field; detected npm from package-lock.json. Add "packageManager": "npm@<version>" to package.json"#,
+    ];
+    if cfg!(windows) {
+        notes.push("on Windows npm scripts run through cmd.exe without npm");
+    }
+    assert_eq!(plan.notes, notes);
     let missing = contrib::ScriptRequest {
         name: "start",
         ..request

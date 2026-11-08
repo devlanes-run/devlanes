@@ -33,6 +33,8 @@ impl ScriptRunner for NotingRunner {
             body: None,
             notes: vec!["no packageManager field; detected pnpm from pnpm-lock.yaml".to_owned()],
             detail: Some("pnpm (lockfile pnpm-lock.yaml)".to_owned()),
+            env: Default::default(),
+            path: Vec::new(),
         })
     }
 }
