@@ -767,7 +767,7 @@ impl Inner {
                 .iter()
                 .filter_map(|(project, lane)| {
                     let st = lane.st();
-                    let running = st.any_running() || st.busy.is_some();
+                    let running = st.any_running() || st.is_busy();
                     // A gone worktree that never was a lane is dropped unasked.
                     (stale(&st) && !running && st.record.is_some())
                         .then(|| st.reference(&project.name()))
@@ -788,7 +788,7 @@ impl Inner {
                     stale(&st),
                     st.record.is_some(),
                     st.reference(&project.name()),
-                    st.any_running() || st.busy.is_some(),
+                    st.any_running() || st.is_busy(),
                 )
             };
             if !stale || present && !assigned {

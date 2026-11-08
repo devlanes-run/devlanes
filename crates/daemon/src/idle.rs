@@ -320,7 +320,7 @@ fn idle_units(st: &LaneSt, reference: &str) -> Result<Vec<Named>, RpcError> {
         ));
     }
     if !st.starts.is_empty()
-        || st.busy.is_some()
+        || st.stopping
         || st.spawning > 0
         || st.closing != crate::model::Closing::No
         || st.sweeping
