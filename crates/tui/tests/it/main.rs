@@ -57,14 +57,13 @@ use tokio::sync::mpsc;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 /// Options for driving the loop in tests: an empty environment (no
-/// `NO_COLOR`, locale or `TMUX` from the machine, no `HOME`), UTC and a
-/// directory no lane uses, so what a test draws is the same everywhere.
-/// The fake daemon answers everything else, the install method included.
+/// `NO_COLOR`, locale or `TMUX` from the machine, no `HOME`) and UTC, so what
+/// a test draws is the same everywhere. The fake daemon answers everything
+/// else, the install method included.
 fn hermetic_options() -> Options {
     Options {
         env: Some(std::collections::BTreeMap::new()),
         time_zone: Some(jiff::tz::TimeZone::UTC),
-        cwd: Some("/nonexistent/devlanes-tests".into()),
         ..Options::default()
     }
 }

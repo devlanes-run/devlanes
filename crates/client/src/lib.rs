@@ -534,34 +534,44 @@ impl Client {
     /// so acts on the cwd's project, and `reload` or a `restart` without units, which
     /// it does not know. `daemon_outdated` says to restart the daemon.
     fn check_features(&self, method: Method, params: &Value, context: &Context) -> Result<()> {
-        let has = |feature: &str| self.peer.features.iter().any(|known| known == feature);
-        let missing = if context.file.is_some() && !has(features::PROJECT_FILE) {
+        let missing = if context.file.is_some() && !self.supports(features::PROJECT_FILE) {
             Some("--file")
-        } else if method == Method::Reload && !has(features::RELOAD) {
+        } else if method == Method::Reload && !self.supports(features::RELOAD) {
             Some("reload")
         } else if method == Method::Restart
             && params["units"].as_array().is_none_or(Vec::is_empty)
-            && !has(features::RELOAD)
+            && !self.supports(features::RELOAD)
         {
             Some("restart without units")
         } else {
             None
         };
         match missing {
-            Some(what) => Err(Error::Rpc(RpcError::new(
-                "daemon_outdated",
-                serde_json::json!({
-                    "needs": what,
-                    "version": self.peer.version,
-                    "message": format!(
-                        "the running daemon ({}) predates {what}; restart it with `devlanes daemon restart`",
-                        self.peer.version
-                    ),
-                }),
-                1,
-            ))),
+            Some(what) => Err(Error::Rpc(self.daemon_outdated(what))),
             None => Ok(()),
         }
+    }
+
+    /// Whether the daemon advertises `feature` ([`features`]).
+    pub fn supports(&self, feature: &str) -> bool {
+        self.peer.features.iter().any(|known| known == feature)
+    }
+
+    /// `daemon_outdated`: the running daemon predates `what`, so restarting it is
+    /// the fix.
+    pub fn daemon_outdated(&self, what: &str) -> RpcError {
+        RpcError::new(
+            "daemon_outdated",
+            serde_json::json!({
+                "needs": what,
+                "version": self.peer.version,
+                "message": format!(
+                    "the running daemon ({}) predates {what}; restart it with `devlanes daemon restart`",
+                    self.peer.version
+                ),
+            }),
+            1,
+        )
     }
 
     /// Logs the answer to one of this connection's requests with its duration.

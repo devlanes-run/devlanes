@@ -729,17 +729,29 @@ impl Inner {
         all: bool,
         policy: Policy,
     ) -> Result<ReadScope, RpcError> {
+        Ok(self.read_scope_found(context, all, policy).await?.0)
+    }
+
+    /// [`Self::read_scope`] with the [`Found`] it resolved, after any registration;
+    /// `None` for `all` and for a `--lane`.
+    pub(crate) async fn read_scope_found(
+        self: &Arc<Self>,
+        context: &Context,
+        all: bool,
+        policy: Policy,
+    ) -> Result<(ReadScope, Option<Found>), RpcError> {
         // Never registers a project: completion and the TUI's monitor ask `all`.
         if all {
-            return Ok(ReadScope::All(self.all_lanes()));
+            return Ok((ReadScope::All(self.all_lanes()), None));
         }
         if context.lane.is_some() {
-            return Ok(ReadScope::Lane(self.lane(context, policy).await?));
+            return Ok((ReadScope::Lane(self.lane(context, policy).await?), None));
         }
-        match self.projects(context, policy).await? {
+        let found = self.projects(context, policy).await?;
+        let scope = match &found {
             Found::Projects { projects, .. } => {
                 if policy.relist {
-                    for project in &projects {
+                    for project in projects {
                         let _ = self.relist(project).await;
                     }
                 }
@@ -752,20 +764,33 @@ impl Inner {
                 {
                     self.claim_lane(project, &lane).await;
                 }
-                Ok(ReadScope::Projects(projects))
+                ReadScope::Projects(projects.clone())
             }
-            Found::Unregistered { config, .. } => {
-                Ok(ReadScope::Unregistered(config.project.clone()))
-            }
+            Found::Unregistered { config, .. } => ReadScope::Unregistered(config.project.clone()),
             Found::Nothing { .. } => {
                 if policy.relist {
                     for project in self.all_projects() {
                         let _ = self.relist(&project).await;
                     }
                 }
-                Ok(ReadScope::All(self.all_lanes()))
+                ReadScope::All(self.all_lanes())
             }
-        }
+        };
+        Ok((scope, Some(found)))
+    }
+
+    /// The reference of the request's own lane as `method` resolves it from `found`,
+    /// which an earlier step of the same request resolved. Registers, relists and
+    /// claims nothing, so it agrees with `method` run in the same context.
+    pub(crate) fn here(
+        &self,
+        found: &Found,
+        context: &Context,
+        method: Method,
+    ) -> Result<String, RpcError> {
+        let (project, lane) = self.locate(found, context, Policy::of(method))?.lane;
+        let reference = lane.st().reference(&project.name());
+        Ok(reference)
     }
 
     /// Facts of lane 0 of the project `config` describes, laid out without storing

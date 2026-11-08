@@ -252,9 +252,6 @@ where
     #[cfg(windows)]
     let user_home = crate::home::user_home(options);
     app.user_home = user_home;
-    if let Some(cwd) = options.cwd.clone().or_else(|| std::env::current_dir().ok()) {
-        app.prefer_path(cwd);
-    }
     let (sender, mut receiver) = mpsc::channel(MESSAGE_QUEUE);
     let mut executor = Executor::new(api, sender, options, clipboard);
     let mut effects = app.start();
@@ -623,8 +620,8 @@ impl Executor {
                 tokio::spawn(async move {
                     let status = api.status().await;
                     // Before the lanes, so the first `Status` can open on one of them.
-                    let home = api.home_lanes();
-                    if !home.is_empty() {
+                    let home = api.home_scope();
+                    if home != crate::api::Home::default() {
                         deliver(&sender, Msg::Home(home)).await;
                     }
                     deliver(&sender, Msg::Status(status)).await;
