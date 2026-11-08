@@ -28,6 +28,10 @@ struct StatusParams {
     mine: bool,
     #[serde(default)]
     watch: bool,
+    /// The command the client completes with the lane `status` reports as `here`;
+    /// `status` itself when absent.
+    #[serde(default)]
+    here_for: Option<Method>,
 }
 
 /// `logs` parameters: proto's [`LogQuery`] plus `all` (cli `LaneLogQuery`).
@@ -229,6 +233,13 @@ impl Inner {
         let scope = self
             .read_scope(context, args.all, Policy::of(Method::Status))
             .await?;
+        // The request's own lane as the command the client completes would resolve
+        // it, after this status's own registration (none with `all`).
+        let here = match args.here_for {
+            Some(method) => Some(self.here(context, method).await),
+            None if !args.all => Some(self.here(context, Method::Status).await),
+            None => None,
+        };
         let lanes = scope.lanes();
         let mine = args.mine.then_some(&context.actor);
         let items = self.summaries(&lanes, mine);
@@ -259,7 +270,14 @@ impl Inner {
                 })
                 .await;
         }
-        serde_json::to_value(Page::complete(items)).map_err(|e| internal("encode", e))
+        let mut reply =
+            serde_json::to_value(Page::complete(items)).map_err(|e| internal("encode", e))?;
+        match here {
+            Some(Ok(reference)) => reply["here"] = json!(reference),
+            Some(Err(error)) => reply["here_error"] = json!(error),
+            None => {}
+        }
+        Ok(reply)
     }
 
     /// `lane.list`: re-lists worktrees first so new ones show immediately.

@@ -507,16 +507,26 @@ pub struct ConnectSession {
     pub answers: mpsc::Sender<(u64, Bytes)>,
 }
 
+/// The lanes of the TUI's scope and its own lane, from the scoped `status`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Home {
+    /// References of the lanes the scope covers.
+    pub lanes: Vec<String>,
+    /// The directory's own lane as the daemon resolves it (`status`'s `here`);
+    /// `None` when it has none or the daemon is too old to say.
+    pub here: Option<String>,
+}
+
 /// Everything the TUI asks of the daemon. Context.actor is always human here.
 #[async_trait]
 pub trait DaemonApi: Send + Sync {
     /// Lanes and units; the daemon picks the scope from the context (no lane or project).
     async fn status(&self) -> Result<Vec<LaneSummary>, ApiError>;
-    /// The lanes the daemon resolved for the TUI's directory and the CLI's `-p`,
+    /// What the daemon resolved for the TUI's directory and the CLI's `-p`,
     /// `--file` or `--lane`, known after the first [`DaemonApi::status`]; empty
     /// when it could not tell.
-    fn home_lanes(&self) -> Vec<String> {
-        Vec::new()
+    fn home_scope(&self) -> Home {
+        Home::default()
     }
     /// Opens the event subscription.
     async fn subscribe(&self) -> Result<EventStream, ApiError>;
@@ -885,8 +895,8 @@ pub struct ClientApi {
     /// The CLI's `-p`, `--file`, `--lane` and `DEVLANES_LANE_PROJECT`, sent with
     /// the first scoped `status` only.
     scope: Context,
-    /// References that scoped `status` answered, for [`DaemonApi::home_lanes`].
-    home: std::sync::Mutex<Vec<String>>,
+    /// What the scoped `status` answered, for [`DaemonApi::home_scope`].
+    home: std::sync::Mutex<Home>,
 }
 
 impl ClientApi {
@@ -916,7 +926,7 @@ impl ClientApi {
             cwd_seen: AtomicBool::new(false),
             setup_check,
             scope,
-            home: std::sync::Mutex::new(Vec::new()),
+            home: std::sync::Mutex::new(Home::default()),
         }))
     }
 
@@ -1024,9 +1034,11 @@ impl DaemonApi for ClientApi {
             match scoped {
                 Err(error) if error.is_disconnect() => return Err(error),
                 Ok(value) => {
+                    // An older daemon sends no `here`; the TUI then opens on a home lane.
+                    let here = value["here"].as_str().map(str::to_owned);
                     if let Ok(page) = from_value::<Page<LaneSummary>>(value) {
-                        let home = page.items.into_iter().map(|lane| lane.reference).collect();
-                        *self.home.lock().unwrap_or_else(|e| e.into_inner()) = home;
+                        let lanes = page.items.into_iter().map(|lane| lane.reference).collect();
+                        *self.home.lock().unwrap_or_else(|e| e.into_inner()) = Home { lanes, here };
                     }
                     self.cwd_seen.store(true, Ordering::Relaxed);
                 }
@@ -1045,7 +1057,7 @@ impl DaemonApi for ClientApi {
         Ok(page.items)
     }
 
-    fn home_lanes(&self) -> Vec<String> {
+    fn home_scope(&self) -> Home {
         self.home.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 

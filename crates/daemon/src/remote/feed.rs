@@ -508,7 +508,7 @@ mod tests {
             remote: false,
             box_https_port: None,
             address: None,
-            upstream_box: None,
+            pool_key: None,
         };
         let routes = [
             route("web.app1.localhost", "web", 4100),
