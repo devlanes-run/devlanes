@@ -12,6 +12,12 @@ fn malformed(source_name: &'static str, detail: impl Into<String>) -> Error {
     }
 }
 
+/// `mkfifo(path, 0600)`.
+pub(crate) fn make_fifo(path: &Path) -> io::Result<()> {
+    use rustix::fs::{CWD, Mode, mkfifoat};
+    Ok(mkfifoat(CWD, path, Mode::RUSR | Mode::WUSR)?)
+}
+
 /// Reads the kernel's random per-boot UUID.
 pub(crate) fn boot_id() -> Result<String, Error> {
     let id = fs::read_to_string("/proc/sys/kernel/random/boot_id")?;

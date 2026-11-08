@@ -9,14 +9,14 @@ use std::{
     },
 };
 
-use devlanes_proto::{Context, LaneWarning, RpcError};
+use devlanes_proto::{Context, LaneWarning, Method, RpcError};
 use serde_json::{Value, json};
 
 use crate::{
     engine::Inner,
     integrations::{RouteEntry, RouteStatus},
     model::{LaneRt, LaneSt, ProjectRt},
-    query::ReadScope,
+    target::{Policy, ReadScope},
     units::UnitState,
 };
 
@@ -405,7 +405,7 @@ impl Inner {
         context: &Context,
     ) -> Result<Value, RpcError> {
         let scope = self
-            .read_scope(context, false, crate::query::Strictness::Lenient)
+            .read_scope(context, false, Policy::of(Method::Hosts))
             .await?;
         let references: Option<BTreeSet<String>> = match &scope {
             ReadScope::All(_) => None,

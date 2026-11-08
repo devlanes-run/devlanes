@@ -86,7 +86,8 @@ async fn config_show_prints_the_merged_config() {
             .await
             .expect("config show");
         assert_eq!(shown["project"], "acme", "{shown}");
-        assert_eq!(shown["lane"], "acme@0", "{shown}");
+        // Nothing started acme, so the file answers without a lane.
+        assert_eq!(shown["lane"], Value::Null, "{shown}");
         assert_eq!(
             shown["files"],
             json!([main.join("devlanes.yaml"), main.join("devlanes.local.yaml")]),

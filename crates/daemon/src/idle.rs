@@ -928,7 +928,12 @@ impl Inner {
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<Value, RpcError> {
-        let (project, lane) = self.target_lane(context).await?;
+        let (project, lane) = self
+            .lane(
+                context,
+                crate::target::Policy::of(devlanes_proto::Method::DebugFreeze),
+            )
+            .await?;
         self.make_idle(&project, &lane, Power::Frozen, None).await?;
         Ok(json!({"lane": lane.st().reference(&project.name()), "level": "frozen"}))
     }
@@ -938,7 +943,12 @@ impl Inner {
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<Value, RpcError> {
-        let (project, lane) = self.target_lane(context).await?;
+        let (project, lane) = self
+            .lane(
+                context,
+                crate::target::Policy::of(devlanes_proto::Method::DebugThaw),
+            )
+            .await?;
         let thawed = self
             .wake_lane(&project, &lane, Some(Activity::Command))
             .await;

@@ -15,7 +15,7 @@ devlanes-core = { path = "../core" }
 thiserror.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["process", "std"] }
+rustix = { version = "1", features = ["fs", "process", "std"] }
 
 [target.'cfg(windows)'.dependencies]
 devlanes-sys-windows = { path = "../sys-windows" }

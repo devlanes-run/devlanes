@@ -47,6 +47,7 @@ mod setup;
 mod spawn_error;
 mod stopping;
 mod stream;
+mod target;
 mod terminal;
 pub mod units;
 pub mod update;

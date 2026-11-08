@@ -47,6 +47,8 @@ pub struct TestClient {
     ui: bool,
     pub asked: Arc<Mutex<Vec<String>>>,
     pub progress: Arc<Mutex<Vec<String>>>,
+    /// Notified after each progress message is recorded.
+    pub progressed: Arc<tokio::sync::Notify>,
 }
 
 impl Default for TestClient {
@@ -58,6 +60,7 @@ impl Default for TestClient {
             ui: false,
             asked: Arc::default(),
             progress: Arc::default(),
+            progressed: Arc::default(),
         }
     }
 }
@@ -129,7 +132,7 @@ impl ClientHandler for TestClient {
         ))
     }
 
-    /// Records the progress message.
+    /// Records the progress message, then wakes a waiter (or the next one).
     async fn on_progress(
         &self,
         params: ProgressNotificationParam,
@@ -138,6 +141,7 @@ impl ClientHandler for TestClient {
         if let Ok(mut progress) = self.progress.lock() {
             progress.push(params.message.unwrap_or_default());
         }
+        self.progressed.notify_one();
     }
 }
 
@@ -285,22 +289,8 @@ impl Harness {
             .expect("tool call")
     }
 
-    /// Every run of the fake so far, `{args, cwd, from_lane, ai_agent, json_out}`,
-    /// without the `debug events` runs that follow a start for progress (rmcp's
-    /// client asks for progress on every call).
+    /// Every run of the fake so far, `{args, cwd, from_lane, ai_agent, json_out}`.
     pub fn runs(&self) -> Vec<Value> {
-        self.all_runs()
-            .into_iter()
-            .filter(|run| {
-                !run["args"]
-                    .as_array()
-                    .is_some_and(|args| args.contains(&json!("events")))
-            })
-            .collect()
-    }
-
-    /// Every run of the fake so far.
-    pub fn all_runs(&self) -> Vec<Value> {
         std::fs::read_to_string(&self.log)
             .unwrap_or_default()
             .lines()
