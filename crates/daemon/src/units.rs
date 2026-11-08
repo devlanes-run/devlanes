@@ -1460,9 +1460,10 @@ mod tests {
                 bytes: Bytes::from_static(b"up\r\n"),
             })
             .expect("send");
-        // Logged before the check begins, so its first read passes. No timer
-        // bounds this wait: the paused clock would jump to it while the log
-        // thread writes. nextest's limit ends a hang.
+        // Logged before the check begins, so its first read passes. While the
+        // log thread writes, the paused clock jumps to the next timer: the
+        // pump's 200 ms pause, or a bound on this wait, which is why there is
+        // none. nextest's limit ends a hang.
         loop {
             let page = host.read_log(LogQuery::default()).await.expect("read");
             if page.items.iter().any(|line| line.text == "up") {
@@ -1470,6 +1471,10 @@ mod tests {
             }
             logged.changed().await.expect("log writer runs");
         }
+        assert!(
+            tokio::time::Instant::now() < host.spawned() + crate::ready::EARLY_EXIT,
+            "the window ended before the check began"
+        );
         let check = tokio::spawn({
             let host = host.clone();
             async move {
