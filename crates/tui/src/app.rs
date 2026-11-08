@@ -1718,6 +1718,9 @@ impl App {
                     let data = event.data.clone();
                     let lane = run.event(&event);
                     self.track_phase(&data);
+                    if self.request_events_count() {
+                        self.track_start(&data);
+                    }
                     if let Some(lane) = lane {
                         self.pending_begin(&lane);
                     }
@@ -1793,12 +1796,23 @@ impl App {
         self.starts.progress()
     }
 
+    /// Whether the events of this TUI's own start request count for which
+    /// starts run. Only while no subscription is online: an online one
+    /// delivers the same events in order with `start.ended`, and a request
+    /// event can arrive after that end and start following the start again.
+    fn request_events_count(&self) -> bool {
+        !matches!(self.connection, Connection::Online)
+    }
+
     /// Feeds the start tracker; a failed start is forgotten after
     /// [`START_ERROR_TICKS`] so its red bar ends.
     fn track_starts(&mut self, msg: &Msg) {
         match msg {
             Msg::Status(Ok(lanes)) => self.starts.seed(lanes),
-            Msg::Event(event) | Msg::Start(StartFrame::Event(event)) => self.starts.event(event),
+            Msg::Event(event) => self.starts.event(event),
+            Msg::Start(StartFrame::Event(event)) if self.request_events_count() => {
+                self.starts.event(event);
+            }
             Msg::Tick if matches!(self.starts.progress(), Progress::Error(_)) => {
                 self.start_error_ticks += 1;
                 if self.start_error_ticks >= START_ERROR_TICKS {
@@ -2834,9 +2848,9 @@ impl App {
         }
     }
 
-    /// Counts the start of a subscription's `lane.phase` event as running,
-    /// when the daemon sends `start.ended`. Events of the start's own request
-    /// do not count: one can arrive after the subscription brought its end.
+    /// Counts the start of a `lane.phase` event as running, when the daemon
+    /// sends `start.ended`. Callers pass the subscription's events, and the
+    /// start request's only while [`App::request_events_count`].
     fn track_start(&mut self, data: &Value) {
         if !self.tracks_starts {
             return;

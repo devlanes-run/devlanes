@@ -6,10 +6,10 @@ use std::{sync::Arc, time::Duration};
 
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
 use devlanes_proto::{Event, events, features};
-use devlanes_term::{Links, Notifications, NotifyStyle, POP_TITLE, PUSH_TITLE};
+use devlanes_term::{Links, Notifications, NotifyStyle, POP_TITLE, PUSH_TITLE, Progress};
 use devlanes_tui::{
     DaemonApi, Options,
-    app::{App, Effect, Msg},
+    app::{App, Effect, Msg, StartFrame},
     drive,
 };
 use futures_util::stream;
@@ -81,12 +81,17 @@ fn notices(effects: &[Effect]) -> Vec<String> {
 }
 
 /// A `lane.phase` event of start `id` of acme@0.
-fn phase_of(id: u64) -> Msg {
-    Msg::Event(Event {
+fn phase_event(id: u64) -> Event {
+    Event {
         seq: 3,
         event: events::PHASE.into(),
         data: json!({"lane": "acme@0", "phase": "services", "state": "started", "start_id": id}),
-    })
+    }
+}
+
+/// [`phase_event`] from the subscription.
+fn phase_of(id: u64) -> Msg {
+    Msg::Event(phase_event(id))
 }
 
 /// The end of start `id` of acme@0.
@@ -133,6 +138,10 @@ async fn notifications_need_an_unfocused_terminal_and_a_long_start() -> TestResu
         notices(&app.update(ended(2))),
         ["acme@0 is up: 2 of 2 ready"]
     );
+    // The TUI's own start request delivers an event of start 2 after the
+    // subscription brought its end: the start stays over.
+    app.update(Msg::Start(StartFrame::Event(phase_event(2))));
+    assert_eq!(app.start_progress(), Progress::Clear);
     // A failed start says so when it ends; its failure is no crash.
     app.update(phase_of(3));
     assert!(notices(&app.update(changed(main_lane("failed", "ready", "failed")))).is_empty());
