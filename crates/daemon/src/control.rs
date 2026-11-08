@@ -1176,7 +1176,7 @@ impl Inner {
                 .await;
         }
         if let Some(error) = resolved.errors.get(&format!("tasks.{}", run.task)) {
-            return Err(crate::resolve::resolve_error(error));
+            return Err(crate::resolve::resolve_error(error, &reference));
         }
         let task = resolved.tasks.get(&run.task).ok_or_else(|| {
             RpcError::new(
@@ -1280,8 +1280,9 @@ impl Inner {
         session: &Session,
     ) -> Result<Value, RpcError> {
         let task = format!("infra.{}.{}", entry.phase, entry.entry);
+        let reference = lane.st().reference(&project.name());
         if let Some(error) = resolved.errors.get(&task) {
-            return Err(crate::resolve::resolve_error(error));
+            return Err(crate::resolve::resolve_error(error, &reference));
         }
         let commands = if entry.phase == "setup" {
             &resolved.setup
@@ -1307,7 +1308,6 @@ impl Inner {
                 3,
             ));
         }
-        let reference = lane.st().reference(&project.name());
         let unit = format!("{}.{}", entry.phase, entry.entry);
         if entry.detach {
             let previous = lane.st().units.get(&unit).map(|rec| rec.host.clone());

@@ -353,7 +353,11 @@ async fn unresolved_service_is_failed_unless_running() {
         let _ = h.call(Method::Start, json!({}), cx(&main)).await;
         let bad = unit_summary(&h, &main, "bad").await.expect("bad");
         assert_eq!(bad.state, "failed");
-        assert_eq!(bad.reason.expect("reason").code, "unresolved_value");
+        let reason = bad.reason.expect("reason");
+        assert_eq!(
+            (reason.code.as_str(), &reason.data["lane"]),
+            ("unresolved_value", &json!("acme@0"))
+        );
         let logs = h
             .call(
                 Method::Logs,

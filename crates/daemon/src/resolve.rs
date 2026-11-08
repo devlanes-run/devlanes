@@ -23,19 +23,23 @@ use crate::{
 /// Folder under the lane's data folder that holds the generated Compose override.
 pub(crate) const COMPOSE_DIR: &str = "compose";
 
-/// Shapes resolution failures as machine codes with data. A value that does not
-/// evaluate in this lane (an unset `${{ env.X }}`) is `unresolved_value`: the
-/// file is valid, so `config_error` would send the user to `config check`.
-pub(crate) fn resolve_error(error: &ResolveError) -> RpcError {
+/// Shapes resolution failures in lane `lane` (its reference) as machine codes
+/// with data. A value that does not evaluate in this lane (an unset
+/// `${{ env.X }}`) is `unresolved_value`: the file is valid, so `config_error`
+/// would send the user to `config check`. Both name the lane, since a value
+/// can resolve in one lane and not in another.
+pub(crate) fn resolve_error(error: &ResolveError, lane: &str) -> RpcError {
     let (code, data, exit) = match error {
         ResolveError::Expression { path, message } => (
             "unresolved_value",
-            json!({"path": path, "message": message}),
+            json!({"lane": lane, "path": path, "message": message}),
             1,
         ),
-        ResolveError::Invalid { path, message } => {
-            ("config_error", json!({"path": path, "message": message}), 1)
-        }
+        ResolveError::Invalid { path, message } => (
+            "config_error",
+            json!({"lane": lane, "path": path, "message": message}),
+            1,
+        ),
         ResolveError::UnknownProfile { name, available } => (
             "unknown_profile",
             json!({"profile": name, "candidates": available}),
@@ -215,7 +219,10 @@ impl Inner {
                 false,
             )
             .await?;
-        let layers = resolved.lane_layers().map_err(resolve_error)?.clone();
+        let layers = resolved
+            .lane_layers()
+            .map_err(|error| resolve_error(error, &reference))?
+            .clone();
         Ok((resolved, layers))
     }
 
@@ -376,7 +383,7 @@ impl Inner {
                 planned = only.map_or(-1, |only| only.len() as i64)
             ))
             .await
-            .map_err(|error| resolve_error(&error))?;
+            .map_err(|error| resolve_error(&error, &reference))?;
         // A unit must never be spawned on a port the config leaves to a server
         // devlanes does not run.
         let own = crate::external::lane_ports(
@@ -439,6 +446,7 @@ impl Inner {
         lane: &Arc<LaneRt>,
         needs: &[InfraPortNeed],
     ) -> Result<InfraSpec, RpcError> {
+        let reference = lane.st().reference(&project.name());
         let (config, allocation, view, env, infra_ns) = {
             let st = lane.st();
             let config = st
@@ -564,7 +572,7 @@ impl Inner {
                 Some(ready) => {
                     let cwd = if per_lane { &lane_dir } else { &primary_dir };
                     devlanes_resolve::container_ready(ready, cwd, &raw, &format!("{path}.ready"))
-                        .map_err(|error| resolve_error(&error))?
+                        .map_err(|error| resolve_error(&error, &reference))?
                 }
                 None => None,
             };

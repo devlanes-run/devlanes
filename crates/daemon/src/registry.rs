@@ -1579,6 +1579,7 @@ impl Inner {
         infra: &[InfraPortNeed],
         access: LaneAccess,
     ) -> Result<devlanes_state::Allocation, RpcError> {
+        let reference = lane.st().reference(&project.name());
         let (config, record, facts_env) = {
             let st = lane.st();
             let config = st
@@ -1593,7 +1594,7 @@ impl Inner {
             (config, record, st.env.clone())
         };
         let needs = devlanes_resolve::port_needs(&config, &self.integ.contributors)
-            .map_err(|error| crate::resolve::resolve_error(&error))?;
+            .map_err(|error| crate::resolve::resolve_error(&error, &reference))?;
         let mut names = needs.names.clone();
         for need in infra.iter().filter(|n| n.scope == PortScope::Lane) {
             names.insert(PortName::new(need.unit.clone(), need.name.clone()));
@@ -1605,7 +1606,7 @@ impl Inner {
         let client_env = facts_env.map(|env| (*env).clone()).unwrap_or_default();
         let fixed_start =
             devlanes_resolve::fixed_block_start(&config, &facts, &client_env, &dotenv)
-                .map_err(|error| crate::resolve::resolve_error(&error))?;
+                .map_err(|error| crate::resolve::resolve_error(&error, &reference))?;
         let fixed_size = literal(&config.lanes.block_size);
         // Running units keep the block they were spawned with (plan 5.8): a
         // config that needs another block waits for the next whole-lane start.
@@ -2148,6 +2149,7 @@ impl Inner {
         lane: &Arc<LaneRt>,
         lanes_main: Option<&Value>,
     ) -> Result<LaneView, RpcError> {
+        let reference = lane.st().reference(&project.name());
         let (config, allocation, env, infra_ns) = {
             let st = lane.st();
             // Running units keep the layout they started with while the file is broken.
@@ -2185,7 +2187,7 @@ impl Inner {
         let https_port = self.integ.routes.https_port();
         input.public_https_port = https_port;
         let layout = devlanes_resolve::lane_layout(&input)
-            .map_err(|error| crate::resolve::resolve_error(&error))?;
+            .map_err(|error| crate::resolve::resolve_error(&error, &reference))?;
         let services = layout
             .services
             .values()

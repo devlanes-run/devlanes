@@ -1137,7 +1137,7 @@ impl Inner {
                     .get(&format!("services.{name}"))
                     .or_else(|| resolved.errors.get(&format!("tasks.{name}")))
                 {
-                    return Err(crate::resolve::resolve_error(error));
+                    return Err(crate::resolve::resolve_error(error, &reference));
                 }
                 let launch = resolved
                     .services
