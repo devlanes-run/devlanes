@@ -570,9 +570,10 @@ pub struct ReadyCheck {
     /// app has a health route that fails while it is broken. Each request sends
     /// `User-Agent: devlanes-ready`, so an app can leave the checks out of its request logs.
     pub http: Option<Box<HttpReady>>,
-    /// Ready once a line of output matches this regular expression, with colors and other
-    /// terminal escape codes removed; recent lines printed before the check began count
-    /// too. Suits workers without a port: have them print a line once connected.
+    /// Ready once a line of the unit's log, as `devlanes logs` shows it (for a container,
+    /// its Docker log), matches this regular expression, with colors removed; lines
+    /// printed before the check began count too. Suits workers without a port: have them
+    /// print a line once connected.
     #[schemars(extend("examples" = ["Connected to Redis"]))]
     pub log: Option<Templated<String>>,
     #[schemars(extend("examples" = ["curl -fsS ${{ self.url }}/healthz"]))]

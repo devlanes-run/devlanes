@@ -1821,11 +1821,11 @@
               "type": "null"
             }
           ],
-          "description": "Ready once a line of output matches this regular expression, with colors and other terminal escape codes removed; recent lines printed before the check began count too. Suits workers without a port: have them print a line once connected.",
+          "description": "Ready once a line of the unit's log, as `devlanes logs` shows it (for a container, its Docker log), matches this regular expression, with colors removed; lines printed before the check began count too. Suits workers without a port: have them print a line once connected.",
           "examples": [
             "Connected to Redis"
           ],
-          "markdownDescription": "Ready once a line of output matches this regular expression, with colors and other terminal escape codes removed; recent lines printed before the check began count too. Suits workers without a port: have them print a line once connected."
+          "markdownDescription": "Ready once a line of the unit's log, as `devlanes logs` shows it (for a container, its Docker log), matches this regular expression, with colors removed; lines printed before the check began count too. Suits workers without a port: have them print a line once connected."
         },
         "tcp": {
           "anyOf": [

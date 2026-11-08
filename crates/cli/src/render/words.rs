@@ -514,6 +514,17 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             },
             status_hint(data).or_else(|| logs_hint(data)),
         ),
+        "ready_log_failed" => (
+            match target(data) {
+                found if found.is_empty() => {
+                    "its log stopped being written, so ready.log cannot match".into()
+                }
+                found => {
+                    format!("{found}'s log stopped being written, so its ready.log check cannot match")
+                }
+            },
+            Some(Hint::command(["daemon", "logs"])),
+        ),
         "queued" => (
             queued(data),
             Some(Hint::command(["start", "--all-at-once"])),
@@ -1971,6 +1982,10 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
                 last_answer(data)
             ),
             status_hint(data).or_else(|| Some(Hint::logs(lane, unit, 200))),
+        ),
+        "ready_log_failed" => (
+            "its log stopped being written, so ready.log cannot match".into(),
+            Some(Hint::command(["daemon", "logs"])),
         ),
         "exited" => (
             match int(data, "code") {
