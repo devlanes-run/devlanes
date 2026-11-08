@@ -320,9 +320,10 @@ fn hide_home(text: &str, home: &str) -> String {
 }
 
 /// Whether `c` can continue a file name component, so a home followed by it is
-/// the start of a longer name (`/home/al` in `/home/alice`).
+/// the start of a longer name (`/home/al` in `/home/alice`, `/home/jos` in
+/// `/home/josé`).
 fn continues_name(c: char) -> bool {
-    c.is_ascii_alphanumeric() || ".-_".contains(c)
+    c.is_alphanumeric() || ".-_".contains(c)
 }
 
 /// How many characters at the end of `before` spell `drive`: `C:`, the
@@ -505,7 +506,8 @@ mod tests {
         // Unchanged on screen, `archived` in the archive.
         let home_row = |input: &str, archived: &str| (text(input), json!(input), json!(archived));
         // A longer name that starts with the home is someone else's.
-        let longer = home_row(&format!("{HOME}ice{SEP}x"), &format!("{HOME}ice{SEP}x"));
+        let longer_names = format!("{HOME}ice{SEP}x {HOME}é{SEP}x");
+        let longer = home_row(&longer_names, &longer_names);
         #[cfg(not(windows))]
         let spellings = [longer];
         #[cfg(windows)]
