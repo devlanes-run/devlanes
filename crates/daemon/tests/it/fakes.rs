@@ -834,6 +834,13 @@ impl InfraProvider for FakeInfra {
         self.record("down done".into());
         Ok(json!({"stopped": ["db"]}))
     }
+    /// The spec's shared plain containers; the fake runs no Compose.
+    async fn shared_names(
+        &self,
+        spec: &SharedInfraSpec,
+    ) -> Result<std::collections::BTreeSet<String>, InfraError> {
+        Ok(spec.containers.iter().cloned().collect())
+    }
     async fn remove_lane(&self, _: &str, lane: u32) -> Result<Value, InfraError> {
         self.record(format!("remove {lane}"));
         Ok(json!({"containers": []}))

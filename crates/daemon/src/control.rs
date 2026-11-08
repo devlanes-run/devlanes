@@ -808,7 +808,9 @@ impl Inner {
     /// `lane.gc`: cleans lanes whose worktrees are gone or whose worktree no longer
     /// holds the project's file (deleted, or naming another project after a rename),
     /// drops port offsets no config uses any more, and deletes the lane data folders
-    /// a clean could not (`data_left` lists the ones still held). Needs `yes` only
+    /// a clean could not (`data_left` lists the ones still held). `shared_infra`
+    /// holds, by lane, what a clean of a project's last lane did to its shared
+    /// containers, as `lane.clean` reports it. Needs `yes` only
     /// when there are lanes to clean; the confirmation lists them under `lanes`.
     pub(crate) async fn lane_gc(self: &Arc<Self>, context: &Context) -> Result<Value, RpcError> {
         // At a folder shared by several projects, each of them is re-listed; in a
@@ -838,6 +840,7 @@ impl Inner {
         }
         let mut cleaned = Vec::new();
         let mut kept_running = Vec::new();
+        let mut shared = serde_json::Map::new();
         for (project, lane) in self.all_lanes() {
             let (present, stale, assigned, reference, running) = {
                 let st = lane.st();
@@ -872,7 +875,15 @@ impl Inner {
                 )
                 .await?;
             // `Gone`: another clean got there first.
-            if assigned && matches!(done, Cleaned::Done(_)) {
+            let Cleaned::Done(done) = done else {
+                continue;
+            };
+            // The project's last lane, record-less or not, stopped its shared
+            // containers or says why it could not.
+            if let Some(stop) = done.get("shared_infra") {
+                shared.insert(reference.clone(), stop.clone());
+            }
+            if assigned {
                 cleaned.push(reference);
             }
         }
@@ -939,6 +950,9 @@ impl Inner {
         }
         let mut result =
             json!({"cleaned": cleaned, "kept_running": kept_running, "offsets_removed": removed});
+        if !shared.is_empty() {
+            result["shared_infra"] = Value::Object(shared);
+        }
         let data_left = self.delete_pending_data().await;
         if !data_left.is_empty() {
             result["data_left"] = json!(data_left);

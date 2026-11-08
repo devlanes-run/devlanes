@@ -6,7 +6,6 @@
 
 use std::sync::Arc;
 
-use devlanes_config::ProjectConfig;
 use devlanes_proto::RpcError;
 use serde_json::{Value, json};
 
@@ -20,12 +19,13 @@ use crate::{
 pub(crate) enum SharedOnClean {
     /// Another runtime uses them ([`used_by_another`]).
     Used,
-    /// The project file declares no containers.
+    /// The project declares nothing shared
+    /// ([`crate::integrations::InfraProvider::shared_names`]).
     None,
     /// No other lane uses them: stop them with this spec.
     Stop(SharedInfraSpec),
-    /// Cannot tell what to stop: the primary worktree's file does not load, or
-    /// a value of the spec does not evaluate.
+    /// Cannot tell what to stop: the primary worktree's file never loaded, a
+    /// value of the spec does not evaluate, or the provider cannot read it.
     Unknown(RpcError),
 }
 
@@ -45,7 +45,7 @@ impl SharedOnClean {
 pub(crate) enum SharedInfraStop {
     /// Another lane uses the shared containers; nothing was stopped.
     Used,
-    /// The project declares no containers.
+    /// The project declares nothing shared.
     None,
     /// Stopped; the provider's report.
     Stopped(Value),
@@ -74,13 +74,6 @@ impl SharedInfraStop {
 /// `{skipped: <code>, message}` for a stop that was not tried.
 fn skipped(error: &RpcError) -> Value {
     json!({"skipped": error.code, "message": error.data.get("message")})
-}
-
-/// Whether `config` runs containers (Compose files or `infra.containers`);
-/// `true` when it did not load, since it may.
-pub(crate) fn declares_containers(config: Option<&ProjectConfig>) -> bool {
-    config
-        .is_none_or(|config| config.infra.compose.is_some() || !config.infra.containers.is_empty())
 }
 
 /// Whether a runtime of `project` other than `leaving` uses the shared
@@ -120,16 +113,16 @@ impl Inner {
         if used_by_another(project, leaving) {
             return SharedOnClean::Used;
         }
-        if self
-            .primary_config(project)
-            .is_some_and(|config| !declares_containers(Some(&config)))
-        {
-            return SharedOnClean::None;
-        }
         let env = leaving.st().env.clone();
-        match self.shared_infra_spec(project, env.as_deref()).await {
-            Ok(spec) => SharedOnClean::Stop(spec),
-            Err(error) => SharedOnClean::Unknown(error),
+        let spec = match self.shared_infra_spec(project, env.as_deref()).await {
+            Ok(spec) => spec,
+            Err(error) => return SharedOnClean::Unknown(error),
+        };
+        // What is shared is the provider's rule, the one its `down` stops by.
+        match self.integ.infra.shared_names(&spec).await {
+            Ok(names) if names.is_empty() => SharedOnClean::None,
+            Ok(_) => SharedOnClean::Stop(spec),
+            Err(error) => SharedOnClean::Unknown(RpcError::from(error)),
         }
     }
 

@@ -832,7 +832,7 @@ async fn every_diesel_migration_prefix_upgrades_and_down_scripts_work() {
 }
 
 #[tokio::test]
-/// Migration 013 deletes lanes earlier daemons kept as cleaned, with their run
+/// The `lane_clean` migration deletes lanes earlier daemons kept as cleaned, with their run
 /// history, and the worktree rows of extra lanes that have no lane, so a lane
 /// registered again gets a new id.
 async fn migration_drops_cleaned_lanes() {
@@ -847,8 +847,14 @@ async fn migration_drops_cleaned_lanes() {
     c.applied_migrations().expect("ledger");
     let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
         .expect("migrations");
-    c.run_migrations(&migrations[..SCHEMA_VERSION as usize - 1])
-        .expect("previous version");
+    // By name, so a migration numbered before or after this one does not
+    // change which ones run first.
+    let lane_clean = migrations
+        .iter()
+        .position(|migration| migration.name().to_string().ends_with("_lane_clean"))
+        .expect("the lane_clean migration");
+    c.run_migrations(&migrations[..lane_clean])
+        .expect("the migrations before it");
     let project: i64 = diesel::insert_into(p::table)
         .values((
             p::name.eq("acme"),

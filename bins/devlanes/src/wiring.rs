@@ -1,7 +1,7 @@
 //! Registers concrete integrations. This is the only module that names them.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -2203,6 +2203,21 @@ impl InfraProvider for ContainerInfra {
         }
         report.insert("containers".into(), json!(stopped));
         Ok(Value::Object(report))
+    }
+
+    /// The shared plain containers and the shared Compose services, from the
+    /// cached Compose model; `config` at most, never the engine.
+    async fn shared_names(&self, spec: &SharedInfraSpec) -> Result<BTreeSet<String>, InfraError> {
+        let mut names: BTreeSet<String> = spec.containers.iter().cloned().collect();
+        if !spec.compose_files.is_empty() {
+            names.extend(
+                self.compose
+                    .shared_service_names(&Self::shared(spec))
+                    .await
+                    .map_err(compose_error)?,
+            );
+        }
+        Ok(names)
     }
 
     /// Removes the lane's compose project (with volumes) and plain containers.

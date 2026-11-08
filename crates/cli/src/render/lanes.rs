@@ -1196,23 +1196,29 @@ pub(super) fn lane_clean(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         lines.push(format!("  infra: {}", text(error, "message")));
     }
     if let Some(shared) = data.get("shared_infra") {
-        let infra_down = Hint::command(["infra", "down"]).0;
-        lines.push(if let Some(error) = shared.get("error") {
-            format!(
-                "  could not stop the shared containers: {}; {infra_down} in the project's folder stops them",
-                clean(&text(error, "message"))
-            )
-        } else if shared.get("skipped").is_some() {
-            format!(
-                "  shared containers not stopped: {}; {infra_down} stops them once the file loads",
-                shared_skipped(shared)
-            )
-        } else {
-            "  stopped shared containers (data kept)".into()
-        });
+        lines.push(format!("  {}", shared_infra_line(shared)));
     }
     lines.extend(data_left_line(data));
     lines
+}
+
+/// What the clean of a project's last lane did to its shared containers, from
+/// its `shared_infra` field (`lane clean`, and per lane in `lane gc`).
+fn shared_infra_line(shared: &Value) -> String {
+    let infra_down = Hint::command(["infra", "down"]).0;
+    if let Some(error) = shared.get("error") {
+        format!(
+            "could not stop the shared containers: {}; {infra_down} in the project's folder stops them",
+            clean(&text(error, "message"))
+        )
+    } else if shared.get("skipped").is_some() {
+        format!(
+            "shared containers not stopped: {}; {infra_down} stops them once the file loads",
+            shared_skipped(shared)
+        )
+    } else {
+        "stopped shared containers (data kept)".into()
+    }
 }
 
 /// Why `lane clean` would not or did not stop the shared containers, from a
@@ -1404,6 +1410,11 @@ pub(super) fn lane_gc(data: &Value) -> Vec<String> {
             Hint::command(["stop", "--lane", lane.as_str()]).0,
             Hint::command(["lane", "gc"]).0
         ));
+    }
+    if let Some(shared) = data.get("shared_infra").and_then(Value::as_object) {
+        for (lane, stop) in shared {
+            lines.push(format!("{}: {}", clean(lane), shared_infra_line(stop)));
+        }
     }
     for path in list(data, "data_left").iter().map(display_value) {
         lines.push(data_left_note(&path));

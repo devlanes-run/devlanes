@@ -12,7 +12,6 @@ use serde_json::{Value, json};
 
 use crate::{
     engine::{Inner, params},
-    shared_infra::declares_containers,
     target::Policy,
 };
 
@@ -186,6 +185,13 @@ fn clean_units(config: &ProjectConfig) -> BTreeSet<String> {
         }
     }
     units
+}
+
+/// Whether the lane's config runs containers (Compose files or
+/// `infra.containers`); `true` when it did not load, since it may.
+fn declares_containers(config: Option<&ProjectConfig>) -> bool {
+    config
+        .is_none_or(|config| config.infra.compose.is_some() || !config.infra.containers.is_empty())
 }
 
 /// The command of task `name` as the config writes it, expressions left as

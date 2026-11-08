@@ -2,7 +2,12 @@
 //! them over concrete crates (PTY runner, Compose/Docker, the proxy, metrics
 //! collectors); tests implement them with in-memory fakes.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -263,6 +268,12 @@ impl InfraSpec {
             per_lane: self.per_lane.clone(),
             profiles: self.profiles.clone(),
             env: self.env.clone(),
+            containers: self
+                .containers
+                .iter()
+                .filter(|container| !container.per_lane)
+                .map(|container| container.name.clone())
+                .collect(),
         }
     }
 }
@@ -281,6 +292,8 @@ pub struct SharedInfraSpec {
     pub per_lane: Vec<String>,
     pub profiles: Vec<String>,
     pub env: BTreeMap<String, String>,
+    /// The plain containers of `infra.containers` whose `per_lane` is false.
+    pub containers: Vec<String>,
 }
 
 /// Which block a requested infra port comes from.
@@ -442,6 +455,11 @@ pub trait InfraProvider: Send + Sync {
     /// Stops the project's shared containers, keeping their data (`infra down`,
     /// and the clean of a project's last lane).
     async fn down(&self, spec: &SharedInfraSpec) -> Result<Value, InfraError>;
+    /// What `spec` declares as shared, which [`InfraProvider::down`] stops: the
+    /// shared plain containers (`spec.containers`) and, with Compose files, the
+    /// services left after `exclude` and `per_lane`. Read from the files, never
+    /// from the engine, so it answers whether anything runs or not.
+    async fn shared_names(&self, spec: &SharedInfraSpec) -> Result<BTreeSet<String>, InfraError>;
     /// Removes the lane's own containers and volumes (`lane clean`).
     async fn remove_lane(&self, project: &str, lane: u32) -> Result<Value, InfraError>;
     /// What [`InfraProvider::remove_lane`] would remove, removing nothing
@@ -541,6 +559,13 @@ impl InfraProvider for NoInfra {
     /// Reports the missing engine.
     async fn down(&self, _: &SharedInfraSpec) -> Result<Value, InfraError> {
         Err(unavailable())
+    }
+    /// The plain containers; Compose files need the provider that runs Compose.
+    async fn shared_names(&self, spec: &SharedInfraSpec) -> Result<BTreeSet<String>, InfraError> {
+        if !spec.compose_files.is_empty() {
+            return Err(unavailable());
+        }
+        Ok(spec.containers.iter().cloned().collect())
     }
     /// Nothing to remove without an engine.
     async fn remove_lane(&self, _: &str, _: u32) -> Result<Value, InfraError> {

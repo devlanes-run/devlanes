@@ -906,6 +906,45 @@ async fn cleaning_the_last_lane_stops_shared_containers() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A project whose only container is `per_lane` has nothing shared: the dry
+/// run of its last lane lists no shared stop, and the clean stops nothing
+/// shared and says nothing about it.
+async fn a_last_clean_with_only_per_lane_containers_stops_nothing_shared() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CONFIG);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let plan = h
+            .call(Method::LaneCleanPlan, json!({}), cx(&main))
+            .await
+            .expect("plan");
+        assert_eq!(plan["history"], true, "{plan}");
+        assert_eq!(plan.get("shared_infra"), None, "{plan}");
+        let before = h.infra.calls.entries().len();
+        let (params, context) = clean_params(&main, "0");
+        let cleaned = h
+            .call(Method::LaneClean, params, context)
+            .await
+            .expect("clean");
+        assert_eq!(cleaned.get("shared_infra"), None, "{cleaned}");
+        assert_eq!(h.infra.calls.entries()[before..], ["remove 0"]);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// A start of another lane that reaches its infra while the last lane's clean
 /// stops the shared containers waits for that stop, so its `up` brings them
 /// back instead of running before the `down`; the project is kept for it.

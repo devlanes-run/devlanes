@@ -490,7 +490,10 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
         (
             "lane_gc",
             Method::LaneGc,
-            json!({"cleaned": ["acme@5"], "offsets_removed": 3}),
+            json!({
+                "cleaned": ["acme@5"], "offsets_removed": 3,
+                "shared_infra": {"acme@5": {"compose": "acme", "containers": ["acme-postgres-1"]}},
+            }),
         ),
         (
             "lane_gc_kept",

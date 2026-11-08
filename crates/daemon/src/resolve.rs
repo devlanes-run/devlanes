@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use devlanes_config::{ComposeFiles, PreparedContext, ProjectConfig, Run};
+use devlanes_config::{ComposeFiles, ContainerConfig, PreparedContext, ProjectConfig, Run};
 use devlanes_core::ports::{PortBlock, PortName};
 use devlanes_proto::RpcError;
 use devlanes_resolve::{LaneLayers, ResolveError, ResolveInput, ResolvedLane};
@@ -537,16 +537,7 @@ impl Inner {
                 })?;
                 ports.push((port_name.clone(), port));
             }
-            let per_lane = match &container.per_lane {
-                Some(value) => value.evaluate(&context).map_err(|error| {
-                    RpcError::new(
-                        "config_error",
-                        json!({"path": format!("{path}.per_lane"), "message": error.message}),
-                        1,
-                    )
-                })?,
-                None => false,
-            };
+            let per_lane = container_per_lane(&path, container, &context)?;
             let mut env = BTreeMap::new();
             for (key, value) in &container.env {
                 let value = value.evaluate(&context).map_err(|error| {
@@ -627,8 +618,8 @@ impl Inner {
     /// to every lane), evaluated against lane 0's provisional facts and `env`,
     /// the client environment of the request that needs it (never persisted).
     /// Needs no lane record, block or data folder, so it works whichever lane is
-    /// the last. An error when the file does not load or a shared value does
-    /// not evaluate.
+    /// the last. A file that does not load is read as of its last good load; an
+    /// error when there was none or a shared value does not evaluate.
     pub(crate) async fn shared_infra_spec(
         &self,
         project: &ProjectRt,
@@ -638,10 +629,12 @@ impl Inner {
         let (config, branch) = match &primary {
             Some(lane) => {
                 let st = lane.st();
-                match &st.config {
-                    ConfigState::Loaded(config) => (config.clone(), st.branch.clone()),
-                    ConfigState::Invalid(error) => return Err(error.clone()),
-                    ConfigState::Missing | ConfigState::Elsewhere(_) => {
+                // A file that stopped loading still names what its last good load
+                // brought up.
+                match (st.config.loaded().or(st.last_good.as_ref()), &st.config) {
+                    (Some(config), _) => (config.clone(), st.branch.clone()),
+                    (None, ConfigState::Invalid(error)) => return Err(error.clone()),
+                    (None, _) => {
                         return Err(RpcError::new("no_config", json!({"path": st.path}), 1));
                     }
                 }
@@ -675,7 +668,8 @@ impl Inner {
 }
 
 /// The shared fields of `config`'s infra (the Compose files and project name,
-/// `exclude`, `per_lane`, `profiles` and `infra.env`) evaluated against
+/// `exclude`, `per_lane`, `profiles`, `infra.env` and the plain containers that
+/// are not `per_lane`) evaluated against
 /// `context`. The one evaluation [`Inner::infra_spec`] and
 /// [`Inner::shared_infra_spec`] share, so a lane's spec and the project's agree.
 fn shared_fields(
@@ -708,6 +702,12 @@ fn shared_fields(
         Some(ComposeFiles::Files(files)) => files.iter().map(PathBuf::from).collect(),
         None => Vec::new(),
     };
+    let mut containers = Vec::new();
+    for (name, container) in &infra.containers {
+        if !container_per_lane(&format!("infra.containers.{name}"), container, context)? {
+            containers.push(name.clone());
+        }
+    }
     Ok(SharedInfraSpec {
         project,
         primary_dir,
@@ -717,7 +717,27 @@ fn shared_fields(
         per_lane: infra.per_lane.clone().unwrap_or_default(),
         profiles: infra.profiles.clone().unwrap_or_default(),
         env,
+        containers,
     })
+}
+
+/// Whether the plain container at `path` runs once per lane: its `per_lane`
+/// evaluated against `context`, false when unset.
+fn container_per_lane(
+    path: &str,
+    container: &ContainerConfig,
+    context: &PreparedContext,
+) -> Result<bool, RpcError> {
+    match &container.per_lane {
+        Some(value) => value.evaluate(context).map_err(|error| {
+            RpcError::new(
+                "config_error",
+                json!({"path": format!("{path}.per_lane"), "message": error.message}),
+                1,
+            )
+        }),
+        None => Ok(false),
+    }
 }
 
 #[cfg(test)]
