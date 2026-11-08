@@ -846,7 +846,7 @@ impl RouteSink for ProxyRoutes {
                 route.unit = Some(entry.unit).filter(|unit| !unit.is_empty());
                 route.remote = entry.remote;
                 route.listen_port = entry.box_https_port;
-                route.pool_key = entry.upstream_box;
+                route.pool_key = entry.pool_key;
                 route
             })
             .collect();
@@ -2851,7 +2851,7 @@ mod tests {
             remote: false,
             box_https_port: None,
             address: None,
-            upstream_box: None,
+            pool_key: None,
         }
     }
 

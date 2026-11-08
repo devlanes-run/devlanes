@@ -788,7 +788,7 @@ impl Mirror {
                     box_https_port,
                     // The local end is the mirror's listener, on either loopback.
                     address: None,
-                    upstream_box: Some(self.conn.name.clone()),
+                    pool_key: Some(self.conn.name.clone()),
                 };
                 if is_mirrored {
                     routes.push(route);

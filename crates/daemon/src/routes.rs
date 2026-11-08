@@ -259,7 +259,7 @@ impl Inner {
                         .iter()
                         .find(|external| external.name == *unit)
                         .map(|external| external.address.ip()),
-                    upstream_box: None,
+                    pool_key: None,
                 });
             }
         }
@@ -341,8 +341,18 @@ impl Inner {
         }
         // Local routes or lane states may have changed what clashes. A change
         // marks the snapshot dirty again, so the next pass publishes it.
-        let (_, assignment) = self.reassign_with(&local.entries);
-        let routes = self.with_remote_routes(local.entries, &assignment);
+        let (version, assignment) = self.reassign_with(&local.entries);
+        let mut routes = self.with_remote_routes(local.entries, &assignment);
+        // A box's connections stay open for a while after a switch away, so
+        // their answers get through. Keyed by the box alone, a switch back
+        // within that while would hand a request one of them, and it would
+        // be reset under the request.
+        for key in routes
+            .iter_mut()
+            .filter_map(|route| route.pool_key.as_mut())
+        {
+            key.push_str(&format!("#{version}"));
+        }
         self.sync_hosts(&routes);
         self.integ.routes.publish(routes);
     }
