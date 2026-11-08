@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use devlanes_config::{ComposeFiles, Run};
+use devlanes_config::{ComposeFiles, ContainerConfig, PreparedContext, ProjectConfig, Run};
 use devlanes_core::ports::{PortBlock, PortName};
 use devlanes_proto::RpcError;
 use devlanes_resolve::{LaneLayers, ResolveError, ResolveInput, ResolvedLane};
@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use crate::{
     engine::Inner,
-    integrations::{ContainerDecl, InfraPortNeed, InfraSpec, PortScope},
+    integrations::{ContainerDecl, InfraPortNeed, InfraSpec, PortScope, SharedInfraSpec},
     model::{ConfigState, EnvMap, LaneRt, ProjectRt},
     registry::{lane_context, read_dotenv, store_error},
 };
@@ -498,17 +498,7 @@ impl Inner {
                 )
             })
         };
-        let mut env_map = BTreeMap::new();
-        for (key, value) in &infra.env {
-            let value = value.evaluate(&context).map_err(|error| {
-                RpcError::new(
-                    "config_error",
-                    json!({"path": format!("infra.env.{key}"), "message": error.message}),
-                    1,
-                )
-            })?;
-            env_map.insert(key.clone(), value.to_string());
-        }
+        let shared = shared_fields(&config, project.name(), primary_dir, &context)?;
         let mut containers = Vec::new();
         for (name, container) in &infra.containers {
             let path = format!("infra.containers.{name}");
@@ -547,16 +537,7 @@ impl Inner {
                 })?;
                 ports.push((port_name.clone(), port));
             }
-            let per_lane = match &container.per_lane {
-                Some(value) => value.evaluate(&context).map_err(|error| {
-                    RpcError::new(
-                        "config_error",
-                        json!({"path": format!("{path}.per_lane"), "message": error.message}),
-                        1,
-                    )
-                })?,
-                None => false,
-            };
+            let per_lane = container_per_lane(&path, container, &context)?;
             let mut env = BTreeMap::new();
             for (key, value) in &container.env {
                 let value = value.evaluate(&context).map_err(|error| {
@@ -570,7 +551,11 @@ impl Inner {
             }
             let ready = match &container.ready {
                 Some(ready) => {
-                    let cwd = if per_lane { &lane_dir } else { &primary_dir };
+                    let cwd = if per_lane {
+                        &lane_dir
+                    } else {
+                        &shared.primary_dir
+                    };
                     devlanes_resolve::container_ready(ready, cwd, &raw, &format!("{path}.ready"))
                         .map_err(|error| resolve_error(&error, &reference))?
                 }
@@ -587,16 +572,7 @@ impl Inner {
                 ready,
             });
         }
-        let project_name = match &infra.project_name {
-            Some(value) => Some(evaluate("infra.project_name", value)?),
-            None => None,
-        };
-        let compose_files = match &infra.compose {
-            Some(ComposeFiles::File(file)) => vec![PathBuf::from(file)],
-            Some(ComposeFiles::Files(files)) => files.iter().map(PathBuf::from).collect(),
-            None => Vec::new(),
-        };
-        let shared = self
+        let shared_block = self
             .store
             .allocation(BlockOwner::Project(project.id))
             .await
@@ -606,7 +582,7 @@ impl Inner {
             let key = PortName::new(need.unit.clone(), need.name.clone());
             let (block, offsets) = match need.scope {
                 PortScope::Lane => (Some(allocation.block), &allocation.offsets),
-                PortScope::Shared => match &shared {
+                PortScope::Shared => match &shared_block {
                     Some(shared) => (Some(shared.block), &shared.offsets),
                     None => (None, &allocation.offsets),
                 },
@@ -619,22 +595,148 @@ impl Inner {
         }
         let index = facts.index;
         Ok(InfraSpec {
-            project: project.name(),
+            project: shared.project,
             lane: index,
             lane_dir,
-            primary_dir,
-            compose_files,
-            project_name,
-            exclude: infra.exclude.clone().unwrap_or_default(),
-            per_lane: infra.per_lane.clone().unwrap_or_default(),
-            profiles: infra.profiles.clone().unwrap_or_default(),
-            env: env_map,
+            primary_dir: shared.primary_dir,
+            compose_files: shared.compose_files,
+            project_name: shared.project_name,
+            exclude: shared.exclude,
+            per_lane: shared.per_lane,
+            profiles: shared.profiles,
+            env: shared.env,
             containers,
             block: (allocation.block.start, allocation.block.size),
-            shared_block: shared.map(|s| (s.block.start, s.block.size)),
+            shared_block: shared_block.map(|s| (s.block.start, s.block.size)),
             ports,
             state_dir: facts.data_path.join(COMPOSE_DIR),
         })
+    }
+
+    /// The project's [`SharedInfraSpec`], from what the project owns: the shared
+    /// fields of the primary worktree's file (whose project-wide settings apply
+    /// to every lane), evaluated against lane 0's provisional facts and `env`,
+    /// the client environment of the request that needs it (never persisted).
+    /// Needs no lane record, block or data folder, so it works whichever lane is
+    /// the last. A file that does not load is read as of its last good load; an
+    /// error when there was none or a shared value does not evaluate.
+    pub(crate) async fn shared_infra_spec(
+        &self,
+        project: &ProjectRt,
+        env: Option<&EnvMap>,
+    ) -> Result<SharedInfraSpec, RpcError> {
+        let primary = self.primary_lane(project);
+        let (config, branch) = match &primary {
+            Some(lane) => {
+                let st = lane.st();
+                // A file that stopped loading still names what its last good load
+                // brought up.
+                match (st.config.loaded().or(st.last_good.as_ref()), &st.config) {
+                    (Some(config), _) => (config.clone(), st.branch.clone()),
+                    (None, ConfigState::Invalid(error)) => return Err(error.clone()),
+                    (None, _) => {
+                        return Err(RpcError::new("no_config", json!({"path": st.path}), 1));
+                    }
+                }
+            }
+            None => {
+                return Err(RpcError::new(
+                    "no_config",
+                    json!({"path": self.primary_path(project)}),
+                    1,
+                ));
+            }
+        };
+        let root = self.primary_path(project);
+        let (config_dir, _) = project.config_path();
+        let branch = branch.or_else(|| Some(project.st().primary_branch.clone()));
+        let facts = self.provisional_facts(&config, &root, branch.as_deref(), &config_dir);
+        let primary_dir = root.join(&config_dir);
+        let dotenv = read_dotenv(primary_dir.clone(), primary_dir.clone()).await;
+        let client = env.cloned().unwrap_or_default();
+        let raw = lane_context(
+            &facts,
+            "",
+            0,
+            &Default::default(),
+            &Value::Null,
+            &client,
+            &dotenv,
+        );
+        shared_fields(&config, project.name(), primary_dir, &raw.prepare())
+    }
+}
+
+/// The shared fields of `config`'s infra (the Compose files and project name,
+/// `exclude`, `per_lane`, `profiles`, `infra.env` and the plain containers that
+/// are not `per_lane`) evaluated against
+/// `context`. The one evaluation [`Inner::infra_spec`] and
+/// [`Inner::shared_infra_spec`] share, so a lane's spec and the project's agree.
+fn shared_fields(
+    config: &ProjectConfig,
+    project: String,
+    primary_dir: PathBuf,
+    context: &PreparedContext,
+) -> Result<SharedInfraSpec, RpcError> {
+    let infra = &config.infra;
+    let failed = |path: String, message: String| {
+        RpcError::new("config_error", json!({"path": path, "message": message}), 1)
+    };
+    let mut env = BTreeMap::new();
+    for (key, value) in &infra.env {
+        let value = value
+            .evaluate(context)
+            .map_err(|error| failed(format!("infra.env.{key}"), error.message))?;
+        env.insert(key.clone(), value.to_string());
+    }
+    let project_name = match &infra.project_name {
+        Some(value) => Some(
+            value
+                .evaluate(context)
+                .map_err(|error| failed("infra.project_name".into(), error.message))?,
+        ),
+        None => None,
+    };
+    let compose_files = match &infra.compose {
+        Some(ComposeFiles::File(file)) => vec![PathBuf::from(file)],
+        Some(ComposeFiles::Files(files)) => files.iter().map(PathBuf::from).collect(),
+        None => Vec::new(),
+    };
+    let mut containers = Vec::new();
+    for (name, container) in &infra.containers {
+        if !container_per_lane(&format!("infra.containers.{name}"), container, context)? {
+            containers.push(name.clone());
+        }
+    }
+    Ok(SharedInfraSpec {
+        project,
+        primary_dir,
+        compose_files,
+        project_name,
+        exclude: infra.exclude.clone().unwrap_or_default(),
+        per_lane: infra.per_lane.clone().unwrap_or_default(),
+        profiles: infra.profiles.clone().unwrap_or_default(),
+        env,
+        containers,
+    })
+}
+
+/// Whether the plain container at `path` runs once per lane: its `per_lane`
+/// evaluated against `context`, false when unset.
+fn container_per_lane(
+    path: &str,
+    container: &ContainerConfig,
+    context: &PreparedContext,
+) -> Result<bool, RpcError> {
+    match &container.per_lane {
+        Some(value) => value.evaluate(context).map_err(|error| {
+            RpcError::new(
+                "config_error",
+                json!({"path": format!("{path}.per_lane"), "message": error.message}),
+                1,
+            )
+        }),
+        None => Ok(false),
     }
 }
 

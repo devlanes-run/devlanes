@@ -890,11 +890,13 @@ this shell's environment and --env, as start does."
     /// Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes)
     #[command(
         long_about = "Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes).\n\n\
-The worktree gets a lane again, with an empty data folder and possibly other ports,\n\
-the next time `start`, `status` or another command that acts on lanes runs in it. The\n\
-primary worktree's lane comes back on the next such command for its project. Reads such\n\
-as `logs` and `url ls` leave it cleaned. A lane added with `lane new` does not come back;\n\
-`lane new --name <name>` creates it again."
+The worktree gets a new lane, with a new, empty data folder, no run history and possibly\n\
+other ports, the next time `start`, `status` or another command that acts on lanes runs in\n\
+it. The primary worktree's lane comes back on the next such command for its project. Reads\n\
+such as `logs` and `url ls` leave it cleaned. A lane added with `lane new` does not come\n\
+back; `lane new --name <name>` creates a new one. A `lane new` lane that waits for\n\
+`lanes.max` is cleaned by its name. Cleaning a project's last lane also stops its shared\n\
+containers, keeping their data."
     )]
     Clean {
         // Own id: `lane` would collide with the global `--lane`.
@@ -905,7 +907,7 @@ as `logs` and `url ls` leave it cleaned. A lane added with `lane new` does not c
         #[arg(long)]
         dry_run: bool,
     },
-    /// Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
+    /// Clean lanes whose worktree or project file is gone or names another project, drop unused port offsets, and delete lane data folders a clean could not (needs --yes)
     Gc,
     /// Start the lanes that were running before a reboot or daemon restart
     #[command(
@@ -1759,6 +1761,19 @@ impl Cli {
                 })
             )
             || matches!(&self.command, Some(Command::Status(args)) if args.watch)
+    }
+
+    /// Whether the result of this command shows environment values hidden by
+    /// [`devlanes_core::redact::Redactor::screen`]: `env show --explain`, whose
+    /// table ends up in transcripts and bug reports. Plain `env show`, `--json`
+    /// and `env export` keep real values for scripts and `eval`.
+    pub fn hides_env_values(&self) -> bool {
+        matches!(
+            &self.command,
+            Some(Command::Env {
+                command: EnvCommand::Show { explain: true, .. }
+            })
+        )
     }
 
     /// Why this command cannot run without a terminal, for callers that have none

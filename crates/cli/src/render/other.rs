@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use devlanes_core::redact::Redactor;
 use devlanes_proto::{Event, LogLine, Method, RpcError, events};
 use serde_json::{Value, json};
 
@@ -331,6 +332,38 @@ fn one_line(value: &str) -> String {
     clean(&value.replace('\r', "\\r").replace('\n', "\\n"))
 }
 
+/// `data`, an `env` result in either shape (`env` map or `--explain` items),
+/// with each value as [`Redactor::screen`] of the same variables shows it.
+pub(crate) fn hide_env_values(data: &Value) -> Value {
+    let mut data = data.clone();
+    if let Some(env) = data.get_mut("env").and_then(Value::as_object_mut) {
+        let redactor = Redactor::screen(
+            env.iter()
+                .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned()))),
+        );
+        for (key, value) in env.iter_mut() {
+            if let Some(text) = value.as_str() {
+                *value = redactor.value(key, text).into();
+            }
+        }
+    }
+    if let Some(items) = data.get_mut("items").and_then(Value::as_array_mut) {
+        let pair = |item: &Value| {
+            Some((
+                item.get("key")?.as_str()?.to_owned(),
+                item.get("value")?.as_str()?.to_owned(),
+            ))
+        };
+        let redactor = Redactor::screen(items.iter().filter_map(pair));
+        for item in items.iter_mut() {
+            if let Some((key, value)) = pair(item) {
+                item["value"] = redactor.value(&key, &value).into();
+            }
+        }
+    }
+    data
+}
+
 /// `env`: `KEY=VALUE` lines, or with `--explain` a `KEY VALUE LAYER` table.
 /// Variables left out until infra is up follow, as `#` comments after `KEY=VALUE`
 /// lines so the output still reads as shell assignments. The table ends with
@@ -642,6 +675,8 @@ pub(super) fn phase_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
         // What the phase waits on now; replaces the line above the same way.
         "progress" if cx.human() => devlanes_term::phase_detail(data)
             .map(|detail| cx.paint(&format!("… {phase}: {}", clean(&detail)), "2")),
+        // Sent once every unit the start brought up is ready.
+        "ready" => Some(format!("{} {phase} ready", cx.mark(Outcome::Ok))),
         "done" if matches!(phase.as_str(), "tasks" | "services" | "after-services") => None,
         "done" => Some(format!("{} {phase}", cx.mark(Outcome::Ok))),
         "failed" => Some(format!(
@@ -662,21 +697,6 @@ pub(super) fn phase_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
         }
         _ => None,
     }
-}
-
-/// `✓ services ready` on the first step of the `after-services` phase. The
-/// daemon sends that step only once every unit of the start is ready (it skips
-/// the phase on a timeout or a failed unit), and the result's services line
-/// comes after the stream, so without this the phase's task lines read as if
-/// they ran before the services were up.
-pub(super) fn services_ready_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
-    let step = data
-        .get("step")
-        .and_then(|step| serde_json::from_value::<devlanes_proto::PhaseStep>(step.clone()).ok())?;
-    (text(data, "phase") == "after-services"
-        && text(data, "state") == "progress"
-        && step.index == 1)
-        .then(|| format!("{} services ready", cx.mark(Outcome::Ok)))
 }
 
 /// A finished task during a start: `✓ migrate` or `✗ migrate exit=1`.

@@ -319,7 +319,12 @@ fn idle_units(st: &LaneSt, reference: &str) -> Result<Vec<Named>, RpcError> {
             json!({"lane": reference, "units": units}),
         ));
     }
-    if !st.starts.is_empty() || st.busy.is_some() || st.spawning > 0 || st.closing || st.sweeping {
+    if !st.starts.is_empty()
+        || st.busy.is_some()
+        || st.spawning > 0
+        || st.closing != crate::model::Closing::No
+        || st.sweeping
+    {
         return Err(refusal("lane_busy", lane));
     }
     let live = || st.units.iter().filter(|(_, rec)| rec.host.is_alive());

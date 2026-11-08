@@ -175,6 +175,14 @@ impl Compose {
         Ok((project, model))
     }
 
+    /// The shared services: every resolved service except `exclude` and `per_lane`,
+    /// from the cached model. Runs `config` at most, never `ps`, so it needs the
+    /// Compose CLI and not the engine.
+    pub async fn shared_service_names(&self, infra: &SharedInfra) -> Result<Vec<String>, Error> {
+        let (_, model) = self.shared_project(infra).await?;
+        model.shared_services(&infra.exclude, &infra.per_lane)
+    }
+
     /// The shared project's name without running Compose when it is known:
     /// `infra.project_name`, else the name from the last `config` of these files,
     /// even if they changed since. Only a project never resolved runs `config`.

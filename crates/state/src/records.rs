@@ -91,7 +91,7 @@ pub struct LaneInput {
     pub profiles: Vec<String>,
 }
 
-/// Lane state retained until an explicit clean/delete operation.
+/// A lane, until it is cleaned or deleted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lane {
     pub id: LaneId,
@@ -109,11 +109,22 @@ pub struct Lane {
     /// plain start brings these back. A whole-lane stop or clean empties it.
     #[serde(default)]
     pub services: Vec<String>,
-    /// Unix milliseconds when the lane was registered. Re-registering a cleaned
-    /// lane resets it, since the revived lane starts with fresh setup state.
+    /// Unix milliseconds when the lane was registered.
     pub created_at: i64,
-    /// Unix milliseconds of the last clean; `None` while the lane is active.
-    pub cleaned_at: Option<i64>,
+}
+
+/// What [`crate::Store::clean_lane`] ends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanLane {
+    pub lane: LaneId,
+    /// The lane's data folder. It is recorded as pending delete in the same
+    /// transaction, so the caller deletes it and calls
+    /// [`crate::Store::data_deleted`]; a folder it could not delete stays listed
+    /// by [`crate::Store::data_deletes`].
+    pub data: PathBuf,
+    /// Also delete the lane's worktree row: an extra lane (`lane new --name`),
+    /// whose worktree row exists only for its lane.
+    pub forget_worktree: bool,
 }
 
 /// A lane block or a project's shared-infrastructure block.

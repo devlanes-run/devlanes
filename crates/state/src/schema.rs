@@ -36,7 +36,6 @@ diesel::table! {
         desired_state -> Text,
         profile -> Nullable<Text>,
         created_at -> BigInt,
-        cleaned_at -> Nullable<BigInt>,
         profiles -> Text,
         services -> Text,
     }
@@ -204,6 +203,12 @@ diesel::table! {
         duration_ms -> BigInt,
     }
 }
+diesel::table! {
+    data_deletes (path) {
+        path -> Binary,
+        since -> BigInt,
+    }
+}
 diesel::allow_tables_to_appear_in_same_query!(
     projects,
     worktrees,
@@ -223,4 +228,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     remote_tokens,
     remote_lane_choices,
     startup_peaks,
+    data_deletes,
 );

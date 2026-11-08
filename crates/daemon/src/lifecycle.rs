@@ -19,7 +19,7 @@ use devlanes_proto::{
     events,
 };
 use devlanes_resolve::{Launch, ReadySpec, ResolvedCommand, ResolvedLane, ResolvedService};
-use devlanes_state::{DesiredState, TaskRunInput};
+use devlanes_state::{CleanLane, DesiredState, TaskRunInput};
 use futures_util::{
     StreamExt,
     future::{BoxFuture, join_all},
@@ -34,10 +34,12 @@ use crate::{
     engine::{Inner, with_ownership},
     integrations::{InfraPortNeed, InfraSpec, ManagedUnit, PlannedUnit},
     model::{
-        EnvMap, Kind, LaneRt, ProjectRt, StartCtl, UnitRec, core_actor, is_mine, unit_summary,
+        Closing, EnvMap, Kind, LaneRt, ProjectRt, StartCtl, UnitRec, core_actor, is_mine,
+        unit_summary,
     },
     ready::Readiness,
     registry::{internal, store_error},
+    shared_infra::SharedInfraStop,
     stopping::StopSteps,
     units::{RunGoal, StopCause, UnitHost, UnitInfo, UnitState, now_ms},
 };
@@ -256,6 +258,16 @@ pub(crate) enum Logs {
     /// worktree policy, the sweep after a re-list) keeps them, so what it
     /// last did can still be read.
     Keep,
+}
+
+/// What [`Inner::clean_lane`] did.
+#[derive(Debug)]
+pub(crate) enum Cleaned {
+    /// The lane ended; the `lane.clean` result.
+    Done(Value),
+    /// Another clean ended this lane first: the runtime is no longer the one its
+    /// project holds, or the project was forgotten. Nothing was changed.
+    Gone,
 }
 
 /// `<logs>/<project>/<lane index>/<unit>`, where a unit's log segments live.
@@ -488,6 +500,28 @@ pub(crate) async fn wait_settled(hosts: &[UnitHost], deadline: Instant) -> bool 
     true
 }
 
+/// Adds to `cx.failures` each unit of `selected` that failed, or ended without
+/// a stop asking it to, unless it is there already.
+async fn record_failed_units(cx: &mut StartCx, selected: &[String]) {
+    let failed: Vec<(String, UnitHost)> = {
+        let st = cx.lane.st();
+        selected
+            .iter()
+            .filter(|unit| !cx.failures.iter().any(|f| &f.unit == *unit))
+            .filter_map(|unit| {
+                let host = &st.units.get(unit)?.host;
+                let failed = matches!(host.state(), UnitState::Failed(_))
+                    || (!host.is_alive() && !host.stop_was_requested());
+                failed.then(|| (unit.clone(), host.clone()))
+            })
+            .collect()
+    };
+    for (unit, host) in failed {
+        cx.failures
+            .push(failure_of(&cx.reference, &unit, &host).await);
+    }
+}
+
 /// Failure data for a unit: exit code, reason and last log lines.
 pub(crate) async fn failure_of(lane: &str, name: &str, host: &UnitHost) -> UnitFailureData {
     let reason = match host.state() {
@@ -566,6 +600,11 @@ pub(crate) struct StartCx {
     pub setup_started_at: Option<BTreeMap<String, String>>,
     pub already_running: Vec<String>,
     pub failures: Vec<UnitFailureData>,
+    /// False once the services phase saw a unit fail or the deadline pass.
+    pub services_ready: bool,
+    /// The units a restart named; `None` for a start, which takes every
+    /// replica of its services.
+    pub units: Option<BTreeSet<String>>,
     pub skipped_tasks: Vec<String>,
     /// Tasks and setup commands of this start that left processes behind.
     pub leftovers: Vec<Leftovers>,
@@ -598,6 +637,13 @@ pub(crate) struct StartCx {
     pub profile_stale: Vec<(String, Vec<String>)>,
 }
 
+impl StartCx {
+    /// Whether the start brings up `unit`, a replica of one of its services.
+    fn selects(&self, unit: &str) -> bool {
+        self.units.as_ref().is_none_or(|units| units.contains(unit))
+    }
+}
+
 /// One ordered step of the lane pipeline (plan 5.5).
 #[async_trait]
 pub(crate) trait LanePhase: Send + Sync {
@@ -627,10 +673,12 @@ struct SetupPhase;
 struct TasksPhase {
     after: bool,
 }
-/// All selected services together.
+/// All selected services together. It owns the start's one readiness wait:
+/// `after: services` tasks and the result read what it decided.
 struct ServicesPhase;
 
-/// The start pipeline in decision-5 order.
+/// The start pipeline in decision-5 order. `services` ends once every unit
+/// the start brought up is ready, failed or past the deadline.
 fn start_pipeline() -> Vec<Box<dyn LanePhase>> {
     vec![
         Box::new(InfraPhase),
@@ -777,7 +825,7 @@ impl LanePhase for InfraPhase {
             }
             // A hung `up` must not keep a stop waiting for the lane.
             None => tokio::select! {
-                up = engine.with_container_progress(cx, &spec, &mut shown, engine.integ.infra.up(&spec)).instrument(tracing::debug_span!("infra up")) => up,
+                up = engine.with_container_progress(cx, &spec, &mut shown, engine.infra_up(&cx.project, &spec)).instrument(tracing::debug_span!("infra up")) => up,
                 () = cx.cancel.cancelled() => {
                     engine.store_after_failed_up(&cx.lane, &spec).await;
                     return PhaseResult::Error(start_cancelled(cx));
@@ -1256,21 +1304,9 @@ impl LanePhase for TasksPhase {
         if chosen.is_empty() {
             return PhaseResult::Skipped(reason("no_tasks", json!({})));
         }
-        if self.after {
-            let hosts: Vec<UnitHost> = {
-                let st = cx.lane.st();
-                cx.started
-                    .iter()
-                    .chain(&cx.already_running)
-                    .filter_map(|unit| st.units.get(unit).map(|rec| rec.host.clone()))
-                    .collect()
-            };
-            let settled = tokio::select! {
-                settled = wait_settled(&hosts, cx.deadline) => settled,
-                () = cx.cancel.cancelled() => return PhaseResult::Error(start_cancelled(cx)),
-            };
-            if !settled {
-                cx.timed_out = true;
+        // The services phase decided whether the services are ready.
+        if self.after && !cx.services_ready {
+            if cx.timed_out {
                 for (name, _) in &chosen {
                     cx.skipped_tasks.push(name.clone());
                     engine.task_event(
@@ -1283,34 +1319,18 @@ impl LanePhase for TasksPhase {
                 }
                 return PhaseResult::Skipped(reason("timed_out", json!({})));
             }
-            let failed: Vec<String> = {
-                let st = cx.lane.st();
-                cx.started
-                    .iter()
-                    .chain(&cx.already_running)
-                    .filter(|unit| {
-                        st.units
-                            .get(*unit)
-                            .is_some_and(|rec| matches!(rec.host.state(), UnitState::Failed(_)))
-                    })
-                    .cloned()
-                    .collect()
-            };
-            if !failed.is_empty() || !cx.failures.is_empty() {
-                let mut units = failed;
-                units.extend(cx.failures.iter().map(|f| f.unit.clone()));
-                for (name, _) in &chosen {
-                    cx.skipped_tasks.push(name.clone());
-                    engine.task_event(
-                        &cx.reference,
-                        name,
-                        "skipped",
-                        None,
-                        Some(json!({"code": "service_failed", "units": units})),
-                    );
-                }
-                return PhaseResult::Skipped(reason("service_failed", json!({"units": units})));
+            let units: Vec<String> = cx.failures.iter().map(|f| f.unit.clone()).collect();
+            for (name, _) in &chosen {
+                cx.skipped_tasks.push(name.clone());
+                engine.task_event(
+                    &cx.reference,
+                    name,
+                    "skipped",
+                    None,
+                    Some(json!({"code": "service_failed", "units": units})),
+                );
             }
+            return PhaseResult::Skipped(reason("service_failed", json!({"units": units})));
         }
         let count = chosen.len();
         for (index, (name, hook)) in chosen.into_iter().enumerate() {
@@ -1391,15 +1411,61 @@ impl LanePhase for ServicesPhase {
         "services"
     }
 
+    /// Spawns the start's units, then waits until each is ready, failed or
+    /// past the deadline, and sends `services:ready` when all are ready.
     async fn run(&self, engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult {
+        let spawned = Self::spawn(engine, cx).await;
+        // Nothing more spawns: a waiting restart of a withdrawn unit may go.
+        cx.ctl.services_done.cancel();
+        engine.forget_waiting(&cx.project, &cx.lane, cx.start_id);
+        let joined = match spawned {
+            Ok(joined) => joined,
+            Err(result) => return result,
+        };
+        let selected: Vec<String> = cx
+            .started
+            .iter()
+            .chain(&cx.already_running)
+            .filter(|unit| cx.ctl.withdrawn_by(unit).is_none())
+            .cloned()
+            .collect();
+        let hosts: Vec<UnitHost> = {
+            let st = cx.lane.st();
+            selected
+                .iter()
+                .filter_map(|unit| st.units.get(unit).map(|rec| rec.host.clone()))
+                .collect()
+        };
+        let settled = tokio::select! {
+            settled = wait_settled(&hosts, cx.deadline) => settled,
+            () = cx.cancel.cancelled() => return PhaseResult::Error(start_cancelled(cx)),
+        };
+        if !settled {
+            cx.timed_out = true;
+        }
+        record_failed_units(cx, &selected).await;
+        cx.services_ready = !cx.timed_out && cx.failures.is_empty();
+        if cx.services_ready && (!cx.started.is_empty() || joined) {
+            // From this task, so subscribers see the units ready before the milestone.
+            engine.emit_lane(&cx.project, &cx.lane);
+            engine.phase_event(cx, self.name(), "ready", None, None);
+        }
+        PhaseResult::Done
+    }
+}
+
+impl ServicesPhase {
+    /// Spawns the selected units and joins those another start spawns.
+    /// `Ok(true)` when it joined a unit that spawned; `Err` ends the phase.
+    async fn spawn(engine: &Arc<Inner>, cx: &mut StartCx) -> Result<bool, PhaseResult> {
         if cx.setup_only {
-            return PhaseResult::Skipped(reason("setup_only", json!({})));
+            return Err(PhaseResult::Skipped(reason("setup_only", json!({}))));
         }
         let Some(resolved) = cx.resolved.clone() else {
-            return PhaseResult::Skipped(reason("not_resolved", json!({})));
+            return Err(PhaseResult::Skipped(reason("not_resolved", json!({}))));
         };
         if cx.services.is_empty() {
-            return PhaseResult::Skipped(reason("no_services", json!({})));
+            return Err(PhaseResult::Skipped(reason("no_services", json!({}))));
         }
         let mut to_spawn: Vec<&ResolvedService> = Vec::new();
         // A copy, because the paced spawn below needs `cx` mutably.
@@ -1417,6 +1483,10 @@ impl LanePhase for ServicesPhase {
                 continue;
             }
             for service in resolved.units_of(name) {
+                // A restart leaves the replicas it did not name as they are.
+                if !cx.selects(&service.unit) {
+                    continue;
+                }
                 // A stop or restart took it out of this start; the result says so.
                 if cx.ctl.withdrawn_by(&service.unit).is_some() {
                     continue;
@@ -1534,21 +1604,25 @@ impl LanePhase for ServicesPhase {
             let running = engine.running_planned(&cx.project);
             for check in &engine.integ.launch_checks {
                 if let Err(message) = check.check(&starting, &running) {
-                    return PhaseResult::Error(RpcError::new(
+                    return Err(PhaseResult::Error(RpcError::new(
                         "launch_check_failed",
                         json!({"message": message}),
                         1,
-                    ));
+                    )));
                 }
             }
         }
         // Each spawn waits for a start slot; see `pacing`.
         engine.spawn_services(cx, &to_spawn, &resolved).await;
+        let mut joined_any = false;
         for (unit, other) in joined {
             match joined_outcome(&cx.ctl, cx.deadline, &unit, &other).await {
                 // What the other start got for the unit is this start's answer too;
                 // waited for like a running unit, so its exit still counts.
-                Joined::Spawned => cx.already_running.push(unit),
+                Joined::Spawned => {
+                    joined_any = true;
+                    cx.already_running.push(unit);
+                }
                 Joined::Failed(error) => cx.failures.push(UnitFailureData {
                     lane: cx.reference.clone(),
                     unit,
@@ -1559,7 +1633,7 @@ impl LanePhase for ServicesPhase {
                 Joined::Gone => {}
             }
         }
-        PhaseResult::Done
+        Ok(joined_any)
     }
 }
 
@@ -2845,7 +2919,8 @@ impl Inner {
             .flat_map(|name| resolved.units_of(name))
             .map(|service| service.unit.clone())
             .filter(|unit| {
-                !st.orphans.contains_key(unit)
+                cx.selects(unit)
+                    && !st.orphans.contains_key(unit)
                     && !st.units.get(unit).is_some_and(|rec| rec.host.is_alive())
                     && cx.ctl.withdrawn_by(unit).is_none()
             })
@@ -3445,6 +3520,8 @@ impl Inner {
             setup_started_at: None,
             already_running: Vec::new(),
             failures: Vec::new(),
+            services_ready: true,
+            units: None,
             skipped_tasks: Vec::new(),
             leftovers: Vec::new(),
             infra_needs: Vec::new(),
@@ -3509,11 +3586,6 @@ impl Inner {
             // Whatever the phase made of it, an interrupted start ends here.
             if cx.cancel.is_cancelled() && !matches!(result, PhaseResult::Error(_)) {
                 result = PhaseResult::Error(start_cancelled(&cx));
-            }
-            if phase.name() == "services" {
-                // Nothing more spawns: a waiting restart of a withdrawn unit may go.
-                cx.ctl.services_done.cancel();
-                self.forget_waiting(project, lane, cx.start_id);
             }
             let (state, why) = result.event_state();
             if phase.visible() {
@@ -3604,55 +3676,31 @@ impl Inner {
         Ok(result)
     }
 
-    /// Waits for started units and assembles the [`StartResult`]. Units a stop or
-    /// restart withdrew are neither waited for nor failures: they are listed as
-    /// `stopped` with a `cancelled_by_stop` reason.
+    /// Assembles the [`StartResult`] once the services phase waited for the
+    /// units. Units a stop or restart withdrew are not failures: they are
+    /// listed as `stopped` with a `cancelled_by_stop` reason.
     async fn finish_start(self: &Arc<Self>, mut cx: StartCx, whole_lane: bool) -> StartResult {
-        let kept = |unit: &String| cx.ctl.withdrawn_by(unit).is_none();
+        let withdrawn = cx.ctl.withdrawn();
         let selected: Vec<String> = cx
             .started
             .iter()
             .chain(&cx.already_running)
-            .filter(|unit| kept(unit))
+            .filter(|unit| !withdrawn.contains_key(*unit))
             .cloned()
             .collect();
-        let hosts: Vec<UnitHost> = {
+        // A service may have crashed while `after: services` tasks ran.
+        record_failed_units(&mut cx, &selected).await;
+        let mut units: Vec<UnitSummary> = {
             let st = cx.lane.st();
             selected
                 .iter()
-                .filter_map(|unit| st.units.get(unit).map(|rec| rec.host.clone()))
+                .filter_map(|unit| {
+                    st.units
+                        .get(unit)
+                        .map(|rec| unit_summary(&cx.reference, unit, rec))
+                })
                 .collect()
         };
-        if !wait_settled(&hosts, cx.deadline).await {
-            cx.timed_out = true;
-        }
-        // Withdrawals may have come in while waiting.
-        let withdrawn = cx.ctl.withdrawn();
-        let selected: Vec<String> = selected
-            .into_iter()
-            .filter(|unit| !withdrawn.contains_key(unit))
-            .collect();
-        let mut units: Vec<UnitSummary> = Vec::new();
-        let mut failed_hosts = Vec::new();
-        {
-            let st = cx.lane.st();
-            for unit in &selected {
-                if let Some(rec) = st.units.get(unit) {
-                    units.push(unit_summary(&cx.reference, unit, rec));
-                    if matches!(rec.host.state(), UnitState::Failed(_))
-                        || (!rec.host.is_alive() && !rec.host.stop_was_requested())
-                    {
-                        failed_hosts.push((unit.clone(), rec.host.clone()));
-                    }
-                }
-            }
-        }
-        for (unit, host) in failed_hosts {
-            if !cx.failures.iter().any(|f| f.unit == unit) {
-                cx.failures
-                    .push(failure_of(&cx.reference, &unit, &host).await);
-            }
-        }
         let all_ready = units.iter().all(|u| u.state == "ready");
         if !withdrawn.is_empty() {
             units.extend(self.withdrawn_summaries(&cx, &withdrawn));
@@ -4397,6 +4445,8 @@ impl Inner {
             setup_started_at: None,
             already_running: Vec::new(),
             failures: Vec::new(),
+            services_ready: true,
+            units: Some(units.iter().cloned().collect()),
             skipped_tasks: Vec::new(),
             leftovers: Vec::new(),
             infra_needs: Vec::new(),
@@ -4421,11 +4471,8 @@ impl Inner {
         } else {
             ServicesPhase.run(self, &mut cx).await
         };
-        cx.ctl.services_done.cancel();
         let (state, why) = result.event_state();
         self.phase_event(&cx, phase, state, why, None);
-        // Replicas not named by the selectors stay as they are.
-        cx.already_running.retain(|unit| units.contains(unit));
         // A restarted service runs again, so a plain start after a crash brings it back.
         let desired = lane.desired.lock().await;
         let record = lane.st().record.clone();
@@ -4457,16 +4504,20 @@ impl Inner {
         Ok(result)
     }
 
-    /// `lane clean`: stop, `lane.clean` tasks, teardown, remove per-lane containers,
-    /// free the block and records, and with [`Logs::Delete`] the lane's logs.
-    /// Other lanes and shared infra stay untouched.
+    /// `lane clean`: stop, `lane.clean` tasks, teardown, remove per-lane
+    /// containers, then end the lane: its row goes with its block and history,
+    /// its runtime is retired, its data folder is deleted, and with
+    /// [`Logs::Delete`] its logs. A worktree that comes back as a lane is a new
+    /// lane. The clean of a project's last lane stops the project's shared
+    /// containers (data kept) and forgets the project; other lanes' containers
+    /// stay untouched.
     pub(crate) async fn clean_lane(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
         actor: Option<&Actor>,
         logs: Logs,
-    ) -> Result<Value, RpcError> {
+    ) -> Result<Cleaned, RpcError> {
         let actor = actor.cloned().unwrap_or_default();
         let reference = lane.st().reference(&project.name());
         // One hold of `op` from the stop to the release of the records: a start
@@ -4474,6 +4525,12 @@ impl Inner {
         self.cancel_queued(lane, &reference, None, None);
         lane.cancel_start();
         let _op = lane.op.write().await;
+        // A clean that resolved the same runtime and got `op` first ended the
+        // lane under it; this one has nothing left to do, and the shared
+        // containers are not its to stop.
+        if !self.holds(project, lane) {
+            return Ok(Cleaned::Gone);
+        }
         // `exec` and `run` take no `op`: interrupt runs and wait for spawns in
         // flight, so the stop below sees every unit and none appears until the
         // records are gone.
@@ -4520,8 +4577,7 @@ impl Inner {
             None => Value::Null,
         };
         let record = lane.st().record.clone();
-        let mut data_left = None;
-        if let Some(record) = &record {
+        if record.is_some() {
             // Every run must be finished before the lane's records may be released;
             // none is alive by now, so each row records a real exit.
             let runs: Vec<_> = lane
@@ -4539,43 +4595,69 @@ impl Inner {
                 // A row left unfinished makes `clean_lane` refuse with `active_runs`.
                 self.finish_run(id, outcome).await;
             }
-            // Setup records, once-only markers and task history go in the same
-            // transaction as the lane's block.
-            self.store
-                .clean_lane(record.id)
-                .await
-                .map_err(store_error)?;
-            // Last, so a clean that fails earlier keeps the data its teardown may need.
-            data_left = self.remove_lane_data(&project.name(), record.id).await;
-            // Every unit stopped and closed its log above.
-            if let (Logs::Delete, Some(index)) = (logs, index) {
-                self.remove_lane_logs(&project.name(), index).await;
-            }
         }
-        let present = {
-            let mut st = lane.st();
-            st.record = None;
-            // Cleaned, the worktree is no lane until devlanes runs in it again.
-            st.wanted = false;
-            st.allocation = None;
-            st.view = None;
-            st.view_error = None;
-            st.units.clear();
-            st.started_at_ms = None;
-            st.infra_ns = None;
-            st.infra_replaced();
-            st.infra_containers.clear();
-            st.usage.clear();
-            st.moves_to = None;
-            st.present
+        // Its stop, `lane.clean` tasks, teardown and container removal are done,
+        // so it no longer uses the shared containers.
+        lane.st().closing = Closing::Released;
+        let shared = self.stop_shared_infra_unless_used(project, lane).await;
+        let replacement = self.replacement(project, lane).await;
+        let data = record
+            .as_ref()
+            .map(|record| self.lane_data_path(&project.name(), record.id));
+        let (alias, listed) = {
+            let st = lane.st();
+            (st.alias().is_some(), st.listed())
         };
-        self.bus
-            .emit(events::LANE_REMOVED, json!({"lane": reference}));
-        if !present {
+        {
+            // After `op`, as `apply_move` takes them. Only the identity check, the
+            // store calls and the map changes run under it.
+            let _sync = project.sync.lock().await;
+            if !self.holds(project, lane) {
+                return Ok(Cleaned::Gone);
+            }
+            match (&record, &data) {
+                (Some(record), Some(data)) => self
+                    .store
+                    .clean_lane(CleanLane {
+                        lane: record.id,
+                        data: data.clone(),
+                        forget_worktree: alias,
+                    })
+                    .await
+                    .map_err(store_error)?,
+                _ if alias => self
+                    .store
+                    .forget_worktree(lane.worktree)
+                    .await
+                    .map_err(store_error)?,
+                _ => {}
+            }
+            // A request still holding this runtime fails with `unassigned`.
+            lane.st().record = None;
             project.st().lanes.remove(&lane.worktree);
             lane.watch.cancel();
+            // While another lane used the shared containers they may still run,
+            // and only a kept project keeps their block reserved.
+            let used = matches!(shared, SharedInfraStop::Used);
+            if (used || !self.forget_if_empty(project).await)
+                && let Some(replacement) = replacement
+            {
+                project.st().lanes.insert(lane.worktree, replacement);
+            }
         }
-        self.forget_if_empty(project).await;
+        // A file held open (Windows) keeps the folder; `lane gc` deletes it later.
+        let data_left = match data {
+            Some(path) => self.delete_data(path).await,
+            None => None,
+        };
+        // Every unit stopped and closed its log above.
+        if let (Logs::Delete, Some(index)) = (logs, index) {
+            self.remove_lane_logs(&project.name(), index).await;
+        }
+        if listed {
+            self.bus
+                .emit(events::LANE_REMOVED, json!({"lane": reference}));
+        }
         self.publish_routes();
         let mut result = json!({
             "lane": reference,
@@ -4584,29 +4666,78 @@ impl Inner {
             "teardown": teardown,
             "infra": infra,
         });
-        // A file held open (Windows) keeps the folder; only the user can close it.
+        if let Some(report) = shared.report() {
+            result["shared_infra"] = report;
+        }
         if let Some(path) = data_left {
             result["data_left"] = json!(path);
         }
-        Ok(result)
+        Ok(Cleaned::Done(result))
     }
 
-    /// Forgets a project whose every lane was cleaned: its rows go (the store
-    /// refuses while a run is unfinished) and so does it in memory, so neither a
-    /// daemon restart nor its watchers bring it back; the next command whose policy
-    /// registers projects (`start`, `status`, `env`, ...) run in its folder registers
-    /// it again, and reads there answer `project_not_started`.
-    pub(crate) async fn forget_if_empty(&self, project: &Arc<ProjectRt>) {
+    /// Whether `lane` is the runtime `project` holds for its worktree and
+    /// `project` is still registered. Identity, not key presence: a worktree
+    /// that is no extra lane keeps its key across a clean, since its
+    /// replacement goes in under the same `WorktreeId`, so only identity tells
+    /// the runtime a clean resolved from the one that replaced it. A clean
+    /// retires its runtime while it holds `op`, so a clean that waited for that
+    /// `op` sees it here.
+    fn holds(&self, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) -> bool {
+        let registered = crate::model::lock(&self.projects)
+            .get(&project.id)
+            .is_some_and(|known| Arc::ptr_eq(known, project));
+        registered
+            && project
+                .st()
+                .lanes
+                .get(&lane.worktree)
+                .is_some_and(|held| Arc::ptr_eq(held, lane))
+    }
+
+    /// The runtime that takes a cleaned lane's place: a new one for a present
+    /// worktree that is no extra lane, with its config already loaded, so the
+    /// config poller sees no change and assigns nothing. Built outside the map;
+    /// the clean inserts it unless it forgets the project.
+    async fn replacement(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+    ) -> Option<Arc<LaneRt>> {
+        let st = {
+            let st = lane.st();
+            if !st.present || st.alias().is_some() {
+                return None;
+            }
+            crate::model::LaneSt::new(
+                st.identity.clone(),
+                st.path.clone(),
+                st.branch.clone(),
+                true,
+            )
+        };
+        let replacement = crate::registry::new_lane(lane.worktree, st);
+        self.reload_config(project, &replacement).await;
+        Some(replacement)
+    }
+
+    /// Under `project.sync`: forgets a project none of whose runtimes is a lane
+    /// (`listed()`, so a lane waiting for one counts), runs something or is
+    /// busy. Its rows go (the store refuses while a run is unfinished) and so
+    /// does it in memory, so neither a daemon restart nor its watchers bring it
+    /// back; the next command whose policy registers projects (`start`,
+    /// `status`, `env`, ...) run in its folder registers it again, and reads
+    /// there answer `project_not_started`. Returns whether it forgot it.
+    async fn forget_if_empty(&self, project: &Arc<ProjectRt>) -> bool {
         let empty = project.lanes().iter().all(|lane| {
             let st = lane.st();
-            st.record.is_none() && !st.any_running() && st.busy.is_none()
+            !st.listed() && !st.any_running() && st.busy.is_none()
         });
         if !empty {
-            return;
+            return false;
         }
         if let Err(error) = self.store.delete_project(project.id).await {
             tracing::warn!(project = %project.name(), %error, "keeping a project whose lanes were all cleaned");
-            return;
+            return false;
         }
         crate::model::lock(&self.projects).remove(&project.id);
         project.watch.cancel();
@@ -4614,6 +4745,7 @@ impl Inner {
             lane.watch.cancel();
         }
         tracing::info!(project = %project.name(), "forgot a project whose lanes were all cleaned");
+        true
     }
 
     /// Worktree auto-start or setup with the project's last request env.

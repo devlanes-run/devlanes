@@ -397,8 +397,8 @@ pub(crate) struct LaneSt {
     pub adhoc_gate: Arc<tokio::sync::RwLock<()>>,
     /// Parent of the tokens of this lane's `run`s; a clean or reset fires it.
     pub adhoc_cancel: Option<CancellationToken>,
-    /// Set while a clean or reset waits for or holds `adhoc_gate`.
-    pub closing: bool,
+    /// How far a clean or reset holding this lane has got.
+    pub closing: Closing,
     /// The config files as of the last reload; `None` before the first one.
     pub config_stamp: Option<crate::registry::ConfigStamp>,
     /// Every file the last config load read or looked for, which the stamp covers.
@@ -432,8 +432,9 @@ pub(crate) struct LaneSt {
     /// Set while an explicit daemon shutdown runs this lane's `lane.stop`
     /// tasks: their spawns pass the refusal that starts with the shutdown.
     pub shutdown_hooks: bool,
-    /// devlanes ran in this worktree (or `lane new` added it), so it gets a lane.
-    /// Worktrees that merely exist get none, except the primary one.
+    /// devlanes ran in this worktree, so it gets a lane. Worktrees that merely
+    /// exist get none, except the primary one; an extra lane (`lane new`) gets
+    /// one by existing.
     pub wanted: bool,
     /// A clean of this lane, whose worktree is gone, is under way or scheduled.
     pub sweeping: bool,
@@ -441,6 +442,21 @@ pub(crate) struct LaneSt {
     pub missing_since: Option<std::time::Instant>,
     /// Set while the idle loop has the lane's processes throttled or frozen.
     pub power: Option<LanePowerSt>,
+}
+
+/// How far a clean or reset holding a lane has got ([`LaneSt::closing`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Closing {
+    /// No clean or reset holds the lane.
+    #[default]
+    No,
+    /// [`LaneRt::close_adhoc`] closed the lane: its stop, `lane.clean` tasks,
+    /// teardown and container removal may still run and may need the shared
+    /// containers.
+    Hooks,
+    /// A clean finished all of that; the lane no longer uses the shared
+    /// containers, though its rows stay until the clean releases them.
+    Released,
 }
 
 /// A unit a start asked for and has not queued in the start gate or spawned.
@@ -560,7 +576,7 @@ impl LaneSt {
             refresh_pending: false,
             adhoc_gate: Arc::new(tokio::sync::RwLock::new(())),
             adhoc_cancel: None,
-            closing: false,
+            closing: Closing::No,
             config_stamp: None,
             config_files: Vec::new(),
             last_good: None,
@@ -587,11 +603,12 @@ impl LaneSt {
     }
 
     /// Whether status, lane lists and events show this lane: it has a lane
-    /// record, or devlanes ran in its present worktree and it waits for one
-    /// (`lanes.max`, a full port pool, a config error). A worktree that merely
-    /// exists, or whose folder is gone without a lane, is not a lane.
+    /// record, or it waits for one (`lanes.max`, a full port pool, a config
+    /// error) in its present folder because devlanes ran there or `lane new`
+    /// added it. A worktree that merely exists, or whose folder is gone without
+    /// a lane, is not a lane.
     pub(crate) fn listed(&self) -> bool {
-        self.record.is_some() || (self.present && self.wanted)
+        self.record.is_some() || (self.present && (self.wanted || self.alias().is_some()))
     }
 
     /// Lane index while assigned.
@@ -879,7 +896,7 @@ impl LaneRt {
             let guard = gate.read_owned().await;
             {
                 let mut st = self.st();
-                if !st.closing {
+                if st.closing == Closing::No {
                     let parent = st
                         .adhoc_cancel
                         .get_or_insert_with(|| shutdown.child_token());
@@ -899,7 +916,7 @@ impl LaneRt {
     pub(crate) async fn close_adhoc(self: &Arc<Self>) -> AdhocClosed {
         let gate = {
             let mut st = self.st();
-            st.closing = true;
+            st.closing = Closing::Hooks;
             if let Some(token) = st.adhoc_cancel.take() {
                 token.cancel();
             }
@@ -936,7 +953,7 @@ pub(crate) struct AdhocClosed {
 impl Drop for AdhocClosed {
     /// Lets `exec` and `run` in again.
     fn drop(&mut self) {
-        self.lane.st().closing = false;
+        self.lane.st().closing = Closing::No;
     }
 }
 
@@ -1157,11 +1174,18 @@ pub(crate) struct ProjectSt {
 /// file names it. Its name is its identity.
 pub(crate) struct ProjectRt {
     pub id: ProjectId,
-    /// Serializes re-listing and registration.
+    /// Serializes changes to the project's lanes: re-listing, registration and
+    /// assignment, `lane new`'s name check and insert, and a clean's release of
+    /// its lane. Taken after a lane's `op`, never before.
     pub sync: tokio::sync::Mutex<()>,
-    /// Serializes `lane new`, from the name check until the lane has its record,
-    /// so two requests cannot both take one name.
-    pub lane_new: tokio::sync::Mutex<()>,
+    /// Orders the project's infra coming up against its shared containers going
+    /// down, for Compose and plain containers alike. Every `InfraProvider::up`
+    /// holds it shared, so starts of different lanes stay parallel; every
+    /// `InfraProvider::down`, and the "no lane uses them" decision before it,
+    /// hold it exclusively ([`crate::shared_infra`]). Taken after a lane's `op`,
+    /// never before; never held while taking `sync`, and `sync` is never held
+    /// while taking it.
+    pub shared_infra: tokio::sync::RwLock<()>,
     pub st: Mutex<ProjectSt>,
     pub watching: AtomicBool,
     pub watch: tokio_util::sync::CancellationToken,

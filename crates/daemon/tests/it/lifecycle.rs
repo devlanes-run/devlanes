@@ -449,6 +449,82 @@ async fn clean_closes_the_lane_to_exec_and_run() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A clean that resolved a lane another clean is ending answers `not_found`
+/// and touches nothing: the retired runtime is `Gone`, so the name's next
+/// `lane new` lane is left alone. This pins the answer for a retired runtime;
+/// the identity check behind it (`Inner::holds`) says why it compares
+/// runtimes rather than worktree keys.
+async fn a_second_clean_of_a_cleaned_lane_is_not_found() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CLEANING);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start lane 0");
+        h.call(Method::LaneNew, json!({"name": "review"}), cx(&main))
+            .await
+            .expect("lane new");
+        let review = Context {
+            lane: Some("review".into()),
+            ..cx(&main)
+        };
+        h.call(Method::Start, json!({}), review.clone())
+            .await
+            .expect("start review");
+        let yes = Context {
+            yes: true,
+            ..review
+        };
+        let (_first_session, _first_frames, first) =
+            spawn_call(&h, Method::LaneClean, json!({}), yes.clone());
+        let naps = || {
+            h.runner
+                .journal
+                .entries()
+                .iter()
+                .filter(|entry| *entry == "nap 800")
+                .count()
+        };
+        let hook = eventually(SETTLE, || async { (naps() == 1).then_some(()) }).await;
+        assert!(hook.is_some(), "the first clean runs its task");
+        let (_second_session, _second_frames, second) =
+            spawn_call(&h, Method::LaneClean, json!({}), yes);
+        let cleaned = first.await.expect("join").expect("first clean");
+        assert_eq!(cleaned["lane"], "tidy@1");
+        let error = second.await.expect("join").expect_err("second clean");
+        assert_eq!(error.code, "not_found", "{error:?}");
+        assert_eq!(naps(), 1);
+
+        h.call(Method::LaneNew, json!({"name": "review"}), cx(&main))
+            .await
+            .expect("the name is free");
+        let page: Page<LaneSummary> = serde_json::from_value(
+            h.call(Method::Status, json!({}), cx(&main))
+                .await
+                .expect("status"),
+        )
+        .expect("page");
+        let mut lanes: Vec<(String, Option<u32>)> = page
+            .items
+            .into_iter()
+            .map(|lane| (lane.reference, lane.index))
+            .collect();
+        lanes.sort();
+        assert_eq!(
+            lanes,
+            [
+                ("tidy@0".to_owned(), Some(0)),
+                ("tidy@1".to_owned(), Some(1))
+            ]
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// `run --env` applies to that run only, and each run streams only its own
 /// output, not what earlier runs of the task wrote.
 async fn run_env_is_per_run_and_streams_only_its_output() {
