@@ -239,7 +239,7 @@ fn hide_url_passwords(text: &str) -> String {
     out
 }
 
-/// `NAME=value` with the value hidden up to whitespace or a quote, when NAME is
+/// `NAME=value` with the value ([`assigned_value`]) hidden, when NAME is
 /// an upper-case variable name that passes [`secret_name`] or a lower-case
 /// field name that passes [`secret_field`]. So `env_keys=A,B` stays while
 /// `ACME_KEY=...` and `token=...` are hidden.
@@ -264,19 +264,45 @@ fn hide_assignments(text: &str) -> String {
         let secret = (made_of(char::is_ascii_uppercase) && secret_name(name))
             || (made_of(char::is_ascii_lowercase) && secret_field(name));
         if secret {
-            let end = after
-                .find(|c: char| c.is_whitespace() || "\"'".contains(c))
-                .unwrap_or(after.len());
-            if end > 0 {
+            let (opening, value, closing) = assigned_value(after);
+            out.push_str(opening);
+            if !value.is_empty() {
                 out.push_str(REDACTED);
             }
-            rest = &after[end..];
+            out.push_str(closing);
+            rest = &after[opening.len() + value.len() + closing.len()..];
         } else {
             rest = after;
         }
     }
     out.push_str(rest);
     out
+}
+
+/// The value at the start of `after` (the text after an `=`), as its opening
+/// quote, the value and its closing quote. A value quoted with `"` or `'` runs
+/// to the matching quote, past quotes escaped with `\` as tracing writes them,
+/// or to the end of the line when it is never closed. A bare value runs to
+/// whitespace or a quote.
+fn assigned_value(after: &str) -> (&str, &str, &str) {
+    let Some(quote @ ('"' | '\'')) = after.chars().next() else {
+        let end = after
+            .find(|c: char| c.is_whitespace() || "\"'".contains(c))
+            .unwrap_or(after.len());
+        return ("", &after[..end], "");
+    };
+    let body = &after[1..];
+    let mut escaped = false;
+    for (index, c) in body.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '\n' | '\r' => return (&after[..1], &body[..index], ""),
+            _ if c == quote => return (&after[..1], &body[..index], &body[index..=index]),
+            _ => {}
+        }
+    }
+    (&after[..1], body, "")
 }
 
 /// `text` with `home` replaced by `~` wherever it names the home itself, not
@@ -431,6 +457,8 @@ mod tests {
         let screen = Redactor::screen(vars);
         let archive = Redactor::archive(vars, HOMES);
         let text = |text: &str| Call::Text(text.to_owned());
+        // The same result in both outputs.
+        let both = |input: &str, hidden: &str| (text(input), json!(hidden), json!(hidden));
         let log = format!("DEBUG spawning program=fixture-server cwd={HOME}{SEP}src{SEP}acme");
         let rows: Vec<(Call, Value, Value)> = vec![
             (
@@ -469,6 +497,22 @@ mod tests {
                 text("env_keys=ACME_KEY,PORT ACME_KEY=k-1 token=abc PORT=3000"),
                 json!("env_keys=ACME_KEY,PORT ACME_KEY=[redacted] token=[redacted] PORT=3000"),
                 json!("env_keys=ACME_KEY,PORT ACME_KEY=[redacted] token=[redacted] PORT=3000"),
+            ),
+            // Quoted values, as tracing writes string fields, keep their quotes.
+            both(
+                r#"token="abc def" PORT=3000"#,
+                r#"token="[redacted]" PORT=3000"#,
+            ),
+            both("ACME_KEY='k-1' next", "ACME_KEY='[redacted]' next"),
+            both("export TOKEN='x y'", "export TOKEN='[redacted]'"),
+            both(
+                r#"password="say \"hi\" now" PORT=1"#,
+                r#"password="[redacted]" PORT=1"#,
+            ),
+            // An unterminated quote ends with its line.
+            both(
+                "token=\"abc def\nPORT=3000",
+                "token=\"[redacted]\nPORT=3000",
             ),
             (
                 Call::Text(log.clone()),
