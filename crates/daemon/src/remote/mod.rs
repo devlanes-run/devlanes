@@ -144,6 +144,9 @@ pub(crate) struct Remotes {
     /// Held while the assignment is computed and stored, so one computed
     /// from older inputs never replaces a newer one.
     assigning: Mutex<()>,
+    /// Held while [`Inner::announce_findings`] computes, compares and stores,
+    /// so a call that read older state never stores its findings last.
+    announcing: Mutex<()>,
     /// Every box port's listener and relay, whichever box they lead to.
     listeners: listeners::Listeners,
 }
@@ -1934,6 +1937,7 @@ impl Inner {
     /// another box's connect repeats nothing, and a finding that went away
     /// only leaves `remote ls`.
     fn announce_findings(&self) {
+        let _announcing = lock(&self.remote.announcing);
         let boxes = self.remote.all();
         for conn in &boxes {
             let findings = conn.findings(&boxes);
