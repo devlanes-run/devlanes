@@ -290,6 +290,28 @@ pub fn resolve_units<'a>(
     Ok(matches)
 }
 
+/// What a lane reference matched, in the order [`resolve_lane`] tries them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneMatch {
+    /// The lane number.
+    Index,
+    /// The checked-out branch.
+    Branch,
+    /// The lane name: an extra lane's own name, or `main`/`lane<N>`.
+    Name,
+    /// The worktree's directory name.
+    Folder,
+    /// The worktree's path.
+    Path,
+}
+
+/// A resolved lane and what in the reference matched it.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedLane<'a> {
+    pub lane: &'a LaneCandidate,
+    pub by: LaneMatch,
+}
+
 /// Resolves by number, branch, lane name, directory name, then lexical path.
 /// Candidates that are no lane are matched by directory name only, and only
 /// when no lane matched, so they never take a name from a lane. Two matches at
@@ -299,7 +321,7 @@ pub fn resolve_lane<'a>(
     reference: &LaneRef,
     lanes: &'a [LaneCandidate],
     context: &ResolveContext,
-) -> Result<&'a LaneCandidate, ReferenceError> {
+) -> Result<ResolvedLane<'a>, ReferenceError> {
     let in_scope = |lane: &&LaneCandidate| match &reference.project {
         Some(project) => &lane.project == project,
         None => context.projects.is_empty() || context.projects.contains(&lane.project_id),
@@ -309,26 +331,38 @@ pub fn resolve_lane<'a>(
     let selector = reference.selector.as_str();
     let numeric = selector.bytes().all(|b| b.is_ascii_digit());
     let path = expand_path(selector, context);
-    let ranks = if numeric { 0..1 } else { 1..5 };
+    let ranks: &[LaneMatch] = if numeric {
+        &[LaneMatch::Index]
+    } else {
+        &[
+            LaneMatch::Branch,
+            LaneMatch::Name,
+            LaneMatch::Folder,
+            LaneMatch::Path,
+        ]
+    };
     let passes = ranks
-        .map(|rank| (rank, &eligible))
-        .chain(std::iter::once((3, &others)));
+        .iter()
+        .map(|rank| (*rank, &eligible))
+        .chain(std::iter::once((LaneMatch::Folder, &others)));
     for (rank, candidates) in passes {
         let matches: Vec<_> = candidates
             .iter()
             .copied()
             .filter(|lane| match rank {
-                0 => lane.index.is_some() && selector.parse::<u32>().ok() == lane.index,
-                1 => lane.branch.as_deref() == Some(selector),
-                2 => lane.name == selector,
-                3 => lane.path.file_name().is_some_and(|name| name == selector),
-                _ => path
+                LaneMatch::Index => {
+                    lane.index.is_some() && selector.parse::<u32>().ok() == lane.index
+                }
+                LaneMatch::Branch => lane.branch.as_deref() == Some(selector),
+                LaneMatch::Name => lane.name == selector,
+                LaneMatch::Folder => lane.path.file_name().is_some_and(|name| name == selector),
+                LaneMatch::Path => path
                     .as_ref()
                     .is_some_and(|path| same_path(&normalize(&lane.path), path)),
             })
             .collect();
         match matches.as_slice() {
-            [lane] => return Ok(lane),
+            [lane] => return Ok(ResolvedLane { lane, by: rank }),
             [] => {}
             _ => {
                 return Err(ReferenceError::Ambiguous {
@@ -352,7 +386,7 @@ pub fn resolve_unit<'a, 'r>(
     context: &ResolveContext,
 ) -> Result<(&'a LaneCandidate, &'r str), ReferenceError> {
     let lane = if let Some(lane) = &reference.lane {
-        resolve_lane(lane, lanes, context)?
+        resolve_lane(lane, lanes, context)?.lane
     } else {
         let matches: Vec<_> = lanes
             .iter()
@@ -468,6 +502,7 @@ mod tests {
             assert_eq!(
                 resolve_lane(&reference, &lanes, &context)
                     .expect("resolved")
+                    .lane
                     .index,
                 Some(expected)
             );
@@ -606,6 +641,7 @@ mod tests {
             assert_eq!(
                 resolve_lane(&reference, &lanes, &context)
                     .expect("resolved")
+                    .lane
                     .index,
                 Some(expected),
                 "{input}"

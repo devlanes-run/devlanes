@@ -175,50 +175,6 @@ impl Inner {
         timeout_ms.map_or(self.opts.start_timeout, Duration::from_millis)
     }
 
-    /// A lone unit selector that matched nothing but is a lane number or an
-    /// extra lane's name (`stop 1`, `stop review`): the error names that lane
-    /// under `names_lane`, so the client can suggest `--lane` instead of acting
-    /// on a guess. Branch, folder and path matches are left out, since those
-    /// are often a mistyped unit.
-    async fn note_lane_selector(
-        self: &Arc<Self>,
-        mut error: RpcError,
-        units: &[String],
-        context: &Context,
-    ) -> RpcError {
-        let [unit] = units else { return error };
-        let plain = !unit.is_empty()
-            && !unit.starts_with('+')
-            && !unit.contains([':', '@', '*', '?', '[', '{']);
-        if error.code != "not_found"
-            || context.lane.is_some()
-            || !plain
-            || error.data.get("reference").and_then(Value::as_str) != Some(unit.as_str())
-        {
-            return error;
-        }
-        // Looked up without registering, relisting or claiming anything.
-        let Ok(parsed) = unit.parse::<devlanes_core::refs::LaneRef>() else {
-            return error;
-        };
-        let Ok(crate::target::RefProjects::In(scope)) =
-            self.reference_projects(&parsed, context, None).await
-        else {
-            return error;
-        };
-        let Ok((project, lane)) = self.match_reference(&parsed, &scope, context) else {
-            return error;
-        };
-        let st = lane.st();
-        let names_lane = st.record.is_some()
-            && (unit.bytes().all(|b| b.is_ascii_digit())
-                || st.alias().is_some_and(|(_, name)| name == unit));
-        if names_lane && let Some(data) = error.data.as_object_mut() {
-            data.insert("names_lane".into(), json!(st.reference(&project.name())));
-        }
-        error
-    }
-
     /// `start`: the lane pipeline, then waits for ready/failed (StartResult).
     pub(crate) async fn start_method(
         self: &Arc<Self>,
@@ -258,14 +214,7 @@ impl Inner {
                 restoring: false,
             },
         );
-        let mut result = match self.with_lane_events(session, stream, start).await {
-            Ok(result) => result,
-            Err(error) => {
-                return Err(self
-                    .note_lane_selector(error, &selection.units, context)
-                    .await);
-            }
-        };
+        let mut result = self.with_lane_events(session, stream, start).await?;
         // Only this lane came back; the shell's env may not suit the others, so this
         // project's other lanes are named for `lane resume` instead of started too.
         // `others` counts the other projects' lanes, which `lane resume` also starts;
@@ -337,17 +286,9 @@ impl Inner {
             Self::refuse_external(&project, &lane, &selectors)?;
             let selectors = (!selectors.is_empty()).then_some(selectors);
             let mine = selection.mine.then_some(&context.actor);
-            stopped = match self
+            stopped = self
                 .stop_lane(&project, &lane, selectors, mine, selection.transient)
-                .await
-            {
-                Ok(stopped) => stopped,
-                Err(error) => {
-                    return Err(self
-                        .note_lane_selector(error, &selection.units, context)
-                        .await);
-                }
-            };
+                .await?;
             // A stopped unit has no drift left to report.
             self.prune_drift(&lane);
         }
@@ -429,14 +370,7 @@ impl Inner {
             self.with_lane_events(session, stream, restart).await?
         } else {
             let restart = self.restart_units(&project, &lane, &selectors, options);
-            match self.with_lane_events(session, stream, restart).await {
-                Ok(result) => result,
-                Err(error) => {
-                    return Err(self
-                        .note_lane_selector(error, &selection.units, context)
-                        .await);
-                }
-            }
+            self.with_lane_events(session, stream, restart).await?
         };
         serde_json::to_value(result).map_err(|e| internal("encode", e))
     }

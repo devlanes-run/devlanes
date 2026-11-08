@@ -1102,6 +1102,7 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
                     Method::Stop => Some("stop"),
                     Method::Start => Some("start"),
                     Method::Restart => Some("restart"),
+                    Method::Reload => Some("reload"),
                     _ => None,
                 } =>
         {

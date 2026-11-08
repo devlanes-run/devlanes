@@ -478,50 +478,28 @@ impl Inner {
                     1,
                 ));
             }
-            // Names the lane does not have are a typo, not "nothing to reload".
-            let known = |selector: &str| {
-                st.units.contains_key(selector)
-                    || st.orphans.contains_key(selector)
-                    || st.view.as_ref().is_some_and(|view| {
-                        view.services
-                            .iter()
-                            .any(|service| service.unit == selector || service.name == selector)
-                    })
+            // The units the selectors name, as `stop` picks them (names, globs,
+            // `+tag`s, a service for its replicas); names the lane does not have
+            // are a typo, not "nothing to reload".
+            let picked: Option<BTreeSet<String>> = if selectors.is_empty() {
+                None
+            } else {
+                Some(
+                    st.match_units(&reference, &selectors)?
+                        .into_iter()
+                        .collect(),
+                )
             };
-            if let Some(unknown) = selectors.iter().find(|selector| !known(selector)) {
-                let mut candidates: Vec<String> = st.units.keys().cloned().collect();
-                candidates.extend(
-                    st.view
-                        .iter()
-                        .flat_map(|view| view.services.iter().map(|s| s.unit.clone())),
-                );
-                candidates.sort();
-                candidates.dedup();
-                return Err(RpcError::new(
-                    "not_found",
-                    json!({"reference": unknown, "candidates": candidates}),
-                    3,
-                ));
-            }
             // A plan that failed has no per-unit answer; its error is the answer.
             if st.drift.is_empty()
                 && let Some(error) = &st.drift_error
             {
                 return Err(error.clone());
             }
-            let picked = |unit: &str| {
-                selectors.is_empty()
-                    || selectors.iter().any(|selector| {
-                        selector == unit
-                            || unit
-                                .rsplit_once('.')
-                                .is_some_and(|(base, _)| base == selector)
-                    })
-            };
             let drift: BTreeMap<String, UnitDrift> = st
                 .drift
                 .iter()
-                .filter(|(unit, _)| picked(unit))
+                .filter(|(unit, _)| picked.as_ref().is_none_or(|picked| picked.contains(*unit)))
                 .map(|(unit, drift)| (unit.clone(), drift.clone()))
                 .collect();
             (
