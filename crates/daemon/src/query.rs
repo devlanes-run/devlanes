@@ -430,39 +430,46 @@ impl Inner {
                 return Ok(json!({"items": [], "truncated": false, "next_cursor": null}));
             }
         }
-        self.follow_logs(lane.clone(), units, page.items, session)
+        self.follow_logs(lane.clone(), units, query, page.items, session)
             .await;
         Ok(json!({"items": [], "truncated": false, "next_cursor": null}))
     }
 
-    /// Streams new lines of `units` until the client disconnects, following restarts.
+    /// Streams new lines of `units` that `filter` (the first page's query)
+    /// selects until the client disconnects, following restarts.
     async fn follow_logs(
         &self,
         lane: Arc<crate::model::LaneRt>,
         units: Vec<String>,
+        filter: LogQuery,
         seen: Vec<LogLine>,
         session: &Session,
     ) {
-        let mut cursors: std::collections::BTreeMap<String, String> =
-            std::collections::BTreeMap::new();
+        // Per unit, the last line already read.
+        let mut read: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
         for line in seen {
-            cursors.insert(line.unit.clone(), format!("{}#{}", line.unit, line.seq));
+            read.insert(line.unit.clone(), line.seq);
         }
         let disconnected = session.disconnected();
         loop {
             for unit in &units {
                 let host = lane.st().units.get(unit).map(|rec| rec.host.clone());
                 let Some(host) = host else { continue };
+                let through = host.logged_through();
                 let query = LogQuery {
-                    cursor: cursors.get(unit).cloned(),
+                    cursor: read.get(unit).map(|seq| host.cursor_after(*seq)),
                     max_bytes: Some(256 * 1024),
-                    ..LogQuery::default()
+                    tail: None,
+                    head: None,
+                    around: None,
+                    ..filter.clone()
                 };
                 let Ok(page) = host.logs(query).await else {
                     continue;
                 };
+                let complete = !page.truncated;
                 for line in page.items {
-                    cursors.insert(unit.clone(), format!("{}#{}", line.unit, line.seq));
+                    read.insert(unit.clone(), line.seq);
                     let event = devlanes_proto::Event {
                         seq: 0,
                         event: events::LOG.into(),
@@ -471,6 +478,16 @@ impl Inner {
                     if session.event(event).await.is_err() {
                         return;
                     }
+                }
+                // A complete page covered every line below `through`, so the
+                // lines the filter left out are not scanned again, except the
+                // last `context_lines` of them, which may lead a later match.
+                if complete
+                    && let Some(skipped) =
+                        through.and_then(|next| next.checked_sub(1 + filter.context_lines as u64))
+                {
+                    let last = read.entry(unit.clone()).or_insert(skipped);
+                    *last = (*last).max(skipped);
                 }
             }
             tokio::select! {

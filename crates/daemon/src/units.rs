@@ -879,17 +879,27 @@ impl UnitHost {
     /// A forward cursor that starts at this run's first line, so a follower
     /// skips the output of earlier runs.
     pub fn run_cursor(&self) -> Option<String> {
-        let last_before = self.inner.first_seq.checked_sub(1)?;
-        Some(format!(
-            "{}#{last_before}",
-            self.inner.info.name.replace('#', "_")
-        ))
+        Some(self.cursor_after(self.inner.first_seq.checked_sub(1)?))
+    }
+
+    /// A forward cursor that resumes this unit's log after line `seq`.
+    pub(crate) fn cursor_after(&self, seq: u64) -> String {
+        format!("{}#{seq}", self.inner.info.name.replace('#', "_"))
     }
 
     /// Watches how far the log thread has written this run's log; it changes
     /// after each stored batch of lines and when the writer stops.
     pub(crate) fn watch_logged(&self) -> watch::Receiver<Logged> {
         self.inner.logged.clone()
+    }
+
+    /// The sequence every line below which is in the log, so in any read
+    /// started after this call; `None` once the writer failed.
+    pub(crate) fn logged_through(&self) -> Option<u64> {
+        match *self.inner.logged.borrow() {
+            Logged::Through(next) => Some(next),
+            Logged::Failed => None,
+        }
     }
 
     /// Subscribes to raw output (for followers).

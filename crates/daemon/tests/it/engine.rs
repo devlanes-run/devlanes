@@ -1884,6 +1884,59 @@ async fn logs_since_lane_start() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// `logs --follow --grep` applies the filter to lines that arrive while
+/// following, not only to the first page.
+async fn logs_follow_keeps_the_filter() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(
+            &tmp.path,
+            "r",
+            "project: demo\nservices:\n  chatty:\n    \
+             run: \"echo match one; echo other one; hold; echo other two; echo match two; sleep\"\n",
+        );
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        start(&h, cx(&main), json!({})).await;
+        let (session, mut frames) = h.session();
+        let follow = h.call_on(
+            Method::Logs,
+            json!({"units": ["chatty"], "grep": "match", "follow": true}),
+            cx(&main),
+            &session,
+        );
+        let read = async {
+            let first = next_log_text(&mut frames).await;
+            // The rest is written only now, so it reaches the follower as new lines.
+            h.runner.release();
+            let second = next_log_text(&mut frames).await;
+            session.close();
+            [first, second]
+        };
+        let (followed, texts) = tokio::join!(follow, read);
+        followed.expect("follow");
+        assert_eq!(texts, ["match one", "match two"]);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// The text of the next `log` event sent to a session.
+async fn next_log_text(frames: &mut tokio::sync::mpsc::Receiver<Frame>) -> String {
+    loop {
+        let frame = frames.recv().await.expect("session open");
+        if let Frame::Control(devlanes_proto::Control::Event(event)) = frame
+            && event.event == events::LOG
+        {
+            return event.data["line"]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// A worktree devlanes ran in without a config shows `no-config`; one it never
 /// ran in is not listed; reset-state needs `yes`.
 async fn no_config_and_reset_state() {
