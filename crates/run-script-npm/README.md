@@ -48,7 +48,7 @@ With `"packageManager": "pnpm@10.4.1"` this runs `pnpm run dev` in `apps/api`; w
 
 Without a field, the nearest lockfile decides (`pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `bun.lock`, `bun.lockb`) and the plan carries a note asking for the field. A lockfile that contradicts the field is also a note; the field wins. Yarn 2+ is recognised by version, the `__metadata:` lockfile header or `.yarnrc.yml`, and a Plug'n'Play install without `.pnp.cjs` gets a note.
 
-On Windows an npm script runs without npm, which turns any stop into exit code 1 there: each of `pre<name>`, the script and `post<name>` runs as `cmd /d /s /c "<step>"` (or through `script-shell` from `.npmrc`), with npm's package variables and `node_modules\.bin` directories in `LaunchPlan::env` and `LaunchPlan::path`.
+npm turns any stop of its script into exit code 1 on Windows, so there an npm script runs without npm: each of `pre<name>`, the script and `post<name>` runs as `cmd /d /s /c "<step>"` (or through `script-shell` from `.npmrc`), with npm's package variables and `node_modules\.bin` directories in `LaunchPlan::env` and `LaunchPlan::path`.
 
 Only npm needs `--` before script arguments. pnpm, yarn 2+ and bun pass a `--` through literally, which makes Vite and similar CLIs ignore the flags after it; yarn 1 drops it with a deprecation warning. All four get the arguments right after the script name.
 

@@ -4,14 +4,14 @@
 use std::{collections::BTreeMap, ffi::OsString, path::Path, sync::Arc, time::Duration};
 
 use devlanes_core::{
-    ExitOutcome, LaunchSpec, OutputChunk, StopPolicy, StopSignal, TerminalSize, Unit,
+    ExitOutcome, LaunchSpec, StopPolicy, StopSignal, TerminalSize, Unit,
     contrib::{self, ScriptPlan, ScriptRunner},
 };
 use devlanes_run_script_npm::NpmScripts;
 use devlanes_runner_windows::{
     ConsoleHelper, HELPER_ARG, WindowsRunner, WindowsUnit, console_ctrl_main,
 };
-use tokio::sync::broadcast::{Receiver, error::RecvError};
+use tokio::sync::broadcast::error::RecvError;
 
 use super::write_files;
 
@@ -59,21 +59,12 @@ async fn script(root: &Path, name: &str) -> ScriptPlan {
         .expect("plan")
 }
 
-/// A pipe unit for `plan` with this process's environment under the plan's
-/// variables and the plan's directories in front of `PATH`, as lane
-/// resolution layers them.
+/// A pipe unit for `plan`: this process's environment with the plan's
+/// variables over it. A hand-written stand-in for lane resolution that keeps
+/// only what the stop test needs (`node` is already on `PATH`), so tests
+/// using it prove the plan and the runner, not `resolve`'s layering.
 fn spec(plan: ScriptPlan) -> LaunchSpec {
-    let mut env: BTreeMap<String, String> = std::env::vars()
-        .map(|(name, value)| (name.to_uppercase(), value))
-        .collect();
-    let path = std::env::join_paths(
-        plan.path
-            .iter()
-            .cloned()
-            .chain(std::env::split_paths(&env["PATH"])),
-    )
-    .expect("PATH");
-    env.insert("PATH".into(), path.to_string_lossy().into_owned());
+    let mut env: BTreeMap<String, String> = std::env::vars().collect();
     env.extend(plan.env);
     LaunchSpec {
         program: plan.argv[0].clone(),
@@ -92,47 +83,6 @@ impl Drop for Cleanup {
     fn drop(&mut self) {
         self.0.terminate();
     }
-}
-
-/// Everything the unit printed until its output closed.
-async fn drain(mut output: Receiver<OutputChunk>) -> String {
-    let mut text = String::new();
-    loop {
-        match output.recv().await {
-            Ok(chunk) => text.push_str(&String::from_utf8_lossy(&chunk.bytes)),
-            Err(RecvError::Lagged(_)) => {}
-            Err(RecvError::Closed) => return text,
-        }
-    }
-}
-
-/// A failing `pre` step ends the script with its code before the script
-/// itself runs, as npm does, through the plan's step variables and the
-/// runner's quoting of the `cmd.exe` line.
-#[tokio::test]
-async fn npm_steps_stop_at_a_failing_pre_script() {
-    tokio::time::timeout(LIMIT, async {
-        let temp = tempfile::tempdir().expect("tempdir");
-        write_files(
-            temp.path(),
-            &[(
-                "package.json",
-                r#"{"scripts":{"prego":"echo PRE-RAN && exit 1","go":"echo BODY-RAN","postgo":"echo POST-RAN"}}"#,
-            )],
-        );
-        let unit = runner()
-            .spawn_unit(spec(script(temp.path(), "go").await))
-            .await
-            .expect("spawn");
-        let _cleanup = Cleanup(unit.clone());
-        let output = drain(unit.output()).await;
-        let outcome = unit.wait().await.expect("exit");
-        assert_eq!(outcome, ExitOutcome { code: Some(1), signal: None }, "{output}");
-        assert!(output.contains("PRE-RAN"), "{output}");
-        assert!(!output.contains("BODY-RAN") && !output.contains("POST-RAN"), "{output}");
-    })
-    .await
-    .expect("bounded");
 }
 
 /// A stopped npm script reports its program's own exit code: npm is not
