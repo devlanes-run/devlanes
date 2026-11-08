@@ -17,7 +17,7 @@ use crate::{
     Session,
     engine::{Inner, carries_env, params},
     lifecycle::StartOptions,
-    model::{EnvMap, Kind, LaneRt, LaneSt, ProjectRt},
+    model::{Kind, LaneRt, LaneSt, ProjectRt},
     registry::internal,
     stream::LaneEvents,
 };
@@ -512,7 +512,7 @@ impl Inner {
             profiles: Vec::new(),
             transient: false,
             env: carries_env(context),
-            overrides: EnvMap::new(),
+            overrides: None,
             actor: context.actor.clone(),
             timeout: self.timeout(selection.timeout_ms),
             session: None,

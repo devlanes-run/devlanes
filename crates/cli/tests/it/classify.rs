@@ -321,7 +321,8 @@ fn mcp_call_variables_stay_in_the_process() {
 
 #[test]
 /// With `DEVLANES_ENV_FROM_LANE` the start of `with` sends no env, so the lane
-/// keeps its own, while the command still gets the shell's.
+/// keeps its own, while the command still gets the shell's. It sends no `--env`
+/// values either, so the lane keeps those too.
 fn with_reuses_the_lanes_env() {
     let cli = Cli::parse_from(["devlanes", "with", "--", "pnpm", "test"]);
     let Ok(Action::With(plan)) = cli.action_with(
@@ -332,5 +333,6 @@ fn with_reuses_the_lanes_env() {
         panic!("with plan");
     };
     assert!(plan.start.context.env.is_none());
+    assert_eq!(plan.start.params.get("env"), None, "{}", plan.start.params);
     assert_eq!(plan.env["PATH"], "/bin");
 }
