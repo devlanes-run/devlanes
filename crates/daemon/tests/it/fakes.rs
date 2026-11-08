@@ -682,9 +682,9 @@ pub struct FakeInfra {
     /// When set, `down` waits for a notification between recording `down`
     /// and `down done`.
     pub down_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
-    /// `port_needs` also asks for the shared plain containers' ports from the
-    /// project's shared block.
-    pub shared_ports: Arc<Mutex<bool>>,
+    /// `port_needs` builds its needs from the spec's plain containers as the
+    /// real provider does, instead of the fixed lane need `infra.db/5432`.
+    pub ports_from_spec: Arc<Mutex<bool>>,
 }
 
 impl FakeInfra {
@@ -773,25 +773,30 @@ impl FakeInfra {
 impl InfraProvider for FakeInfra {
     async fn port_needs(&self, spec: &InfraSpec) -> Result<Vec<InfraPortNeed>, InfraError> {
         self.query("port_needs");
-        let mut needs = vec![InfraPortNeed {
+        // As the real provider: one need per declared port, from the lane's block
+        // for a `per_lane` container and from the project's shared block otherwise.
+        if self.ports_from_spec.lock().is_ok_and(|on| *on) {
+            return Ok(spec
+                .containers
+                .iter()
+                .flat_map(|container| {
+                    container.ports.iter().map(|(name, _)| InfraPortNeed {
+                        scope: if container.per_lane {
+                            PortScope::Lane
+                        } else {
+                            PortScope::Shared
+                        },
+                        unit: format!("infra.{}", container.name),
+                        name: name.clone(),
+                    })
+                })
+                .collect());
+        }
+        Ok(vec![InfraPortNeed {
             scope: PortScope::Lane,
             unit: "infra.db".into(),
             name: "5432".into(),
-        }];
-        // As the real provider: a shared plain container's ports come from the
-        // project's shared block.
-        if self.shared_ports.lock().is_ok_and(|shared| *shared) {
-            for container in spec.containers.iter().filter(|c| !c.per_lane) {
-                for (name, _) in &container.ports {
-                    needs.push(InfraPortNeed {
-                        scope: PortScope::Shared,
-                        unit: format!("infra.{}", container.name),
-                        name: name.clone(),
-                    });
-                }
-            }
-        }
-        Ok(needs)
+        }])
     }
     async fn up(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
         self.record(format!("up {}", spec.lane));

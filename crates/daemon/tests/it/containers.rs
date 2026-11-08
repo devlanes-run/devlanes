@@ -892,7 +892,7 @@ async fn cleaning_the_last_lane_stops_shared_containers() {
             },
         )
         .await;
-        *h.infra.shared_ports.lock().expect("knob") = true;
+        *h.infra.ports_from_spec.lock().expect("knob") = true;
         h.call(Method::Start, json!({}), cx(&main))
             .await
             .expect("start");
