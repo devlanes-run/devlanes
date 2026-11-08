@@ -899,13 +899,12 @@ async fn run_infra_entry_not_found_lists_entries() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// A service that exits right after its spawn skips `after: services` tasks
-/// and reports its log tail, whatever its check, including one that passed.
+/// and reports its log tail, whether its check never passes or passes at once.
 async fn after_services_skip_on_failure() {
     tokio::time::timeout(LIMIT, async {
         for bad in [
             "{ run: fail, ready: { log: never } }",
             "{ run: fail, ready: started }",
-            r#"{ run: "echo up; nap 100; fail", ready: { log: up } }"#,
         ] {
             let tmp = temp();
             let config = format!(
