@@ -570,7 +570,7 @@ async fn unit_identity_actor_and_exit_roundtrip_without_environment_columns() {
         signal: Some(15),
     };
     store
-        .finish_unit_run(run.id, outcome, true)
+        .finish_unit_run(run.id, outcome, None)
         .await
         .expect("finish");
     store
@@ -580,7 +580,7 @@ async fn unit_identity_actor_and_exit_roundtrip_without_environment_columns() {
                 code: Some(0),
                 signal: None,
             },
-            false,
+            None,
         )
         .await
         .expect("idempotent finish");
@@ -793,7 +793,7 @@ async fn registry_updates_deletes_and_allocation_release() {
                     code: Some(0),
                     signal: None
                 },
-                false
+                None
             )
             .await
             .is_err()
@@ -959,9 +959,9 @@ async fn migration_drops_cleaned_lanes() {
 }
 
 #[tokio::test]
-/// Runs finished before the `unit_run_ended_by_request` migration read as not
-/// knowing whether a stop ended them, so their exit codes count as no crash.
-async fn migration_leaves_earlier_runs_without_ended_by_request() {
+/// Runs finished before the `unit_run_ended_by` migration read as not knowing
+/// what ended them, so their exit codes count as no crash.
+async fn migration_leaves_earlier_runs_without_ended_by() {
     use diesel::migration::MigrationSource;
     const MIGRATIONS: diesel_migrations::EmbeddedMigrations = embed_migrations!("migrations");
     let dir = tempfile::tempdir().expect("dir");
@@ -974,16 +974,11 @@ async fn migration_leaves_earlier_runs_without_ended_by_request() {
         .expect("migrations");
     // By name, so a migration numbered before or after this one does not
     // change which ones run first.
-    let ended_by_request = migrations
+    let ended_by = migrations
         .iter()
-        .position(|migration| {
-            migration
-                .name()
-                .to_string()
-                .ends_with("_unit_run_ended_by_request")
-        })
-        .expect("the unit_run_ended_by_request migration");
-    c.run_migrations(&migrations[..ended_by_request])
+        .position(|migration| migration.name().to_string().ends_with("_unit_run_ended_by"))
+        .expect("the unit_run_ended_by migration");
+    c.run_migrations(&migrations[..ended_by])
         .expect("the migrations before it");
     c.batch_execute(
         "INSERT INTO projects (id, name, identity, root_path, primary_branch)
@@ -1004,7 +999,7 @@ async fn migration_leaves_earlier_runs_without_ended_by_request() {
         .expect("runs");
     assert_eq!(
         runs.iter()
-            .map(|run| (run.outcome, run.ended_by_request))
+            .map(|run| (run.outcome, run.ended_by))
             .collect::<Vec<_>>(),
         [(
             Some(ExitOutcome {

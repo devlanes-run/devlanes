@@ -48,7 +48,7 @@ async fn run(store: &Store, lane: LaneId, name: &str, finished: bool) -> UnitRun
                     code: Some(0),
                     signal: None,
                 },
-                false,
+                None,
             )
             .await
             .expect("finish");

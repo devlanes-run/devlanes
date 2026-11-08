@@ -10,7 +10,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use devlanes_core::{ExitOutcome, ProcessIdentity, UnitRunId};
 use devlanes_proto::{RpcError, UnitSummary};
-use devlanes_state::UnitRun;
+use devlanes_state::{EndedBy, UnitRun};
 use futures_util::future::join_all;
 
 use crate::{
@@ -62,7 +62,7 @@ impl Inner {
         let mut tracked = 0;
         for ((run, members), alive) in runs.into_iter().zip(members).zip(checks) {
             if !alive {
-                self.finish_run(run.id, GONE, false).await;
+                self.finish_run(run.id, GONE, None).await;
                 continue;
             }
             let lane = lanes.iter().find(|(_, lane)| {
@@ -135,7 +135,10 @@ impl Inner {
         let mut stopped = Vec::new();
         for (name, orphan, mut summary) in picked {
             // An unfinished row keeps the record, so the liveness check retries it.
-            if self.finish_run(orphan.run_id, TERMINATED, true).await {
+            if self
+                .finish_run(orphan.run_id, TERMINATED, Some(EndedBy::Requested))
+                .await
+            {
                 let mut st = lane.st();
                 if st
                     .orphans
@@ -168,7 +171,7 @@ impl Inner {
                 if self.any_alive(orphan.process, &orphan.members).await {
                     continue;
                 }
-                if !self.finish_run(orphan.run_id, GONE, false).await {
+                if !self.finish_run(orphan.run_id, GONE, None).await {
                     continue;
                 }
                 let mut st = lane.st();
@@ -253,7 +256,7 @@ impl Inner {
     /// Before the store is reset or closed: finishes the rows of this daemon's
     /// exited units with their exit status, without waiting for their watchers.
     pub(crate) async fn finish_stopped_runs(&self) {
-        let runs: Vec<(UnitRunId, Option<ExitOutcome>, bool)> = self
+        let runs: Vec<(UnitRunId, Option<ExitOutcome>, EndedBy)> = self
             .all_lanes()
             .iter()
             .flat_map(|(_, lane)| {
@@ -263,13 +266,13 @@ impl Inner {
                     .filter(|rec| !rec.host.is_alive())
                     .filter_map(|rec| {
                         let id = rec.run_id?;
-                        Some((id, rec.host.exit_outcome(), rec.host.stop_was_requested()))
+                        Some((id, rec.host.exit_outcome(), rec.host.ended_by()))
                     })
                     .collect::<Vec<_>>()
             })
             .collect();
-        for (id, outcome, by_request) in runs {
-            self.finish_run(id, outcome.unwrap_or(GONE), by_request)
+        for (id, outcome, ended_by) in runs {
+            self.finish_run(id, outcome.unwrap_or(GONE), Some(ended_by))
                 .await;
         }
     }
@@ -292,27 +295,31 @@ impl Inner {
             if alive {
                 self.terminate_all(run.process, &members).await;
             }
-            let outcome = if alive { TERMINATED } else { GONE };
-            self.finish_run(run.id, outcome, alive).await;
+            if alive {
+                self.finish_run(run.id, TERMINATED, Some(EndedBy::Requested))
+                    .await;
+            } else {
+                self.finish_run(run.id, GONE, None).await;
+            }
             alive
         }))
         .await;
         Ok(ended.into_iter().filter(|alive| *alive).count())
     }
 
-    /// Finishes a run row with its outcome and whether a stop asked for its end,
-    /// retrying briefly. An unfinished row keeps the unit's active-run slot (one
-    /// per lane and unit) taken, which would refuse its next start. Returns
-    /// false when the row is still unfinished.
+    /// Finishes a run row with its outcome and what ended it (`None` when
+    /// unknown), retrying briefly. An unfinished row keeps the unit's
+    /// active-run slot (one per lane and unit) taken, which would refuse its
+    /// next start. Returns false when the row is still unfinished.
     pub(crate) async fn finish_run(
         &self,
         id: UnitRunId,
         outcome: ExitOutcome,
-        by_request: bool,
+        ended_by: Option<EndedBy>,
     ) -> bool {
         let mut delay = Duration::from_millis(100);
         for attempt in 1..=FINISH_ATTEMPTS {
-            match self.store.finish_unit_run(id, outcome, by_request).await {
+            match self.store.finish_unit_run(id, outcome, ended_by).await {
                 // A missing row was reset or pruned: nothing is left to finish.
                 Ok(()) | Err(devlanes_state::Error::NotFound(_)) => return true,
                 Err(devlanes_state::Error::Closed) => return false,

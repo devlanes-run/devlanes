@@ -76,7 +76,7 @@ diesel::table! {
         actor_session_id -> Nullable<Text>,
         log_path -> Nullable<Binary>,
         boot_id -> Nullable<Text>,
-        ended_by_request -> Nullable<Integer>,
+        ended_by -> Nullable<Text>,
     }
 }
 diesel::table! {
