@@ -3361,7 +3361,9 @@ impl Inner {
         }
         // Selected before anything on the lane changes, so a start the profile
         // check refuses leaves the lane as it was. `apply_move` and the refresh
-        // below change neither the config nor the record this reads.
+        // below change neither the config nor the record this reads. Selection
+        // errors name the pre-move reference too, so a typo on an idle lane that
+        // `apply_move` then renumbers names its old index.
         let config = lane.st().config.require(&initial).map_err(fail)?;
         let (saved, lane_profiles) = {
             let st = lane.st();

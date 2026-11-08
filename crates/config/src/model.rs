@@ -401,13 +401,6 @@ pub struct ProfileOptions {
     pub run_scripts: IndexMap<String, String>,
 }
 
-impl ProfileOptions {
-    /// Return a single-step script remapping, or the original name when no mapping exists.
-    pub fn remap_script<'a>(&'a self, name: &'a str) -> &'a str {
-        self.run_scripts.get(name).map_or(name, String::as_str)
-    }
-}
-
 /// Express nonempty script keys and values to YAML editors as well as runtime validation.
 fn script_remaps_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
