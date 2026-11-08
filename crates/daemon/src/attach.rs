@@ -105,7 +105,11 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let args: AttachParams = required(value)?;
         let ((project, lane), selectors) = self
-            .lane_for_units(std::slice::from_ref(&args.unit), context)
+            .lane_for_units(
+                std::slice::from_ref(&args.unit),
+                context,
+                crate::target::Policy::of(devlanes_proto::Method::Attach),
+            )
             .await?;
         Self::refuse_external(&project, &lane, &selectors)?;
         let name = selectors.into_iter().next().unwrap_or_default();

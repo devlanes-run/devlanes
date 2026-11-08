@@ -84,6 +84,9 @@ async fn several_profiles_select_merge_and_persist() {
             },
         )
         .await;
+        h.call(Method::Status, json!({}), cx(&main))
+            .await
+            .expect("status registers the project");
 
         let listed = h
             .call(Method::ProfileList, json!({}), cx(&main))

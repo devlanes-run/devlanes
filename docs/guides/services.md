@@ -218,7 +218,7 @@ services:
 
 A worktree can hold a lane of each project whose file it has, so one worktree of this repository can run a lane of `acme` and a lane of `billing` side by side.
 
-From a folder of the repository that holds no `devlanes.yaml`, such as its root, commands that need one project ask for `-p` when it holds several projects devlanes knows; `status` and `lane ls` list them all, and a full lane reference such as `--lane billing@1` works there too. A project counts once a devlanes command ran in its folder.
+From a folder of the repository that holds no `devlanes.yaml`, such as its root, commands that need one project ask for `-p` when it holds several projects devlanes knows; `status` and `lane ls` list them all, and a full lane reference such as `--lane billing@1` works there too. A project counts once `start`, `status` or another command that acts on lanes ran in its folder; reads such as `logs` there say the project has not been started.
 
 ## Several projects in one directory
 

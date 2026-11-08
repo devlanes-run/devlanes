@@ -891,8 +891,9 @@ this shell's environment and --env, as start does."
     #[command(
         long_about = "Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes).\n\n\
 The worktree gets a lane again, with an empty data folder and possibly other ports,\n\
-the next time a devlanes command runs in it. The primary worktree's lane comes back on\n\
-the next command for its project. A lane added with `lane new` does not come back;\n\
+the next time `start`, `status` or another command that acts on lanes runs in it. The\n\
+primary worktree's lane comes back on the next such command for its project. Reads such\n\
+as `logs` and `url ls` leave it cleaned. A lane added with `lane new` does not come back;\n\
 `lane new --name <name>` creates it again."
     )]
     Clean {

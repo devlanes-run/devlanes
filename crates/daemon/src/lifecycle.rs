@@ -3606,7 +3606,7 @@ impl Inner {
         }
         let branch = cx.lane.st().branch.clone();
         let mut warnings = cx.dropped.warnings(&cx.reference);
-        warnings.extend(self.ca_warnings(&cx.reference, &cx.lane.st()));
+        warnings.extend(self.ca_warnings(&cx.reference, cx.lane.st().view.as_deref()));
         let path = cx.lane.st().path.clone();
         warnings.extend(self.windows_drive_warning(&cx.reference, &path).await);
         cx.profile_stale
@@ -4526,8 +4526,9 @@ impl Inner {
 
     /// Forgets a project whose every lane was cleaned: its rows go (the store
     /// refuses while a run is unfinished) and so does it in memory, so neither a
-    /// daemon restart nor its watchers bring it back; the next command run in its
-    /// folder registers it again.
+    /// daemon restart nor its watchers bring it back; the next command whose policy
+    /// registers projects (`start`, `status`, `env`, ...) run in its folder registers
+    /// it again, and reads there answer `project_not_started`.
     pub(crate) async fn forget_if_empty(&self, project: &Arc<ProjectRt>) {
         let empty = project.lanes().iter().all(|lane| {
             let st = lane.st();
