@@ -311,9 +311,13 @@ pub enum Method {
     /// machine), `mirrored` whether the chosen lane serves them now and
     /// `replaced` the deleted choices as `[{lane, host}]`. For `host: null`
     /// these are the choices that took the lane's hostnames. A box known here
-    /// but not connected keeps the choice until it connects: the reply then
-    /// has `mirrored: false` and `pending: true`. A switch emits one
-    /// `remote.warning` notice with code `lane_switched`. Errors, each with a
+    /// but not connected keeps the choice until it connects, and a connected
+    /// box whose lane this machine has not mirrored yet, such as right after
+    /// `connect`, until it is: the reply then has `mirrored: false`,
+    /// `pending: true` and as `previous` the box that serves the hostnames
+    /// meanwhile. A switch emits one `remote.warning` notice with code
+    /// `lane_switched`, a pending choice once it applies (unless the daemon
+    /// restarted meanwhile). Errors, each with a
     /// `message`: `box_unknown`, `lane_not_on_box` (the connected box has no
     /// such lane), `local_lane_running` (a running local lane, named by
     /// `local_lane`, keeps the hostnames or has the same reference. Its
@@ -1459,7 +1463,8 @@ pub mod remote {
     /// `holds`, `containers` when only that lane's containers run, such as
     /// ones that came back after a reboot. `lane_switched` is a notice, not a
     /// problem: `lane`, `to` and `from` (boxes, null for this machine) and
-    /// `message`, after `remote.use` moved a lane.
+    /// `message`, after `remote.use` moved a lane or a pending choice of it
+    /// applied.
     pub const WARNING_EVENT: &str = "remote.warning";
     /// `{host}` on a client daemon, at most a few times a second, when what
     /// `host.list` says about the box changed apart from its link state (which

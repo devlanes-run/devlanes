@@ -138,6 +138,10 @@ pub(crate) struct Remotes {
     choices: Arc<Mutex<BTreeMap<String, String>>>,
     /// Set once `choices` was read from the store.
     choices_loaded: tokio::sync::OnceCell<()>,
+    /// Choices `remote.use` made that could not apply yet, lane reference to
+    /// box: the reassignment that first mirrors the lane from that box
+    /// announces the switch ([`Inner::reassign_with`]).
+    pending_switches: Mutex<BTreeMap<String, String>>,
     /// The latest [`assign::Assignment`] and its version, which goes up with
     /// every change.
     assignment: Mutex<(u64, Arc<assign::Assignment>)>,
@@ -691,26 +695,29 @@ impl HostConn {
         let _ = tokio::time::timeout(RECORD_WAIT, recorded.wait_for(|done| *done)).await;
     }
 
-    /// Waits, at most `limit`, until the mirror built routes for every lane
-    /// the box's registry lists, or the link ended. The registry holds a new
-    /// session's lanes before the link counts as connected, but the
-    /// assignment counts a lane only once the mirror built it, in its next
-    /// reconcile.
-    pub(super) async fn lanes_built(&self, limit: Duration) {
+    /// Waits, at most `limit`, until the mirror built routes for box lane
+    /// `lane`. The registry holds a new session's lanes before the link
+    /// counts as connected, but the assignment counts a lane only once the
+    /// mirror built it, in its next reconcile. Returns false when the time
+    /// ran out first; true once the lane is built, the registry lists no unit
+    /// of it to mirror, or the link ended, since nothing is left to wait for.
+    pub(super) async fn lane_built(&self, lane: &str, limit: Duration) -> bool {
         // Subscribed before the first look: a reconcile that ends after it wakes the loop.
         let mut applied = self.applied.subscribe();
         let wait = async {
             loop {
-                let wanted = mirror::buildable(&self.registry.current());
-                if self.ended() || wanted.is_subset(&lock(&self.view).built) {
+                let listed = mirror::mirrorable_units(&self.registry.current())
+                    .any(|unit| mirror::lane_ref(&unit.key.lane) == lane);
+                if !listed || self.ended() || lock(&self.view).built.contains(lane) {
                     return;
                 }
+                // The sender lives as long as `self`, so this never fails.
                 if applied.changed().await.is_err() {
                     return;
                 }
             }
         };
-        let _ = tokio::time::timeout(limit, wait).await;
+        tokio::time::timeout(limit, wait).await.is_ok()
     }
 
     /// `remote.state` payload for the current state, with the command that

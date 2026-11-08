@@ -448,8 +448,8 @@ async fn closes(stream: &mut BufReader<TcpStream>, wait: Duration) -> bool {
 /// lane's port is never unbound, a raw TCP connection, an idle pooled
 /// connection and a WebSocket to the old box close, and nothing warns about
 /// the switch, which one `lane_switched` notice announces. Each refusal has
-/// its code, a disconnected box's choice waits until it connects, and
-/// `remote disconnect` deletes the choice.
+/// its code, a disconnected box's choice waits until it connects and is
+/// announced then, and `remote disconnect` deletes the choice.
 async fn remote_use_switches_a_lane_between_boxes() {
     if !ipv6_loopback().await {
         eprintln!("skipping remote_use_switches_a_lane_between_boxes: no IPv6 loopback");
@@ -674,6 +674,13 @@ async fn remote_use_switches_a_lane_between_boxes() {
         assert!(
             taken.is_some(),
             "the chosen box takes the lane once it connects"
+        );
+        let seen = warnings_until_code(&mut frames, "lane_switched", "forkapp@0").await;
+        let notice = seen.last().expect("lane_switched");
+        assert_eq!(
+            (&notice["from"], &notice["to"]),
+            (&json!("alpha"), &json!("beta")),
+            "the pending choice is announced when it applies: {notice}"
         );
         // Beta only wins once its routes are built, so alpha's stay until
         // then and the hostnames never lead nowhere.
