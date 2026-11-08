@@ -150,7 +150,7 @@ async fn await_spawn(
 /// with `ignore_errors` still answers with its real exit code: it was run on
 /// its own, to see whether it works.
 fn run_result(task: &str, lane: &str, unit: Option<&str>, outcome: &TaskOutcome) -> Value {
-    let code = outcome.raw_code;
+    let code = outcome.code;
     let mut result = json!({
         "task": task,
         "lane": lane,

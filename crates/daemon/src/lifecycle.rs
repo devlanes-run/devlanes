@@ -1121,15 +1121,23 @@ impl LanePhase for SetupPhase {
         results.sort_by_key(|(name, _)| pending.iter().position(|(entry, _)| entry == name));
         let mut failed = Vec::new();
         for (name, result) in results {
-            if let Ok((_, host)) = &result {
+            if let Ok(TaskOutcome {
+                host: Some(host), ..
+            }) = &result
+            {
                 cx.leftovers
                     .extend(ended_leftovers(&cx.lane, &format!("setup.{name}"), host));
             }
-            // An entry a stop interrupted did not run, whatever `ignore_errors` says.
-            let ignore = resolved.setup.get(&name).is_some_and(|c| c.ignore_errors)
-                && !cx.cancel.is_cancelled();
-            let ok = matches!(&result, Ok((outcome, _)) if outcome.code == Some(0));
-            if ok || ignore {
+            let done = match &result {
+                Ok(outcome) => outcome.counts_done(),
+                // It never ran; `ignore_errors` lets the start go on unless a stop
+                // interrupted the start meanwhile.
+                Err(_) => {
+                    resolved.setup.get(&name).is_some_and(|c| c.ignore_errors)
+                        && !cx.cancel.is_cancelled()
+                }
+            };
+            if done {
                 let started_at = pending
                     .iter()
                     .find(|(n, _)| *n == name)
@@ -1147,9 +1155,17 @@ impl LanePhase for SetupPhase {
             }
             let unit = format!("setup.{name}");
             match result {
-                Ok((_, host)) => cx
-                    .failures
-                    .push(failure_of(&cx.reference, &unit, &host).await),
+                Ok(outcome) => {
+                    let failure = match &outcome.host {
+                        Some(host) => failure_of(&cx.reference, &unit, host).await,
+                        None => UnitFailureData {
+                            lane: cx.reference.clone(),
+                            unit,
+                            ..UnitFailureData::default()
+                        },
+                    };
+                    cx.failures.push(failure);
+                }
                 Err(error) => cx.failures.push(UnitFailureData {
                     lane: cx.reference.clone(),
                     unit,
@@ -1337,7 +1353,7 @@ impl LanePhase for TasksPhase {
                 cx.leftovers.extend(outcome.leftovers.iter().cloned());
             }
             match outcome {
-                Ok(TaskOutcome { code: Some(0), .. }) => cx.ran.push(name),
+                Ok(outcome) if outcome.counts_done() => cx.ran.push(name),
                 Ok(TaskOutcome { code, host, .. }) => {
                     let mut failure = match &host {
                         Some(host) => failure_of(&cx.reference, &name, host).await,
@@ -1547,20 +1563,30 @@ impl LanePhase for ServicesPhase {
     }
 }
 
-/// Exit of a task: its code (`None` when killed or timed out) and its last unit.
+/// Exit of a task, setup or teardown entry: its code (`None` when killed or
+/// timed out) and its last unit.
 pub(crate) struct TaskOutcome {
+    /// The last unit's own exit code.
     pub code: Option<i32>,
-    /// The last unit's own exit code. It differs from `code` only for an infra
-    /// entry with `ignore_errors`, which counts a failure as done for starts
-    /// and steps; a `run` of that one entry reports what really happened.
-    pub raw_code: Option<i32>,
     /// How the run ended, for `run` and the closing `task` event: the last
     /// unit's state, `Exited` for steps that all succeeded, `Stopped` for steps
     /// cancelled between two units.
     pub state: UnitState,
+    /// An infra entry's `ignore_errors`: its failure still counts as done.
+    pub ignore_errors: bool,
     pub host: Option<UnitHost>,
     /// Every unit of the task (steps included) that left processes behind.
     pub leftovers: Vec<Leftovers>,
+}
+
+impl TaskOutcome {
+    /// Whether the run counts as done for whatever ran it (the next step, a
+    /// start's setup or tasks phase, an entry's done-record): it exited 0, or
+    /// failed with `ignore_errors`. A stopped run never does, whatever its exit
+    /// code or `ignore_errors`: a stop, a cancel or a clean interrupted it.
+    pub(crate) fn counts_done(&self) -> bool {
+        !matches!(self.state, UnitState::Stopped(_)) && (self.code == Some(0) || self.ignore_errors)
+    }
 }
 
 /// Saved names a start brought back without, because the config no longer has them.
@@ -2862,7 +2888,7 @@ impl Inner {
         actor: &Actor,
         cancel: &CancellationToken,
         session: Option<&Session>,
-    ) -> Result<(ExitOutcome, UnitHost), RpcError> {
+    ) -> Result<TaskOutcome, RpcError> {
         let extra = lane.st().setup_env.clone();
         let name = format!("{phase}.{}", command.name);
         let mut request =
@@ -2881,7 +2907,13 @@ impl Inner {
             }
             None => finish(&host, command.timeout, cancel).await,
         };
-        Ok((outcome, host))
+        Ok(TaskOutcome {
+            code: outcome.code,
+            state: host.state(),
+            ignore_errors: command.ignore_errors,
+            host: Some(host),
+            leftovers: Vec::new(),
+        })
     }
 
     /// Runs a task (or its steps) to completion, recording `task_runs`. When
@@ -2950,11 +2982,11 @@ impl Inner {
             let result: Result<TaskOutcome, RpcError> = async {
                 let mut outcome = TaskOutcome {
                     code: Some(0),
-                    raw_code: Some(0),
                     state: UnitState::Exited(ExitOutcome {
                         code: Some(0),
                         signal: None,
                     }),
+                    ignore_errors: false,
                     host: None,
                     leftovers: Vec::new(),
                 };
@@ -2964,7 +2996,6 @@ impl Inner {
                         for step in &task.steps {
                             if cancel.is_cancelled() {
                                 outcome.code = None;
-                                outcome.raw_code = None;
                                 outcome.state = UnitState::Stopped(ExitOutcome {
                                     code: None,
                                     signal: None,
@@ -2999,7 +3030,8 @@ impl Inner {
                                 .await?
                             };
                             leftovers.extend(step_outcome.leftovers.iter().cloned());
-                            if step_outcome.code != Some(0) {
+                            // A failed or stopped step ends the task the same way.
+                            if !step_outcome.counts_done() {
                                 outcome = step_outcome;
                                 break;
                             }
@@ -3029,8 +3061,8 @@ impl Inner {
                         leftovers.extend(ended_leftovers(lane, name, &host));
                         outcome = TaskOutcome {
                             code: exit.code,
-                            raw_code: exit.code,
                             state: host.state(),
+                            ignore_errors: false,
                             host: Some(host),
                             leftovers: Vec::new(),
                         };
@@ -3138,11 +3170,10 @@ impl Inner {
             )
         })?;
         let hash = loaded_config(lane).and_then(|config| setup_hash(&config, entry));
-        let (outcome, host) = self
+        let mut outcome = self
             .run_command(project, lane, phase, command, actor, cancel, session)
             .await?;
-        // An interrupted entry did not do its work, whatever `ignore_errors` says.
-        let ok = !cancel.is_cancelled() && (outcome.code == Some(0) || command.ignore_errors);
+        let ok = outcome.counts_done();
         let lane_id = lane.st().record.as_ref().map(|r| r.id);
         if let Some(lane_id) = lane_id {
             if phase == "setup" && ok {
@@ -3171,16 +3202,12 @@ impl Inner {
                     .await;
             }
         }
-        let leftovers = ended_leftovers(lane, &format!("{phase}.{entry}"), &host)
-            .into_iter()
-            .collect();
-        Ok(TaskOutcome {
-            code: if ok { Some(0) } else { outcome.code },
-            raw_code: outcome.code,
-            state: host.state(),
-            host: Some(host),
-            leftovers,
-        })
+        if let Some(host) = &outcome.host {
+            outcome.leftovers = ended_leftovers(lane, &format!("{phase}.{entry}"), host)
+                .into_iter()
+                .collect();
+        }
+        Ok(outcome)
     }
 
     /// Brings a lane up (decision 5), or adds units to a lane that runs or is
@@ -4465,7 +4492,7 @@ impl Inner {
                         .run_command(project, lane, "teardown", command, &actor, &cancel, None)
                         .await;
                     teardown.push(match result {
-                        Ok((outcome, _)) => json!({"entry": name, "exit_code": outcome.code, "ignored": command.ignore_errors}),
+                        Ok(outcome) => json!({"entry": name, "exit_code": outcome.code, "ignored": command.ignore_errors}),
                         Err(error) => json!({"entry": name, "error": {"code": error.code}}),
                     });
                 }

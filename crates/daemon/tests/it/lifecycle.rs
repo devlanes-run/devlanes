@@ -286,6 +286,58 @@ async fn a_task_past_its_own_timeout_failed() {
     .expect("timeout");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+/// A step stopped by name ends its task `stopped` even when its process exits
+/// 0 on the signal: the next step never runs and the task is not marked done.
+async fn a_step_stopped_by_name_stops_its_task() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: steps\ntasks:\n  pipeline: { steps: [first, second] }\n  first: { run: \"graceful; sleep\" }\n  second: { run: \"echo second\" }\n";
+        let main = repo(&tmp.path, "r", config);
+        let home = tmp.path.join("home");
+        let h = harness(&home, Setup::default()).await;
+        let (_session, _frames, running) =
+            spawn_call(&h, Method::Run, json!({"task": "pipeline"}), cx(&main));
+        let first = eventually(SETTLE, || async {
+            alive(&lane(&h, &main).await)
+                .contains(&"first".to_owned())
+                .then_some(())
+        })
+        .await;
+        assert!(first.is_some(), "the first step runs");
+        h.call(Method::Stop, json!({"units": ["first"]}), cx(&main))
+            .await
+            .expect("stop");
+        let ran = running.await.expect("join").expect("run answers");
+        assert_eq!(ran["state"], "stopped", "{ran}");
+        assert!(
+            !h.runner.journal.entries().contains(&"echo second".to_owned()),
+            "the second step never spawned"
+        );
+        let tasks = h
+            .call(Method::TaskList, json!({}), cx(&main))
+            .await
+            .expect("task list");
+        let pipeline = tasks["items"]
+            .as_array()
+            .and_then(|items| items.iter().find(|task| task["name"] == "pipeline"))
+            .expect("pipeline");
+        assert_eq!(pipeline["last_run"]["state"], "stopped", "{tasks}");
+        h.close().await;
+        let store = devlanes_state::Store::open(home.join("state.db"))
+            .await
+            .expect("store");
+        let lane_id = store.lanes(None).await.expect("lanes")[0].id;
+        let marker = store
+            .task_completion(lane_id, "pipeline".into())
+            .await
+            .expect("marker");
+        assert_eq!(marker, None, "a stopped task never succeeded");
+    })
+    .await
+    .expect("timeout");
+}
+
 /// A lane whose `lane clean` task takes a while, and a long task.
 const CLEANING: &str = r#"project: tidy
 tasks:
