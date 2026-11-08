@@ -1643,10 +1643,7 @@ impl App {
                 if was_up && unit.state == "failed" && lane.state != "starting" && !was_starting {
                     let body = unit
                         .exit_code
-                        .map(|code| {
-                            devlanes_cli::exit::words(code.into())
-                                .map_or_else(|| format!("exited {code}"), str::to_owned)
-                        })
+                        .map(|code| format!("exited {code}"))
                         .unwrap_or_default();
                     notes.push((format!("{}:{} crashed", lane.reference, unit.name), body));
                 }
@@ -8169,10 +8166,7 @@ pub fn unit_ref(lane: &str, unit: &str) -> String {
 fn failure_words(failure: &devlanes_proto::UnitFailureData) -> Worded {
     let mut worded = match (&failure.reason, failure.exit_code) {
         (Some(reason), _) => words::rpc(reason),
-        (None, Some(code)) => Worded::local(
-            &devlanes_cli::exit::words(code.into())
-                .map_or_else(|| format!("exited with code {code}"), str::to_owned),
-        ),
+        (None, Some(code)) => Worded::local(&format!("exited with code {code}")),
         (None, None) => Worded::local("never became ready"),
     };
     worded
