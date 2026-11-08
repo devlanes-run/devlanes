@@ -12,7 +12,7 @@ use std::{
 
 use bytes::Bytes;
 use devlanes_core::{ExitOutcome, ProcessIdentity, StopPolicy, TerminalSize, Unit};
-use devlanes_logs::{LogOptions, LogReader, UnitLog};
+use devlanes_logs::{LogOptions, LogReader, Resumable, UnitLog};
 use devlanes_proto::{Actor, LogLine, LogQuery, Page, RpcError};
 use serde_json::json;
 use tokio::sync::{broadcast, watch};
@@ -804,25 +804,44 @@ impl UnitHost {
     /// Queries this unit's logs off the executor, once the log thread applied
     /// every line queued before the call.
     pub async fn logs(&self, query: LogQuery) -> Result<Page<LogLine>, RpcError> {
+        Ok(self.logs_resumable(query, 0).await?.page)
+    }
+
+    /// [`Self::logs`] with where a follower continues, owing `trailing`
+    /// context lines from its previous read ([`LogReader::query_resumable`]).
+    pub(crate) async fn logs_resumable(
+        &self,
+        query: LogQuery,
+        trailing: usize,
+    ) -> Result<Resumable, RpcError> {
         let (synced, applied) = tokio::sync::oneshot::channel();
         // A finished log thread has nothing queued; its send failure is fine.
         if self.inner.log_tx.send(LogCommand::Sync(synced)).is_ok() {
             let _ = tokio::time::timeout(PUMP_DRAIN, applied).await;
         }
-        self.read_log(query).await
+        self.read_resumable(query, trailing).await
     }
 
     /// Queries what the log thread has written so far, off the executor,
     /// without waiting for queued lines. Every line below the sequence
     /// [`Self::watch_logged`] reports is included.
     pub(crate) async fn read_log(&self, query: LogQuery) -> Result<Page<LogLine>, RpcError> {
+        Ok(self.read_resumable(query, 0).await?.page)
+    }
+
+    /// [`Self::read_log`] with where a follower continues.
+    async fn read_resumable(
+        &self,
+        query: LogQuery,
+        trailing: usize,
+    ) -> Result<Resumable, RpcError> {
         let log = self.inner.log.clone();
         tokio::task::spawn_blocking(move || {
             // The snapshot flushes under the lock; reading happens after releasing it,
             // so a long query never stalls the writer.
             let reader = log.lock().map_err(|_| poisoned())?.reader();
             reader
-                .query(&query)
+                .query_resumable(&query, trailing)
                 .map_err(|error| internal("log_query_failed", error))
         })
         .await
@@ -879,27 +898,17 @@ impl UnitHost {
     /// A forward cursor that starts at this run's first line, so a follower
     /// skips the output of earlier runs.
     pub fn run_cursor(&self) -> Option<String> {
-        Some(self.cursor_after(self.inner.first_seq.checked_sub(1)?))
-    }
-
-    /// A forward cursor that resumes this unit's log after line `seq`.
-    pub(crate) fn cursor_after(&self, seq: u64) -> String {
-        format!("{}#{seq}", self.inner.info.name.replace('#', "_"))
+        let last_before = self.inner.first_seq.checked_sub(1)?;
+        Some(format!(
+            "{}#{last_before}",
+            self.inner.info.name.replace('#', "_")
+        ))
     }
 
     /// Watches how far the log thread has written this run's log; it changes
     /// after each stored batch of lines and when the writer stops.
     pub(crate) fn watch_logged(&self) -> watch::Receiver<Logged> {
         self.inner.logged.clone()
-    }
-
-    /// The sequence every line below which is in the log, so in any read
-    /// started after this call; `None` once the writer failed.
-    pub(crate) fn logged_through(&self) -> Option<u64> {
-        match *self.inner.logged.borrow() {
-            Logged::Through(next) => Some(next),
-            Logged::Failed => None,
-        }
     }
 
     /// Subscribes to raw output (for followers).
@@ -1146,11 +1155,11 @@ pub async fn query_log_dir(
     dir: PathBuf,
     unit: String,
     query: LogQuery,
-) -> Result<Page<LogLine>, RpcError> {
+) -> Result<Resumable, RpcError> {
     tokio::task::spawn_blocking(move || {
         LogReader::open(&dir, unit.replace('#', "_"))
             .map_err(|error| internal("log_open_failed", error))?
-            .query(&query)
+            .query_resumable(&query, 0)
             .map_err(|error| internal("log_query_failed", error))
     })
     .await
@@ -1576,7 +1585,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("missing");
         let query = |dir: PathBuf| query_log_dir(dir, "web".into(), LogQuery::default());
-        let page = query(missing.clone()).await.expect("query");
+        let page = query(missing.clone()).await.expect("query").page;
         assert!(page.items.is_empty());
         assert!(!missing.exists());
 
@@ -1599,7 +1608,8 @@ mod tests {
         loop {
             let page = query(host.info().log_dir.clone())
                 .await
-                .expect("read-only query");
+                .expect("read-only query")
+                .page;
             let lines: Vec<_> = page.items.into_iter().map(|line| line.text).collect();
             // The space after the prompt shows nothing, so the log leaves it out.
             if lines == ["hello", "prompt>"] {

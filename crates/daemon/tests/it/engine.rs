@@ -1884,8 +1884,8 @@ async fn logs_since_lane_start() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// `logs --follow --grep` applies the filter to lines that arrive while
-/// following, not only to the first page.
+/// `logs --follow --grep` applies the filter, and `context_lines` its
+/// context, to lines that arrive while following, as to the first page.
 async fn logs_follow_keeps_the_filter() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -1893,28 +1893,45 @@ async fn logs_follow_keeps_the_filter() {
             &tmp.path,
             "r",
             "project: demo\nservices:\n  chatty:\n    \
-             run: \"echo match one; echo other one; hold; echo other two; echo match two; sleep\"\n",
+             run: \"echo match one; hold; echo other one; echo other two; echo other three; \
+             echo match two; sleep\"\n",
         );
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
         start(&h, cx(&main), json!({})).await;
-        let (session, mut frames) = h.session();
-        let follow = h.call_on(
-            Method::Logs,
-            json!({"units": ["chatty"], "grep": "match", "follow": true}),
-            cx(&main),
-            &session,
-        );
-        let read = async {
-            let first = next_log_text(&mut frames).await;
-            // The rest is written only now, so it reaches the follower as new lines.
-            h.runner.release();
-            let second = next_log_text(&mut frames).await;
-            session.close();
-            [first, second]
+        let (plain, mut plain_frames) = h.session();
+        let (context, mut context_frames) = h.session();
+        let follow = |context_lines: usize, session| {
+            h.call_on(
+                Method::Logs,
+                json!({"units": ["chatty"], "grep": "match", "context_lines": context_lines,
+                       "follow": true}),
+                cx(&main),
+                session,
+            )
         };
-        let (followed, texts) = tokio::join!(follow, read);
-        followed.expect("follow");
-        assert_eq!(texts, ["match one", "match two"]);
+        let read = async {
+            let mut plain_texts = vec![next_log_text(&mut plain_frames).await];
+            let mut context_texts = vec![next_log_text(&mut context_frames).await];
+            // The rest is written only now, so it reaches the followers as new
+            // lines, after a read that ended on the match.
+            h.runner.release();
+            plain_texts.push(next_log_text(&mut plain_frames).await);
+            for _ in 0..3 {
+                context_texts.push(next_log_text(&mut context_frames).await);
+            }
+            plain.close();
+            context.close();
+            (plain_texts, context_texts)
+        };
+        let (plain_followed, context_followed, (plain_texts, context_texts)) =
+            tokio::join!(follow(0, &plain), follow(1, &context), read);
+        plain_followed.expect("follow");
+        context_followed.expect("follow with context");
+        assert_eq!(plain_texts, ["match one", "match two"]);
+        assert_eq!(
+            context_texts,
+            ["match one", "other one", "other three", "match two"]
+        );
         h.close().await;
     })
     .await

@@ -54,6 +54,7 @@ applies the size bound across all unit directories.
 - `UnitLog::open`: the single writer of a unit directory; `Error::Locked` while another writer holds it.
 - `UnitLog::reader`: a metadata snapshot to query after releasing any lock around the writer.
 - `LogReader::open`: reads a directory without recovering, locking or creating anything.
+- `LogReader::query_resumable`: a page plus the `Resume` a follower's next query continues from, so its filter and context apply to later lines as to one query.
 - `UnitLog::trim_to(max_bytes) -> Result<u64>`: removes oldest data until the directory fits `max_bytes`; returns the bytes left.
 - `UnitLog::disk_bytes`: bytes the directory's segments use now.
 
