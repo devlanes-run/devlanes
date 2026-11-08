@@ -3558,16 +3558,6 @@ impl Inner {
         if !wait_settled(&hosts, cx.deadline).await {
             cx.timed_out = true;
         }
-        // `ready: started` calls a unit ready at once; one that exits right after
-        // its spawn (a bad flag, a missing file) failed to start all the same.
-        let fresh: Vec<UnitHost> = {
-            let st = cx.lane.st();
-            cx.started
-                .iter()
-                .filter_map(|unit| st.units.get(unit).map(|rec| rec.host.clone()))
-                .collect()
-        };
-        settle_early_exits(&fresh, cx.deadline).await;
         // Withdrawals may have come in while waiting.
         let withdrawn = cx.ctl.withdrawn();
         let selected: Vec<String> = selected
@@ -5034,28 +5024,6 @@ async fn finish_within(host: &UnitHost, timeout: Option<Duration>) -> ExitOutcom
         },
         None => host.wait_exit().await,
     }
-}
-
-/// How long after its spawn a unit's exit still counts as a failed start.
-const EARLY_EXIT: Duration = Duration::from_millis(500);
-
-/// Waits until each live unit of `hosts` has run for [`EARLY_EXIT`] (or the
-/// start's deadline passed), returning early once all of them exited.
-async fn settle_early_exits(hosts: &[UnitHost], deadline: Instant) {
-    let now = now_ms();
-    let youngest = hosts
-        .iter()
-        .filter(|host| host.is_alive())
-        .map(|host| host.info().started_at_ms)
-        .max();
-    let Some(started) = youngest else {
-        return;
-    };
-    let early = u64::try_from(EARLY_EXIT.as_millis()).unwrap_or(u64::MAX);
-    let left = Duration::from_millis((started + early).saturating_sub(now));
-    let until = (Instant::now() + left).min(deadline);
-    let all_exited = join_all(hosts.iter().map(UnitHost::wait_exit));
-    let _ = tokio::time::timeout_at(until, all_exited).await;
 }
 
 /// Polls a TCP port until nothing accepts on it.

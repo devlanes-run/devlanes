@@ -447,6 +447,17 @@ impl UnitHost {
         });
     }
 
+    /// Moves a starting run to ready. A run a stop reached first stays `stopping`.
+    pub fn mark_ready(&self) {
+        self.inner.state.send_if_modified(|state| {
+            if *state != UnitState::Starting {
+                return false;
+            }
+            *state = UnitState::Ready;
+            true
+        });
+    }
+
     /// After an explicit full stop, a run that had failed and exited reads as
     /// stopped; the failure stays in `unit_runs`. Returns whether it changed.
     pub fn acknowledge_failure(&self) -> bool {
