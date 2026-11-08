@@ -536,7 +536,7 @@ pub enum HostHeader {
 /// run only once every started service is ready. Write `started`, or a mapping with one of
 /// `tcp`, `http`, `log` or `cmd` and an optional `timeout`.
 pub enum ReadyConfig {
-    /// Ready as soon as the unit runs, without a probe.
+    /// Ready once the unit runs, without a probe.
     #[schemars(extend("examples" = ["started"]))]
     Started(Started),
     /// Ready once a `tcp`, `http`, `log` or `cmd` check passes.
@@ -549,9 +549,9 @@ pub enum ReadyConfig {
 #[schemars(extend("examples" = ["started"]))]
 /// Readiness without a probe.
 pub enum Started {
-    /// Count the unit ready as soon as it runs, without probing anything. A dev server
-    /// whose program crashed under a file watcher still counts as ready, so prefer a check
-    /// when there is something to probe.
+    /// Count the unit ready once it runs, without probing anything; a service once it has
+    /// run half a second. A dev server whose program crashed under a file watcher still
+    /// counts as ready, so prefer a check when there is something to probe.
     #[schemars(extend("examples" = ["started"]))]
     Started,
 }

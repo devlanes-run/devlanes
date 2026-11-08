@@ -13,7 +13,7 @@ use serde_json::json;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    time::{Instant, sleep, timeout},
+    time::{Instant, sleep, sleep_until, timeout},
 };
 
 use crate::units::{Logged, UnitHost, UnitState};
@@ -101,6 +101,10 @@ const POLL: Duration = Duration::from_millis(150);
 /// Upper bound for one `cmd` attempt, so a hanging probe cannot eat the whole timeout.
 const CMD_ATTEMPT: Duration = Duration::from_secs(10);
 
+/// How long after its spawn a unit's exit still counts as a failed start: a
+/// unit is ready only once its check passed and it has run this long.
+pub(crate) const EARLY_EXIT: Duration = Duration::from_millis(500);
+
 /// Waits for readiness, process exit or the timeout, then records the result on the host.
 /// `listening` reports the ports the unit's tree bound, for the tcp timeout diagnostic.
 pub async fn run_check<F, Fut>(host: &UnitHost, check: Readiness, limit: Duration, listening: F)
@@ -109,7 +113,7 @@ where
     Fut: std::future::Future<Output = Vec<u16>>,
 {
     if matches!(check, Readiness::Started) {
-        host.set_state(UnitState::Ready);
+        ready_after_window(host).await;
         return;
     }
     // A pattern that cannot compile never matches; waiting for the timeout would
@@ -152,7 +156,7 @@ where
     let exited = host.wait_exit();
     tokio::select! {
         result = probe => match result {
-            Ok(()) => host.set_state(UnitState::Ready),
+            Ok(()) => ready_after_window(host).await,
             Err(Missed::Failed(error)) => host.set_state(UnitState::Failed(Some(error))),
             Err(Missed::Deadline) => {
                 let mut data = json!({"check": describe(&check), "timeout_ms": limit.as_millis()});
@@ -168,6 +172,16 @@ where
         },
         // The waiter task classifies the exit itself.
         _ = exited => {}
+    }
+}
+
+/// Marks the unit ready once it has run [`EARLY_EXIT`] since its spawn, unless
+/// it exits first; the waiter task classifies that exit.
+async fn ready_after_window(host: &UnitHost) {
+    tokio::select! {
+        biased;
+        _ = host.wait_exit() => {}
+        () = sleep_until(host.spawned() + EARLY_EXIT) => host.set_state(UnitState::Ready),
     }
 }
 

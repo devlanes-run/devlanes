@@ -899,44 +899,52 @@ async fn run_infra_entry_not_found_lists_entries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// A failed service skips `after: services` tasks and reports its log tail.
+/// A service that exits right after its spawn skips `after: services` tasks
+/// and reports its log tail, whether its check never passes or passes at once.
 async fn after_services_skip_on_failure() {
     tokio::time::timeout(LIMIT, async {
-        let tmp = temp();
-        let config = r#"project: skip
+        for bad in [
+            "{ run: fail, ready: { log: never } }",
+            "{ run: fail, ready: started }",
+        ] {
+            let tmp = temp();
+            let config = format!(
+                r#"project: skip
 tasks:
-  seed: { run: "echo seed", when: lane.create, after: services }
+  seed: {{ run: "echo seed", when: lane.create, after: services }}
 services:
-  bad: { run: fail, ready: { log: never } }
-  good: { run: sleep }
-"#;
-        let main = repo(&tmp.path, "r", config);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
-        let mut bus = h.engine.subscribe();
-        let result = start(&h, cx(&main), json!({})).await;
-        assert!(!result.ready);
-        assert_eq!(result.skipped_tasks, ["seed"]);
-        // Clients read the first after-services step as "services ready"
-        // (`services_ready_line` in devlanes-cli), so a skipped phase sends none.
-        let mut after = Vec::new();
-        while let Ok(event) = bus.try_recv() {
-            if event.data["phase"] == "after-services" {
-                after.push(event.data["state"].as_str().unwrap_or("").to_owned());
+  bad: {bad}
+  good: {{ run: sleep }}
+"#
+            );
+            let main = repo(&tmp.path, "r", &config);
+            let h = harness(&tmp.path.join("home"), Setup::default()).await;
+            let mut bus = h.engine.subscribe();
+            let result = start(&h, cx(&main), json!({})).await;
+            assert!(!result.ready, "{bad}");
+            assert_eq!(result.skipped_tasks, ["seed"], "{bad}");
+            // Clients read the first after-services step as "services ready"
+            // (`services_ready_line` in devlanes-cli), so a skipped phase sends none.
+            let mut after = Vec::new();
+            while let Ok(event) = bus.try_recv() {
+                if event.data["phase"] == "after-services" {
+                    after.push(event.data["state"].as_str().unwrap_or("").to_owned());
+                }
             }
+            assert_eq!(after, ["started", "skipped"], "{bad}");
+            let failure = result
+                .failures
+                .iter()
+                .find(|f| f.unit == "bad")
+                .unwrap_or_else(|| panic!("{bad}: bad failed: {result:?}"));
+            assert_eq!(failure.exit_code, Some(1), "{bad}");
+            assert!(
+                failure.log_tail.iter().any(|l| l.contains("boom")),
+                "{bad}: {failure:?}"
+            );
+            assert!(!h.runner.journal.entries().iter().any(|e| e == "echo seed"));
+            h.close().await;
         }
-        assert_eq!(after, ["started", "skipped"]);
-        let failure = result
-            .failures
-            .iter()
-            .find(|f| f.unit == "bad")
-            .expect("bad failed");
-        assert_eq!(failure.exit_code, Some(1));
-        assert!(
-            failure.log_tail.iter().any(|l| l.contains("boom")),
-            "{failure:?}"
-        );
-        assert!(!h.runner.journal.entries().iter().any(|e| e == "echo seed"));
-        h.close().await;
     })
     .await
     .expect("timeout");
