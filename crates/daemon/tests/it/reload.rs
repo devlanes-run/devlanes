@@ -128,13 +128,13 @@ async fn reload_applies_only_what_the_file_changed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// Raising `replicas` adds the new replicas, which `reload` starts next to the
-/// running ones.
+/// Raising `replicas` adds the new replicas, which `reload` of the service's tag
+/// starts next to the running ones.
 async fn raised_replicas_are_added() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let file = |count: u8| {
-            format!("project: demo\nservices:\n  api: {{ run: sleep, ready: started, replicas: {count} }}\n")
+            format!("project: demo\nservices:\n  api: {{ run: sleep, ready: started, replicas: {count}, tags: [back] }}\n")
         };
         let main = repo(&tmp.path, "r", &file(2));
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
@@ -153,12 +153,12 @@ async fn raised_replicas_are_added() {
             )]
         );
         let result: StartResult = serde_json::from_value(
-            h.call(Method::Reload, json!({}), cx(&main))
+            h.call(Method::Reload, json!({"units": ["+back"]}), cx(&main))
                 .await
                 .expect("reload"),
         )
         .expect("result");
-        assert_eq!(result.started, ["demo@0:api.3"]);
+        assert_eq!(result.started, ["demo@0:api.3"], "{result:?}");
         assert!(drift(&lane(&h, &main).await).is_empty());
         h.close().await;
     })

@@ -3814,10 +3814,10 @@ impl Inner {
     ) -> Result<Vec<UnitSummary>, RpcError> {
         let transient = transient || by != "stop";
         let reference = lane.st().reference(&project.name());
-        // Tasks the starts run or plan count even before the lane records their
-        // unit: the runner may have spawned one that is not registered yet.
+        // The starts' tasks count even before the lane records their unit
+        // (`unit_candidates`): the runner may have spawned one not registered yet.
         let tasks: BTreeSet<String> = starts.iter().flat_map(|start| start.task_units()).collect();
-        let mut names = Self::matching_units(lane, &reference, selectors.as_deref(), &tasks)?;
+        let mut names = Self::matching_units(lane, &reference, selectors.as_deref())?;
         if let Some(caller) = mine {
             // Only the caller's running units: the start's own were not theirs yet.
             let st = lane.st();
@@ -3913,7 +3913,7 @@ impl Inner {
             self.run_hook(project, lane, TaskWhen::Stop, &Actor::default(), &cancel)
                 .await;
         }
-        let names = Self::matching_units(lane, &reference, selectors.as_deref(), &BTreeSet::new())?;
+        let names = Self::matching_units(lane, &reference, selectors.as_deref())?;
         let named = selectors.as_ref().is_some_and(|s| !s.is_empty());
         Ok(self
             .stop_named(
@@ -3922,48 +3922,21 @@ impl Inner {
             .await)
     }
 
-    /// The lane's units (running, configured or orphaned, plus `extra`) that
-    /// `selectors` match; every one without selectors.
+    /// The lane's units ([`LaneSt::unit_candidates`]) that `selectors` match;
+    /// every one without selectors.
     fn matching_units(
         lane: &LaneRt,
         reference: &str,
         selectors: Option<&[String]>,
-        extra: &BTreeSet<String>,
     ) -> Result<Vec<String>, RpcError> {
         let st = lane.st();
-        let mut candidates: Vec<(String, Vec<String>)> = st
-            .units
-            .iter()
-            .map(|(name, rec)| (name.clone(), rec.tags.clone()))
-            .collect();
-        for name in extra {
-            if !st.units.contains_key(name) {
-                candidates.push((name.clone(), Vec::new()));
-            }
-        }
-        if let Some(view) = &st.view {
-            for service in &view.services {
-                if !candidates.iter().any(|(n, _)| *n == service.unit) {
-                    candidates.push((service.unit.clone(), service.tags.clone()));
-                }
-            }
-        }
-        for name in st.orphans.keys() {
-            if !candidates.iter().any(|(n, _)| n == name) {
-                candidates.push((name.clone(), Vec::new()));
-            }
-        }
         match selectors.filter(|s| !s.is_empty()) {
-            Some(selectors) => {
-                let services = st.view.iter().flat_map(|view| {
-                    view.services
-                        .iter()
-                        .map(|s| (s.name.as_str(), s.unit.as_str()))
-                });
-                let selectors = crate::engine::expand_replicas(selectors, services);
-                crate::engine::match_units(&selectors, &candidates, reference)
-            }
-            None => Ok(candidates.into_iter().map(|(name, _)| name).collect()),
+            Some(selectors) => st.match_units(reference, selectors),
+            None => Ok(st
+                .unit_candidates()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect()),
         }
     }
 
