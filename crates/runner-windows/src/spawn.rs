@@ -16,7 +16,7 @@ use devlanes_sys_windows::{
 
 use crate::{
     StderrMode,
-    command::{self, CommandError, Quoting},
+    command::{self, CommandError},
     exit::Leader,
     runtime::Runtimes,
     terminal::Terminal,
@@ -167,19 +167,11 @@ pub(crate) fn launch(
     }
     let env = child_env(env);
     let system = devlanes_sys_windows::file::system_directory()?;
-    let quoting = if through_shell {
-        Quoting::Msys
+    let command = command::build(&program, &spec.args, &env, &spec.cwd, &system, runtimes)?;
+    let leader_kind = if command.msys {
+        Leader::Msys
     } else {
-        Quoting::Native
-    };
-    let command = command::build(&program, &spec.args, &env, &spec.cwd, &system, quoting)?;
-    let leader_kind = match runtimes.links_msys(&command.application) {
-        Ok(true) => Leader::Msys,
-        Ok(false) => Leader::Native,
-        Err(error) => {
-            tracing::debug!(%error, program = %command.application.display(), "image not read; leader counted as native");
-            Leader::Native
-        }
+        Leader::Native
     };
     let system_cmd = system.join("cmd.exe");
     let environment = Environment::new(&env)?;

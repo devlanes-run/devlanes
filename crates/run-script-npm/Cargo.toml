@@ -15,9 +15,16 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+devlanes-shell-windows = { path = "../shell-windows" }
+
 [dev-dependencies]
 insta = "1"
 tempfile.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+devlanes-runner-windows = { path = "../runner-windows" }
+devlanes-sys-windows = { path = "../sys-windows" }
 
 [lints]
 workspace = true

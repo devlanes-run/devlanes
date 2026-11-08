@@ -4,23 +4,21 @@
 //! the child splits itself. This module builds both the way std's `Command` does
 //! on Windows, except that bare names are looked up on the unit's `PATH` with
 //! `PATHEXT` (std only appends `.exe`, so `npm.cmd` is never found), and that
-//! Git's `sh.exe` gets the quoting its MSYS2 runtime expects.
+//! programs linking the MSYS2 runtime get the quoting it expects.
 //!
-//! Everything here is string work plus file existence checks.
+//! Everything here is string work plus file checks.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use devlanes_shell_windows::quote_msys;
+use devlanes_shell_windows::{quote_for_cmd, quote_msys};
+
+use crate::runtime::Runtimes;
 
 /// Extensions `CreateProcessW` can start, in the default `PATHEXT` order. Other
 /// `PATHEXT` entries (`.JS`, `.PS1`, ...) need a host program and are skipped.
 const RUNNABLE_EXTENSIONS: [&str; 4] = [".com", ".exe", ".bat", ".cmd"];
-
-/// Characters that never need quotes in a batch file argument; std's list. Every
-/// other ASCII symbol is quoted, so `cmd.exe` cannot read it as an operator.
-const BATCH_UNQUOTED: &str = r"#$*+-./:?@\_";
 
 /// What `CreateProcessW` needs to start a program.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,16 +31,10 @@ pub(crate) struct Command {
     /// The program is a batch file that `cmd.exe` runs. An explicit
     /// `[cmd, /c, ...]` is not one.
     pub batch: bool,
-}
-
-/// How arguments are quoted on the command line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Quoting {
-    /// The Microsoft C runtime's rules, which most programs use; std's quoting.
-    Native,
-    /// The MSYS2 runtime of Git's `sh.exe`: every argument in double quotes, so
-    /// it is never glob-expanded, with `\` and `"` escaped by a backslash.
-    Msys,
+    /// The program links the MSYS2 runtime (Git's `usr\bin` programs, MSYS2,
+    /// Cygwin), so every argument is in double quotes, never glob-expanded,
+    /// with `\` and `"` escaped by a backslash.
+    pub msys: bool,
 }
 
 /// Why a command could not be built.
@@ -69,29 +61,39 @@ pub(crate) enum CommandError {
 }
 
 /// Resolves `program` for a child with environment `env` started in `cwd`, and
-/// builds the command line that passes it `args` quoted per `quoting`. Batch
-/// files run through `system\cmd.exe`, where `system` is the System32
-/// directory. Checks the filesystem for candidates, so call it off async
-/// executor threads.
+/// builds the command line that passes it `args`. The quoting follows what
+/// was resolved: a batch file runs through `system\cmd.exe` (`system` is the
+/// System32 directory) with `cmd.exe`'s escaping, a program that links the
+/// MSYS2 runtime (as `runtimes` reads it) gets MSYS quoting, which it reads
+/// back exactly, and anything else the C runtime's rules. Reads the
+/// filesystem, so call it off async executor threads.
 pub(crate) fn build(
     program: &str,
     args: &[String],
     env: &BTreeMap<String, String>,
     cwd: &Path,
     system: &Path,
-    quoting: Quoting,
+    runtimes: &Runtimes,
 ) -> Result<Command, CommandError> {
-    build_with(program, args, env, cwd, system, quoting, &Path::is_file)
+    let links_msys = |application: &Path| match runtimes.links_msys(application) {
+        Ok(links) => links,
+        Err(error) => {
+            tracing::debug!(%error, program = %application.display(), "image not read; quoted as native");
+            false
+        }
+    };
+    build_with(program, args, env, cwd, system, &links_msys, &Path::is_file)
 }
 
-/// [`build`] with the existence check passed in, so tests need no files.
+/// [`build`] with the MSYS and existence checks passed in, so tests need no
+/// files.
 fn build_with(
     program: &str,
     args: &[String],
     env: &BTreeMap<String, String>,
     cwd: &Path,
     system: &Path,
-    quoting: Quoting,
+    links_msys: &dyn Fn(&Path) -> bool,
     exists: &dyn Fn(&Path) -> bool,
 ) -> Result<Command, CommandError> {
     for text in std::iter::once(program).chain(args.iter().map(String::as_str)) {
@@ -101,6 +103,7 @@ fn build_with(
     }
     let application = resolve(program, env, cwd, exists)?;
     let batch = is_batch_file(&application);
+    let msys = !batch && links_msys(&application);
     let (application, argv0, arguments) = if batch {
         let script = application.to_string_lossy();
         (
@@ -108,18 +111,13 @@ fn build_with(
             "cmd.exe".to_owned(),
             batch_arguments(&script, args)?,
         )
+    } else if msys {
+        let quoted: Vec<String> = args.iter().map(|arg| quote_msys(arg)).collect();
+        (application, quote_msys(program), quoted.join(" "))
     } else {
-        let quote = match quoting {
-            Quoting::Native => quote,
-            Quoting::Msys => quote_msys,
-        };
         let quoted: Vec<String> = args.iter().map(|arg| quote(arg)).collect();
-        let argv0 = match quoting {
-            // File names cannot contain quotes, so there is nothing to escape.
-            Quoting::Native => format!("\"{program}\""),
-            Quoting::Msys => quote_msys(program),
-        };
-        (application, argv0, quoted.join(" "))
+        // File names cannot contain quotes, so there is nothing to escape.
+        (application, format!("\"{program}\""), quoted.join(" "))
     };
     let command_line = if arguments.is_empty() {
         argv0
@@ -130,6 +128,7 @@ fn build_with(
         application,
         command_line: command_line.into(),
         batch,
+        msys,
     })
 }
 
@@ -315,52 +314,10 @@ fn batch_arguments(script: &str, args: &[String]) -> Result<String, CommandError
             return Err(CommandError::ArgumentNotSafeForBatch(arg.clone()));
         }
         out.push(' ');
-        out.push_str(&quote_batch(arg));
+        out.push_str(&quote_for_cmd(arg));
     }
     out.push('"');
     Ok(out)
-}
-
-/// `arg` quoted for a batch file the way std's `append_bat_arg` does: quoted
-/// when empty, ending in `\` (so `"%~1"` in the script does not escape its own
-/// closing quote), or holding any ASCII symbol outside a small safe set or a
-/// control character; quotes doubled; `%` defused.
-fn quote_batch(arg: &str) -> String {
-    let quoted = arg.is_empty()
-        || arg.ends_with('\\')
-        || arg.chars().any(|character| {
-            (character.is_ascii()
-                && !(character.is_ascii_alphanumeric() || BATCH_UNQUOTED.contains(character)))
-                || character.is_control()
-        });
-    let mut out = String::with_capacity(arg.len() + 2);
-    if quoted {
-        out.push('"');
-    }
-    let mut backslashes = 0;
-    for character in arg.chars() {
-        if character == '\\' {
-            backslashes += 1;
-        } else {
-            if character == '"' {
-                // n backslashes before a quote become 2n, and the quote doubles.
-                out.extend(std::iter::repeat_n('\\', backslashes));
-                out.push('"');
-            } else if character == '%' {
-                // `%%cd:~,%` expands to nothing (a zero-length substring of the
-                // always-set `cd`), and it keeps cmd.exe from pairing this `%`
-                // with another one into a variable reference.
-                out.push_str("%%cd:~,");
-            }
-            backslashes = 0;
-        }
-        out.push(character);
-    }
-    if quoted {
-        out.extend(std::iter::repeat_n('\\', backslashes));
-        out.push('"');
-    }
-    out
 }
 
 /// `path` without a verbatim `\\?\` prefix, which cmd.exe cannot read.
@@ -392,23 +349,23 @@ mod tests {
             .collect()
     }
 
-    /// Builds natively quoted with only `files` existing.
+    /// Builds with only `files` existing and none linking MSYS.
     fn build_in(
         program: &str,
         args: &[&str],
         env: &BTreeMap<String, String>,
         files: &[PathBuf],
     ) -> Result<Command, CommandError> {
-        build_quoted(program, args, env, files, Quoting::Native)
+        build_quoted(program, args, env, files, false)
     }
 
-    /// Builds with `quoting` and only `files` existing.
+    /// Builds with only `files` existing, each linking MSYS when `msys`.
     fn build_quoted(
         program: &str,
         args: &[&str],
         env: &BTreeMap<String, String>,
         files: &[PathBuf],
-        quoting: Quoting,
+        msys: bool,
     ) -> Result<Command, CommandError> {
         let files: BTreeSet<&PathBuf> = files.iter().collect();
         let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
@@ -418,7 +375,7 @@ mod tests {
             env,
             Path::new(r"C:\work"),
             Path::new(SYSTEM),
-            quoting,
+            &|_| msys,
             &|path| files.contains(&path.to_path_buf()),
         )
     }
@@ -454,7 +411,7 @@ mod tests {
 
     #[test]
     /// MSYS quoting (`devlanes_shell_windows::quote_msys`) applies to argv0 and every
-    /// argument of a shell unit.
+    /// argument of a program that links the MSYS runtime.
     fn msys_quoting() {
         let sh = PathBuf::from(r"C:\Git\usr\bin\sh.exe");
         let command = build_quoted(
@@ -462,10 +419,11 @@ mod tests {
             &["-c", r#"echo "a\b""#],
             &BTreeMap::new(),
             std::slice::from_ref(&sh),
-            Quoting::Msys,
+            true,
         )
         .expect("built");
         assert_eq!(command.application, sh);
+        assert!(command.msys);
         assert_eq!(
             command.command_line,
             r#""C:\\Git\\usr\\bin\\sh.exe" "-c" "echo \"a\\b\"""#
@@ -687,15 +645,11 @@ mod tests {
                 .to_string_lossy()
                 .ends_with(r#" "&calc"""#)
         );
-        // Batch escaping applies whatever quoting the caller asked for.
-        let msys = build_quoted(
-            "npm",
-            &["a b"],
-            &env,
-            std::slice::from_ref(&script),
-            Quoting::Msys,
-        )
-        .expect("built");
+        // A batch file gets batch escaping, not the MSYS quoting `cmd.exe`
+        // would not read.
+        let msys = build_quoted("npm", &["a b"], &env, std::slice::from_ref(&script), true)
+            .expect("built");
+        assert!(!msys.msys);
         assert!(msys.command_line.to_string_lossy().ends_with(r#" "a b"""#));
         assert!(is_batch_file(Path::new(r"C:\b\run.bat. .")));
         assert!(is_batch_file(Path::new(r"C:\b\RUN.CMD")));
@@ -704,27 +658,9 @@ mod tests {
     }
 
     #[test]
-    /// Batch escaping quotes everything cmd.exe could read as syntax and defuses
-    /// `%`; line breaks are refused.
+    /// Batch file arguments with line breaks are refused, and a verbatim
+    /// script path is made readable for cmd.exe.
     fn batch_escaping() {
-        for (arg, expected) in [
-            ("plain", "plain"),
-            ("safe-arg_1.txt", "safe-arg_1.txt"),
-            (r"C:\dir\file", r"C:\dir\file"),
-            ("", r#""""#),
-            ("a b", r#""a b""#),
-            (r"C:\dir\", r#""C:\dir\\""#),
-            (r#"a"b"#, r#""a""b""#),
-            (r#"a\"b"#, r#""a\\""b""#),
-            ("&calc", r#""&calc""#),
-            ("a|b<c>d^e", r#""a|b<c>d^e""#),
-            ("%PATH%", r#""%%cd:~,%PATH%%cd:~,%""#),
-            ("!x!", r#""!x!""#),
-            ("tab\there", "\"tab\there\""),
-            ("ünï", "ünï"),
-        ] {
-            assert_eq!(quote_batch(arg), expected, "{arg:?}");
-        }
         for arg in ["a\nb", "a\rb", "line\r\n"] {
             let error = batch_arguments(r"C:\b\x.bat", &[arg.to_owned()]).expect_err("refused");
             assert!(

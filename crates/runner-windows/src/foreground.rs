@@ -10,16 +10,18 @@ use devlanes_sys_windows::spawn::{
     self as win, Child, CreationFlags, Environment, Spawn, Stdio, Stream,
 };
 
-use crate::command::{self, Quoting};
+use crate::command;
+use crate::runtime::Runtimes;
 use crate::spawn::child_env;
 use crate::{CONTROL_C_EXIT, SpawnError};
 
 /// Starts `program` with `args` in `cwd`, with exactly `env` (minus the
 /// `=C:`-style drive entries), on this process's console and standard
-/// handles. `program` is looked up on `env`'s `PATH` with `PATHEXT`, and batch
-/// files run through `cmd.exe` with std's escaping, as for units; the cases
-/// that refuse a unit refuse it here too. The child is in no job, like a
-/// command a shell starts. Blocking: call it off async executor threads.
+/// handles. `program` is looked up on `env`'s `PATH` with `PATHEXT` and its
+/// arguments quoted as for units: batch files run through `cmd.exe` with
+/// std's escaping, and programs that link the MSYS2 runtime get MSYS quoting.
+/// The cases that refuse a unit refuse it here too. The child is in no job,
+/// like a command a shell starts. Blocking: call it off async executor threads.
 pub fn spawn_foreground(
     program: &str,
     args: &[String],
@@ -28,7 +30,9 @@ pub fn spawn_foreground(
 ) -> Result<Child, SpawnError> {
     let env = child_env(env.clone());
     let system = devlanes_sys_windows::file::system_directory()?;
-    let command = command::build(program, args, &env, cwd, &system, Quoting::Native)?;
+    // One command, so nothing is worth caching across calls.
+    let runtimes = Runtimes::default();
+    let command = command::build(program, args, &env, cwd, &system, &runtimes)?;
     let environment = Environment::new(&env)?;
     // The child writes to the same handles; what this process printed must
     // come first.

@@ -47,6 +47,8 @@ impl ScriptRunner for NpmScripts {
             cwd: planned.cwd,
             body: Some(planned.script_body),
             notes: planned.notes,
+            env: planned.env,
+            path: planned.path,
         })
     }
 }
