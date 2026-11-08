@@ -196,6 +196,9 @@ impl UnitRunner for FakeRunner {
             .split(';')
             .any(|command| command.trim() == "stubborn");
         let renders = script.split(';').any(|command| command.trim() == "render");
+        let graceful = script
+            .split(';')
+            .any(|command| command.trim() == "graceful");
         let real = if stubborn {
             self.stubborn_identity
                 .lock()
@@ -212,6 +215,7 @@ impl UnitRunner for FakeRunner {
             }),
             stubborn: AtomicBool::new(stubborn),
             renders,
+            graceful,
             sender: Mutex::new(Some(sender)),
             first: Mutex::new(Some(first)),
             exit: watch::channel(None).0,
@@ -236,6 +240,9 @@ pub struct FakeUnit {
     stubborn: AtomicBool,
     /// Set by `render`.
     renders: bool,
+    /// Set by `graceful`: a stop ends it with exit 0, as a process that handles
+    /// the signal and exits cleanly.
+    graceful: bool,
     sender: Mutex<Option<broadcast::Sender<OutputChunk>>>,
     first: Mutex<Option<broadcast::Receiver<OutputChunk>>>,
     exit: watch::Sender<Option<ExitOutcome>>,
@@ -312,7 +319,7 @@ impl FakeUnit {
                 }
                 "deaf" => self.deaf.store(true, Ordering::SeqCst),
                 // Read at spawn.
-                "render" => {}
+                "render" | "graceful" => {}
                 "printenv" => self.print(env.get(rest).map_or("", String::as_str)),
                 "daemonize" | "escape" => {
                     let process = LeftProcess {
@@ -522,9 +529,16 @@ impl Unit for FakeUnit {
             return Ok(());
         }
         self.stop.send_replace(true);
-        self.end(ExitOutcome {
-            code: None,
-            signal: Some(signal_number(policy.signal)),
+        self.end(if self.graceful {
+            ExitOutcome {
+                code: Some(0),
+                signal: None,
+            }
+        } else {
+            ExitOutcome {
+                code: None,
+                signal: Some(signal_number(policy.signal)),
+            }
         });
         Ok(())
     }

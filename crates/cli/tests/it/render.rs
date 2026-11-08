@@ -361,11 +361,11 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 vec![unit("api", "ready"), pgadmin],
             )])
         }),
-        // An exec command in progress reads `running` in every text mode.
         ("status_exec", Method::Status, {
-            let mut docs = unit("docs", "ready");
+            let mut docs = unit("docs", "running");
             docs["kind"] = json!("exec");
-            docs["ready_check"] = json!("started");
+            docs["cpu_percent"] = json!(4.5);
+            docs["memory_bytes"] = json!(150_000_000);
             docs["urls"] = json!([]);
             docs["ports"] = json!({});
             page(vec![lane(
@@ -465,8 +465,18 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::LaneClean,
             json!({
                 "lane": "acme@2", "stopped": ["api", "web"],
-                "tasks": [{"task": "drop-db", "exit_code": 0}],
-                "teardown": [{"entry": "vhost", "exit_code": 3, "ignored": false}],
+                // `drop-db` from a daemon before `state`; `archive` ran past its own timeout.
+                "tasks": [
+                    {"task": "drop-db", "exit_code": 0},
+                    {"task": "archive", "exit_code": null, "state": "failed",
+                     "reason": {"code": "task_timeout", "data": {"timeout_ms": 60_000}, "exit_code": 1}},
+                ],
+                // `vhost` from a daemon before `state`; `dns` ran past its own timeout.
+                "teardown": [
+                    {"entry": "vhost", "exit_code": 3, "ignored": false},
+                    {"entry": "dns", "exit_code": null, "state": "failed", "ignored": false,
+                     "reason": {"code": "task_timeout", "data": {"timeout_ms": 30_000}, "exit_code": 1}},
+                ],
                 "infra": {"compose": "acme-2"},
             }),
         ),
@@ -510,9 +520,8 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             json!({"cleaned": [], "kept_running": ["acme@3", "acme@4"], "offsets_removed": 0}),
         ),
         ("exec", Method::Exec, {
-            let mut exec = unit("probe", "ready");
+            let mut exec = unit("probe", "running");
             exec["kind"] = json!("exec");
-            exec["ready_check"] = json!("started");
             exec["urls"] = json!([]);
             exec["ports"] = json!({});
             exec["left_out"] = json!([{"key": "DATABASE_URL", "infra": "postgres"}]);
@@ -1191,14 +1200,21 @@ fn daemon_stop_reports_units_and_failed_tasks() {
             {"lane": "acme@0", "task": "flush", "exit_code": 0},
             {"lane": "acme@0", "task": "notify", "exit_code": 3},
             {"lane": "acme@1", "task": "slow", "error": {"code": "cancelled", "data": null}},
+            {"lane": "acme@1", "task": "backup", "exit_code": null, "state": "failed",
+             "reason": {"code": "task_timeout", "data": {"timeout_ms": 60_000}, "exit_code": 1}},
+            {"lane": "acme@1", "task": "tidy", "exit_code": 0, "state": "exited"},
         ],
     });
     let text = render_text(Method::DaemonShutdown, &data);
     assert!(text.contains("stopped the daemon and 2 units"), "{text}");
-    assert!(text.contains("ran 3 lane.stop tasks"), "{text}");
+    assert!(text.contains("ran 5 lane.stop tasks"), "{text}");
     assert!(text.contains("acme@0 notify: exit 3"), "{text}");
     assert!(text.contains("acme@1 slow: cancelled"), "{text}");
-    assert!(!text.contains("flush"), "{text}");
+    assert!(
+        text.contains("acme@1 backup: failed, stopped by its timeout of 1m 0s"),
+        "{text}"
+    );
+    assert!(!text.contains("flush") && !text.contains("tidy"), "{text}");
     let idle = json!({"stopping": true, "processes": 0, "stopped": [], "tasks": []});
     let text = render_text(Method::DaemonShutdown, &idle);
     assert!(text.contains("stopped the daemon\n"), "{text}");
@@ -1937,7 +1953,12 @@ fn start_progress_prints_finished_steps_once() {
         ),
         (
             "task",
-            json!({"lane": "acme@2", "task": "migrate", "state": "done", "exit_code": 0}),
+            json!({"lane": "acme@2", "task": "migrate", "state": "exited", "exit_code": 0}),
+        ),
+        // The start's deadline passed before this after-services task ran.
+        (
+            "task",
+            json!({"lane": "acme@2", "task": "seed", "state": "skipped", "reason": {"code": "timed_out"}}),
         ),
         ("unit.changed", json!({"unit": unit("api", "ready")})),
         (

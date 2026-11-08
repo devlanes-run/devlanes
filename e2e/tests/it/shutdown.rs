@@ -291,7 +291,7 @@ fn daemon_stop_runs_lane_stop_tasks() -> Result<()> {
     );
     assert_eq!(
         stopped["tasks"],
-        json!([{"lane": "fixture-shutdown@0", "task": "mark", "exit_code": 0}]),
+        json!([{"lane": "fixture-shutdown@0", "task": "mark", "exit_code": 0, "state": "exited"}]),
         "{stopped}"
     );
     wait_for_exit(&lab, daemon)?;

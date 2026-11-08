@@ -457,15 +457,19 @@ impl Inner {
             }
             let current = state.borrow_and_update().clone();
             let settling = match current {
-                UnitState::Failed(_) | UnitState::Exited(_) | UnitState::Stopping => {
+                UnitState::Failed(_)
+                | UnitState::Stopped(_)
+                | UnitState::Exited(_)
+                | UnitState::Stopping => {
                     slot.release(Release::Failed);
                     break Release::Failed;
                 }
-                UnitState::Ready if !started => {
+                // Only services are paced, and they never reach `Running`.
+                UnitState::Ready | UnitState::Running if !started => {
                     slot.release(Release::Ready);
                     break Release::Ready;
                 }
-                UnitState::Ready => true,
+                UnitState::Ready | UnitState::Running => true,
                 UnitState::Starting => false,
             };
             {

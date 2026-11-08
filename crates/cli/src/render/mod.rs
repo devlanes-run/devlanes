@@ -17,8 +17,8 @@ pub(crate) use lanes::display_url;
 pub use other::{DoctorCheck, DoctorState, doctor_checks_of, watch_line};
 pub(crate) use other::{doctor_failed, hide_env_values};
 pub use statusline::{StatuslineInput, statusline};
-pub use words::status_hint;
 pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording, lane_drift, unit_drift};
+pub use words::{status_hint, task_timeout};
 
 use crate::{OutputMode, Runtime};
 

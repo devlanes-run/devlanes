@@ -36,7 +36,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 /// Highest supported forward-only migration. Newer databases require an upgrade.
-pub const SCHEMA_VERSION: u32 = 13;
+pub const SCHEMA_VERSION: u32 = 14;
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 /// Store failures. Diesel, connection, migration and filesystem failures keep the
