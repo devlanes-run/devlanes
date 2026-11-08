@@ -69,8 +69,9 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
 }
 
 #[tokio::test]
-/// Migration 013 names how earlier task runs ended from their exit code: 0
-/// `exited`, another code `failed`, none `stopped`; a run still going has none.
+/// Migration `task_run_state` names how earlier task runs ended from their exit
+/// code: 0 `exited`, another code `failed`, none `stopped`; a run still going
+/// has none.
 async fn migration_names_how_earlier_task_runs_ended() {
     use devlanes_core::LaneId;
     use diesel::{connection::SimpleConnection, migration::MigrationSource, prelude::*};
@@ -82,7 +83,13 @@ async fn migration_names_how_earlier_task_runs_ended() {
     c.applied_migrations().expect("ledger");
     let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
         .expect("migrations");
-    c.run_migrations(&migrations[..12]).expect("v12");
+    // Every migration before this one, by name, so a migration added ahead of
+    // it does not leave the rows below on the wrong schema.
+    let earlier: Vec<_> = migrations
+        .into_iter()
+        .take_while(|migration| !migration.name().to_string().ends_with("_task_run_state"))
+        .collect();
+    c.run_migrations(&earlier).expect("earlier migrations");
     let runs = [
         ("ok", Some(5_i64), Some(0)),
         ("bad", Some(5), Some(3)),
