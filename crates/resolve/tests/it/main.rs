@@ -164,8 +164,8 @@ services:
 
 #[tokio::test]
 /// `stop.signal` names parse to stop signals. Only Windows notes a stop that
-/// sends something else, and SIGINT only for a `run:` string, whose programs
-/// ignore Ctrl-C there.
+/// always sends something else (Ctrl-Break); SIGINT is Ctrl-C there, for a
+/// `run:` string too.
 async fn stop_signals() {
     let lane = plain(
         r#"
@@ -199,7 +199,7 @@ services:
             .any(|note| note.contains("stop.signal"))
     };
     let expected = if cfg!(windows) {
-        [true, false, true, false]
+        [false, false, true, false]
     } else {
         [false; 4]
     };
@@ -1502,15 +1502,6 @@ async fn snapshot_reference() {
     input.client_env = &client;
     let lane = resolve_lane(input).await.expect("resolves");
     assert!(lane.errors.is_empty(), "{:?}", lane.errors);
-    // The snapshot leaves Windows-only notes out; `queue-worker` stops on
-    // SIGINT through a run string, which Windows can only send as Ctrl-Break.
-    #[cfg(windows)]
-    assert_eq!(
-        lane.services["queue-worker"].launch.notes,
-        [
-            "on Windows stop.signal SIGINT is sent as Ctrl-Break, since programs a run string starts ignore Ctrl-C"
-        ]
-    );
     insta::assert_json_snapshot!(lane_view(&lane));
 }
 

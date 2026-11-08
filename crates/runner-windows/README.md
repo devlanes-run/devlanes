@@ -35,6 +35,7 @@ The `devlanes` binary dispatches `devlanes __console-ctrl <pid> <c|break>` to `c
 - `SpawnError`: why a unit did not start, with a stable `code()` such as `shell_missing` or `unsafe_batch_argument`. Converted to `devlanes_core::Error::Io` with a `devlanes_core::SpawnRefusal` source that carries the code.
 - `spawn_foreground` and `shell_exit_code`: run a command on this process's console with the same resolution (the test command of `devlanes with`) and map its exit code the way a shell reports it.
 - `console_ctrl_main` and `ConsoleHelper`: the helper that sends Ctrl-C or Ctrl-Break to a unit's console.
+- `stop_orphan`: stops a unit a previous daemon left running; pass it `WindowsRunner::runtimes()` so it shares the runner's reads of which programs link the MSYS runtime.
 
 ## Processes
 
@@ -54,16 +55,15 @@ A bare program name is looked up on the unit's `PATH` with `PATHEXT` (`.COM`, `.
 
 ## Stopping
 
-| `stop.signal` | Windows action |
-|---|---|
-| `SIGTERM` | Ctrl-C (in a pseudo console, the `0x03` key), or Ctrl-Break for `/bin/sh` units and when `sh.exe`, `bash.exe`, `dash.exe`, `zsh.exe` or `fish.exe` is a job member as the stop begins, since programs an MSYS shell starts ignore Ctrl-C |
-| `SIGINT` | Ctrl-C (in a pseudo console, the `0x03` key), or Ctrl-Break for `/bin/sh` units |
-| `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2` | Ctrl-Break |
-| `SIGKILL` | terminate the job |
+| `stop.signal` | `pty: true` | `pty: false` | `pty: false`, an MSYS program runs |
+|---|---|---|---|
+| `SIGTERM`, `SIGINT` | the Ctrl-C key (`0x03`) | Ctrl-C event | Ctrl-Break event |
+| `SIGHUP`, `SIGQUIT`, `SIGUSR1`, `SIGUSR2` | Ctrl-Break event | Ctrl-Break event | Ctrl-Break event |
+| `SIGKILL` | terminate the job | terminate the job | terminate the job |
 
-The event is chosen once and no second one is sent; a unit that ignores it is terminated at the timeout.
+The stop reads the job once and chooses from it; no second event is sent, and a unit that ignores it is terminated at the timeout. A member is an MSYS program when its executable imports `msys-2.0.dll` or `cygwin1.dll` (Git's `usr\bin` tools, MSYS2 and Cygwin programs, whatever they are called), read from the image's import table and cached by path and modification time in `Runtimes`. MSYS starts native programs so that a Ctrl-C event does not reach them, so pipe units with such a member get Ctrl-Break. The typed key reaches them as Ctrl-C, and it is what `wrangler dev`, which reads its console raw, removes its dev registry entry on; a raw-mode program that ignores `0x03` runs until the timeout. `stop_orphan` plans as for a `pty: false` SIGTERM stop.
 
-A graceful stop also posts `WM_CLOSE` to the members' visible windows, then sends one console event through the helper, which the supervisor does not wait for. In a pseudo console a `.cmd` shim asks "Terminate batch job (Y/N)?" after the event; once only `cmd.exe` is left, the runner answers `Y`, again every half second while it still is (an answer typed before `cmd.exe` reached the prompt can be lost), which is not an escalation. Once only the console host is left, or at the timeout, the job is terminated; the report says whether the timeout was reached. A process ended by a console event exits with `STATUS_CONTROL_C_EXIT` (`0xC000013A`), which is reported as its code. A stop that did not escalate also reports that code for a `.cmd` shim in a pseudo console that exits non-zero after its prompt was answered (`cmd.exe` then exits 255 whatever its program returned), and for an exit code of 512 when an MSYS shell (Git's `sh.exe`, `bash.exe` or `dash.exe`, or MSYS2's `zsh.exe` or `fish.exe`) was a member as the event went out (MSYS reports a SIGINT death as `2 << 8`, and wrappers such as just pass it on). A shim in a pipe unit returns its program's code, which is kept.
+A graceful stop also posts `WM_CLOSE` to the members' visible windows, then sends one console event through the helper, which the supervisor does not wait for. In a pseudo console a `.cmd` shim asks "Terminate batch job (Y/N)?" after the event; once only `cmd.exe` is left, the runner answers `Y`, again every half second while it still is (an answer typed before `cmd.exe` reached the prompt can be lost), which is not an escalation. Once only the console host is left, or at the timeout, the job is terminated; the report says whether the timeout was reached. A process ended by a console event exits with `STATUS_CONTROL_C_EXIT` (`0xC000013A`), which is reported as its code. A stop that did not escalate also reports that code for a `.cmd` shim in a pseudo console that exits non-zero after its prompt was answered (`cmd.exe` then exits 255 whatever its program returned), and for an exit code of 512 when an MSYS program was a member as the stop began (MSYS reports a SIGINT death as `2 << 8`, and wrappers such as just pass it on). A shim in a pipe unit returns its program's code, which is kept.
 
 ## Idle units
 
