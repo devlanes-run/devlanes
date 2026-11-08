@@ -35,8 +35,8 @@ use crate::{
     infra_restarts::{COMMAND_INFRA_WAIT, Settled},
     integrations::{InfraPortNeed, InfraSpec, ManagedUnit, PlannedUnit, StartedAt},
     model::{
-        Brought, Closing, EnvMap, Kind, LaneRt, ProjectRt, StartCtl, StartSlot, UnitRec,
-        core_actor, is_mine, unit_summary,
+        Brought, Closing, EnvMap, Kind, LaneRt, ProjectRt, StartCtl, StartSlot, Unassigned,
+        UnitRec, core_actor, is_mine, unassigned, unit_summary,
     },
     ready::Readiness,
     registry::{internal, store_error},
@@ -1037,11 +1037,7 @@ impl LanePhase for SetupPhase {
             return PhaseResult::Skipped(profile_disables_infra(cx));
         }
         let Some(lane_id) = cx.lane.st().record.as_ref().map(|r| r.id) else {
-            return PhaseResult::Error(RpcError::new(
-                "unassigned",
-                json!({"lane": cx.reference}),
-                1,
-            ));
+            return PhaseResult::Error(unassigned(&cx.reference, Unassigned::NoRecord));
         };
         // Starts that add units run this phase side by side; one of them checks
         // and runs the entries while the others wait, then finds them done.
@@ -1232,11 +1228,7 @@ impl LanePhase for TasksPhase {
             return PhaseResult::Skipped(reason("setup_only", json!({})));
         }
         let Some(lane_id) = cx.lane.st().record.as_ref().map(|r| r.id) else {
-            return PhaseResult::Error(RpcError::new(
-                "unassigned",
-                json!({"lane": cx.reference}),
-                1,
-            ));
+            return PhaseResult::Error(unassigned(&cx.reference, Unassigned::NoRecord));
         };
         let mut chosen = Vec::new();
         for (name, task) in &resolved.tasks {
@@ -2136,7 +2128,7 @@ impl Inner {
             let record = st
                 .record
                 .clone()
-                .ok_or_else(|| RpcError::new("unassigned", json!({"lane": reference}), 1))?;
+                .ok_or_else(|| unassigned(&reference, Unassigned::NoRecord))?;
             let previous = st
                 .units
                 .get(&request.name)
@@ -2979,7 +2971,7 @@ impl Inner {
                 .record
                 .as_ref()
                 .map(|r| r.id)
-                .ok_or_else(|| RpcError::new("unassigned", json!({"lane": reference}), 1))?;
+                .ok_or_else(|| unassigned(&reference, Unassigned::NoRecord))?;
             self.task_event(&reference, name, "started", None, None);
             let hash = loaded_config(lane).and_then(|config| task_hash(&config, name));
             let run = self
@@ -3314,11 +3306,7 @@ impl Inner {
                 _ => {}
             }
             if st.record.is_none() {
-                return Err(fail(RpcError::new(
-                    "unassigned",
-                    json!({"lane": initial}),
-                    1,
-                )));
+                return Err(fail(unassigned(&initial, Unassigned::NoRecord)));
             }
             if !st.present {
                 return Err(fail(RpcError::new(

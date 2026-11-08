@@ -904,7 +904,7 @@ pub(super) fn status(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         );
         let (cpu, memory) = usage(lane);
         rows.push(vec![
-            lane.index.map_or("–".into(), |index| index.to_string()),
+            clean(lane_part(lane)),
             lane.branch.as_deref().map_or("–".into(), clean),
             match power_note(lane) {
                 Some(note) => format!("{} {}", cx.state(&clean(&lane.state)), cx.paint(&note, "2")),
@@ -964,6 +964,15 @@ pub(super) fn status(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
+/// The lane part of the daemon's reference, as `--lane` takes it: `2` of
+/// `acme@2`, or the name or folder of a lane still waiting for an index.
+fn lane_part(lane: &LaneSummary) -> &str {
+    lane.reference
+        .strip_prefix(lane.project.as_str())
+        .and_then(|rest| rest.strip_prefix('@'))
+        .unwrap_or(&lane.reference)
+}
+
 /// `state project@N branch ready/total [failed=a,b] [notes]` for agents.
 fn agent_lane(lane: &LaneSummary) -> String {
     let services = services(lane);
@@ -971,7 +980,7 @@ fn agent_lane(lane: &LaneSummary) -> String {
         let mut line = format!(
             "{} {} {}",
             clean(&lane.state),
-            clean(&lane.project),
+            clean(&lane.reference),
             lane.branch
                 .as_deref()
                 .map_or_else(|| clean(&lane.path.display().to_string()), clean)

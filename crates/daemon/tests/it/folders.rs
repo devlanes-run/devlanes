@@ -341,6 +341,7 @@ async fn a_cleaned_lane_comes_back_as_a_new_lane() {
         let new_extra = || h.call(Method::LaneNew, json!({"name": "extra"}), cx(&main));
         let waiting = new_extra().await.expect_err("lanes.max");
         assert_eq!(waiting.code, "unassigned", "{waiting:?}");
+        assert_eq!(waiting.data["lane"], "demo@extra", "{waiting:?}");
         assert_eq!(new_extra().await.expect_err("taken").code, "name_taken");
         clean(&h, cx(&main), Some("extra"))
             .await
