@@ -2175,7 +2175,7 @@ impl Inner {
                     code: None,
                     signal: None,
                 });
-                if !self.finish_run(id, outcome).await {
+                if !self.finish_run(id, outcome, Some(host.ended_by())).await {
                     return Err(RpcError::new(
                         "state_error",
                         json!({"lane": reference, "unit": request.name, "message": "the previous run could not be recorded as finished in state.db"}),
@@ -2537,7 +2537,7 @@ impl Inner {
             // On failure the lane's record keeps `run_id`; the next start of this
             // unit finishes the row again before recording a new run.
             if let Some(id) = run_id {
-                engine.finish_run(id, outcome).await;
+                engine.finish_run(id, outcome, Some(host.ended_by())).await;
             }
             engine.emit_unit(&project, &lane, &name, &host);
             if let Some(id) = run_id {
@@ -4478,15 +4478,18 @@ impl Inner {
                 .units
                 .values()
                 .filter(|rec| !rec.host.is_alive())
-                .filter_map(|rec| rec.run_id.map(|id| (id, rec.host.exit_outcome())))
+                .filter_map(|rec| {
+                    let id = rec.run_id?;
+                    Some((id, rec.host.exit_outcome(), rec.host.ended_by()))
+                })
                 .collect();
-            for (id, outcome) in runs {
+            for (id, outcome, ended_by) in runs {
                 let outcome = outcome.unwrap_or(ExitOutcome {
                     code: None,
                     signal: None,
                 });
                 // A row left unfinished makes `clean_lane` refuse with `active_runs`.
-                self.finish_run(id, outcome).await;
+                self.finish_run(id, outcome, Some(ended_by)).await;
             }
         }
         // Its stop, `lane.clean` tasks, teardown and container removal are done,

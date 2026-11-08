@@ -67,7 +67,7 @@ Commands use the project of the nearest `devlanes.yaml` above the current direct
 | Ad-hoc long-running command | `devlanes exec --name storybook -- pnpm storybook` |
 | Route a server devlanes does not run | `infra.external` in `devlanes.local.yaml` ([Ports outside the config](#ports-outside-the-config)) |
 | URL of a service | `devlanes url print web` |
-| Environment of a unit | `devlanes env show api`, or `eval "$(devlanes env export api)"` |
+| Environment of a unit | `devlanes env show api` (secret-looking values hidden), or `eval "$(devlanes env export api)"` for real values |
 | Tests against the stack | `devlanes with -- pnpm test:e2e` |
 | Stop what you started | `devlanes stop --mine` |
 | Setup problems | `devlanes doctor` |

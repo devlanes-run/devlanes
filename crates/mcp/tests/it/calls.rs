@@ -257,6 +257,7 @@ async fn refusals_run_nothing() {
             (&["ui"][..], "TUI"),
             (&["attach", "api"], "logs"),
             (&["env", "shell"], "env show"),
+            (&["env", "export"], "env show"),
             (&["start", "--attach"], "--attach"),
             (&["setup"], "terminal"),
             (&["update"], "terminal"),

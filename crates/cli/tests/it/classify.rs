@@ -52,7 +52,7 @@ const COMMANDS: &[(&[&str], bool, bool)] = &[
     (&["debug", "config"], true, false),
     (&["debug", "bundle"], false, false),
     (&["env", "show"], true, false),
-    (&["env", "export"], true, false),
+    (&["env", "export"], true, true),
     (&["env", "shell"], false, true),
     (&["url", "print", "web"], true, false),
     (&["url", "open", "web"], true, false),
@@ -207,7 +207,10 @@ fn env_values_are_hidden_where_read() {
             true,
         ),
         (&["--json", "env", "show", "api", "--explain"], true),
+        // What `devlanes mcp` runs for `env_show`.
+        (&["--output", "agent", "env", "show", "api"], true),
         (&["--output", "plain", "env", "show", "api"], false),
+        (&["--json", "env", "show", "api"], false),
     ] {
         let cli = Cli::try_parse_from(std::iter::once("devlanes").chain(args.iter().copied()))
             .expect("parse");
