@@ -126,8 +126,10 @@ pub enum WatchEvent {
     /// stopped. Sent before waiting for the engine, so callers learn of it
     /// while it is down.
     Ended,
-    /// The engine's event stream ended or failed and is subscribed again;
-    /// events from the time it was down are lost.
+    /// The stream was subscribed again. Events between the two subscriptions
+    /// may be lost, so callers read the state they keep again. Docker's own
+    /// replay (`since`) holds the last 256 events of every type in total, so
+    /// it could not prove the gap complete and is not used.
     Reconnected,
 }
 
@@ -139,20 +141,15 @@ struct Resubscribe<S, St, P> {
     delay: Duration,
     backoff_min: Duration,
     backoff_max: Duration,
-    /// The current subscription delivered an event since the last
-    /// [`WatchEvent::Reconnected`], so events may have been missed since.
-    delivered: bool,
 }
 
 /// The events of `subscribe()`, subscribed again whenever that stream ends or
-/// fails: it then yields [`WatchEvent::Ended`] and retries `ping` with a delay
-/// doubling from `backoff_min` to
-/// `backoff_max` until it answers `true`, and subscribes again. It yields
-/// [`WatchEvent::Reconnected`] before the new subscription when events may
-/// have been missed: the old one delivered events, or the engine did not
-/// answer at first. A subscription that keeps failing while the engine
-/// answers is retried with the growing delay and reported once. The delay
-/// resets once an event arrives.
+/// fails: it then yields [`WatchEvent::Ended`], retries `ping` with a delay
+/// doubling from `backoff_min` to `backoff_max` until it answers `true`,
+/// subscribes again and yields [`WatchEvent::Reconnected`], after every
+/// resubscription. The delay resets once an event arrives, so a subscription
+/// that keeps failing while the engine answers is retried at the growing
+/// delay.
 pub(crate) fn resubscribing<S, St, P, F>(
     mut subscribe: S,
     ping: P,
@@ -172,40 +169,29 @@ where
         delay: backoff_min,
         backoff_min,
         backoff_max,
-        // The first failure always counts: the daemon may have stored
-        // containers from before it.
-        delivered: true,
     };
     futures_util::stream::unfold(state, |mut state| async move {
+        if let Some(stream) = &mut state.current {
+            match stream.next().await {
+                Some(Ok(event)) => {
+                    state.delay = state.backoff_min;
+                    return Some((WatchEvent::Event(event), state));
+                }
+                Some(Err(error)) => tracing::debug!(%error, "docker event stream failed"),
+                None => tracing::debug!("docker event stream ended"),
+            }
+            state.current = None;
+            return Some((WatchEvent::Ended, state));
+        }
         loop {
-            if let Some(stream) = &mut state.current {
-                match stream.next().await {
-                    Some(Ok(event)) => {
-                        state.delay = state.backoff_min;
-                        state.delivered = true;
-                        return Some((WatchEvent::Event(event), state));
-                    }
-                    Some(Err(error)) => tracing::debug!(%error, "docker event stream failed"),
-                    None => tracing::debug!("docker event stream ended"),
-                }
-                state.current = None;
-                return Some((WatchEvent::Ended, state));
-            }
-            let mut answered_at_once = true;
-            loop {
-                tokio::time::sleep(state.delay).await;
-                state.delay = (state.delay * 2).min(state.backoff_max);
-                if (state.ping)().await {
-                    break;
-                }
-                answered_at_once = false;
-            }
-            state.current = Some((state.subscribe)());
-            if state.delivered || !answered_at_once {
-                state.delivered = false;
-                return Some((WatchEvent::Reconnected, state));
+            tokio::time::sleep(state.delay).await;
+            state.delay = (state.delay * 2).min(state.backoff_max);
+            if (state.ping)().await {
+                break;
             }
         }
+        state.current = Some((state.subscribe)());
+        Some((WatchEvent::Reconnected, state))
     })
 }
 
@@ -305,10 +291,10 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Every subscription that ends says so at once, and after the engine
-    /// comes back, a subscription that fails at once while the engine answers
-    /// is retried without a second `Reconnected`.
-    async fn resubscribing_reports_reconnected_after_the_stream_ends() {
+    /// Every subscription that ends says so at once and every new one is
+    /// reported, also one after a subscription that failed at once while the
+    /// engine answered: events of that gap may be lost too.
+    async fn every_resubscription_is_reported() {
         let first = map_event(&event("die", LANE)).expect("mapped");
         let second = map_event(&event("start", LANE)).expect("mapped");
         let refused = || Err(Error::Io(std::io::Error::other("refused")));
@@ -317,25 +303,19 @@ mod tests {
             vec![refused()],
             vec![Ok(first.clone())],
         ];
-        let mut pings = 0;
         let watch = resubscribing(
             move || {
                 let events = streams.pop().expect("subscribed at most three times");
                 futures_util::stream::iter(events)
             },
-            move || {
-                pings += 1;
-                // The engine is still down on the first try.
-                let up = pings > 1;
-                async move { up }
-            },
+            || async { true },
             Duration::from_millis(1),
             Duration::from_millis(1),
         );
         let items: Vec<WatchEvent> =
-            tokio::time::timeout(Duration::from_secs(5), watch.take(5).collect::<Vec<_>>())
+            tokio::time::timeout(Duration::from_secs(5), watch.take(6).collect::<Vec<_>>())
                 .await
-                .expect("five items");
+                .expect("six items");
         assert_eq!(
             items,
             [
@@ -343,6 +323,7 @@ mod tests {
                 WatchEvent::Ended,
                 WatchEvent::Reconnected,
                 WatchEvent::Ended,
+                WatchEvent::Reconnected,
                 WatchEvent::Event(second),
             ]
         );
