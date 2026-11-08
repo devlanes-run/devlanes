@@ -4,11 +4,12 @@ use devlanes_run_script_npm::{
     detect_package_manager, plan,
 };
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+use windows::run;
 
 const ALL: [PackageManager; 5] = [
     PackageManager::Npm,
@@ -474,19 +475,32 @@ async fn adapter_resolves_through_core_trait() {
     );
 }
 
-/// Runs `argv` in `dir` with a deadline, returning stdout on success.
-fn run_with_timeout(argv: &[String], dir: &Path, timeout: Duration) -> String {
+/// Upper bound for each package manager command.
+const COMMAND_LIMIT: Duration = Duration::from_secs(60);
+
+/// Variables that keep package managers from prompting or checking for updates.
+const QUIET: [(&str, &str); 2] = [
+    ("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"),
+    ("npm_config_update_notifier", "false"),
+];
+
+/// Runs `argv` in `dir` within [`COMMAND_LIMIT`] and returns whether it exited
+/// 0 and its stdout, or `None` when it could not start.
+#[cfg(unix)]
+fn run(argv: &[String], dir: &Path) -> Option<(bool, String)> {
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .current_dir(dir)
-        .env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
-        .env("npm_config_update_notifier", "false")
+        .envs(QUIET)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .expect("spawn package manager");
-    let deadline = Instant::now() + timeout;
+        .ok()?;
+    let deadline = Instant::now() + COMMAND_LIMIT;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll child") {
             break status;
@@ -502,21 +516,15 @@ fn run_with_timeout(argv: &[String], dir: &Path, timeout: Duration) -> String {
     if let Some(mut stdout) = child.stdout.take() {
         std::io::Read::read_to_string(&mut stdout, &mut output).expect("read stdout");
     }
-    assert!(status.success(), "{argv:?} failed: {status}\n{output}");
-    output
+    Some((status.success(), output))
 }
 
 /// Returns the manager behind `program` if it is installed.
-fn installed(program: &str) -> Option<PackageManager> {
-    let output = Command::new(program)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
+fn installed(program: &str, dir: &Path) -> Option<PackageManager> {
+    let (success, version) = run(&[program.to_owned(), "--version".to_owned()], dir)?;
+    if !success {
         return None;
     }
-    let version = String::from_utf8_lossy(&output.stdout);
     Some(match program {
         "npm" => PackageManager::Npm,
         "pnpm" => PackageManager::Pnpm,
@@ -547,16 +555,14 @@ fn real_managers_forward_port() {
     );
     let managers: Vec<PackageManager> = ["npm", "pnpm", "yarn", "bun"]
         .into_iter()
-        .filter_map(installed)
+        .filter_map(|program| installed(program, temp.path()))
         .collect();
     assert!(!managers.is_empty(), "no package manager on PATH");
     let args = vec!["--port".to_owned(), "4321".to_owned()];
     for manager in managers {
-        let output = run_with_timeout(
-            &manager.run_argv("dev", &args),
-            temp.path(),
-            Duration::from_secs(60),
-        );
+        let argv = manager.run_argv("dev", &args);
+        let (success, output) = run(&argv, temp.path()).expect("start package manager");
+        assert!(success, "{argv:?} failed:\n{output}");
         assert!(
             output.contains(r#"["--fixed","--port","4321"]"#),
             "{manager:?} did not forward --port:\n{output}"

@@ -606,11 +606,17 @@ async fn setup_entry_reruns_only_after_its_container_restarted() {
                 },
             )
             .await;
-            *h.infra.up_omits_db.lock().expect("lock") = !stored;
+            // `db` runs in a new run from here.
             let started_at = |at: &str| {
-                *h.infra.started_at.lock().expect("lock") = Some(at.to_owned());
+                *h.infra.db_run.lock().expect("lock") = Some(at.to_owned());
+                *h.infra.namespace_db_state.lock().expect("lock") = None;
             };
             started_at("2026-01-01T00:00:00Z");
+            if !stored {
+                // Down when the bring-up reads it, so the lane stores no
+                // entry, container or run for it.
+                *h.infra.namespace_db_state.lock().expect("lock") = Some("exited 0".into());
+            }
             assert!(start(&h, cx(&main), json!({"units": ["api"]})).await.ready);
             assert_eq!(h.runner.journal.entries(), ["echo setup-db", "sleep"]);
 
@@ -790,6 +796,9 @@ async fn run_infra_entry_gets_the_compose_env_without_a_start() {
             },
         )
         .await;
+        // None of the lane's containers runs: the env comes from the files.
+        *h.infra.namespace_db_state.lock().expect("lock") = Some("exited 0".into());
+        *h.infra.cache_down.lock().expect("lock") = true;
         h.call(
             Method::Run,
             json!({"task": "infra.setup.database"}),

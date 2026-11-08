@@ -45,7 +45,8 @@ impl Remotes {
 /// box. Returns what holds them.
 pub(crate) fn hold(st: &LaneSt) -> Option<Hold> {
     let own: Vec<_> = st
-        .infra_containers
+        .infra()
+        .containers()
         .iter()
         .filter(|container| container.holds_port())
         .collect();
@@ -655,7 +656,7 @@ mod tests {
             Some("running"),
         );
         worker.publishes = false;
-        st.infra_containers = vec![
+        let mut containers = vec![
             container("acme-cache-1", true, Some("acme"), Some("running")),
             container(
                 "acme-lane0-old-1",
@@ -666,11 +667,13 @@ mod tests {
             container("devlanes-acme-lane0-search", false, None, None),
             worker,
         ];
+        st.store_infra_containers(containers.clone());
         assert_eq!(hold(&st), None);
-        st.infra_containers.extend([
+        containers.extend([
             container("acme-lane0-db-1", false, Some("acme-lane0"), Some("oom")),
             container("devlanes-acme-lane0-cerbos", false, None, Some("running")),
         ]);
+        st.store_infra_containers(containers);
         let held = hold(&st).expect("held");
         assert_eq!(
             held,
@@ -703,7 +706,7 @@ mod tests {
             error.data["message"],
             "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0. Stop its containers with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos. Then run devlanes remote use fork-b acme@0."
         );
-        st.infra_containers.clear();
+        st.store_infra_containers(Vec::new());
         let error = local_running("fork-b", "acme@0", "acme@0", &hold(&st).expect("held"));
         assert!(error.data.get("compose_project").is_none());
         assert_eq!(

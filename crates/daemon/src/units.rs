@@ -545,6 +545,16 @@ impl UnitHost {
         self.inner.stop_cause.get() == Some(&StopCause::Requested)
     }
 
+    /// What ended this run, for its history row: its stop's cause, or
+    /// `Itself` when no stop was asked for. Call once the run has exited.
+    pub fn ended_by(&self) -> devlanes_state::EndedBy {
+        match self.inner.stop_cause.get() {
+            Some(StopCause::Requested) => devlanes_state::EndedBy::Requested,
+            Some(StopCause::TimedOut(_)) => devlanes_state::EndedBy::TimedOut,
+            None => devlanes_state::EndedBy::Itself,
+        }
+    }
+
     /// True when both handles refer to the same run.
     pub fn same_run(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)

@@ -349,10 +349,7 @@ fn selection() {
     ));
     let e2e = select(&config, Some("e2e"), &[]).expect("e2e");
     assert_eq!(e2e.profile.as_deref(), Some("e2e"));
-    assert_eq!(
-        e2e.profile_options.expect("object form").run_scripts["dev"],
-        "start"
-    );
+    assert_eq!(e2e.settings.remap_script("dev"), "start");
 
     let bare = parse("project: x\nservices:\n  a: { run: a }\n  b: { run: b, autostart: false }\n");
     let selection = select(&bare, None, &[]).expect("no profiles");
@@ -491,7 +488,7 @@ fn multi_profile_selection() {
 
     let config = parse(PROFILES);
     let both = select_profiles(&config, &["a", "b"], &[]).expect("both");
-    let options = both.profile_options.expect("merged");
+    let options = both.settings;
     assert_eq!(
         options.env["PX"],
         Templated::Literal(Scalar::String("b".into()))
@@ -502,16 +499,10 @@ fn multi_profile_selection() {
     );
     assert_eq!(options.run_scripts["dev"], "prod");
     assert_eq!(options.run_scripts["test"], "ci");
-    assert!(matches!(options.infra, Some(Templated::Literal(false))));
+    assert_eq!(options.infra, [Templated::Literal(false)]);
     let mixed = select_profiles(&config, &["a", "c"], &[]).expect("mixed");
     assert_eq!(mixed.services, ["api", "tester"]);
-    assert!(
-        mixed
-            .profile_options
-            .expect("a has options")
-            .infra
-            .is_none()
-    );
+    assert!(mixed.settings.infra.is_empty());
 }
 
 #[tokio::test]

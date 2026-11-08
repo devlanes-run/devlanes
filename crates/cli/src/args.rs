@@ -1106,6 +1106,19 @@ pub enum Action {
     },
 }
 
+/// Whether a command sends the daemon this process's environment
+/// ([`Cli::sends_env`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendsEnv {
+    /// Never: the command starts nothing, or keeps the env the lane has (`reload`).
+    No,
+    /// Unless [`devlanes_proto::ENV_FROM_LANE_ENV`] asks for the lane's own env,
+    /// which `devlanes mcp` sets first and drops when the lane has none.
+    UnlessFromLane,
+    /// Always: what it starts has no env of its own to reuse.
+    Always,
+}
+
 /// Client interruption policy never implicitly stops services.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterruptPolicy {
@@ -1155,6 +1168,11 @@ impl Cli {
                 command: LaneCommand::New { start: true, .. }
             })
         );
+        let send_env = match self.sends_env() {
+            SendsEnv::Always => true,
+            SendsEnv::UnlessFromLane => !runtime.env_from_lane,
+            SendsEnv::No => false,
+        };
         if !self.env.is_empty()
             && !(matches!(
                 &self.command,
@@ -1203,18 +1221,23 @@ impl Cli {
                 .is_some_and(Command::streams_start_events);
         let wait_events =
             runtime.mode == OutputMode::Human && runtime.stdout_tty && runtime.ci.is_none();
-        let selection =
-            |units: &[String], env: &[(String, String)], profiles: &[String], mine, all_at_once| {
-                serde_json::to_value(Selection {
-                    units: units.to_vec(),
-                    env: env.iter().cloned().collect(),
-                    profiles: profiles.to_vec(),
-                    mine,
-                    timeout_ms,
-                    all_at_once,
-                    ..Selection::default()
-                })
-            };
+        // `env` is `Some` for the commands that take `--env`, whose values then
+        // replace the lane's earlier ones even when empty.
+        let selection = |units: &[String],
+                         env: Option<&[(String, String)]>,
+                         profiles: &[String],
+                         mine,
+                         all_at_once| {
+            serde_json::to_value(Selection {
+                units: units.to_vec(),
+                env: env.map(|env| env.iter().cloned().collect()),
+                profiles: profiles.to_vec(),
+                mine,
+                timeout_ms,
+                all_at_once,
+                ..Selection::default()
+            })
+        };
         let (method, params) = match &self.command {
             None if runtime.mode == OutputMode::Human
                 && runtime.stdout_tty
@@ -1226,9 +1249,10 @@ impl Cli {
             Some(Command::Ui) => return Ok(Action::Ui(context)),
             Some(Command::With(args)) => {
                 // The command always gets this shell's env; the start leaves it
-                // out when the lane's own should be reused.
+                // out when the lane's own should be reused. `with` takes no
+                // `--env`, so the lane keeps the values it has.
                 let env = environment();
-                if !runtime.env_from_lane {
+                if send_env {
                     context.env = Some(env.clone());
                 }
                 let params = serde_json::to_value(Selection {
@@ -1239,6 +1263,8 @@ impl Cli {
                     events: start_events,
                     // What `--keep` leaves running stays, like a plain start's.
                     transient: !args.keep,
+                    // The command runs under the profiles, with or without `--keep`.
+                    needs_profile_settings: true,
                     ..Selection::default()
                 })?;
                 return Ok(Action::With(crate::WithPlan {
@@ -1257,7 +1283,7 @@ impl Cli {
             Some(Command::Start(args)) => {
                 let mut params = selection(
                     &args.units,
-                    &self.env,
+                    Some(&self.env),
                     &args.profiles,
                     false,
                     args.all_at_once,
@@ -1270,17 +1296,18 @@ impl Cli {
             }
             Some(Command::Stop(args)) => (
                 Method::Stop,
-                selection(&args.units, &[], &[], args.mine, false)?,
+                selection(&args.units, None, &[], args.mine, false)?,
             ),
             Some(Command::Restart(args)) => {
-                let mut params = selection(&args.units, &self.env, &[], false, args.all_at_once)?;
+                let mut params =
+                    selection(&args.units, Some(&self.env), &[], false, args.all_at_once)?;
                 if start_events {
                     params["events"] = json!(true);
                 }
                 (Method::Restart, params)
             }
             Some(Command::Reload(args)) => {
-                let mut params = selection(&args.units, &[], &[], false, args.all_at_once)?;
+                let mut params = selection(&args.units, None, &[], false, args.all_at_once)?;
                 if start_events {
                     params["events"] = json!(true);
                 }
@@ -1528,7 +1555,7 @@ impl Cli {
                 }
                 DaemonCommand::Restart => {
                     // The lanes that ran come back with this shell's env, as `lane resume`.
-                    context.env = Some(environment());
+                    context.env = send_env.then(environment);
                     return Ok(Action::DaemonRestart(context));
                 }
                 DaemonCommand::Logs { follow, tail } => {
@@ -1572,27 +1599,7 @@ impl Cli {
             Some(Command::Tunnel { .. }) => return Ok(Action::Tunnel),
             Some(Command::Askpass { prompt }) => return Ok(Action::Askpass(prompt.clone())),
         };
-        // `reload` is absent: it applies the project file, and the lane keeps the env
-        // its last start stored, as when the TUI reloads. `env` for one unit sends it
-        // so a lane that never started plans the unit as a start from this shell
-        // would; the daemon does not keep it. `devlanes mcp` asks for no env first,
-        // so a lane a shell started keeps that shell's env.
-        let unit_env = matches!(
-            &self.command,
-            Some(Command::Env {
-                command: EnvCommand::Show { unit: Some(_), .. }
-                    | EnvCommand::Export { unit: Some(_), .. }
-                    | EnvCommand::Shell { unit: Some(_) }
-            })
-        );
-        if (unit_env
-            || lane_new_start
-            || matches!(
-                method,
-                Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume
-            ))
-            && !runtime.env_from_lane
-        {
+        if send_env {
             context.env = Some(environment());
         }
         let request = Request {
@@ -1736,6 +1743,42 @@ impl Cli {
     /// `status --statusline`, which the binary answers without a runtime or reporter.
     pub fn statusline(&self) -> bool {
         matches!(&self.command, Some(Command::Status(args)) if args.statusline)
+    }
+
+    /// Whether this command sends the daemon this process's environment, for
+    /// the CLI's request and for `devlanes mcp`, which reruns a `needs_env`
+    /// answer with the login shell's env only when it does. `reload` keeps the
+    /// env the lane has. `env` for one unit plans a lane that never started as
+    /// a start from this shell would; the daemon does not keep it. `lane new
+    /// --start` and `daemon restart` start lanes whose env comes from this request.
+    pub fn sends_env(&self) -> SendsEnv {
+        match &self.command {
+            Some(
+                Command::Start(_)
+                | Command::Restart(_)
+                | Command::Exec(_)
+                | Command::With(_)
+                | Command::Lane {
+                    command: LaneCommand::Resume { .. },
+                }
+                | Command::Env {
+                    command:
+                        EnvCommand::Show { unit: Some(_), .. }
+                        | EnvCommand::Export { unit: Some(_), .. }
+                        | EnvCommand::Shell { unit: Some(_) },
+                },
+            ) => SendsEnv::UnlessFromLane,
+            Some(Command::Run(args)) if !args.list => SendsEnv::UnlessFromLane,
+            Some(
+                Command::Lane {
+                    command: LaneCommand::New { start: true, .. },
+                }
+                | Command::Daemon {
+                    command: DaemonCommand::Restart,
+                },
+            ) => SendsEnv::Always,
+            _ => SendsEnv::No,
+        }
     }
 
     /// Identifies commands whose JSON output is an NDJSON stream.
