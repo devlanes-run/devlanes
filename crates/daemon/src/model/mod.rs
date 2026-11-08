@@ -1906,6 +1906,31 @@ fn state_badness(state: &str) -> u8 {
     }
 }
 
+/// Why a lane has no index or no port block, for [`unassigned`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Unassigned {
+    /// The project has `lanes.max` lanes.
+    LanesMax(u32),
+    /// No free port block is left.
+    PoolExhausted,
+    /// The lane has an index but no port block.
+    NoPorts,
+    /// The lane has no index yet, or no longer has one.
+    NoRecord,
+}
+
+/// `unassigned` for the lane `lane` (its reference), which every client names
+/// in the message.
+pub(crate) fn unassigned(lane: &str, reason: Unassigned) -> RpcError {
+    let data = match reason {
+        Unassigned::LanesMax(max) => json!({"lane": lane, "reason": "lanes_max", "max": max}),
+        Unassigned::PoolExhausted => json!({"lane": lane, "reason": "pool_exhausted"}),
+        Unassigned::NoPorts => json!({"lane": lane, "reason": "no_ports"}),
+        Unassigned::NoRecord => json!({"lane": lane}),
+    };
+    RpcError::new("unassigned", data, 1)
+}
+
 /// `config_names_other_project`: the lane's worktree now holds another project's file.
 pub(crate) fn elsewhere_error(other: &str, lane: Option<&str>) -> RpcError {
     let mut error = RpcError::new(

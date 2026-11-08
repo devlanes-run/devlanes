@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use crate::{
     engine::Inner,
     integrations::{ContainerDecl, InfraPortNeed, InfraSpec, PortScope, SharedInfraSpec},
-    model::{ConfigState, EnvMap, LaneRt, ProjectRt},
+    model::{ConfigState, EnvMap, LaneRt, ProjectRt, Unassigned, unassigned},
     registry::{lane_context, read_dotenv, store_error},
 };
 
@@ -137,7 +137,7 @@ impl Inner {
         lane: &Arc<LaneRt>,
         fallback: Option<Arc<EnvMap>>,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
-        self.resolve_planned(project, lane, fallback, None, None, None, None, false)
+        self.resolve_planned(project, lane, fallback, None, None, None, false)
             .await
     }
 
@@ -159,48 +159,30 @@ impl Inner {
             .config
             .loaded()
             .and_then(|config| task_units(config, task));
-        self.resolve_planned(
-            project,
-            lane,
-            None,
-            None,
-            Some(extra),
-            only.as_ref(),
-            None,
-            false,
-        )
-        .await
+        self.resolve_planned(project, lane, None, None, Some(extra), only.as_ref(), false)
+            .await
     }
 
     /// Resolves the lane without planning a unit, for its lane-level env
     /// ([`ResolvedLane::lane_env`] and its [`LaneLayers`]) that `exec`, `with`
     /// and `env show` use. The stored client env wins over `fallback`. While the
     /// lane runs something, a project file that does not load leaves the last
-    /// good config in use, as for the lane's view. `profiles` replaces the lane's,
-    /// for `with`, whose transient start on a running lane does not store them.
+    /// good config in use, as for the lane's view.
     pub(crate) async fn resolve_lane_env(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
         fallback: Arc<EnvMap>,
-        profiles: Option<&[String]>,
     ) -> Result<(Arc<ResolvedLane>, LaneLayers), RpcError> {
         let reference = lane.st().reference(&project.name());
         let config = {
             let st = lane.st();
             if st.record.is_none() {
-                let mut error = st
+                return Err(st
                     .unassigned
                     .clone()
                     .or_else(|| st.last_error.clone())
-                    .unwrap_or_else(|| RpcError::new("unassigned", json!({}), 1));
-                if error.data.is_null() {
-                    error.data = json!({});
-                }
-                if let Some(data) = error.data.as_object_mut() {
-                    data.entry("lane").or_insert(json!(reference));
-                }
-                return Err(error);
+                    .unwrap_or_else(|| unassigned(&reference, Unassigned::NoRecord)));
             }
             match &st.config {
                 ConfigState::Loaded(_) => None,
@@ -215,7 +197,6 @@ impl Inner {
                 config,
                 None,
                 Some(&BTreeSet::new()),
-                profiles,
                 false,
             )
             .await?;
@@ -236,7 +217,7 @@ impl Inner {
         config: Arc<devlanes_config::ProjectConfig>,
         only: Option<&BTreeSet<String>>,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
-        self.resolve_planned(project, lane, None, Some(config), None, only, None, false)
+        self.resolve_planned(project, lane, None, Some(config), None, only, false)
             .await
     }
 
@@ -252,36 +233,13 @@ impl Inner {
         config: Option<Arc<devlanes_config::ProjectConfig>>,
         only: Option<&BTreeSet<String>>,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
-        self.resolve_planned(project, lane, None, config, None, only, None, true)
+        self.resolve_planned(project, lane, None, config, None, only, true)
             .await
     }
 
-    /// Like [`Self::resolve_config`], with the start's own profiles instead of the
-    /// lane's: a transient start on a running lane does not store them on it.
-    pub(crate) async fn resolve_start(
-        self: &Arc<Self>,
-        project: &Arc<ProjectRt>,
-        lane: &Arc<LaneRt>,
-        config: Arc<devlanes_config::ProjectConfig>,
-        only: Option<&BTreeSet<String>>,
-        profiles: &[String],
-    ) -> Result<Arc<ResolvedLane>, RpcError> {
-        self.resolve_planned(
-            project,
-            lane,
-            None,
-            Some(config),
-            None,
-            only,
-            Some(profiles),
-            false,
-        )
-        .await
-    }
-
-    /// Shared body of the resolve methods; `config` overrides the lane's, `extra`
-    /// is layered over the lane's overrides, `only` limits the planned units,
-    /// `profiles` replaces the lane's, and `dry` plans as [`Self::resolve_dry`] says.
+    /// Shared body of the resolve methods, under the lane's profiles; `config`
+    /// overrides the lane's, `extra` is layered over the lane's overrides, `only`
+    /// limits the planned units, and `dry` plans as [`Self::resolve_dry`] says.
     #[allow(clippy::too_many_arguments)]
     async fn resolve_planned(
         self: &Arc<Self>,
@@ -291,7 +249,6 @@ impl Inner {
         config: Option<Arc<devlanes_config::ProjectConfig>>,
         extra: Option<&EnvMap>,
         only: Option<&BTreeSet<String>>,
-        profiles: Option<&[String]>,
         dry: bool,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
         let reference = lane.st().reference(&project.name());
@@ -308,13 +265,10 @@ impl Inner {
                     return Err(RpcError::new("no_config", json!({"lane": reference}), 1));
                 }
             };
-            let allocation = st.allocation.clone().ok_or_else(|| {
-                RpcError::new(
-                    "unassigned",
-                    json!({"lane": reference, "reason": "no_ports"}),
-                    1,
-                )
-            })?;
+            let allocation = st
+                .allocation
+                .clone()
+                .ok_or_else(|| unassigned(&reference, Unassigned::NoPorts))?;
             let env = st
                 .env
                 .clone()
@@ -325,7 +279,7 @@ impl Inner {
                 allocation,
                 env,
                 st.overrides.clone(),
-                profiles.map_or_else(|| st.profiles.clone(), <[String]>::to_vec),
+                st.profiles.clone(),
                 st.infra().namespace_value(),
                 st.index(),
             )
@@ -457,7 +411,7 @@ impl Inner {
             let allocation = st
                 .allocation
                 .clone()
-                .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "no_ports"}), 1))?;
+                .ok_or_else(|| unassigned(&reference, Unassigned::NoPorts))?;
             (
                 config,
                 allocation,

@@ -34,6 +34,7 @@ linked = [[
   "cargo/devlanes-infra-docker",
   "cargo/devlanes-ipc",
   "cargo/devlanes-logs",
+  "cargo/devlanes-loopback",
   "cargo/devlanes-mcp",
   "cargo/devlanes-mcp-ui",
   "cargo/devlanes-metrics",

@@ -443,10 +443,9 @@ fn yaml_language_server_schemas() {
         assert!(errors.is_empty(), "{name}: {errors:#?}");
     }
     let config = parse_project(FULL, None).expect("reference example");
-    let Some(ProfileConfig::Object(profile)) = config.profiles.get("e2e") else {
+    let Some(ProfileConfig::Object(_)) = config.profiles.get("e2e") else {
         panic!("the reference example declares an e2e profile mapping")
     };
-    assert_eq!(profile.remap_script("dev"), "start");
     assert_eq!(config.tasks["build"].when, Some(TaskWhen::Start));
 }
 
@@ -461,7 +460,6 @@ fn prod_example_extends_the_reference() {
     let Some(ProfileConfig::Object(profile)) = config.profiles.get("default") else {
         panic!("the prod example turns the default profile into a mapping")
     };
-    assert_eq!(profile.remap_script("dev"), "start");
     assert_eq!(
         profile.include.as_deref(),
         Some(&["+essential".to_owned(), "user-web".to_owned()][..]),
@@ -1275,38 +1273,15 @@ fn custom_extension_seam() {
     assert!(parse_project(source, None).is_ok());
 }
 
-/// Profile remapping applies once to service script names and keeps the file.
+/// Profile `run_scripts` load with a local file and the schema rejects blank names.
 #[test]
 fn profile_script_remapping() {
     let source = "project: demo\ntasks:\n  build: { run: pnpm build, when: lane.start, profiles: [e2e] }\nservices:\n  api: { run_script: { file: apps/api/package.json, name: dev } }\nprofiles:\n  e2e:\n    include: [api]\n    run_scripts: { dev: start, start: production }\n    env: { NODE_ENV: production }\n";
     let local = "profiles:\n  e2e:\n    run_scripts: { watch: serve }\n";
     let config = parse_project(source, Some(local)).expect("e2e profile");
-    let ProfileConfig::Object(profile) = &config.profiles["e2e"] else {
+    let ProfileConfig::Object(_) = &config.profiles["e2e"] else {
         panic!("object profile")
     };
-    assert_eq!(profile.remap_script("dev"), "start");
-    assert_eq!(profile.remap_script("watch"), "serve");
-    assert_eq!(profile.remap_script("build"), "build");
-    let script = config.services["api"].run_script.as_ref().expect("script");
-    assert_eq!(
-        script
-            .file_and_name_for_profile(Some(profile))
-            .expect("remapped"),
-        ("apps/api/package.json", "start")
-    );
-    assert_eq!(
-        script.file_and_name_for_profile(None).expect("unmapped"),
-        ("apps/api/package.json", "dev")
-    );
-    let make = RunScript {
-        file: "Makefile".into(),
-        name: "dev".into(),
-    };
-    assert_eq!(
-        make.file_and_name_for_profile(Some(profile))
-            .expect("make remapped"),
-        ("Makefile", "start")
-    );
     assert_eq!(config.tasks["build"].when, Some(TaskWhen::Start));
     let validator = jsonschema::validator_for(&project_schema()).expect("schema");
     for remap in [

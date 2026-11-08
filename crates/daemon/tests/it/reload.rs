@@ -275,9 +275,11 @@ async fn an_added_external_entry_is_not_drift() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// `restart <unit>` from a shell uses only its own `--env` values; a request
-/// without a shell environment (the TUI's restart) keeps the lane's.
-async fn restart_from_a_shell_drops_an_earlier_env_override() {
+/// A request replaces the lane's `--env` values only when it carries `env`, with
+/// or without a shell environment: the TUI's restart keeps them, `devlanes mcp`'s
+/// `restart <unit>` (no shell environment) drops them. A whole-lane `stop`
+/// forgets them, so a later start without `env` does not bring them back.
+async fn restart_replaces_env_overrides_only_when_asked() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", BEFORE);
@@ -303,17 +305,36 @@ async fn restart_from_a_shell_drops_an_earlier_env_override() {
                 .expect("env");
             value["env"]["EXTRA"].as_str().map(str::to_owned)
         };
-        let no_shell = devlanes_proto::Context {
+        let no_shell = || devlanes_proto::Context {
             env: None,
             ..cx(&main)
         };
-        h.call(Method::Restart, json!({"units": ["web"]}), no_shell)
+        h.call(Method::Restart, json!({"units": ["web"]}), no_shell())
             .await
-            .expect("restart without a shell environment");
+            .expect("the TUI's restart");
         assert_eq!(extra().await.as_deref(), Some("one"));
-        h.call(Method::Restart, json!({"units": ["web"]}), cx(&main))
+        h.call(
+            Method::Restart,
+            json!({"units": ["web"], "env": {}}),
+            no_shell(),
+        )
+        .await
+        .expect("devlanes mcp's restart");
+        assert_eq!(extra().await, None);
+
+        h.call(
+            Method::Start,
+            json!({"units": ["web"], "env": {"EXTRA": "one"}}),
+            cx(&main),
+        )
+        .await
+        .expect("start with --env again");
+        h.call(Method::Stop, json!({}), cx(&main))
             .await
-            .expect("restart from a shell");
+            .expect("stop the lane");
+        h.call(Method::Start, json!({"units": ["web"]}), no_shell())
+            .await
+            .expect("start without env");
         assert_eq!(extra().await, None);
         h.close().await;
     })

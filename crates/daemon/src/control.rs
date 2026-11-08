@@ -202,6 +202,7 @@ impl Inner {
                 selectors,
                 profiles: selection.profile_names(),
                 transient: selection.transient,
+                needs_profile_settings: selection.needs_profile_settings,
                 env: carries_env(context),
                 overrides: selection.env.clone(),
                 actor: context.actor.clone(),
@@ -355,6 +356,7 @@ impl Inner {
             selectors: selectors.clone(),
             profiles: selection.profile_names(),
             transient: false,
+            needs_profile_settings: false,
             env: carries_env(context),
             overrides: selection.env.clone(),
             actor: context.actor.clone(),
@@ -434,8 +436,9 @@ impl Inner {
                             selectors: Vec::new(),
                             profiles: Vec::new(),
                             transient: false,
+                            needs_profile_settings: false,
                             env: Some(env.clone()),
-                            overrides: EnvMap::new(),
+                            overrides: Some(EnvMap::new()),
                             actor: context.actor.clone(),
                             timeout: self.timeout(args.timeout_ms),
                             session: None,
@@ -506,8 +509,9 @@ impl Inner {
                             selectors: planned.units,
                             profiles: planned.profiles,
                             transient: false,
+                            needs_profile_settings: false,
                             env,
-                            overrides: EnvMap::new(),
+                            overrides: Some(EnvMap::new()),
                             actor: context.actor.clone(),
                             timeout: self.opts.start_timeout,
                             session: None,
@@ -591,8 +595,9 @@ impl Inner {
                     selectors: Vec::new(),
                     profiles: Vec::new(),
                     transient: false,
+                    needs_profile_settings: false,
                     env,
-                    overrides: args.env.clone(),
+                    overrides: Some(args.env.clone()),
                     actor: context.actor.clone(),
                     timeout: self.opts.start_timeout,
                     session: None,
@@ -639,10 +644,9 @@ impl Inner {
         if base.st().record.is_none() {
             // The folder's first lane comes first; it could not get one.
             return Err(reason.unwrap_or_else(|| {
-                RpcError::new(
-                    "unassigned",
-                    json!({"lane": base.st().reference(&project.name())}),
-                    1,
+                crate::model::unassigned(
+                    &base.st().reference(&project.name()),
+                    crate::model::Unassigned::NoRecord,
                 )
             }));
         }
@@ -719,10 +723,9 @@ impl Inner {
         if lane.st().record.is_none() {
             let st = lane.st();
             return Err(st.unassigned.clone().unwrap_or_else(|| {
-                RpcError::new(
-                    "unassigned",
-                    json!({"lane": st.reference(&project.name())}),
-                    1,
+                crate::model::unassigned(
+                    &st.reference(&project.name()),
+                    crate::model::Unassigned::NoRecord,
                 )
             }));
         }
@@ -981,7 +984,7 @@ impl Inner {
             return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
         }
         let (resolved, layers) = self
-            .resolve_lane_env(&project, &lane, Arc::default(), None)
+            .resolve_lane_env(&project, &lane, Arc::default())
             .await?;
         let mut left_out = layers.unset.clone();
         left_out.retain(|key, _| !args.env.contains_key(key));

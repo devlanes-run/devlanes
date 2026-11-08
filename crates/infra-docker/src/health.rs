@@ -5,7 +5,7 @@ use bollard::models::{
     ContainerSummaryStateEnum, HealthStatusEnum,
 };
 use serde::Serialize;
-use tokio::{io::AsyncReadExt, net::TcpStream};
+use tokio::io::AsyncReadExt;
 
 /// Container health, from the image healthcheck when it has one, else from a tcp probe.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -149,8 +149,7 @@ pub fn health_from_summary(
 /// an accepted connection only counts when it stays open for `settle` or sends data.
 pub async fn tcp_probe(port: u16, connect_timeout: Duration, settle: Duration) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let Ok(Ok(mut stream)) = tokio::time::timeout(connect_timeout, TcpStream::connect(addr)).await
-    else {
+    let Ok(mut stream) = devlanes_loopback::connect(addr, connect_timeout).await else {
         return false;
     };
     let mut buffer = [0_u8; 1];

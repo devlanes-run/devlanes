@@ -538,8 +538,11 @@ pub struct Selection {
     /// the config defines none.
     #[serde(default)]
     pub profiles: Vec<String>,
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
+    /// `--env` values for the processes this request starts. `Some` (also
+    /// empty) replaces the values the lane keeps from earlier requests, `None`
+    /// keeps them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub mine: bool,
     #[serde(default)]
@@ -556,6 +559,12 @@ pub struct Selection {
     /// start does not bring back what this request ran.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub transient: bool,
+    /// The caller runs something against the lane under these profiles
+    /// (`devlanes with`). On a lane that is up, the start refuses with
+    /// `profile_not_applied` before it changes anything when the lane's profiles
+    /// give units other settings than these. Older daemons ignore it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub needs_profile_settings: bool,
     /// Send [`events::START_ACCEPTED`] on this request once the start is
     /// installed, whatever `events` says (`start`, `restart` and `reload`; see
     /// [`features::START_ACCEPTED`]).
