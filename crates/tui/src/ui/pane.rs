@@ -827,8 +827,7 @@ fn task_lines(app: &App, lane: &LaneSummary, name: &str, width: usize) -> Vec<Li
     if let Some(run) = info.and_then(|i| i.last_run.as_ref()) {
         let mut last = run.state.clone();
         if let Some(code) = run.exit_code.filter(|code| *code != 0) {
-            last.push_str(", ");
-            last.push_str(&super::exit_words(code));
+            last.push_str(&format!(", exit {code}"));
         }
         if let Some(finished) = run.finished_at_ms {
             last.push_str(&format!(", {}", super::ago(finished)));
