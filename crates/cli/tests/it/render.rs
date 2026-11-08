@@ -470,6 +470,15 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "infra": {"compose": "acme-2"},
             }),
         ),
+        // The last lane of a Compose project without the Docker CLI.
+        (
+            "lane_clean_docker_unavailable",
+            Method::LaneClean,
+            json!({
+                "lane": "acme@0", "stopped": [], "tasks": [], "teardown": [], "infra": null,
+                "shared_infra": {"skipped": "docker_unavailable", "message": "no Docker engine is reachable"},
+            }),
+        ),
         ("lane_clean_plan", Method::LaneCleanPlan, lane_clean_plan()),
         // A gone worktree runs no hooks, and Docker did not answer.
         ("lane_clean_plan_missing", Method::LaneCleanPlan, {

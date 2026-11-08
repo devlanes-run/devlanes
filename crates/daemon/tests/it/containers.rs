@@ -858,10 +858,28 @@ fn clean_params(main: &std::path::Path, lane: &str) -> (Value, devlanes_proto::C
     )
 }
 
+/// `lane clean --yes` of `lane` from `main`: its result and the provider calls
+/// it made.
+async fn clean_calls(
+    h: &crate::Harness,
+    main: &std::path::Path,
+    lane: &str,
+) -> (Value, Vec<String>) {
+    let before = h.infra.calls.entries().len();
+    let (params, context) = clean_params(main, lane);
+    let cleaned = h
+        .call(Method::LaneClean, params, context)
+        .await
+        .expect("clean");
+    (cleaned, h.infra.calls.entries()[before..].to_vec())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// Cleaning a lane while another is left keeps the shared containers; cleaning
 /// the project's last lane, which forgets the project and its shared ports,
-/// stops them first.
+/// stops them first. That holds for a shared container the file no longer
+/// declares while its port block remains, and a project with only `per_lane`
+/// containers has nothing shared to stop.
 async fn cleaning_the_last_lane_stops_shared_containers() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -874,70 +892,49 @@ async fn cleaning_the_last_lane_stops_shared_containers() {
             },
         )
         .await;
+        *h.infra.shared_ports.lock().expect("knob") = true;
         h.call(Method::Start, json!({}), cx(&main))
             .await
             .expect("start");
         h.call(Method::LaneNew, json!({"name": "review"}), cx(&main))
             .await
             .expect("lane new");
-        let before = h.infra.calls.entries().len();
-        let (params, context) = clean_params(&main, "review");
-        let kept = h
-            .call(Method::LaneClean, params, context)
-            .await
-            .expect("clean review");
-        assert_eq!(h.infra.calls.entries()[before..], ["remove 1"]);
+        let (kept, calls) = clean_calls(&h, &main, "review").await;
+        assert_eq!(calls, ["remove 1"]);
         assert_eq!(kept.get("shared_infra"), None, "{kept}");
-
-        let (params, context) = clean_params(&main, "0");
-        let last = h
-            .call(Method::LaneClean, params, context)
-            .await
-            .expect("clean lane 0");
-        assert_eq!(
-            h.infra.calls.entries()[before + 1..],
-            ["remove 0", "down", "down done"]
-        );
+        let (last, calls) = clean_calls(&h, &main, "0").await;
+        assert_eq!(calls, ["remove 0", "down", "down done"]);
         assert_eq!(last["shared_infra"], json!({"stopped": ["db"]}), "{last}");
-        h.close().await;
-    })
-    .await
-    .expect("timeout");
-}
 
-#[tokio::test(flavor = "multi_thread")]
-/// A project whose only container is `per_lane` has nothing shared: the dry
-/// run of its last lane lists no shared stop, and the clean stops nothing
-/// shared and says nothing about it.
-async fn a_last_clean_with_only_per_lane_containers_stops_nothing_shared() {
-    tokio::time::timeout(LIMIT, async {
-        let tmp = temp();
-        let main = repo(&tmp.path, "r", CONFIG);
-        let h = harness(
-            &tmp.path.join("home"),
-            Setup {
-                infra: true,
-                ..Setup::default()
-            },
+        // The file dropped `db` after it got its port from the shared block.
+        let dropped = repo(&tmp.path, "dropped", &SHARED.replace("demo", "dropped"));
+        h.call(Method::Start, json!({}), cx(&dropped))
+            .await
+            .expect("start");
+        std::fs::write(
+            dropped.join("devlanes.yaml"),
+            "project: dropped\nservices:\n  api: { run: sleep }\n",
         )
-        .await;
-        h.call(Method::Start, json!({}), cx(&main))
+        .expect("edit");
+        h.call(Method::ConfigShow, json!({}), cx(&dropped))
+            .await
+            .expect("reload");
+        let (_, calls) = clean_calls(&h, &dropped, "0").await;
+        assert_eq!(calls, ["remove 0", "down", "down done"]);
+
+        let per_lane = repo(&tmp.path, "per-lane", &CONFIG.replace("demo", "lanes"));
+        h.call(Method::Start, json!({}), cx(&per_lane))
             .await
             .expect("start");
         let plan = h
-            .call(Method::LaneCleanPlan, json!({}), cx(&main))
+            .call(Method::LaneCleanPlan, json!({}), cx(&per_lane))
             .await
             .expect("plan");
-        assert_eq!(plan["history"], true, "{plan}");
-        assert_eq!(plan.get("shared_infra"), None, "{plan}");
-        let before = h.infra.calls.entries().len();
-        let (params, context) = clean_params(&main, "0");
-        let cleaned = h
-            .call(Method::LaneClean, params, context)
-            .await
-            .expect("clean");
-        assert_eq!(cleaned.get("shared_infra"), None, "{cleaned}");
-        assert_eq!(h.infra.calls.entries()[before..], ["remove 0"]);
+        let (_, calls) = clean_calls(&h, &per_lane, "0").await;
+        assert_eq!(
+            (plan.get("shared_infra"), calls),
+            (None, vec!["remove 0".to_owned()])
+        );
         h.close().await;
     })
     .await

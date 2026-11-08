@@ -7,12 +7,14 @@
 use std::sync::Arc;
 
 use devlanes_proto::RpcError;
+use devlanes_state::BlockOwner;
 use serde_json::{Value, json};
 
 use crate::{
     engine::Inner,
     integrations::{InfraError, InfraSpec, InfraUp, SharedInfraSpec},
     model::{Closing, LaneRt, ProjectRt},
+    registry::store_error,
 };
 
 /// What cleaning a lane does to the project's shared containers.
@@ -20,7 +22,8 @@ pub(crate) enum SharedOnClean {
     /// Another runtime uses them ([`used_by_another`]).
     Used,
     /// The project declares nothing shared
-    /// ([`crate::integrations::InfraProvider::shared_names`]).
+    /// ([`crate::integrations::InfraProvider::shared_names`]) and holds no
+    /// shared port block.
     None,
     /// No other lane uses them: stop them with this spec.
     Stop(SharedInfraSpec),
@@ -118,11 +121,21 @@ impl Inner {
             Ok(spec) => spec,
             Err(error) => return SharedOnClean::Unknown(error),
         };
-        // What is shared is the provider's rule, the one its `down` stops by.
-        match self.integ.infra.shared_names(&spec).await {
-            Ok(names) if names.is_empty() => SharedOnClean::None,
-            Ok(_) => SharedOnClean::Stop(spec),
-            Err(error) => SharedOnClean::Unknown(RpcError::from(error)),
+        let declared = match self.integ.infra.shared_names(&spec).await {
+            Ok(names) => !names.is_empty(),
+            Err(error) => return SharedOnClean::Unknown(RpcError::from(error)),
+        };
+        // A shared container the file dropped may still run and hold a port of
+        // the project's shared block, which forgetting the project frees; `down`
+        // stops it by its label.
+        let block = match self.store.allocation(BlockOwner::Project(project.id)).await {
+            Ok(block) => block.is_some(),
+            Err(error) => return SharedOnClean::Unknown(store_error(error)),
+        };
+        if declared || block {
+            SharedOnClean::Stop(spec)
+        } else {
+            SharedOnClean::None
         }
     }
 

@@ -682,6 +682,9 @@ pub struct FakeInfra {
     /// When set, `down` waits for a notification between recording `down`
     /// and `down done`.
     pub down_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
+    /// `port_needs` also asks for the shared plain containers' ports from the
+    /// project's shared block.
+    pub shared_ports: Arc<Mutex<bool>>,
 }
 
 impl FakeInfra {
@@ -768,13 +771,27 @@ impl FakeInfra {
 
 #[async_trait]
 impl InfraProvider for FakeInfra {
-    async fn port_needs(&self, _: &InfraSpec) -> Result<Vec<InfraPortNeed>, InfraError> {
+    async fn port_needs(&self, spec: &InfraSpec) -> Result<Vec<InfraPortNeed>, InfraError> {
         self.query("port_needs");
-        Ok(vec![InfraPortNeed {
+        let mut needs = vec![InfraPortNeed {
             scope: PortScope::Lane,
             unit: "infra.db".into(),
             name: "5432".into(),
-        }])
+        }];
+        // As the real provider: a shared plain container's ports come from the
+        // project's shared block.
+        if self.shared_ports.lock().is_ok_and(|shared| *shared) {
+            for container in spec.containers.iter().filter(|c| !c.per_lane) {
+                for (name, _) in &container.ports {
+                    needs.push(InfraPortNeed {
+                        scope: PortScope::Shared,
+                        unit: format!("infra.{}", container.name),
+                        name: name.clone(),
+                    });
+                }
+            }
+        }
+        Ok(needs)
     }
     async fn up(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
         self.record(format!("up {}", spec.lane));

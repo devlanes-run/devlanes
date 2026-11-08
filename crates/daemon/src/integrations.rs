@@ -455,10 +455,12 @@ pub trait InfraProvider: Send + Sync {
     /// Stops the project's shared containers, keeping their data (`infra down`,
     /// and the clean of a project's last lane).
     async fn down(&self, spec: &SharedInfraSpec) -> Result<Value, InfraError>;
-    /// What `spec` declares as shared, which [`InfraProvider::down`] stops: the
-    /// shared plain containers (`spec.containers`) and, with Compose files, the
-    /// services left after `exclude` and `per_lane`. Read from the files, never
-    /// from the engine, so it answers whether anything runs or not.
+    /// What `spec` declares as shared: the shared plain containers
+    /// (`spec.containers`) and, with Compose files, the services left after
+    /// `exclude` and `per_lane`. Read from the files, never from the engine.
+    /// [`InfraProvider::down`] stops more than this: every running plain
+    /// container with the project's shared label, including ones the file no
+    /// longer declares.
     async fn shared_names(&self, spec: &SharedInfraSpec) -> Result<BTreeSet<String>, InfraError>;
     /// Removes the lane's own containers and volumes (`lane clean`).
     async fn remove_lane(&self, project: &str, lane: u32) -> Result<Value, InfraError>;

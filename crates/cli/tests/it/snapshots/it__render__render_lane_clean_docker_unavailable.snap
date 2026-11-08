@@ -1,0 +1,13 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+cleaned acme@0: stopped 0 units
+  shared containers not stopped: Docker is not available; devlanes infra down stops them once it is
+--- plain (exit 0)
+cleaned acme@0: stopped 0 units
+  shared containers not stopped: Docker is not available; devlanes infra down stops them once it is
+--- agent (exit 0)
+cleaned acme@0: stopped 0 units
+  shared containers not stopped: Docker is not available; devlanes infra down stops them once it is

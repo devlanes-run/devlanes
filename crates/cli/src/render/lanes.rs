@@ -1212,8 +1212,12 @@ fn shared_infra_line(shared: &Value) -> String {
             clean(&text(error, "message"))
         )
     } else if shared.get("skipped").is_some() {
+        let when = match text(shared, "skipped").as_str() {
+            "docker_unavailable" => "once it is",
+            _ => "once the file loads",
+        };
         format!(
-            "shared containers not stopped: {}; {infra_down} stops them once the file loads",
+            "shared containers not stopped: {}; {infra_down} stops them {when}",
             shared_skipped(shared)
         )
     } else {
@@ -1222,11 +1226,12 @@ fn shared_infra_line(shared: &Value) -> String {
 }
 
 /// Why `lane clean` would not or did not stop the shared containers, from a
-/// `shared_infra: {skipped, message}` field.
+/// `shared_infra: {skipped, message}` field, worded by its code.
 fn shared_skipped(shared: &Value) -> String {
-    match text(shared, "message") {
-        message if message.is_empty() => "the project file does not load".into(),
-        message => clean(&message),
+    match (text(shared, "skipped").as_str(), text(shared, "message")) {
+        ("docker_unavailable", _) => "Docker is not available".into(),
+        (_, message) if message.is_empty() => "the project file does not load".into(),
+        (_, message) => clean(&message),
     }
 }
 
