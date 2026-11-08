@@ -1698,7 +1698,8 @@ impl Inner {
                 (file, primary)
             }
             LaneOrFile::File { file, config } => {
-                (file.clone(), PrimaryWorktree::of(file, config).await?)
+                let primary = PrimaryWorktree::of(file, config, self.opts.ci).await?;
+                (file.clone(), primary)
             }
         };
         let primary_dir = primary.root.join(&primary.relative);

@@ -767,15 +767,15 @@ pub(crate) struct PrimaryWorktree {
 }
 
 impl PrimaryWorktree {
-    /// The worktree on the primary branch, else the main checkout, else the
-    /// repository root of `config_file`, as [`Inner::primary_path`] picks it for a
-    /// registered project.
-    pub(crate) async fn of(config_file: &Path, config: &ProjectConfig) -> Result<Self, RpcError> {
+    /// The [`primary_tree`] of `config_file`'s repository, else its root. `ci` as in
+    /// [`crate::EngineOptions::ci`].
+    pub(crate) async fn of(
+        config_file: &Path,
+        config: &ProjectConfig,
+        ci: bool,
+    ) -> Result<Self, RpcError> {
         let checkout = Checkout::of(config_file, config).await?;
-        let present = || checkout.trees.iter().filter(|tree| tree.present);
-        let root = present()
-            .find(|tree| tree.branch.as_deref() == Some(checkout.primary_branch.as_str()))
-            .or_else(|| present().find(|tree| tree.identity == "main"))
+        let root = primary_tree(&checkout.trees, &checkout.primary_branch, ci)
             .map_or_else(|| checkout.root.clone(), |tree| tree.path.clone());
         Ok(Self {
             root,
@@ -1023,34 +1023,23 @@ impl Inner {
         Ok(project)
     }
 
-    /// The primary worktree: lane 0, else the worktree on the primary branch, else
-    /// the main checkout, else the project root.
+    /// The primary worktree: lane 0 once it exists, else the [`primary_tree`], else
+    /// the project root.
     pub(crate) fn primary_path(&self, project: &ProjectRt) -> PathBuf {
         let st = project.st();
         let lanes: Vec<_> = st.lanes.values().cloned().collect();
         let primary = st.primary_branch.clone();
         let root = st.root.clone();
         drop(st);
-        let mut fallback = None;
+        let mut trees = Vec::with_capacity(lanes.len());
         for lane in &lanes {
             let lane = lane.st();
             if lane.index() == Some(0) {
                 return lane.path.clone();
             }
-            if lane.present
-                && lane.alias().is_none()
-                && lane.branch.as_deref() == Some(primary.as_str())
-            {
-                fallback = Some(lane.path.clone());
-            }
+            trees.push(lane_tree(&lane));
         }
-        if let Some(path) = fallback {
-            return path;
-        }
-        lanes
-            .iter()
-            .find(|lane| lane.st().identity == "main")
-            .map_or(root, |lane| lane.st().path.clone())
+        primary_tree(&trees, &primary, self.opts.ci).map_or(root, |tree| tree.path.clone())
     }
 
     /// The loaded config of the primary worktree's lane, whose project-wide settings
@@ -1298,6 +1287,9 @@ impl Inner {
             .map(|config| literal(&config.lanes.max));
         let mut lanes = project.lanes();
         lanes.sort_by_key(|lane| lane.st().path.clone());
+        let trees: Vec<Tree> = lanes.iter().map(|lane| lane_tree(&lane.st())).collect();
+        let primary_identity =
+            primary_tree(&trees, &primary, self.opts.ci).map(|tree| tree.identity.clone());
         let mut assigned = Vec::new();
         for lane in lanes {
             let (config, branch, alias) = {
@@ -1307,8 +1299,7 @@ impl Inner {
                 }
                 // Only the primary worktree gets a lane by existing; any other
                 // gets one once devlanes runs in it.
-                let primary_tree = st.alias().is_none()
-                    && (st.identity == "main" || st.branch.as_deref() == Some(primary.as_str()));
+                let primary_tree = primary_identity.as_deref() == Some(st.identity.as_str());
                 if !primary_tree && !st.wanted {
                     continue;
                 }
@@ -2603,6 +2594,48 @@ pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
         setup: tokio::sync::Mutex::new(()),
         infra_refresh: tokio::sync::Mutex::new(()),
     })
+}
+
+/// The primary worktree among `trees`: the only one that gets a lane by existing,
+/// and lane 0 at a project's first start. That is the present worktree on
+/// `primary_branch` (the first by path if git reports several), else the present
+/// main checkout (identity `main`), which then gets the first free lane instead.
+/// Under CI (`ci`) the main checkout comes first, since there the checkout takes
+/// lane 0 on any branch. An extra lane of a folder (`lane new`) is never primary,
+/// and neither is a worktree whose folder is gone. `None` when none qualifies.
+pub(crate) fn primary_tree<'a>(
+    trees: impl IntoIterator<Item = &'a Tree>,
+    primary_branch: &str,
+    ci: bool,
+) -> Option<&'a Tree> {
+    let rank = |tree: &Tree| {
+        let on_primary = tree.branch.as_deref() == Some(primary_branch);
+        let checkout = tree.identity == "main";
+        if !tree.present || tree.identity.contains(crate::model::ALIAS_MARK) {
+            None
+        } else if (ci && checkout) || (!ci && on_primary) {
+            Some(0)
+        } else if on_primary || checkout {
+            Some(1)
+        } else {
+            None
+        }
+    };
+    trees
+        .into_iter()
+        .filter_map(|tree| Some((rank(tree)?, tree)))
+        .min_by(|(a, x), (b, y)| a.cmp(b).then_with(|| x.path.cmp(&y.path)))
+        .map(|(_, tree)| tree)
+}
+
+/// A lane's worktree as a [`Tree`], for [`primary_tree`].
+fn lane_tree(st: &LaneSt) -> Tree {
+    Tree {
+        identity: st.identity.clone(),
+        path: st.path.clone(),
+        branch: st.branch.clone(),
+        present: st.present,
+    }
 }
 
 /// Converts git's view of a worktree.
