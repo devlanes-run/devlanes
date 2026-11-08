@@ -755,6 +755,39 @@ impl Inner {
     }
 }
 
+/// The primary worktree of the repository a project file sits in, found from git
+/// without registering the project it names.
+pub(crate) struct PrimaryWorktree {
+    /// The worktree lane 0 gets.
+    pub root: PathBuf,
+    /// Its branch; `None` outside git.
+    pub branch: Option<String>,
+    /// The project file's folder below the worktree.
+    pub relative: PathBuf,
+}
+
+impl PrimaryWorktree {
+    /// The worktree on the primary branch, else the main checkout, else the
+    /// repository root of `config_file`, as [`Inner::primary_path`] picks it for a
+    /// registered project.
+    pub(crate) async fn of(config_file: &Path, config: &ProjectConfig) -> Result<Self, RpcError> {
+        let checkout = Checkout::of(config_file, config).await?;
+        let present = || checkout.trees.iter().filter(|tree| tree.present);
+        let root = present()
+            .find(|tree| tree.branch.as_deref() == Some(checkout.primary_branch.as_str()))
+            .or_else(|| present().find(|tree| tree.identity == "main"))
+            .map_or_else(|| checkout.root.clone(), |tree| tree.path.clone());
+        Ok(Self {
+            root,
+            branch: checkout
+                .common_dir
+                .is_some()
+                .then(|| checkout.primary_branch.clone()),
+            relative: checkout.relative,
+        })
+    }
+}
+
 /// The repository a project file sits in, as registration records it.
 struct Checkout {
     repository: Option<devlanes_git::Repository>,

@@ -2522,7 +2522,7 @@ pub(super) fn config_check(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .any(|warning| text(warning, "code") == "host_outside_ca");
     if !provisional.is_empty() && hosts {
         lines.push(format!(
-            "hostname warnings for {provisional}, the lane this project gets first"
+            "hostname warnings for {provisional}, laid out from the file"
         ));
     }
     if list(data, "skipped")

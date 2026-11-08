@@ -31,7 +31,7 @@ use crate::{
     engine::{Inner, LanePair, carries_env, confirmation, params, required},
     lifecycle::{SpawnRequest, StartOptions, TaskOutcome},
     model::{EnvMap, Kind, LaneRt, LaneView, ProjectRt, is_mine, lane_summary, lock, unit_summary},
-    registry::{internal, store_error},
+    registry::{PrimaryWorktree, internal, store_error},
     stream::LaneEvents,
     target::{Found, LaneOrFile, Policy},
     units::UnitHost,
@@ -1680,28 +1680,34 @@ impl Inner {
             .await?;
         // The lane's warnings below come from its loaded config; bring it up to date.
         // A worktree without its own devlanes.local.yaml uses the primary
-        // worktree's, as the lane does.
-        let (file, primary_dir) = match &target {
+        // worktree's, as the lane does; for a project nobody started, the primary
+        // worktree git reports.
+        let (file, primary) = match &target {
             LaneOrFile::Lane((project, lane)) => {
                 self.fresh_config(project, lane).await;
                 let file = context.file.clone().unwrap_or_else(|| {
                     let (dir, name) = project.config_path();
                     lane.st().path.join(dir).join(name)
                 });
-                (file, Some(self.config_dirs(project, lane).1))
+                let branch = project.st().primary_branch.clone();
+                let primary = PrimaryWorktree {
+                    root: self.primary_path(project),
+                    branch: Some(branch),
+                    relative: project.config_path().0,
+                };
+                (file, primary)
             }
-            LaneOrFile::File { file, .. } => (file.clone(), None),
+            LaneOrFile::File { file, config } => {
+                (file.clone(), PrimaryWorktree::of(file, config).await?)
+            }
         };
+        let primary_dir = primary.root.join(&primary.relative);
         let checks = self.config_checks();
         let known = crate::platforms::known(&self.integ.contributors);
         let path = file.clone();
         let (config, report, unknown) = tokio::task::spawn_blocking(move || {
-            let config = match &primary_dir {
-                Some(primary) => {
-                    devlanes_config::load_lane_project_with::<OpaqueExtensions>(&path, primary)?
-                }
-                None => devlanes_config::load_project_with::<OpaqueExtensions>(&path)?,
-            };
+            let config =
+                devlanes_config::load_lane_project_with::<OpaqueExtensions>(&path, &primary_dir)?;
             let report = crate::registry::check_config(&config, &checks)?;
             let unknown = crate::platforms::unknown(&config, &known);
             Ok::<_, devlanes_config::ConfigError>((config, report, unknown))
@@ -1726,18 +1732,13 @@ impl Inner {
             // Hostnames depend on the lane's index, domain and vars, not on its
             // ports, so lane 0 laid out from the file gives the same advice before
             // anything started. `host_conflict` needs other lanes and is left out.
-            target => {
-                let facts = match target {
-                    LaneOrFile::Lane((project, _)) => {
-                        let primary = self.primary_path(project);
-                        let branch = project.st().primary_branch.clone();
-                        let (dir, _) = project.config_path();
-                        self.provisional_facts(&config, &primary, Some(&branch), &dir)
-                    }
-                    LaneOrFile::File { file, .. } => {
-                        self.provisional_facts_of_file(file, &config).await
-                    }
-                };
+            _ => {
+                let facts = self.provisional_facts(
+                    &config,
+                    &primary.root,
+                    primary.branch.as_deref(),
+                    &primary.relative,
+                );
                 let reference = format!("{}@0", config.project);
                 match self.provisional_view(&config, &facts).await {
                     Some(view) => {

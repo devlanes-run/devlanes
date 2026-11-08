@@ -12,7 +12,7 @@ use std::{
 use devlanes_config::ProjectConfig;
 use devlanes_core::{
     WorktreeId,
-    paths::{same_path, strip_path_prefix},
+    paths::same_path,
     ports::{PortBlock, allocate_offsets, block_size},
     refs::{LaneCandidate, LaneRef, ReferenceError, ResolveContext, UnitRef},
 };
@@ -644,7 +644,8 @@ impl Inner {
     }
 
     /// The projects a short reference resolves in when nothing is registered on the
-    /// way: [`Self::find`]'s, `None` for a project nobody registered.
+    /// way: [`Self::find`]'s, `None` for a project nobody registered. Only for
+    /// `note_lane_selector`, and removed with it (ws-resolution PR 3).
     pub(crate) async fn reference_scope(
         self: &Arc<Self>,
         context: &Context,
@@ -817,27 +818,6 @@ impl Inner {
                 tracing::debug!(code = %error.code, "no provisional layout");
                 None
             }
-        }
-    }
-
-    /// Lane 0 of the project in `file`, as [`Self::provisional_facts`] lays it out:
-    /// the repository root and primary branch git reports, else the file's folder.
-    pub(crate) async fn provisional_facts_of_file(
-        &self,
-        file: &Path,
-        config: &ProjectConfig,
-    ) -> LaneFacts {
-        let dir = file.parent().unwrap_or(Path::new(""));
-        let repository = devlanes_git::discover(dir, config.lanes.primary.as_deref())
-            .await
-            .ok()
-            .flatten();
-        match repository {
-            Some(repo) => {
-                let relative = strip_path_prefix(dir, &repo.root).unwrap_or(Path::new(""));
-                self.provisional_facts(config, &repo.root, Some(&repo.primary_branch), relative)
-            }
-            None => self.provisional_facts(config, dir, None, Path::new("")),
         }
     }
 }
