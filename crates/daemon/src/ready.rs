@@ -871,16 +871,28 @@ mod tests {
         let env = windows_env(&[("DL_READY", "yes")]);
         // An attempt is cut off after `CMD_ATTEMPT`, and a loaded runner has
         // stalled sh.exe for longer than that. A paused clock does not advance
-        // while the attempt's blocking wait runs, so only the exit code decides
-        // here; `cmd_probe_timeout_ends_the_tree` covers the cut-off, and
-        // nextest's limit ends a hang. Paused only after the lookup above,
-        // which bounds `git --exec-path` with a real-time timeout.
+        // while a blocking task runs, so the attempt's limit cannot pass while
+        // it waits for sh.exe and only the exit code decides here;
+        // `cmd_probe_timeout_ends_the_tree` covers the cut-off. A hang is
+        // caught by a real-time guard per probe instead. Paused only after the
+        // lookup above, which bounds `git --exec-path` with a real-time timeout.
         tokio::time::pause();
         let probe = |command: &'static str| {
             let (shell, cwd, env) = (shell.clone(), cwd.clone(), env.clone());
             async move {
                 let deadline = Instant::now() + CMD_ATTEMPT;
-                windows::cmd_succeeds(&shell, command, &cwd, &env, deadline).await
+                // Dropping `done` ends the guard; a panic drops the attempt,
+                // whose job then ends sh.exe.
+                let (done, cancelled) = std::sync::mpsc::channel::<()>();
+                let guard = tokio::task::spawn_blocking(move || {
+                    cancelled.recv_timeout(Duration::from_secs(60))
+                });
+                let passed = tokio::select! {
+                    passed = windows::cmd_succeeds(&shell, command, &cwd, &env, deadline) => passed,
+                    _ = guard => panic!("{command} did not exit within 60 s of real time"),
+                };
+                drop(done);
+                passed
             }
         };
         assert!(probe("test \"$DL_READY\" = yes").await);
