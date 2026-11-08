@@ -439,6 +439,21 @@ pub fn rpc(error: &RpcError) -> Worded {
                 .into(),
             ),
         ),
+        // A value of a file that loads did not evaluate here, such as an unset
+        // `${{ env.X }}`: the file is valid, so no `config check`. 0.12.0
+        // daemons send `lane_env_unresolved` for the lane env.
+        "unresolved_value" | "lane_env_unresolved" => (
+            format!(
+                "{} has no value in {}: {message}",
+                known(data, "path"),
+                match field(data, "lane") {
+                    lane if lane.is_empty() => "this lane".to_owned(),
+                    lane => format!("lane {lane}"),
+                }
+            ),
+            rest,
+            None,
+        ),
         "no_config" => (
             "no devlanes.yaml in this worktree".into(),
             Vec::new(),

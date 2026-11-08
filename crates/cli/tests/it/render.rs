@@ -2326,7 +2326,7 @@ fn daemon_errors_are_worded_with_hints() {
         ),
         RpcError::new("needs_env", json!({"lane": "acme@2"}), 1),
         RpcError::new(
-            "lane_env_unresolved",
+            "unresolved_value",
             json!({"lane": "acme@2", "path": "global_env.API_TOKEN", "message": "undefined value (devlanes.yaml:4:14)"}),
             1,
         ),
