@@ -37,7 +37,6 @@ use crate::{
     activity::{ActiveBody, Activity},
     health::{Health, ListenerGuard, ListenerHealth},
     lane::{ClientReads, LaneActivity},
-    loopback::connect_loopback,
     pool::{Connection, Pool, PoolKey},
 };
 
@@ -786,8 +785,8 @@ impl Proxy {
                 _ = tokio::time::sleep(delay) => {}
             }
             delay = (delay * 2).min(Duration::from_secs(1));
-            // A refused loopback connect takes about 2 s on Windows, so a retry is
-            // cut at the deadline; it keeps the last refusal.
+            // An upstream that does not answer would hold a retry for up to
+            // `connect_timeout`, so a retry is cut at the deadline; it keeps the last refusal.
             match tokio::time::timeout_at(deadline, self.connect(target, shutdown.clone())).await {
                 Ok(Ok(connection)) => return Ok(connection),
                 Ok(Err(next)) => error = next,
@@ -1041,8 +1040,8 @@ fn header_has_token(headers: &HeaderMap, name: header::HeaderName, token: &str) 
 /// Retries only failed TCP connections, so POST/upload bodies are never replayed.
 async fn dial(target: &Upstream, timeout: Duration) -> io::Result<TcpStream> {
     let addresses = match target {
-        Upstream::Local(port) => return connect_loopback(*port, timeout).await,
-        Upstream::Address(address) => vec![*address],
+        Upstream::Local(port) => return devlanes_loopback::connect_loopback(*port, timeout).await,
+        Upstream::Address(address) => return devlanes_loopback::connect(*address, timeout).await,
         Upstream::Host { hostname, port } => {
             let mut addresses: Vec<_> =
                 tokio::time::timeout(timeout, tokio::net::lookup_host((hostname.as_str(), *port)))
@@ -1057,13 +1056,12 @@ async fn dial(target: &Upstream, timeout: Duration) -> io::Result<TcpStream> {
         "upstream resolved to no addresses",
     );
     for address in addresses {
-        let error = match tokio::time::timeout(timeout, TcpStream::connect(address)).await {
-            Ok(Ok(stream)) => return Ok(stream),
-            Ok(Err(error)) => error,
-            Err(_) => io::Error::new(io::ErrorKind::TimedOut, "upstream dial timed out"),
+        let error = match devlanes_loopback::connect(address, timeout).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) => error,
         };
         // A refused address means the service may be restarting, which callers retry, so
-        // it outranks later failures such as a loopback without IPv6.
+        // it outranks later failures.
         if last.kind() != io::ErrorKind::ConnectionRefused {
             last = error;
         }

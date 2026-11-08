@@ -47,7 +47,7 @@ The daemon binds these ports on both address families. When a port is denied or 
 
 ## Behaviour
 
-Host is preserved unless a route selects `HostHeader::Upstream`. `Upstream::Local` prefers IPv4 loopback over IPv6. WebSockets and SSE stream without an idle timeout. Idle upstream connections are reused for a few seconds, only for requests to the same target with the same `Route::pool_key`; WebSocket upgrades always get their own connection. A box route's key names its box, so after the daemon moves the lane to another box behind the same local port, no request reuses a connection to the old one.
+Host is preserved unless a route selects `HostHeader::Upstream`. `Upstream::Local` tries IPv4 loopback before IPv6 through `devlanes-loopback`, where a refused port fails at once on every OS. WebSockets and SSE stream without an idle timeout. Idle upstream connections are reused for a few seconds, only for requests to the same target with the same `Route::pool_key`; WebSocket upgrades always get their own connection. A box route's key names its box, so after the daemon moves the lane to another box behind the same local port, no request reuses a connection to the old one.
 
 Routes marked `fallback` apply only when no other route matches, even an exact fallback route against a wildcard. Within each group an exact host beats the longest matching wildcard.
 
@@ -62,8 +62,6 @@ A failed `accept` never stops a listener: client resets are skipped and descript
 ## Windows
 
 Wildcard listeners (`lan: true`) set `SO_EXCLUSIVEADDRUSE`, so no other program can bind the same port on a more specific address and take connections. Loopback listeners do not need it. Low ports need no privilege on Windows; access denied means another program holds the port (port 80 is often http.sys, see `netsh http show servicestate`) or the port lies in a range Hyper-V, WSL or Docker reserved (`netsh int ipv4 show excludedportrange protocol=tcp`). Both fall back, and the fallback message names these commands.
-
-Windows takes about 2 s to report a refused loopback port, so `Upstream::Local` dials `127.0.0.1` and `::1` at once there and keeps the first that connects. Elsewhere it dials `::1` only after `127.0.0.1` is refused.
 
 ## License
 

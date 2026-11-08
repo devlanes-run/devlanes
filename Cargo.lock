@@ -1283,6 +1283,7 @@ dependencies = [
  "devlanes-git",
  "devlanes-ipc",
  "devlanes-logs",
+ "devlanes-loopback",
  "devlanes-metrics",
  "devlanes-pki",
  "devlanes-proto",
@@ -1461,6 +1462,14 @@ dependencies = [
  "tracing",
  "vte 0.15.0",
  "zstd",
+]
+
+[[package]]
+name = "devlanes-loopback"
+version = "0.1.0"
+dependencies = [
+ "devlanes-sys-windows",
+ "tokio",
 ]
 
 [[package]]
@@ -1715,6 +1724,7 @@ version = "0.8.0"
 dependencies = [
  "arc-swap",
  "bytes",
+ "devlanes-loopback",
  "devlanes-pages",
  "devlanes-pki",
  "devlanes-sys-windows",
@@ -2020,6 +2030,7 @@ version = "0.4.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "devlanes-loopback",
  "futures-util",
  "serde",
  "serde_json",
