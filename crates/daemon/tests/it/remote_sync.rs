@@ -330,6 +330,8 @@ async fn large_sync_reconnects_send_only_differences() {
         reconnect(&side, &client).await;
         let (status, peak) = resynced(&client).await;
         let took = started.elapsed();
+        // This link carried the whole manifest and no file.
+        let manifest_link = client.controls.writes.written();
         assert_eq!(status["written"], 0, "unchanged files resent: {status}");
         assert_eq!(status["pruned"], 0, "{status}");
         let growth = peak.saturating_sub(baseline);
@@ -368,18 +370,20 @@ async fn large_sync_reconnects_send_only_differences() {
         assert!(!out.join(removed).exists());
 
         // A link dropped in the middle of the manifest: the next subscription
-        // starts over and still sends nothing.
-        reconnect(&side, &client).await;
+        // starts over and still sends nothing. The next link's writes stop
+        // halfway through the manifest, so the sync stays there until the
+        // link is severed.
+        drop_link(&side, &client).await;
+        client.controls.writes.hold_at(manifest_link / 2);
+        side.transport.accept();
         until(
             &client,
-            "never caught mid-manifest",
-            Duration::from_millis(5),
+            "never held mid-manifest",
+            Duration::from_millis(100),
             |status| {
-                // Past the window the sync settles, and only a stall report
-                // would end the wait, minutes later and blaming the sync.
                 assert!(
                     status["state"] != "watching",
-                    "missed the manifest window: {status}"
+                    "the hold let the whole manifest through: {status}"
                 );
                 let compared = status["compared"].as_u64().unwrap_or(0);
                 status["state"] == "comparing" && compared > 0 && compared < FILES as u64 - 1
@@ -395,6 +399,7 @@ async fn large_sync_reconnects_send_only_differences() {
             |status| status["state"] != "comparing",
         )
         .await;
+        client.controls.writes.release();
         side.transport.accept();
         let status = until(
             &client,
