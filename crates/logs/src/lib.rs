@@ -30,6 +30,7 @@ mod storage;
 
 pub use framing::{Frame, Framer, MAX_LINE_BYTES, PARTIAL_FLUSH_MS, SGR_RESET};
 pub use level::extract_level;
+pub use query::{Resumable, Resume, resolve_since};
 pub use storage::{
     IndexEntry, LogOptions, LogReader, SegmentMetadata, UnitLog, line_records, strip_sgr,
 };

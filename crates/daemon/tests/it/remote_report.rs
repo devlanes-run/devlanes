@@ -21,7 +21,9 @@ use tokio::{
     task::JoinHandle,
 };
 
-use super::{BOX, BoxSide, ClientSide, SOON, box_port, engine_with, http_get, ipv6_loopback};
+use super::{
+    BOX, BoxSide, ClientSide, SOON, box_port, engine_with, held_events, http_get, ipv6_loopback,
+};
 use crate::{Harness, LIMIT, cx, eventually, repo, temp};
 
 // Port ranges: 18000-18999, below the default pool and below `remote_view.rs`'s
@@ -595,12 +597,9 @@ async fn external_ports_stay_out_of_port_blocks() {
     .expect("timeout");
 }
 
-/// The next `remote.clients.changed` event on `frames` within `wait`.
-async fn clients_changed(
-    frames: &mut tokio::sync::mpsc::Receiver<Frame>,
-    wait: std::time::Duration,
-) -> bool {
-    tokio::time::timeout(wait, async {
+/// The next `remote.clients.changed` event on `frames` within [`SOON`].
+async fn clients_changed(frames: &mut tokio::sync::mpsc::Receiver<Frame>) -> bool {
+    tokio::time::timeout(SOON, async {
         while let Some(frame) = frames.recv().await {
             if let Frame::Control(Control::Event(event)) = frame
                 && event.event == devlanes_proto::remote::CLIENTS_EVENT
@@ -666,10 +665,7 @@ async fn a_mirror_report_announces_only_a_change() {
         };
         let serial = snapshot.data["client_serial"].clone();
         assert!(serial.is_u64(), "{}", snapshot.data);
-        assert!(
-            clients_changed(&mut events, SOON).await,
-            "the client is listed"
-        );
+        assert!(clients_changed(&mut events).await, "the client is listed");
 
         let report = |alias: &str| {
             let h = &h;
@@ -683,16 +679,22 @@ async fn a_mirror_report_announces_only_a_change() {
             }
         };
         report("box").await;
-        assert!(clients_changed(&mut events, SOON).await, "a first report");
-        // The event goes out within the call, so a second one would be
-        // queued by now; the wait covers forwarding it to the session.
+        assert!(clients_changed(&mut events).await, "a first report");
+        // The event goes out within the call, so the bus holds it, if any, by
+        // the time the call returns.
+        let mut bus = h.engine.subscribe();
         report("box").await;
+        let repeated: Vec<String> = held_events(&mut bus)
+            .into_iter()
+            .map(|event| event.event)
+            .filter(|event| event == devlanes_proto::remote::CLIENTS_EVENT)
+            .collect();
         assert!(
-            !clients_changed(&mut events, std::time::Duration::from_millis(500)).await,
-            "the same report again announces nothing"
+            repeated.is_empty(),
+            "the same report again announces nothing: {repeated:?}"
         );
         report("hetzner").await;
-        assert!(clients_changed(&mut events, SOON).await, "a changed report");
+        assert!(clients_changed(&mut events).await, "a changed report");
 
         feed_session.close();
         let _ = feed.await;

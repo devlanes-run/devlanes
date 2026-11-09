@@ -19,6 +19,23 @@ const MAX_QUERY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_QUERY_LINES: usize = 10_000;
 const MAX_CONTEXT: usize = 1_000;
 
+/// A page and where a follower's next query continues the same scan.
+#[derive(Debug, Clone)]
+pub struct Resumable {
+    pub page: Page<LogLine>,
+    pub resume: Resume,
+}
+
+/// Where a follower's next query continues a scan, so lines written later are
+/// selected as if one query had read them all.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Resume {
+    /// The forward cursor of the next query; `None` reads from the start.
+    pub cursor: Option<String>,
+    /// Lines right after `cursor` that belong to a match's trailing context.
+    pub trailing: usize,
+}
+
 impl UnitLog {
     /// Queries a fresh [`UnitLog::reader`] snapshot. Callers sharing the log behind a
     /// lock should take the snapshot under it and query after releasing it.
@@ -39,17 +56,32 @@ impl LogReader {
     /// Tail pages are chronological, and their next cursor retrieves older records.
     /// Long records are UTF-8-safely clipped only if a single record exceeds the budget.
     pub fn query(&self, query: &LogQuery) -> Result<Page<LogLine>> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| Error::Query(e.to_string()))?
-            .as_millis()
-            .min(u128::from(u64::MAX)) as u64;
-        self.query_at(query, now)
+        self.query_resumable(query, 0)
+            .map(|resumable| resumable.page)
     }
 
     /// Caller time makes relative `since` durations deterministic in tests and replay.
     /// `since` accepts Unix milliseconds, RFC3339, or an integer followed by ms/s/m/h/d.
     pub fn query_at(&self, query: &LogQuery, now_ms: u64) -> Result<Page<LogLine>> {
+        self.resumable_at(query, 0, now_ms)
+            .map(|resumable| resumable.page)
+    }
+
+    /// [`LogReader::query`] for a follower: the page comes with the [`Resume`]
+    /// its next query continues from. `trailing` is the previous page's
+    /// [`Resume::trailing`]; that many lines after the cursor are kept as a
+    /// match's context before filtering again. Only forward queries take it.
+    pub fn query_resumable(&self, query: &LogQuery, trailing: usize) -> Result<Resumable> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| Error::Query(e.to_string()))?
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
+        self.resumable_at(query, trailing, now)
+    }
+
+    /// [`LogReader::query_resumable`] at the caller's time.
+    fn resumable_at(&self, query: &LogQuery, trailing: usize, now_ms: u64) -> Result<Resumable> {
         if query.context_lines > MAX_CONTEXT {
             return Err(Error::Query("context exceeds 1000 lines".into()));
         }
@@ -67,7 +99,7 @@ impl LogReader {
         let since = query
             .since
             .as_deref()
-            .map(|s| parse_since(s, now_ms))
+            .map(|s| resolve_since(s, now_ms))
             .transpose()?;
         let min_level = query
             .level
@@ -99,6 +131,11 @@ impl LogReader {
             lower = anchor.saturating_sub(query.context_lines as u64);
             upper = anchor.saturating_add(query.context_lines as u64);
         }
+        if trailing > 0 && (backwards || query.around.is_some()) {
+            return Err(Error::Query(
+                "owed context resumes only forward queries".into(),
+            ));
+        }
         let page = PageBuilder::new(
             query.max_bytes.unwrap_or(1024 * 1024).min(MAX_QUERY_BYTES),
             query
@@ -122,7 +159,10 @@ impl LogReader {
             ));
         }
         if !query.units.is_empty() && !query.units.contains(&self.unit) {
-            return Ok(Page::complete(Vec::new()));
+            return Ok(Resumable {
+                page: Page::complete(Vec::new()),
+                resume: Resume::default(),
+            });
         }
         let mut scan = Scan {
             page,
@@ -138,8 +178,11 @@ impl LogReader {
                 query.context_lines
             },
             pending: VecDeque::new(),
-            trailing: 0,
+            trailing,
             styled: query.styled,
+            newest: None,
+            matched: false,
+            before_match: 0,
         };
         let candidates = self.segments.iter().filter(|segment| {
             segment.records > 0
@@ -168,7 +211,11 @@ impl LogReader {
                 Err(error) => return Err(error),
             }
         }
-        Ok(scan.page.finish(&self.unit))
+        let resume = scan.resume(&self.unit, lower.checked_sub(1));
+        Ok(Resumable {
+            page: scan.page.finish(&self.unit),
+            resume,
+        })
     }
 
     /// Cursor identity includes the unit so accidental cross-unit paging fails loudly.
@@ -197,9 +244,16 @@ struct Scan {
     context: usize,
     /// Non-matching neighbours seen just before the next match, in scan order.
     pending: VecDeque<LogLine>,
+    /// Lines after the last match still to keep as its context, in scan order.
     trailing: usize,
     /// Keep [`LogLine::styled`]; without it the page budget counts plain text.
     styled: bool,
+    /// The newest line in range the scan is done with.
+    newest: Option<u64>,
+    matched: bool,
+    /// Lines visited before the first match; for a backward scan, the lines
+    /// newer than its newest match.
+    before_match: usize,
 }
 
 impl Scan {
@@ -209,10 +263,47 @@ impl Scan {
         if !self.styled {
             line.styled = None;
         }
-        if line.seq < self.lower
-            || line.seq > self.upper
-            || self.since.is_some_and(|s| line.timestamp_ms < s)
-        {
+        if line.seq < self.lower || line.seq > self.upper {
+            return Ok(true);
+        }
+        let seq = line.seq;
+        let more = self.select(line)?;
+        if more {
+            self.newest = Some(self.newest.map_or(seq, |newest| newest.max(seq)));
+        }
+        Ok(more)
+    }
+
+    /// Where a follower continues once the scan ended: after the page and the
+    /// lines it skipped, except the last `context` of them, which may lead a
+    /// later match. `floor` is the line the query's cursor started after.
+    fn resume(&self, unit: &str, floor: Option<u64>) -> Resume {
+        let shown = self.page.items.back().map(|line| line.seq);
+        let kept_back = self
+            .newest
+            .and_then(|newest| newest.checked_sub(self.context as u64));
+        let after = floor.max(shown).max(kept_back);
+        // A backward scan meets the newest match first; the lines newer than
+        // it are its context in time, which later lines complete.
+        let trailing = if self.page.backwards {
+            if self.matched {
+                self.context.saturating_sub(self.before_match)
+            } else {
+                0
+            }
+        } else {
+            self.trailing
+        };
+        Resume {
+            cursor: after.map(|seq| format!("{unit}#{seq}")),
+            trailing,
+        }
+    }
+
+    /// Applies `since`, the level and the pattern to one line in range, and
+    /// keeps it when it matches or is a match's context.
+    fn select(&mut self, line: LogLine) -> Result<bool> {
+        if self.since.is_some_and(|s| line.timestamp_ms < s) {
             return Ok(true);
         }
         let mut matches = self.min_level.is_none_or(|minimum| {
@@ -231,6 +322,10 @@ impl Scan {
                     Ok(false)
                 }),
             )?;
+        }
+        if !self.matched {
+            self.matched = matches;
+            self.before_match += usize::from(!matches);
         }
         if matches {
             while let Some(previous) = self.pending.pop_front() {
@@ -453,8 +548,11 @@ fn clip(line: &mut LogLine, budget: usize) -> Result<()> {
     Ok(())
 }
 
+/// A `since` value as Unix milliseconds: Unix milliseconds, RFC3339, or an
+/// integer followed by ms/s/m/h/d counted back from `now_ms`. Callers that
+/// read the same range several times resolve it once, so the window stays put.
 /// Duration subtraction saturates so querying beyond the epoch remains meaningful.
-fn parse_since(value: &str, now_ms: u64) -> Result<u64> {
+pub fn resolve_since(value: &str, now_ms: u64) -> Result<u64> {
     if let Ok(timestamp) = value.parse::<u64>() {
         return Ok(timestamp);
     }

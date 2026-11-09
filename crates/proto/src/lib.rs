@@ -1296,8 +1296,11 @@ pub struct StartResult {
     /// Units this request spawned, as canonical `lane:unit` references.
     #[serde(default)]
     pub started: Vec<String>,
-    /// Setup entries (`setup.<name>`) and tasks this request ran to success, as
-    /// canonical `lane:unit` references, e.g. `acme@2:setup.vhost`.
+    /// Setup entries (`setup.<name>`) and tasks this request ran, failed ones
+    /// included, as canonical `lane:unit` references, e.g. `acme@2:setup.vhost`.
+    /// One whose command could not start is listed too, since its log says
+    /// why. Failures are also in `failures`. A task made only of `steps` that a
+    /// stop interrupted before its first step is listed, though it has no log.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ran: Vec<String>,
     /// Selected units that were already running and left untouched.
@@ -1877,9 +1880,12 @@ pub mod events {
     /// before any event of that start. [`super::Method::StartCancel`] with this
     /// `start_id` ends the start from then on. `lane` is the canonical reference.
     pub const START_ACCEPTED: &str = "start.accepted";
-    /// `{lane, task, state, exit_code?, reason?, finished_at_ms?}` for task runs.
-    /// `state` is `started`, `skipped`, or how the run ended in unit state words:
-    /// `exited`, `failed` (with the unit's `reason`) or `stopped`.
+    /// `{lane, task, state, exit_code?, reason?, finished_at_ms?, start_id?,
+    /// phase?}` for task runs. `state` is `started`, `skipped`, or how the run
+    /// ended in unit state words: `exited`, `failed` (with the unit's `reason`)
+    /// or `stopped`. A task a start's `tasks` or `after-services` phase runs
+    /// carries that start's `start_id` and the phase, so a client ties its end
+    /// to the phase's step; its own `steps` carry neither.
     pub const TASK: &str = "task";
     /// `{unit, line: LogLine}` for followed logs.
     pub const LOG: &str = "log";

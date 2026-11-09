@@ -1,6 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
-use crate::{Error, Frame, Framer, LogOptions, LogReader, MAX_LINE_BYTES, UnitLog, extract_level};
+use crate::{
+    Error, Frame, Framer, LogOptions, LogReader, MAX_LINE_BYTES, UnitLog, extract_level,
+    resolve_since,
+};
 use devlanes_proto::LogQuery;
 use std::{fs, io::Write, path::Path};
 
@@ -563,6 +566,70 @@ fn open_loads_closed_metadata_without_decoding() {
     assert_eq!(log.next_sequence(), 3001);
     assert!(rebuilt.exists());
     assert!(!zst_tmp.exists() && !json_tmp.exists());
+}
+
+#[test]
+/// A follower resuming a filtered tail gets the context a later line owes a
+/// match and the context that leads a later match, as one forward query would.
+/// A relative `since` resolved once at the first read keeps its window.
+fn resumed_queries_select_like_one_query() {
+    let (_directory, mut log) = store(LogOptions::default());
+    // Line `i` is logged at `i` ms.
+    let write = |log: &mut UnitLog, lines: std::ops::RangeInclusive<u64>| {
+        for i in lines {
+            let text = if i % 7 == 0 { "match" } else { "other" };
+            log.ingest(format!("{text} {i}\n").as_bytes(), i).unwrap();
+        }
+    };
+    let relative = LogQuery {
+        grep: Some("match".into()),
+        context_lines: 2,
+        since: Some("2ms".into()),
+        ..Default::default()
+    };
+    write(&mut log, 1..=8);
+    let first_read_at = 8;
+    let query = LogQuery {
+        since: Some(resolve_since("2ms", first_read_at).unwrap().to_string()),
+        ..relative.clone()
+    };
+    let first = log
+        .reader()
+        .query_resumable(
+            &LogQuery {
+                tail: Some(100),
+                ..query.clone()
+            },
+            0,
+        )
+        .unwrap();
+    let mut followed: Vec<u64> = first.page.items.iter().map(|l| l.seq).collect();
+    let mut resume = first.resume;
+    for end in [9, 11, 13, 14, 16, 20, 22] {
+        let from = log.next_sequence();
+        write(&mut log, from..=end);
+        let next = log
+            .reader()
+            .query_resumable(
+                &LogQuery {
+                    cursor: resume.cursor.clone(),
+                    ..query.clone()
+                },
+                resume.trailing,
+            )
+            .unwrap();
+        followed.extend(next.page.items.iter().map(|l| l.seq));
+        resume = next.resume;
+    }
+    let one_query: Vec<u64> = log
+        .query_at(&relative, first_read_at)
+        .unwrap()
+        .items
+        .iter()
+        .map(|l| l.seq)
+        .collect();
+    assert_eq!(followed, one_query);
+    assert_eq!(followed, [6, 7, 8, 9, 12, 13, 14, 15, 16, 19, 20, 21, 22]);
 }
 
 #[test]
