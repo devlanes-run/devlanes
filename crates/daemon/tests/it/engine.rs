@@ -1894,7 +1894,8 @@ async fn logs_since_lane_start() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// `logs --follow --grep` applies the filter, and `context_lines` its
-/// context, to lines that arrive while following, as to the first page.
+/// context, to lines that arrive while following, as to the first page. A
+/// unit cut from a merged `head` page still gets the context it is owed.
 async fn logs_follow_keeps_the_filter() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -1903,24 +1904,33 @@ async fn logs_follow_keeps_the_filter() {
             "r",
             "project: demo\nservices:\n  chatty:\n    \
              run: \"echo match one; hold; echo other one; echo other two; echo other three; \
-             echo match two; sleep\"\n",
+             echo match two; sleep\"\n  second:\n    run: \"echo match b; sleep\"\n",
         );
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
-        start(&h, cx(&main), json!({})).await;
+        start(&h, cx(&main), json!({"units": ["chatty"]})).await;
         let (plain, mut plain_frames) = h.session();
         let (context, mut context_frames) = h.session();
-        let follow = |context_lines: usize, session| {
-            h.call_on(
-                Method::Logs,
-                json!({"units": ["chatty"], "grep": "match", "context_lines": context_lines,
-                       "follow": true}),
-                cx(&main),
-                session,
-            )
+        let (second, mut second_frames) = h.session();
+        let (merged, mut merged_frames) = h.session();
+        let follow = |params: Value, session| {
+            let mut params = params;
+            params["grep"] = json!("match");
+            params["follow"] = json!(true);
+            h.call_on(Method::Logs, params, cx(&main), session)
         };
+        let chatty =
+            |context_lines: usize| json!({"units": ["chatty"], "context_lines": context_lines});
         let read = async {
             let mut plain_texts = vec![next_log_text(&mut plain_frames).await];
             let mut context_texts = vec![next_log_text(&mut context_frames).await];
+            // `match b` is logged after `match one` and before `other one`.
+            start(&h, cx(&main), json!({"units": ["second"]})).await;
+            let (followed, _) =
+                tokio::join!(follow(json!({"units": ["second"]}), &second), async {
+                    next_log_text(&mut second_frames).await;
+                    second.close();
+                });
+            followed.expect("follow second");
             // The rest is written only now, so it reaches the followers as new
             // lines, after a read that ended on the match.
             h.runner.release();
@@ -1933,13 +1943,30 @@ async fn logs_follow_keeps_the_filter() {
             (plain_texts, context_texts)
         };
         let (plain_followed, context_followed, (plain_texts, context_texts)) =
-            tokio::join!(follow(0, &plain), follow(1, &context), read);
+            tokio::join!(follow(chatty(0), &plain), follow(chatty(1), &context), read);
         plain_followed.expect("follow");
         context_followed.expect("follow with context");
         assert_eq!(plain_texts, ["match one", "match two"]);
         assert_eq!(
             context_texts,
             ["match one", "other one", "other three", "match two"]
+        );
+        // chatty's page is `match one`, `other one` and second's `match b`.
+        // The merged head keeps `match one` and `match b` and cuts `other one`,
+        // which the follower then still owes `match one` as context.
+        let both = json!({"units": ["chatty", "second"], "context_lines": 1, "head": 2});
+        let (merged_followed, merged_texts) = tokio::join!(follow(both, &merged), async {
+            let mut texts = Vec::new();
+            for _ in 0..4 {
+                texts.push(next_log_text(&mut merged_frames).await);
+            }
+            merged.close();
+            texts
+        });
+        merged_followed.expect("follow both");
+        assert_eq!(
+            merged_texts,
+            ["match one", "match b", "other one", "other three"]
         );
         h.close().await;
     })

@@ -434,13 +434,19 @@ impl Inner {
                 let cut: BTreeSet<usize> = items[head..].iter().map(|(index, _)| *index).collect();
                 items.truncate(head);
                 truncated = true;
-                // A unit cut short continues after its last line shown.
-                for index in cut {
-                    resumes[index] = items
-                        .iter()
-                        .rev()
-                        .find(|(shown, _)| *shown == index)
-                        .map_or_else(Resume::default, |(_, line)| Resume::after(line));
+                // A unit cut short continues after its lines shown, as a read of
+                // just those lines would; none shown reads from the start.
+                for index in cut.into_iter().filter(|_| follow) {
+                    let shown = items.iter().filter(|(unit, _)| *unit == index).count();
+                    resumes[index] = if shown == 0 {
+                        Resume::default()
+                    } else {
+                        let query = LogQuery {
+                            head: Some(shown),
+                            ..each.clone()
+                        };
+                        self.unit_logs(&pair, &units[index], query).await?.resume
+                    };
                 }
             }
             Page {
