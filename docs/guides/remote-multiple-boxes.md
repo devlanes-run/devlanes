@@ -41,7 +41,7 @@ devlanes remote use --local acme@0    # this machine's acme@0 serves them again
 devlanes remote ls                    # skipped lanes say which lane is in use
 ```
 
-You can choose a box that is not connected right now. `remote use` then says `acme@0 will come from fork-b once it connects`, and the box takes the lane when it connects.
+You can choose a box that is not connected right now. `remote use` then says `acme@0 will come from fork-b once it connects`, and the box takes the lane when it connects. On a busy machine, a box that just connected may not have its lanes mirrored here yet. `remote use` then says `acme@0 will come from fork-b once this machine mirrors it`, and the box takes the lane a moment later. Either way, a `lane_switched` notice says when the lane switched.
 
 The latest choice wins. When the lane you choose clashes with a lane chosen before, such as another project's lane with overlapping names, that older choice is deleted, and `remote use` says so. `remote use --local` also deletes the choices that took the names of this machine's lane.
 

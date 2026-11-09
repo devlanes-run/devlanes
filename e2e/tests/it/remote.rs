@@ -317,7 +317,8 @@ fn remote_use_switches_a_lane_between_two_boxes() -> Result<()> {
     assert_eq!(
         used?,
         json!({"lane": "fixture-two@0", "host": "fork-b", "previous": "fork-a",
-               "mirrored": true, "pending": false, "replaced": []})
+               "mirrored": true, "pending": false, "waits_for": null,
+               "nothing_to_mirror": false, "replaced": []})
     );
     assert_eq!(
         seen.iter()

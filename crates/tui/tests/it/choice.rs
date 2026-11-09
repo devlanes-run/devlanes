@@ -941,24 +941,41 @@ async fn a_switch_refused_for_a_running_lane_offers_to_stop_it() -> TestResult {
     Ok(())
 }
 
-/// A box that is not connected keeps the choice for when it connects.
+/// A box that is not connected keeps the choice for when it connects, and a
+/// connected one for when its lane is mirrored here. A lane without a
+/// service, container or external port has nothing to mirror, and the
+/// notice says so.
 #[tokio::test]
-async fn a_choice_for_a_box_that_is_not_connected_waits_for_it() {
-    let mut app = with_forks(120, 30).await;
-    let effects = app.update(Msg::LaneUsed {
-        lane: "acme@1".into(),
-        host: Some("fork-b".into()),
-        result: Ok(
-            json!({"lane": "acme@1", "host": "fork-b", "previous": "fork-a",
-                          "mirrored": false, "pending": true}),
+async fn a_choice_that_does_not_serve_yet_says_why() {
+    for (fields, notice) in [
+        (
+            json!({"pending": true, "waits_for": "connect"}),
+            "acme@1 will come from fork-b once it connects",
         ),
-    });
-    let shown = app.notice.as_ref().map(|n| (n.text.as_str(), n.error));
-    assert_eq!(
-        shown,
-        Some(("acme@1 will come from fork-b once it connects", false))
-    );
-    assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
+        (
+            json!({"pending": true, "waits_for": "mirror"}),
+            "acme@1 will come from fork-b once this machine mirrors it",
+        ),
+        (
+            json!({"pending": false, "nothing_to_mirror": true}),
+            "fork-b's acme@1 is chosen, but it has nothing this machine mirrors: no service, container or external port",
+        ),
+    ] {
+        let mut app = with_forks(120, 30).await;
+        let mut reply = json!({"lane": "acme@1", "host": "fork-b", "previous": "fork-a",
+                               "mirrored": false});
+        if let (Some(reply), Some(fields)) = (reply.as_object_mut(), fields.as_object()) {
+            reply.extend(fields.clone());
+        }
+        let effects = app.update(Msg::LaneUsed {
+            lane: "acme@1".into(),
+            host: Some("fork-b".into()),
+            result: Ok(reply),
+        });
+        let shown = app.notice.as_ref().map(|n| (n.text.as_str(), n.error));
+        assert_eq!(shown, Some((notice, false)), "{fields}");
+        assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
+    }
 }
 
 /// A local lane that starts and clears a choice says so in one notice.

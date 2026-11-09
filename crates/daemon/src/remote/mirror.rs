@@ -198,6 +198,14 @@ impl View {
     }
 }
 
+/// The units of `registry` this machine mirrors, whose lanes the mirror
+/// builds routes for ([`View::built`]). Tasks are listed by the box but
+/// never mirrored. A box sends no hidden units; the filter keeps any it would
+/// send off this machine all the same.
+pub(super) fn mirrorable_units(registry: &Registry) -> impl Iterator<Item = &UnitInfo> {
+    registry.units().filter(|unit| unit.mirrorable())
+}
+
 /// The reason `remote ls` shows next to a skipped lane: the lane in use.
 pub(super) fn skip_reason(skip: &Skip) -> String {
     let lane = &skip.winner_lane;
@@ -461,9 +469,7 @@ impl Mirror {
         // Read after the registry, so it has every lane `registry` lists.
         let (version, assignment) = engine.reassign();
         let suffixes = route_suffixes(engine);
-        // Tasks are listed by the box but never mirrored. A box sends no hidden
-        // units; the filter keeps any it would send off this machine all the same.
-        let visible: Vec<&UnitInfo> = registry.units().filter(|unit| unit.mirrorable()).collect();
+        let visible: Vec<&UnitInfo> = mirrorable_units(registry).collect();
 
         // A box lane the assignment skips is skipped whole: renaming it would
         // break the CORS origins and cookies the box chose.

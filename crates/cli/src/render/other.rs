@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 
 use devlanes_core::redact::Redactor;
-use devlanes_proto::{Event, LogLine, Method, RpcError, events};
+use devlanes_proto::{
+    Event, LogLine, Method, RpcError, events,
+    remote::{UseOutcome, WaitsFor},
+};
 use serde_json::{Value, json};
 
 use super::{
@@ -2234,24 +2237,43 @@ pub(super) fn remote_use(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let lane = text(data, "lane");
     let host = data.get("host").and_then(Value::as_str);
     let previous = data.get("previous").and_then(Value::as_str);
-    let mirrored = data.get("mirrored").and_then(Value::as_bool) != Some(false);
-    let pending = data.get("pending").and_then(Value::as_bool) == Some(true);
+    let outcome = UseOutcome::of_reply(data);
     if cx.agent() {
+        let (mirrored, pending, extra) = match outcome {
+            UseOutcome::Mirrored => (true, false, ""),
+            UseOutcome::Pending(WaitsFor::Connect) => (false, true, " waits_for=connect"),
+            UseOutcome::Pending(WaitsFor::Mirror) => (false, true, " waits_for=mirror"),
+            UseOutcome::NothingToMirror => (false, false, " nothing_to_mirror=true"),
+            UseOutcome::NotMirrored => (false, false, ""),
+        };
         return vec![format!(
-            "remote use lane={lane} from={} previous={} mirrored={mirrored} pending={pending}",
+            "remote use lane={lane} from={} previous={} mirrored={mirrored} pending={pending}{extra}",
             host.unwrap_or("local"),
             previous.unwrap_or("local")
         )];
     }
     let from = host.map_or_else(|| "this machine".to_owned(), str::to_owned);
-    if pending {
-        return vec![format!("{lane} will come from {from} once it connects.")];
-    }
-    if !mirrored {
-        let owner = host.map_or_else(|| "this machine's".to_owned(), |host| format!("{host}'s"));
-        return vec![format!(
-            "{owner} {lane} is chosen but not mirrored yet. devlanes remote ls shows why."
-        )];
+    let owner = host.map_or_else(|| "this machine's".to_owned(), |host| format!("{host}'s"));
+    match outcome {
+        UseOutcome::Mirrored => {}
+        UseOutcome::Pending(WaitsFor::Connect) => {
+            return vec![format!("{lane} will come from {from} once it connects.")];
+        }
+        UseOutcome::Pending(WaitsFor::Mirror) => {
+            return vec![format!(
+                "{lane} will come from {from} once this machine mirrors it."
+            )];
+        }
+        UseOutcome::NothingToMirror => {
+            return vec![format!(
+                "{owner} {lane} is chosen, but it has nothing this machine mirrors: no service, container or external port."
+            )];
+        }
+        UseOutcome::NotMirrored => {
+            return vec![format!(
+                "{owner} {lane} is chosen but not mirrored yet. devlanes remote ls shows why."
+            )];
+        }
     }
     let mut lines = if previous == host {
         vec![format!("{lane} already comes from {from}.")]
