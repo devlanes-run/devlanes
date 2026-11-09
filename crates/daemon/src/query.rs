@@ -397,9 +397,15 @@ impl Inner {
         let (project, lane) = &pair;
         Self::refuse_external(project, lane, &selectors)?;
         let reference = lane.st().reference(&project.name());
+        // Absolute once, so every page, re-read and follow read of this
+        // request uses the same window.
         if query.since.as_deref() == Some("start") {
             let started = lane.st().started_at_ms.unwrap_or(0);
             query.since = Some(started.to_string());
+        } else if let Some(since) = &query.since {
+            let since = devlanes_logs::resolve_since(since, now_ms())
+                .map_err(|error| internal("log_query_failed", error))?;
+            query.since = Some(since.to_string());
         }
         let (candidates, selectors) = {
             let st = lane.st();
