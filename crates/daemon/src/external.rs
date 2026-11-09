@@ -202,7 +202,7 @@ impl Inner {
             let reference = st.reference(&project.name());
             // This lane's view is the one being replaced; `own` stands for it.
             let same = std::ptr::eq(other.as_ref(), lane);
-            if let Some(view) = st.view.as_ref().filter(|_| !same) {
+            if let Some(view) = st.view().filter(|_| !same) {
                 for service in &view.services {
                     let path = format!("services.{}", service.name);
                     for port in std::iter::once(service.port).chain(service.ports.values().copied())
@@ -218,7 +218,7 @@ impl Inner {
             }
             // Ports of the block's names the view does not show, such as
             // per-lane containers before their infra runs.
-            if let Some(allocation) = &st.allocation {
+            if let Some(allocation) = st.allocation() {
                 for (name, offset) in &allocation.offsets {
                     if let Some(port) = allocation.block.start.checked_add(*offset) {
                         taken.push(PortUse {
@@ -280,7 +280,7 @@ impl Inner {
         selectors: &[String],
     ) -> Result<(), RpcError> {
         let st = lane.st();
-        let Some(config) = st.config.loaded() else {
+        let Some(config) = st.config().loaded() else {
             return Ok(());
         };
         match selectors
@@ -301,7 +301,7 @@ impl Inner {
     pub(crate) fn external_ports(&self) -> BTreeSet<u16> {
         self.all_lanes()
             .iter()
-            .filter_map(|(_, lane)| lane.st().config.loaded().cloned())
+            .filter_map(|(_, lane)| lane.st().config().loaded().cloned())
             .flat_map(|config| {
                 config
                     .infra

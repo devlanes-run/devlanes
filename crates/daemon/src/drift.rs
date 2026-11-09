@@ -206,7 +206,7 @@ pub(crate) fn service_of<'a>(
 
 /// The running service units of a lane with their fingerprints.
 fn running_services(st: &LaneSt) -> Vec<(String, Option<Arc<Fingerprint>>)> {
-    st.units
+    st.units()
         .iter()
         .filter(|(_, rec)| rec.kind == Kind::Service && rec.host.is_alive())
         .map(|(unit, rec)| (unit.clone(), rec.fingerprint.clone()))
@@ -261,11 +261,11 @@ impl Inner {
             // result, planned from an older state, is then dropped.
             st.drift_generation += 1;
             (
-                st.config.loaded().cloned(),
+                st.config().loaded().cloned(),
                 running_services(&st),
-                st.orphans.keys().cloned().collect::<BTreeSet<String>>(),
-                st.started_with.clone(),
-                st.profiles.clone(),
+                st.orphans().keys().cloned().collect::<BTreeSet<String>>(),
+                st.started_with().cloned(),
+                st.profiles().to_vec(),
                 !st.starts.is_empty(),
                 st.drift_generation,
             )
@@ -343,8 +343,7 @@ impl Inner {
             .unwrap_or_default();
         let laid_out: Vec<(String, String)> = lane
             .st()
-            .view
-            .as_ref()
+            .view()
             .map(|view| {
                 view.services
                     .iter()
@@ -393,10 +392,14 @@ impl Inner {
         spawned: &[String],
     ) -> bool {
         // A unit a reload added counts as started: stopping it later is on purpose.
-        if let Some(started) = &mut lane.st().started_with {
-            started.units.extend(spawned.iter().cloned());
+        {
+            let mut st = lane.st();
+            if let Some(mut started) = st.started_with().cloned() {
+                started.units.extend(spawned.iter().cloned());
+                st.set_started_with(Some(started));
+            }
         }
-        let current = lane.st().config.loaded().cloned();
+        let current = lane.st().config().loaded().cloned();
         let same = current.is_some_and(|current| {
             Arc::ptr_eq(&current, used)
                 || serde_json::to_value(current.as_ref()).ok()
@@ -464,7 +467,7 @@ impl Inner {
         self.fresh_config(&project, &lane).await;
         let name = project.name();
         let reference = lane.st().reference(&name);
-        lane.st().config.require(&reference)?;
+        lane.st().config().require(&reference)?;
         self.update_drift(&project, &lane).await;
         let (drift, whole) = {
             let st = lane.st();
@@ -611,17 +614,17 @@ impl Inner {
         let reference = lane.st().reference(&project.name());
         {
             let st = lane.st();
-            st.config.require(&reference)?;
+            st.config().require(&reference)?;
             if let Some(reason) = &st.unassigned {
                 return Err(reason.clone());
             }
-            if st.record.is_none() {
+            if st.record().is_none() {
                 return Err(crate::model::unassigned(
                     &reference,
                     crate::model::Unassigned::NoRecord,
                 ));
             }
-            if options.env.is_none() && st.env.is_none() {
+            if options.env.is_none() && st.env().is_none() {
                 return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
             }
         }

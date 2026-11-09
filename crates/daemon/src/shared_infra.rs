@@ -110,7 +110,7 @@ impl Inner {
         if used_by_another(project, leaving) {
             return SharedOnClean::Used;
         }
-        let env = leaving.st().env.clone();
+        let env = leaving.st().env().cloned();
         let spec = match self.shared_infra_spec(project, env.as_deref()).await {
             Ok(spec) => spec,
             Err(error) => return SharedOnClean::Unknown(error),

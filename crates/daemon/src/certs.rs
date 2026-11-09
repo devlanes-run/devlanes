@@ -90,7 +90,10 @@ impl Inner {
             .iter()
             .flat_map(|(project, lane)| {
                 let st = lane.st();
-                self.ca_warnings(&st.reference(&project.name()), st.view.as_deref())
+                self.ca_warnings(
+                    &st.reference(&project.name()),
+                    st.view().map(|view| view.as_ref()),
+                )
             })
             .collect()
     }

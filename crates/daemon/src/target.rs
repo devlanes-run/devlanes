@@ -243,12 +243,12 @@ impl Inner {
             if alias.is_some() && !listed {
                 continue;
             }
-            let record = st.record.as_ref();
+            let record = st.record();
             // An extra lane answers to its index and its own name; the branch and
             // the folder keep naming the folder's first lane.
             let (branch, path) = match alias {
                 Some(_) => (None, PathBuf::new()),
-                None => (st.branch.clone(), st.path.clone()),
+                None => (st.branch().map(str::to_owned), st.path().to_path_buf()),
             };
             let candidate = LaneCandidate {
                 id: record.map(|record| record.id),
@@ -666,7 +666,7 @@ impl Inner {
         // The same answer the command gives a name the lane does not have.
         let mut error = {
             let st = lane.st();
-            if !plain || st.view.is_none() {
+            if !plain || st.view().is_none() {
                 return None;
             }
             st.match_units(&st.reference(&project.name()), &[selector.to_owned()])
@@ -680,7 +680,7 @@ impl Inner {
             .match_reference(&parsed, std::slice::from_ref(project), context)
             .ok()?;
         let st = other.st();
-        if !matches!(by, LaneMatch::Index | LaneMatch::Name) || st.record.is_none() {
+        if !matches!(by, LaneMatch::Index | LaneMatch::Name) || st.record().is_none() {
             return None;
         }
         let data = error.data.as_object_mut()?;
@@ -954,7 +954,7 @@ fn main_lane(project: &Arc<ProjectRt>) -> Result<LanePair, RpcError> {
         .into_iter()
         .filter_map(|lane| {
             let st = lane.st();
-            let index = st.record.as_ref().filter(|_| st.present)?.index;
+            let index = st.record().filter(|_| st.present())?.index;
             drop(st);
             Some((index, lane))
         })
@@ -995,7 +995,7 @@ fn lane_refs(project: &ProjectRt) -> Vec<String> {
         .iter()
         .filter_map(|lane| {
             let st = lane.st();
-            (st.present && st.record.is_some()).then(|| st.reference(&name))
+            (st.present() && st.record().is_some()).then(|| st.reference(&name))
         })
         .collect();
     refs.sort();

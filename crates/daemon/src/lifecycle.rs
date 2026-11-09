@@ -60,7 +60,7 @@ const SLOW_STOP: Duration = Duration::from_secs(2);
 /// worktree is gone (or that never got an env or record) has no directory or
 /// environment to run them in.
 fn hooks_runnable(st: &crate::model::LaneSt) -> bool {
-    st.present && st.env.is_some() && st.record.is_some()
+    st.present() && st.env().is_some() && st.record().is_some()
 }
 
 /// Everything needed to spawn one unit.
@@ -423,7 +423,7 @@ pub(crate) fn setup_hash(config: &devlanes_config::ProjectConfig, name: &str) ->
 /// The lane's loaded config, read when a run begins so its completion records the
 /// declaration it ran, not one edited while it ran.
 fn loaded_config(lane: &LaneRt) -> Option<Arc<devlanes_config::ProjectConfig>> {
-    lane.st().config.loaded().cloned()
+    lane.st().config().loaded().cloned()
 }
 
 /// Maps a resolved readiness spec to the checker's form. `env` is the unit's launch
@@ -507,7 +507,7 @@ async fn record_failed_units(cx: &mut StartCx, selected: &[String]) {
             .iter()
             .filter(|unit| !cx.failures.iter().any(|f| &f.unit == *unit))
             .filter_map(|unit| {
-                let host = &st.units.get(unit)?.host;
+                let host = &st.units().get(unit)?.host;
                 let failed = matches!(host.state(), UnitState::Failed(_))
                     || (!host.is_alive() && !host.stop_was_requested());
                 failed.then(|| (unit.clone(), host.clone()))
@@ -542,7 +542,7 @@ pub(crate) async fn failure_of(lane: &str, name: &str, host: &UnitHost) -> UnitF
 /// newer run of `unit` replaced it.
 pub(crate) fn ended_leftovers(lane: &LaneRt, unit: &str, host: &UnitHost) -> Option<Leftovers> {
     let st = lane.st();
-    let rec = st.units.get(unit).filter(|rec| rec.host.same_run(host))?;
+    let rec = st.units().get(unit).filter(|rec| rec.host.same_run(host))?;
     Some(rec.leftovers(unit)).filter(|leftovers| !leftovers.is_empty())
 }
 
@@ -1039,7 +1039,7 @@ impl LanePhase for SetupPhase {
         if !cx.infra_enabled {
             return PhaseResult::Skipped(profile_disables_infra(cx));
         }
-        let Some(lane_id) = cx.lane.st().record.as_ref().map(|r| r.id) else {
+        let Some(lane_id) = cx.lane.st().record().map(|r| r.id) else {
             return PhaseResult::Error(unassigned(&cx.reference, Unassigned::NoRecord));
         };
         // Starts that add units run this phase side by side; one of them checks
@@ -1244,7 +1244,7 @@ impl LanePhase for TasksPhase {
         if self.after && cx.setup_only {
             return PhaseResult::Skipped(reason("setup_only", json!({})));
         }
-        let Some(lane_id) = cx.lane.st().record.as_ref().map(|r| r.id) else {
+        let Some(lane_id) = cx.lane.st().record().map(|r| r.id) else {
             return PhaseResult::Error(unassigned(&cx.reference, Unassigned::NoRecord));
         };
         let mut chosen = Vec::new();
@@ -1414,7 +1414,7 @@ impl LanePhase for ServicesPhase {
             let st = cx.lane.st();
             selected
                 .iter()
-                .filter_map(|unit| st.units.get(unit).map(|rec| rec.host.clone()))
+                .filter_map(|unit| st.units().get(unit).map(|rec| rec.host.clone()))
                 .collect()
         };
         let settled = tokio::select! {
@@ -1486,7 +1486,7 @@ impl ServicesPhase {
                 let (alive, fingerprint) = cx
                     .lane
                     .st()
-                    .units
+                    .units()
                     .get(&service.unit)
                     .filter(|rec| rec.host.is_alive())
                     .map_or((false, None), |rec| (true, rec.fingerprint.clone()));
@@ -1548,7 +1548,7 @@ impl ServicesPhase {
             to_spawn.retain(|service| {
                 // Another start spawned it since the check above.
                 if st
-                    .units
+                    .units()
                     .get(&service.unit)
                     .is_some_and(|rec| rec.host.is_alive())
                 {
@@ -2110,17 +2110,16 @@ fn remembered_services(kept: &[String], planned: &[String], ctl: &StartCtl) -> V
 fn without_stopped(lane: &LaneRt, saved: &[String], touched: &[String]) -> Vec<String> {
     let st = lane.st();
     let service_of = |unit: &str| -> String {
-        st.view
-            .as_ref()
+        st.view()
             .and_then(|view| view.services.iter().find(|s| s.unit == unit))
             .map_or_else(|| unit.to_owned(), |s| s.name.clone())
     };
     let alive: BTreeSet<String> = st
-        .units
+        .units()
         .iter()
         .filter(|(_, rec)| rec.kind == Kind::Service && rec.host.is_alive())
         .map(|(unit, _)| service_of(unit))
-        .chain(st.orphans.keys().map(|unit| service_of(unit)))
+        .chain(st.orphans().keys().map(|unit| service_of(unit)))
         .collect();
     let stopped: BTreeSet<String> = touched
         .iter()
@@ -2203,14 +2202,14 @@ impl Inner {
                 return Err(error);
             }
             let record = st
-                .record
-                .clone()
+                .record()
+                .cloned()
                 .ok_or_else(|| unassigned(&reference, Unassigned::NoRecord))?;
             let previous = st
-                .units
+                .units()
                 .get(&request.name)
                 .map(|rec| (rec.run_id, rec.host.clone()));
-            (st.path.clone(), record, reference, previous, color)
+            (st.path().to_path_buf(), record, reference, previous, color)
         };
         if let Some((run_id, host)) = previous {
             if host.is_alive() {
@@ -2363,7 +2362,7 @@ impl Inner {
         let mut st = lane.st();
         let first_run = st.claiming > 0 && !st.claim_ran;
         st.claim_ran = true;
-        st.units.insert(
+        st.record_unit(
             request.name.clone(),
             UnitRec {
                 host: host.clone(),
@@ -2430,9 +2429,9 @@ impl Inner {
         reason: RpcError,
     ) -> bool {
         let occupied = |st: &crate::model::LaneSt| {
-            st.orphans.contains_key(&rec.name)
+            st.orphans().contains_key(&rec.name)
                 || st
-                    .units
+                    .units()
                     .get(&rec.name)
                     .is_some_and(|unit| unit.host.is_alive())
         };
@@ -2470,7 +2469,7 @@ impl Inner {
             if occupied(&st) {
                 return false;
             }
-            st.units.insert(
+            st.record_unit(
                 rec.name,
                 UnitRec {
                     host: host.clone(),
@@ -2514,14 +2513,17 @@ impl Inner {
                 return;
             };
             let pending: Vec<crate::model::ServiceInfo> = st
-                .view
-                .iter()
+                .view()
+                .into_iter()
                 .flat_map(|view| view.services.iter())
                 .filter(|s| {
                     s.name == name
                         && cx.ctl.withdrawn_by(&s.unit).is_none()
-                        && !st.orphans.contains_key(&s.unit)
-                        && !st.units.get(&s.unit).is_some_and(|rec| rec.host.is_alive())
+                        && !st.orphans().contains_key(&s.unit)
+                        && !st
+                            .units()
+                            .get(&s.unit)
+                            .is_some_and(|rec| rec.host.is_alive())
                 })
                 .cloned()
                 .collect();
@@ -2557,11 +2559,7 @@ impl Inner {
                 if let UnitState::Failed(_) = state {
                     let (tail, styled) =
                         devlanes_proto::split_styled(host.tail_lines(TAIL, true).await);
-                    if let Some(rec) = lane
-                        .st()
-                        .units
-                        .get_mut(&name)
-                        .filter(|r| r.host.same_run(&host))
+                    if let Some(rec) = lane.st().unit_mut(&name).filter(|r| r.host.same_run(&host))
                     {
                         rec.failure_tail = tail;
                         rec.failure_tail_styled = styled;
@@ -2632,8 +2630,7 @@ impl Inner {
         let summaries = {
             let mut st = lane.st();
             let units: Vec<String> = st
-                .view
-                .as_ref()
+                .view()
                 .map(|view| {
                     view.services
                         .iter()
@@ -2680,7 +2677,7 @@ impl Inner {
     ) {
         let summary = {
             let st = lane.st();
-            st.units
+            st.units()
                 .get(name)
                 .filter(|rec| rec.host.same_run(host))
                 .map(|rec| {
@@ -2825,14 +2822,15 @@ impl Inner {
         }
         let (config, view, saved, lane_profiles, whole_lane) = {
             let st = lane.st();
-            let (Some(config), Some(view)) = (st.config.loaded().cloned(), st.view.clone()) else {
+            let (Some(config), Some(view)) = (st.config().loaded().cloned(), st.view().cloned())
+            else {
                 return;
             };
             (
                 config,
                 view,
-                st.record.clone(),
-                st.profiles.clone(),
+                st.record().cloned(),
+                st.profiles().to_vec(),
                 !st.any_running() && st.bringup.is_none(),
             )
         };
@@ -2846,16 +2844,16 @@ impl Inner {
             let mut marked = false;
             for service in &view.services {
                 if !selection.services.contains(&service.name)
-                    || st.orphans.contains_key(&service.unit)
+                    || st.orphans().contains_key(&service.unit)
                     || st
-                        .units
+                        .units()
                         .get(&service.unit)
                         .is_some_and(|rec| rec.host.is_alive())
                 {
                     continue;
                 }
                 // An earlier start of the unit keeps it; this one joins it.
-                st.waiting
+                st.waiting_mut()
                     .entry(service.unit.clone())
                     .or_insert_with(|| crate::model::Waiting {
                         start_id,
@@ -2876,9 +2874,10 @@ impl Inner {
     fn forget_waiting(&self, project: &ProjectRt, lane: &LaneRt, start_id: u64) {
         let forgot = {
             let mut st = lane.st();
-            let before = st.waiting.len();
-            st.waiting.retain(|_, waiting| waiting.start_id != start_id);
-            st.waiting.len() != before
+            let before = st.waiting().len();
+            st.waiting_mut()
+                .retain(|_, waiting| waiting.start_id != start_id);
+            st.waiting().len() != before
         };
         if forgot {
             self.emit_lane(project, lane);
@@ -2898,7 +2897,7 @@ impl Inner {
                 return;
             };
             bringup.step = step.map(str::to_owned);
-            !st.waiting.is_empty()
+            !st.waiting().is_empty()
         };
         if waiting {
             self.emit_lane(&cx.project, &cx.lane);
@@ -2925,8 +2924,8 @@ impl Inner {
             .map(|service| service.unit.clone())
             .filter(|unit| {
                 cx.selects(unit)
-                    && !st.orphans.contains_key(unit)
-                    && !st.units.get(unit).is_some_and(|rec| rec.host.is_alive())
+                    && !st.orphans().contains_key(unit)
+                    && !st.units().get(unit).is_some_and(|rec| rec.host.is_alive())
                     && cx.ctl.withdrawn_by(unit).is_none()
             })
             .collect()
@@ -2939,7 +2938,7 @@ impl Inner {
                 continue;
             }
             let st = lane.st();
-            for (name, rec) in &st.units {
+            for (name, rec) in st.units() {
                 if rec.literal_port == Some(port) && rec.host.is_alive() {
                     return Some((st.reference(&project.name()), name.clone()));
                 }
@@ -2957,7 +2956,7 @@ impl Inner {
             .flat_map(|lane| {
                 let st = lane.st();
                 let reference = st.reference(&name);
-                st.units
+                st.units()
                     .iter()
                     .filter(|(_, rec)| rec.host.is_alive())
                     .map(|(unit, rec)| PlannedUnit {
@@ -3058,8 +3057,7 @@ impl Inner {
             })?;
             let lane_id = lane
                 .st()
-                .record
-                .as_ref()
+                .record()
                 .map(|r| r.id)
                 .ok_or_else(|| unassigned(&reference, Unassigned::NoRecord))?;
             self.task_event(&reference, name, "started", None, None, phase);
@@ -3262,7 +3260,7 @@ impl Inner {
             .run_command(project, lane, phase, command, actor, cancel, session, None)
             .await?;
         let ok = outcome.counts_done();
-        let lane_id = lane.st().record.as_ref().map(|r| r.id);
+        let lane_id = lane.st().record().map(|r| r.id);
         if let Some(lane_id) = lane_id {
             if phase == "setup" && ok {
                 // The start's setup phase compares this with the container's
@@ -3421,20 +3419,20 @@ impl Inner {
             if let Some(reason) = &st.unassigned {
                 return Err(fail(reason.clone()));
             }
-            match &st.config {
+            match st.config() {
                 crate::model::ConfigState::Invalid(error) => return Err(fail(error.clone())),
                 crate::model::ConfigState::Elsewhere(other) => {
                     return Err(fail(crate::model::elsewhere_error(other, Some(&initial))));
                 }
                 _ => {}
             }
-            if st.record.is_none() {
+            if st.record().is_none() {
                 return Err(fail(unassigned(&initial, Unassigned::NoRecord)));
             }
-            if !st.present {
+            if !st.present() {
                 return Err(fail(RpcError::new(
                     "worktree_missing",
-                    json!({"path": st.path}),
+                    json!({"path": st.path()}),
                     3,
                 )));
             }
@@ -3444,10 +3442,10 @@ impl Inner {
         // below change neither the config nor the record this reads. Selection
         // errors name the pre-move reference too, so a typo on an idle lane that
         // `apply_move` then renumbers names its old index.
-        let config = lane.st().config.require(&initial).map_err(fail)?;
+        let config = lane.st().config().require(&initial).map_err(fail)?;
         let (saved, lane_profiles) = {
             let st = lane.st();
-            (st.record.clone(), st.profiles.clone())
+            (st.record().cloned(), st.profiles().to_vec())
         };
         let (selection, dropped) = start_selection(
             &config,
@@ -3473,9 +3471,9 @@ impl Inner {
         {
             let mut st = lane.st();
             if let Some(env) = options.env.clone() {
-                st.env = Some(env);
+                st.set_env(env);
             }
-            if st.env.is_none() {
+            if st.env().is_none() {
                 return Err(fail(RpcError::new(
                     "needs_env",
                     json!({"lane": initial}),
@@ -3483,7 +3481,7 @@ impl Inner {
                 )));
             }
             if let Some(overrides) = &options.overrides {
-                st.overrides = overrides.clone();
+                st.set_overrides(overrides.clone());
             }
         }
         if let Some(env) = options.env.clone() {
@@ -3501,7 +3499,7 @@ impl Inner {
         let reference = lane.st().reference(&project.name());
         let fail = |error: RpcError| with_ownership(error, &reference, &slot.ctl);
         let (relative, _) = project.config_path();
-        let config_dir = lane.st().path.join(relative);
+        let config_dir = lane.st().path().join(relative);
         check_compose_files(&config, config_dir)
             .instrument(tracing::debug_span!("compose files"))
             .await
@@ -3511,7 +3509,7 @@ impl Inner {
         // restoring them afterwards would race a concurrent `start --profile`.
         let stores_profiles = !options.transient || whole_lane;
         if stores_profiles {
-            lane.st().profiles = selection.profiles.clone();
+            lane.st().set_profiles(selection.profiles.clone());
         }
         // This start wrote new profiles to the lane.
         let profiles_changed =
@@ -3543,8 +3541,10 @@ impl Inner {
                 st.drift_error = None;
                 st.drift_generation += 1;
                 st.infra_changed = false;
-                st.started_with =
-                    Some(crate::drift::StartedWith::new(&config, &selection.profiles));
+                st.set_started_with(Some(crate::drift::StartedWith::new(
+                    &config,
+                    &selection.profiles,
+                )));
                 st.skipped_tasks.clear();
             }
         }
@@ -3661,7 +3661,7 @@ impl Inner {
             self.mark_unstarted(project, lane, &cx, phase, error);
         }
         let desired_guard = lane.desired.lock().await;
-        let record = lane.st().record.clone();
+        let record = lane.st().record().cloned();
         if let Some(record) = record
             && !options.transient
         {
@@ -3736,7 +3736,7 @@ impl Inner {
             selected
                 .iter()
                 .filter_map(|unit| {
-                    st.units
+                    st.units()
                         .get(unit)
                         .map(|rec| unit_summary(&cx.reference, unit, rec))
                 })
@@ -3751,10 +3751,11 @@ impl Inner {
             cx.failures
                 .retain(|failure| !withdrawn.contains_key(&failure.unit));
         }
-        let branch = cx.lane.st().branch.clone();
+        let branch = cx.lane.st().branch().map(str::to_owned);
         let mut warnings = cx.dropped.warnings(&cx.reference);
-        warnings.extend(self.ca_warnings(&cx.reference, cx.lane.st().view.as_deref()));
-        let path = cx.lane.st().path.clone();
+        warnings
+            .extend(self.ca_warnings(&cx.reference, cx.lane.st().view().map(|view| view.as_ref())));
+        let path = cx.lane.st().path().to_path_buf();
         warnings.extend(self.windows_drive_warning(&cx.reference, &path).await);
         cx.profile_stale
             .retain(|(unit, _)| !withdrawn.contains_key(unit));
@@ -3824,10 +3825,9 @@ impl Inner {
             .filter(|(unit, _)| ours.contains(*unit))
             .map(|(unit, by)| {
                 let service = st
-                    .view
-                    .as_ref()
+                    .view()
                     .and_then(|view| view.services.iter().find(|s| &s.unit == unit));
-                let mut summary = match (st.units.get(unit), service) {
+                let mut summary = match (st.units().get(unit), service) {
                     (Some(rec), _) => unit_summary(&cx.reference, unit, rec),
                     (None, Some(service)) => crate::model::idle_summary(&cx.reference, service),
                     (None, None) => UnitSummary {
@@ -3924,7 +3924,7 @@ impl Inner {
             // Only the caller's running units: the start's own were not theirs yet.
             let st = lane.st();
             names.retain(|name| {
-                st.units.get(name).is_some_and(|rec| {
+                st.units().get(name).is_some_and(|rec| {
                     rec.host.is_alive() && is_mine(&rec.host.info().actor, caller)
                 })
             });
@@ -3936,7 +3936,7 @@ impl Inner {
         {
             let mut st = lane.st();
             for name in &names {
-                st.waiting.remove(name);
+                st.waiting_mut().remove(name);
             }
         }
         // Again: one may have joined the queue before the withdrawal was visible.
@@ -3961,14 +3961,13 @@ impl Inner {
             if stopped.iter().any(|summary| &summary.name == name) {
                 continue;
             }
-            if st.units.get(name).is_some_and(|rec| rec.host.is_alive()) {
+            if st.units().get(name).is_some_and(|rec| rec.host.is_alive()) {
                 continue;
             }
             let service = st
-                .view
-                .as_ref()
+                .view()
                 .and_then(|view| view.services.iter().find(|s| &s.unit == name));
-            let mut summary = match (service, st.units.get(name)) {
+            let mut summary = match (service, st.units().get(name)) {
                 (Some(service), _) => crate::model::idle_summary(&reference, service),
                 // A task of the start that has already ended: the start's own
                 // cancellation may have stopped it before this stop got to it.
@@ -4069,7 +4068,7 @@ impl Inner {
             let orphans = names
                 .iter()
                 .filter(|name| {
-                    st.orphans
+                    st.orphans()
                         .get(*name)
                         .is_some_and(|o| mine.is_none_or(|caller| is_mine(&o.actor, caller)))
                 })
@@ -4078,7 +4077,7 @@ impl Inner {
             let targets = names
                 .into_iter()
                 .filter(|name| {
-                    st.units.get(name).is_some_and(|rec| {
+                    st.units().get(name).is_some_and(|rec| {
                         rec.host.is_alive()
                             && mine.is_none_or(|caller| is_mine(&rec.host.info().actor, caller))
                     })
@@ -4095,7 +4094,7 @@ impl Inner {
             targets
                 .iter()
                 .filter_map(|name| {
-                    st.units
+                    st.units()
                         .get(name)
                         .map(|rec| (name, rec.host.clone(), rec.stop))
                 })
@@ -4120,7 +4119,7 @@ impl Inner {
         if whole || named {
             let st = lane.st();
             for name in names {
-                let Some(rec) = st.units.get(name) else {
+                let Some(rec) = st.units().get(name) else {
                     continue;
                 };
                 if matches!(rec.kind, Kind::Service | Kind::Exec)
@@ -4133,12 +4132,12 @@ impl Inner {
             }
         }
         let desired = lane.desired.lock().await;
-        let record = lane.st().record.clone();
+        let record = lane.st().record().cloned();
         match record {
             // The profiles of a short-lived start go with it.
             Some(record) if transient => {
                 if whole {
-                    lane.st().profiles = record.profiles.clone();
+                    lane.st().set_profiles(record.profiles.clone());
                 }
             }
             // A lane stopped by hand starts from its default next time, without
@@ -4146,8 +4145,8 @@ impl Inner {
             Some(record) if whole => {
                 {
                     let mut st = lane.st();
-                    st.profiles = Vec::new();
-                    st.overrides = EnvMap::new();
+                    st.set_profiles(Vec::new());
+                    st.set_overrides(EnvMap::new());
                 }
                 self.save_desired(lane, &record, DesiredState::Stopped, Vec::new(), Vec::new())
                     .await;
@@ -4183,7 +4182,7 @@ impl Inner {
         let listed = targets.iter().chain(cleared.iter().filter(|_| named));
         let mut stopped: Vec<UnitSummary> = listed
             .filter_map(|name| {
-                st.units
+                st.units()
                     .get(name)
                     .map(|rec| unit_summary(reference, name, rec))
             })
@@ -4316,20 +4315,20 @@ impl Inner {
         self.wake_lane(project, lane, Some(Activity::Stop)).await;
         let reference = lane.st().reference(&project.name());
         if let Some(env) = options.env.clone() {
-            lane.st().env = Some(env.clone());
+            lane.st().set_env(env.clone());
             project.st().last_env = Some(env);
         }
         if let Some(overrides) = &options.overrides {
-            lane.st().overrides = overrides.clone();
+            lane.st().set_overrides(overrides.clone());
         }
         if !options.profiles.is_empty() {
-            let config = lane.st().config.loaded().cloned();
+            let config = lane.st().config().loaded().cloned();
             if let Some(config) = config {
                 let selection = devlanes_resolve::select_profiles(&config, &options.profiles, &[])
                     .map_err(|error| crate::resolve::resolve_error(&error, &reference))?;
-                lane.st().profiles = selection.profiles.clone();
+                lane.st().set_profiles(selection.profiles.clone());
                 let _desired = lane.desired.lock().await;
-                let record = lane.st().record.clone();
+                let record = lane.st().record().cloned();
                 if let Some(record) = record {
                     self.save_desired(
                         lane,
@@ -4344,7 +4343,7 @@ impl Inner {
         }
         let (candidates, selectors): (Vec<(String, Vec<String>)>, Vec<String>) = {
             let st = lane.st();
-            let services = st.view.iter().flat_map(|view| view.services.iter());
+            let services = st.view().into_iter().flat_map(|view| view.services.iter());
             (
                 services
                     .clone()
@@ -4357,7 +4356,7 @@ impl Inner {
             )
         };
         let units = crate::engine::match_units(&selectors, &candidates, &reference)?;
-        let config = lane.st().config.require(&reference)?;
+        let config = lane.st().config().require(&reference)?;
         // A container that restarted may publish other ports than the lane
         // stored; the background refresh may not have read them yet.
         let deadline = Instant::now() + options.timeout;
@@ -4393,7 +4392,7 @@ impl Inner {
             units
                 .iter()
                 .filter_map(|unit| {
-                    st.units
+                    st.units()
                         .get(unit)
                         .filter(|rec| rec.host.is_alive())
                         .map(|rec| {
@@ -4435,7 +4434,7 @@ impl Inner {
             actor: options.actor.clone(),
             services,
             autostart_pending: Vec::new(),
-            profiles: lane.st().profiles.clone(),
+            profiles: lane.st().profiles().to_vec(),
             infra_enabled: true,
             infra_templated: false,
             whole_lane: false,
@@ -4475,7 +4474,7 @@ impl Inner {
         self.phase_event(&cx, phase, state, why, None);
         // A restarted service runs again, so a plain start after a crash brings it back.
         let desired = lane.desired.lock().await;
-        let record = lane.st().record.clone();
+        let record = lane.st().record().cloned();
         if let Some(record) = record {
             let services = remembered_services(&record.services, &cx.services, &cx.ctl);
             if services != record.services {
@@ -4571,13 +4570,13 @@ impl Inner {
             },
             None => Value::Null,
         };
-        let record = lane.st().record.clone();
+        let record = lane.st().record().cloned();
         if record.is_some() {
             // Every run must be finished before the lane's records may be released;
             // none is alive by now, so each row records a real exit.
             let runs: Vec<_> = lane
                 .st()
-                .units
+                .units()
                 .values()
                 .filter(|rec| !rec.host.is_alive())
                 .filter_map(|rec| {
@@ -4631,7 +4630,7 @@ impl Inner {
                 _ => {}
             }
             // A request still holding this runtime fails with `unassigned`.
-            lane.st().record = None;
+            lane.st().set_record(None);
             project.st().lanes.remove(&lane.worktree);
             lane.watch.cancel();
             // While another lane used the shared containers they may still run,
@@ -4703,13 +4702,13 @@ impl Inner {
     ) -> Option<Arc<LaneRt>> {
         let st = {
             let st = lane.st();
-            if !st.present || st.alias().is_some() {
+            if !st.present() || st.alias().is_some() {
                 return None;
             }
             crate::model::LaneSt::new(
                 st.identity.clone(),
-                st.path.clone(),
-                st.branch.clone(),
+                st.path().to_path_buf(),
+                st.branch().map(str::to_owned),
                 true,
             )
         };
@@ -4918,7 +4917,7 @@ impl Inner {
             let st = lane.st();
             let reference = st.reference(&project.name());
             let before = stops.len();
-            for (name, rec) in st.units.iter().filter(|(_, rec)| rec.host.is_alive()) {
+            for (name, rec) in st.units().iter().filter(|(_, rec)| rec.host.is_alive()) {
                 stops.push((reference.clone(), name.clone(), rec.host.clone(), rec.stop));
                 stopped.push(json!({"lane": reference, "unit": name}));
             }
@@ -4963,12 +4962,12 @@ impl Inner {
     fn refuse_running(&self, project: &ProjectRt, lane: &LaneRt) -> Result<(), RpcError> {
         let st = lane.st();
         let mut units: Vec<String> = st
-            .units
+            .units()
             .iter()
             .filter(|(_, rec)| rec.host.is_alive())
             .map(|(name, _)| name.clone())
             .collect();
-        units.extend(st.orphans.keys().cloned());
+        units.extend(st.orphans().keys().cloned());
         if units.is_empty() {
             return Ok(());
         }
@@ -4996,7 +4995,7 @@ impl Inner {
         })
         .await;
         if saved && let Some(updated) = self.store.lane(id).await.ok().flatten() {
-            lane.st().record = Some(updated);
+            lane.st().set_record(Some(updated));
         }
     }
 
@@ -5008,13 +5007,13 @@ impl Inner {
     // what a start picks. Evaluate it the way a start does.
     pub(crate) fn profile_services(lane: &LaneRt) -> Option<(Vec<String>, BTreeSet<String>)> {
         let st = lane.st();
-        let config = st.config.loaded()?;
-        let mut selection = devlanes_resolve::select_profiles(config, &st.profiles, &[]).ok()?;
+        let config = st.config().loaded()?;
+        let mut selection = devlanes_resolve::select_profiles(config, st.profiles(), &[]).ok()?;
         devlanes_resolve::retain_autostart(
             &mut selection.services,
             &selection.autostart_pending,
             |name| {
-                st.view.as_ref().and_then(|view| {
+                st.view().and_then(|view| {
                     view.services
                         .iter()
                         .filter(|s| s.name == name)
@@ -5029,7 +5028,11 @@ impl Inner {
     /// Runs the `ready` checks of the lane's plain containers concurrently; the
     /// first failure is returned.
     async fn containers_ready(&self, lane: &LaneRt, spec: &InfraSpec) -> Result<(), RpcError> {
-        let mut env: EnvMap = lane.st().env.as_deref().cloned().unwrap_or_default();
+        let mut env: EnvMap = lane
+            .st()
+            .env()
+            .map(|env| env.as_ref().clone())
+            .unwrap_or_default();
         env.extend(spec.env.clone());
         // `up` just listed every plain container here under its Docker name.
         let dockers: BTreeMap<String, String> = lane

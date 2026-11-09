@@ -1002,7 +1002,7 @@ async fn local_blocks(engine: &Arc<Inner>, assignment: &Assignment) -> Vec<(Port
         .iter()
         .filter_map(|(project, lane)| {
             let st = lane.st();
-            Some((st.record.as_ref()?.id, st.reference(&project.name())))
+            Some((st.record()?.id, st.reference(&project.name())))
         })
         .collect();
     records

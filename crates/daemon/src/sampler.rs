@@ -272,9 +272,9 @@ impl Inner {
             let project_name = project.name();
             let (reference, lane_id, units) = {
                 let st = lane.st();
-                let Some(record) = &st.record else { continue };
+                let Some(record) = st.record() else { continue };
                 let units: Vec<_> = st
-                    .units
+                    .units()
                     .iter()
                     .filter(|(_, rec)| rec.host.is_alive())
                     .map(|(name, rec)| {
@@ -665,11 +665,11 @@ impl Inner {
             let (project, lane) = self.lane(context, Policy::of(Method::Metrics)).await?;
             let st = lane.st();
             let reference = st.reference(&project.name());
-            let mut names: Vec<String> = st.units.keys().cloned().collect();
+            let mut names: Vec<String> = st.units().keys().cloned().collect();
             names.extend(
                 st.usage
                     .keys()
-                    .filter(|k| !st.units.contains_key(*k))
+                    .filter(|k| !st.units().contains_key(*k))
                     .cloned(),
             );
             let peaks: Vec<UnitPeak> = names
@@ -679,7 +679,7 @@ impl Inner {
                     let (peak_memory_bytes, peak_cpu_percent) = usage.peak();
                     let (avg_memory_bytes, avg_cpu_percent) = usage.average();
                     let run = st
-                        .units
+                        .units()
                         .get(&unit)
                         .map(|rec| unit_summary(&reference, &unit, rec));
                     UnitPeak {
@@ -722,7 +722,7 @@ impl Inner {
             }
             ReadScope::Unregistered(_) => Box::new(|_| false),
             ReadScope::Lane((project, lane)) => {
-                let (project, lane) = (project.id, lane.st().record.as_ref().map(|r| r.id));
+                let (project, lane) = (project.id, lane.st().record().map(|r| r.id));
                 Box::new(move |subject| match subject.lane() {
                     Some(id) => Some(id) == lane,
                     None => {
@@ -736,7 +736,7 @@ impl Inner {
         let current: BTreeSet<LaneId> = self
             .all_lanes()
             .iter()
-            .filter_map(|(_, lane)| lane.st().record.as_ref().map(|record| record.id))
+            .filter_map(|(_, lane)| lane.st().record().map(|record| record.id))
             .collect();
         let state = lock(&self.metrics);
         let mut units = Vec::new();
@@ -746,8 +746,8 @@ impl Inner {
         for (project, lane) in scope.lanes() {
             let st = lane.st();
             let reference = st.reference(&project.name());
-            let lane_id = st.record.as_ref().map(|record| record.id);
-            for (name, rec) in &st.units {
+            let lane_id = st.record().map(|record| record.id);
+            for (name, rec) in st.units() {
                 let alive = rec.host.is_alive();
                 // From the lane's id rather than `subjects`, which is keyed by
                 // reference and can still point at a cleaned lane's series when

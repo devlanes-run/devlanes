@@ -95,9 +95,9 @@ struct InfraEntry {
 /// project's file (deleted, or now naming another project). Never collected on its own,
 /// since a branch switch back would find the lane gone.
 fn stale(st: &crate::model::LaneSt) -> bool {
-    !st.present
+    !st.present()
         || matches!(
-            st.config,
+            st.config(),
             crate::model::ConfigState::Missing | crate::model::ConfigState::Elsewhere(_)
         )
 }
@@ -125,7 +125,7 @@ async fn await_spawn(
     for _ in 0..100 {
         let spawned = lane
             .st()
-            .units
+            .units()
             .get(unit)
             .is_some_and(|rec| previous.is_none_or(|previous| !rec.host.same_run(previous)));
         if spawned {
@@ -221,7 +221,7 @@ impl Inner {
             let mut others = 0;
             for (other_project, other) in self.all_lanes() {
                 let st = other.st();
-                if Arc::ptr_eq(&other, &lane) || !st.present || !st.needs_env() {
+                if Arc::ptr_eq(&other, &lane) || !st.present() || !st.needs_env() {
                     continue;
                 }
                 if other_project.id == project.id {
@@ -311,11 +311,11 @@ impl Inner {
             }
             let st = lane.st();
             let mine = st
-                .units
+                .units()
                 .values()
                 .any(|rec| rec.host.is_alive() && is_mine(&rec.host.info().actor, actor))
                 || st
-                    .orphans
+                    .orphans()
                     .values()
                     .any(|orphan| is_mine(&orphan.actor, actor));
             if mine {
@@ -407,11 +407,10 @@ impl Inner {
             .into_iter()
             .filter(|(_, lane)| {
                 let st = lane.st();
-                st.present
+                st.present()
                     && !st.services_alive()
                     && st
-                        .record
-                        .as_ref()
+                        .record()
                         .is_some_and(|r| r.desired_state == DesiredState::Running)
             })
             .collect();
@@ -563,7 +562,7 @@ impl Inner {
         // The folder the new lane shares: `--lane`'s (an extra lane stands for its
         // folder's first lane), else the cwd's, never a guessed one.
         let (project, lane) = self.lane(context, Policy::of(Method::LaneNew)).await?;
-        let path = lane.st().path.clone();
+        let path = lane.st().path().to_path_buf();
         let base = Self::lane_at(&project, &path).unwrap_or(lane);
         let (lane, extra) = self
             .extra_lane(&project, &base, args.name.as_deref())
@@ -571,7 +570,7 @@ impl Inner {
         let name = project.name();
         let (summary, path) = {
             let st = lane.st();
-            (lane_summary(&name, &st), st.path.clone())
+            (lane_summary(&name, &st), st.path().to_path_buf())
         };
         // The project's folder, which is below the worktree root when the
         // project file is in a subfolder. `join("")` would add a separator.
@@ -599,18 +598,18 @@ impl Inner {
         self.claim_lane(project, base).await;
         let (identity, path, branch, reason) = {
             let st = base.st();
-            let reason = st.unassigned.clone().or_else(|| match &st.config {
+            let reason = st.unassigned.clone().or_else(|| match st.config() {
                 crate::model::ConfigState::Invalid(error) => Some(error.clone()),
                 _ => None,
             });
             (
                 st.identity.clone(),
-                st.path.clone(),
-                st.branch.clone(),
+                st.path().to_path_buf(),
+                st.branch().map(str::to_owned),
                 reason,
             )
         };
-        if base.st().record.is_none() {
+        if base.st().record().is_none() {
             // The folder's first lane comes first; it could not get one.
             return Err(reason.unwrap_or_else(|| {
                 crate::model::unassigned(
@@ -628,7 +627,7 @@ impl Inner {
             project.lanes().iter().find_map(|lane| {
                 let st = lane.st();
                 let holds = st.alias().is_some_and(|(_, alias)| alias == candidate)
-                    || st.branch.as_deref() == Some(candidate);
+                    || st.branch() == Some(candidate);
                 holds.then(|| st.reference(&project.name()))
             })
         };
@@ -689,7 +688,7 @@ impl Inner {
         drop(sync);
         self.reload_config(project, &lane).await;
         self.claim_lane(project, &lane).await;
-        if lane.st().record.is_none() {
+        if lane.st().record().is_none() {
             let st = lane.st();
             return Err(st.unassigned.clone().unwrap_or_else(|| {
                 crate::model::unassigned(
@@ -762,7 +761,7 @@ impl Inner {
                     let st = lane.st();
                     let running = st.any_running() || st.is_busy();
                     // A gone worktree that never was a lane is dropped unasked.
-                    (stale(&st) && !running && st.record.is_some())
+                    (stale(&st) && !running && st.record().is_some())
                         .then(|| st.reference(&project.name()))
                 })
                 .collect();
@@ -777,9 +776,9 @@ impl Inner {
             let (present, stale, assigned, reference, running) = {
                 let st = lane.st();
                 (
-                    st.present,
+                    st.present(),
                     stale(&st),
-                    st.record.is_some(),
+                    st.record().is_some(),
                     st.reference(&project.name()),
                     st.any_running() || st.is_busy(),
                 )
@@ -824,7 +823,7 @@ impl Inner {
             let configs: Vec<_> = project
                 .lanes()
                 .iter()
-                .filter_map(|lane| lane.st().config.loaded().cloned())
+                .filter_map(|lane| lane.st().config().loaded().cloned())
                 .collect();
             if configs.is_empty() {
                 continue;
@@ -851,7 +850,7 @@ impl Inner {
                 .ok()
                 .flatten();
             for lane in project.lanes() {
-                if let Some(allocation) = &lane.st().allocation {
+                if let Some(allocation) = lane.st().allocation() {
                     // Infra names come from the provider; keep them while their lane exists.
                     live.extend(
                         allocation
@@ -919,11 +918,10 @@ impl Inner {
         // logs, its stop and the next start of the real one.
         let taken = {
             let st = lane.st();
-            let config = st.config.loaded();
+            let config = st.config().loaded();
             let service = config.is_some_and(|c| c.services.contains_key(&args.name))
                 || st
-                    .view
-                    .as_ref()
+                    .view()
                     .is_some_and(|view| view.services.iter().any(|s| s.unit == args.name));
             let task = config.is_some_and(|c| c.tasks.contains_key(&args.name));
             let external = config.is_some_and(|c| c.infra.external.contains_key(&args.name));
@@ -943,14 +941,14 @@ impl Inner {
             ));
         }
         if let Some(env) = carries_env(context) {
-            lane.st().env = Some(env.clone());
+            lane.st().set_env(env.clone());
             project.st().last_env = Some(env);
         }
         // A client that sends no env (`devlanes mcp` first tries without) gets the
         // lane's, or `needs_env` instead of a process without PATH.
         let (shell, reference) = {
             let st = lane.st();
-            (st.env.clone(), st.reference(&project.name()))
+            (st.env().cloned(), st.reference(&project.name()))
         };
         let Some(shell) = shell else {
             return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
@@ -968,7 +966,7 @@ impl Inner {
             )
             .await?;
         let cwd = if context.cwd.as_os_str().is_empty() {
-            lane.st().path.clone()
+            lane.st().path().to_path_buf()
         } else {
             context.cwd.clone()
         };
@@ -1008,7 +1006,7 @@ impl Inner {
         let (adhoc, _) = lane.enter_adhoc(&self.shutdown).await;
         self.spawn_unit(&project, &lane, request).await?;
         drop(adhoc);
-        let summary = match lane.st().units.get(&args.name) {
+        let summary = match lane.st().units().get(&args.name) {
             Some(rec) => unit_summary(&reference, &args.name, rec),
             None => UnitSummary::default(),
         };
@@ -1032,7 +1030,7 @@ impl Inner {
         self.fresh_config(&project, &lane).await;
         let reference = lane.st().reference(&project.name());
         if let Some(env) = carries_env(context) {
-            lane.st().env = Some(env.clone());
+            lane.st().set_env(env.clone());
             project.st().last_env = Some(env);
         }
         self.ensure_infra_env(&project, &lane).await;
@@ -1081,7 +1079,7 @@ impl Inner {
             // A previous run of the task stays listed until the new one replaces it.
             let previous = unit
                 .as_ref()
-                .and_then(|unit| lane.st().units.get(unit).map(|rec| rec.host.clone()));
+                .and_then(|unit| lane.st().units().get(unit).map(|rec| rec.host.clone()));
             let engine = self.clone();
             let actor = context.actor.clone();
             let name = run.task.clone();
@@ -1188,7 +1186,7 @@ impl Inner {
         }
         let unit = format!("{}.{}", entry.phase, entry.entry);
         if entry.detach {
-            let previous = lane.st().units.get(&unit).map(|rec| rec.host.clone());
+            let previous = lane.st().units().get(&unit).map(|rec| rec.host.clone());
             let engine = self.clone();
             let actor = context.actor.clone();
             let (step_project, step_lane) = (project.clone(), lane.clone());
@@ -1302,7 +1300,7 @@ impl Inner {
         };
         let st = lane.st();
         let reference = st.reference(&project.name());
-        let config = match &st.config {
+        let config = match st.config() {
             crate::model::ConfigState::Loaded(config) => config,
             crate::model::ConfigState::Invalid(error) => return Err(error.clone()),
             crate::model::ConfigState::Missing => {
@@ -1326,13 +1324,13 @@ impl Inner {
                 let (config_dir, _) = project.config_path();
                 let st = lane.st();
                 let config = st
-                    .config
+                    .config()
                     .loaded()
                     .cloned()
-                    .ok_or_else(|| RpcError::new("no_config", json!({"path": st.path}), 1))?;
-                let lane_id = st.record.as_ref().map(|record| record.id);
+                    .ok_or_else(|| RpcError::new("no_config", json!({"path": st.path()}), 1))?;
+                let lane_id = st.record().map(|record| record.id);
                 let reference = st.reference(&project.name());
-                (config, st.path.join(config_dir), lane_id, Some(reference))
+                (config, st.path().join(config_dir), lane_id, Some(reference))
             }
             // A project nobody started has run nothing.
             LaneOrFile::File { file, config } => {
@@ -1410,7 +1408,7 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         if !context.yes {
             return Err(confirmation(
-                json!({"processes": self.all_lanes().iter().map(|(_, l)| l.st().units.values().filter(|u| u.host.is_alive()).count()).sum::<usize>(), "flag": "--yes"}),
+                json!({"processes": self.all_lanes().iter().map(|(_, l)| l.st().units().values().filter(|u| u.host.is_alive()).count()).sum::<usize>(), "flag": "--yes"}),
             ));
         }
         // Every lane stays locked until the reset is done, so no start spawns a
@@ -1439,9 +1437,8 @@ impl Inner {
         // A start waiting for one of these lanes finds it unassigned once it runs.
         for (_, lane) in &lanes {
             let mut st = lane.st();
-            st.record = None;
-            st.units.clear();
-            st.orphans.clear();
+            st.set_record(None);
+            st.clear_units();
         }
         lock(&self.projects).clear();
         // The store lost them too, and the routes below must not follow them.
@@ -1542,7 +1539,7 @@ impl Inner {
         context: &Context,
     ) -> Result<Value, RpcError> {
         let (project, lane) = self.lane(context, Policy::of(Method::InfraDown)).await?;
-        let env = lane.st().env.clone();
+        let env = lane.st().env().cloned();
         let spec = self.shared_infra_spec(&project, env.as_deref()).await?;
         let running: Vec<String> = project
             .lanes()
@@ -1596,7 +1593,7 @@ impl Inner {
                 self.fresh_config(project, lane).await;
                 let file = context.file.clone().unwrap_or_else(|| {
                     let (dir, name) = project.config_path();
-                    lane.st().path.join(dir).join(name)
+                    lane.st().path().join(dir).join(name)
                 });
                 let branch = project.st().primary_branch.clone();
                 let primary = PrimaryWorktree {
@@ -1635,7 +1632,7 @@ impl Inner {
         // cannot read; without them `infra.<name>` is checked against nothing.
         if config.infra.compose.is_some() {
             let env = match &target {
-                LaneOrFile::Lane((_, lane)) => lane.st().env.clone(),
+                LaneOrFile::Lane((_, lane)) => lane.st().env().cloned(),
                 LaneOrFile::File { .. } => None,
             }
             .or_else(|| carries_env(context));
@@ -1657,10 +1654,11 @@ impl Inner {
         }
         let mut result = json!({"project": report.project, "path": file});
         let laid_out = match &target {
-            LaneOrFile::Lane((project, lane)) if lane.st().view.is_some() => {
+            LaneOrFile::Lane((project, lane)) if lane.st().view().is_some() => {
                 let st = lane.st();
                 let reference = st.reference(&project.name());
-                warnings.extend(self.host_warnings(&reference, st.view.as_deref()));
+                warnings
+                    .extend(self.host_warnings(&reference, st.view().map(|view| view.as_ref())));
                 true
             }
             // Hostnames depend on the lane's index, domain and vars, not on its

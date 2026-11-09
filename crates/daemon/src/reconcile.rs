@@ -180,7 +180,7 @@ impl Inner {
                 )
                 .await?;
             for lane in project.lanes() {
-                if lane.st().present {
+                if lane.st().present() {
                     self.reload_config(&project, &lane).await;
                 }
             }

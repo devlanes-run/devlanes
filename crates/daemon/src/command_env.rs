@@ -77,14 +77,14 @@ impl Inner {
         let reference = lane.st().reference(&project.name());
         let (config, stored) = {
             let st = lane.st();
-            if st.record.is_none() {
+            if st.record().is_none() {
                 return Err(st
                     .unassigned
                     .clone()
                     .or_else(|| st.last_error.clone())
                     .unwrap_or_else(|| unassigned(&reference, Unassigned::NoRecord)));
             }
-            (st.effective_config(Some(&reference))?, st.env.clone())
+            (st.effective_config(Some(&reference))?, st.env().cloned())
         };
         let inputs = self.lane_inputs(project, lane, &config).await?;
         let none = EnvMap::new();

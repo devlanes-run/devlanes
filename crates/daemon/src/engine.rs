@@ -215,7 +215,7 @@ impl Handler for Engine {
             .iter()
             .map(|(_, lane)| {
                 lane.st()
-                    .units
+                    .units()
                     .values()
                     .filter(|unit| unit.host.is_alive())
                     .count()

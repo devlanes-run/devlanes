@@ -418,7 +418,7 @@ impl Inner {
             .map(|(project, lane)| {
                 let st = lane.st();
                 let hint = st
-                    .config
+                    .config()
                     .loaded()
                     .and_then(|config| config.lanes.hosts_file)
                     .map(mode);
