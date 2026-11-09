@@ -23,7 +23,7 @@ mod ports;
 mod select;
 mod util;
 
-pub use command::{CommandLayers, command_reads_infra, lane_command_env};
+pub use command::{CommandLayers, LeftOut, command_reads_infra, lane_command_env};
 pub use error::ResolveError;
 pub use facts::{LANE_DATA_ENV, LaneFacts, branch_label, lane_name};
 pub use layout::{fixed_block_start, https_url, lane_layout, tag_colors};

@@ -611,10 +611,11 @@ impl Inner {
         let shared = self
             .provisional_shared_spec(config, config.project.clone(), primary, env)
             .await?;
-        let state_dir = self
-            .project_data_path(&config.project)
-            .join("provisional")
-            .join(COMPOSE_DIR);
+        // `declared` reads only the Compose files and their settings
+        // (`project_name`, `exclude`, `per_lane`, `profiles`, `env`) and the
+        // container names, so the lane fields are placeholders that nothing
+        // may write to or bring up. Validation knows the plain containers
+        // from the file.
         let spec = InfraSpec {
             project: shared.project,
             lane: 0,
@@ -626,12 +627,11 @@ impl Inner {
             per_lane: shared.per_lane,
             profiles: shared.profiles,
             env: shared.env,
-            // Names only: validation knows the plain containers from the file.
             containers: Vec::new(),
             block: (0, 0),
             shared_block: None,
             ports: BTreeMap::new(),
-            state_dir,
+            state_dir: PathBuf::new(),
         };
         self.integ
             .infra

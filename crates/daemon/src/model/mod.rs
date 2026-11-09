@@ -181,16 +181,7 @@ pub(crate) struct LaunchRecord {
     pub notes: Vec<String>,
     /// An exec run's lane variables left out because the container they read
     /// was down, for `env show` to name.
-    pub left_out: BTreeMap<String, LeftOut>,
-}
-
-/// A variable a command outside a unit runs without.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LeftOut {
-    /// The declared container it reads.
-    pub infra: String,
-    /// Why that container does not run.
-    pub reason: devlanes_resolve::DownReason,
+    pub left_out: BTreeMap<String, devlanes_resolve::LeftOut>,
 }
 
 impl LaunchRecord {

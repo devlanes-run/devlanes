@@ -7,12 +7,12 @@ use devlanes_core::{
     env::{EnvLayer, Environment, assemble},
 };
 use devlanes_proto::RpcError;
-use devlanes_resolve::{DownReason, InfraState};
+use devlanes_resolve::{DownReason, LeftOut};
 use serde_json::{Value, json};
 
 use crate::{
     engine::Inner,
-    model::{EnvMap, LaneRt, LaunchRecord, LeftOut, ProjectRt, Unassigned, unassigned},
+    model::{EnvMap, LaneRt, LaunchRecord, ProjectRt, Unassigned, unassigned},
     resolve::resolve_error,
 };
 
@@ -130,17 +130,6 @@ impl Inner {
                 1,
             ));
         }
-        let left_out = layers
-            .left_out
-            .into_iter()
-            .map(|(key, infra)| {
-                let reason = match states.get(&infra) {
-                    Some(InfraState::Down(reason)) => *reason,
-                    _ => DownReason::NotRunning,
-                };
-                (key, LeftOut { infra, reason })
-            })
-            .collect();
         let shell = request.shell.cloned().unwrap_or_default();
         let runtime_ca = runtime_ca_env(&layers.devlanes, |name| {
             shell.contains_key(name) || request.overrides.contains_key(name)
@@ -153,6 +142,9 @@ impl Inner {
             (EnvLayer::Profile, layers.profile),
             (EnvLayer::Override, request.overrides.clone()),
         ]);
-        Ok(CommandEnv { env, left_out })
+        Ok(CommandEnv {
+            env,
+            left_out: layers.left_out,
+        })
     }
 }

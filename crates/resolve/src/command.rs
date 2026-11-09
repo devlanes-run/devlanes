@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, fmt};
 use devlanes_config::{Env, Extensions, PreparedContext, ProfileConfig, Scalar, Templated};
 
 use crate::{
-    InfraState, ResolveError, ResolveInput,
+    DownReason, InfraState, ResolveError, ResolveInput,
     layout::{self, env_namespace},
     plan::{reads_unit, shared_globals},
     select::active_profiles,
@@ -20,10 +20,20 @@ pub struct CommandLayers {
     pub devlanes: BTreeMap<String, String>,
     pub global: BTreeMap<String, String>,
     pub profile: BTreeMap<String, String>,
-    /// Entries that failed on a declared container that is down: variable to container.
-    pub left_out: BTreeMap<String, String>,
-    /// Entries that failed on a declared container whose state is unknown.
+    /// Entries that failed on a declared container that is down.
+    pub left_out: BTreeMap<String, LeftOut>,
+    /// Entries that failed on a declared container whose state is unknown:
+    /// variable to container.
     pub unknown: BTreeMap<String, String>,
+}
+
+/// A variable a command outside a unit runs without.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftOut {
+    /// The declared container it reads.
+    pub infra: String,
+    /// Why that container does not run.
+    pub reason: DownReason,
 }
 
 impl fmt::Debug for CommandLayers {
@@ -137,8 +147,8 @@ fn infra_names(value: &Templated<Scalar>) -> Option<Vec<String>> {
 /// What became of one entry.
 enum Outcome {
     Value(String),
-    /// Failed on this down container.
-    LeftOut(String),
+    /// Failed on a down container.
+    LeftOut(LeftOut),
     /// Failed on this container whose state is unknown.
     Unknown(String),
 }
@@ -186,8 +196,8 @@ fn command_layers<E: Extensions>(
             Outcome::Value(value) => {
                 layers.profile.insert(key, value);
             }
-            Outcome::LeftOut(container) => {
-                layers.left_out.insert(key, container);
+            Outcome::LeftOut(left_out) => {
+                layers.left_out.insert(key, left_out);
             }
             Outcome::Unknown(container) => {
                 layers.unknown.insert(key, container);
@@ -231,16 +241,20 @@ fn outcome(
         Ok(value) => return Ok(Outcome::Value(value)),
         Err(error) => error,
     };
-    let state = |wanted: fn(&InfraState) -> bool| {
-        read.iter()
-            .find(|(_, state)| wanted(state))
-            .map(|(name, _)| (*name).clone())
-    };
-    if let Some(name) = state(|state| matches!(state, InfraState::Down(_))) {
-        Ok(Outcome::LeftOut(name))
-    } else if let Some(name) = state(|state| *state == InfraState::Unknown) {
-        Ok(Outcome::Unknown(name))
-    } else {
-        Err(error)
+    let down = read.iter().find_map(|(name, state)| match state {
+        InfraState::Down(reason) => Some(LeftOut {
+            infra: (*name).clone(),
+            reason: *reason,
+        }),
+        _ => None,
+    });
+    let unknown = read
+        .iter()
+        .find(|(_, state)| *state == InfraState::Unknown)
+        .map(|(name, _)| (*name).clone());
+    match (down, unknown) {
+        (Some(left_out), _) => Ok(Outcome::LeftOut(left_out)),
+        (None, Some(name)) => Ok(Outcome::Unknown(name)),
+        (None, None) => Err(error),
     }
 }
