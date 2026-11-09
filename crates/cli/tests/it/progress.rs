@@ -349,4 +349,22 @@ fn a_finished_task_replaces_its_phase_line() {
         rewritten(&runtime(&["devlanes"], false, false), &events),
         "ok build\nok install\nok services ready\nok seed\nok ping\nok notify\n"
     );
+    // A service failed, so the phase skips its tasks without naming one
+    // first: the first skipped task replaces the phase's own line.
+    let skipped = |name: &str| {
+        let (event, mut data) = task("acme@1", name, Some("after-services"));
+        data["state"] = json!("skipped");
+        (event, data)
+    };
+    let events = [
+        phase("after-services", "started", None),
+        skipped("seed"),
+        skipped("notify"),
+    ];
+    let out = rewritten(&runtime(&["devlanes"], true, false), &events);
+    assert!(
+        out.starts_with(&format!("\u{2026} after-services\n{erase}")),
+        "{out:?}"
+    );
+    assert_eq!(out.matches(erase).count(), 1, "{out:?}");
 }

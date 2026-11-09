@@ -136,12 +136,17 @@ impl PhaseLines {
                 stdout.insert_str(0, ERASE_LINE);
                 self.open = None;
             }
-            // Only finished tasks render a line; the end of the task the open
-            // line says runs replaces it. The daemon sends the phase and
-            // `start_id` on the tasks a start's phase runs.
+            // Only finished or skipped tasks render a line. It replaces the
+            // open line of its phase when that line names this task, or no
+            // task yet (`… after-services` before its tasks were skipped). The
+            // daemon sends the phase and `start_id` on a start phase's tasks.
             None if event.event == devlanes_proto::events::TASK && !stdout.is_empty() => {
                 if self.open.as_ref().is_some_and(|open| {
-                    open.key == key && open.step.as_deref() == Some(field("task"))
+                    open.key == key
+                        && open
+                            .step
+                            .as_deref()
+                            .is_none_or(|step| step == field("task"))
                 }) {
                     stdout.insert_str(0, ERASE_LINE);
                 }

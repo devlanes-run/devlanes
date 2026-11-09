@@ -959,22 +959,27 @@ services:
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// A task that fails is in the result's `ran` as well as its `failures`, so
-/// `devlanes with --logs-dir` writes the log that says why.
+/// A task that fails, or whose command cannot start, is in the result's `ran`
+/// as well as its `failures`, so `devlanes with --logs-dir` writes the log
+/// that says why.
 async fn a_failed_task_is_among_what_the_start_ran() {
     tokio::time::timeout(LIMIT, async {
-        let tmp = temp();
-        let config = "project: ran\ntasks:\n  migrate: { run: fail, when: lane.start }\n\
-                      services:\n  web: { run: sleep }\n";
-        let main = repo(&tmp.path, "r", config);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
-        let result = start(&h, cx(&main), json!({})).await;
-        assert_eq!(result.ran, ["ran@0:migrate"], "{result:?}");
-        assert!(
-            result.failures.iter().any(|f| f.unit == "migrate"),
-            "{result:?}"
-        );
-        h.close().await;
+        for run in ["fail", "nospawn"] {
+            let tmp = temp();
+            let config = format!(
+                "project: ran\ntasks:\n  migrate: {{ run: {run}, when: lane.start }}\n\
+                 services:\n  web: {{ run: sleep }}\n"
+            );
+            let main = repo(&tmp.path, "r", &config);
+            let h = harness(&tmp.path.join("home"), Setup::default()).await;
+            let result = start(&h, cx(&main), json!({})).await;
+            assert_eq!(result.ran, ["ran@0:migrate"], "{run}: {result:?}");
+            assert!(
+                result.failures.iter().any(|f| f.unit == "migrate"),
+                "{run}: {result:?}"
+            );
+            h.close().await;
+        }
     })
     .await
     .expect("timeout");

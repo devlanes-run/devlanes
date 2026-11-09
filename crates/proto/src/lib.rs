@@ -1298,8 +1298,9 @@ pub struct StartResult {
     pub started: Vec<String>,
     /// Setup entries (`setup.<name>`) and tasks this request ran, failed ones
     /// included, as canonical `lane:unit` references, e.g. `acme@2:setup.vhost`.
-    /// Failures are also in `failures`. A task made only of `steps` that a stop
-    /// interrupted before its first step is listed too, though it has no log.
+    /// One whose command could not start is listed too, since its log says
+    /// why. Failures are also in `failures`. A task made only of `steps` that a
+    /// stop interrupted before its first step is listed, though it has no log.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ran: Vec<String>,
     /// Selected units that were already running and left untouched.
