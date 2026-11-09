@@ -15,7 +15,7 @@ use devlanes_state::RemoteLaneChoice;
 use serde_json::{Value, json};
 
 use super::{
-    Remotes,
+    LaneBuild, Remotes,
     assign::{Assignment, BoxLanes, Cause, Hold, LocalLane, PortUse, assign, clashing_choices},
     mirror, now_ms,
 };
@@ -25,9 +25,10 @@ use crate::{
     model::{LaneSt, lock},
 };
 
-/// How long `remote.use` waits for the mirrors to show a choice in
-/// `host.list`. Nothing in a reconcile waits for a box, so this is a bound
-/// for a busy machine only.
+/// How long `remote.use` waits for the chosen box's mirror to build its
+/// lanes, and then for the mirrors to show the choice in `host.list`.
+/// Nothing in a reconcile waits for a box, so this is a bound for a busy
+/// machine only.
 const APPLY_WAIT: Duration = Duration::from_secs(2);
 
 impl Remotes {
@@ -167,7 +168,8 @@ impl Inner {
     /// deleted with a `choice_cleared` warning. When the result differs from
     /// the last one, every mirror is woken and the routes are published: the
     /// published routes follow the new assignment at once, before any mirror
-    /// has reconciled.
+    /// has reconciled. A pending `remote.use` choice it applies is announced
+    /// with `lane_switched`.
     pub(crate) fn reassign_with(&self, local: &[RouteEntry]) -> (u64, Arc<Assignment>) {
         let computing = lock(&self.remote.assigning);
         self.reassign_locked(computing, local)
@@ -214,17 +216,23 @@ impl Inner {
                 None
             } else {
                 current.0 += 1;
-                current.1 = next.clone();
-                Some(current.0)
+                let previous = std::mem::replace(&mut current.1, next.clone());
+                Some((current.0, previous))
             }
         };
-        let version = changed.unwrap_or_else(|| lock(&self.remote.assignment).0);
-        if changed.is_some() {
+        let version = changed
+            .as_ref()
+            .map_or_else(|| lock(&self.remote.assignment).0, |(version, _)| *version);
+        let mut switched = Vec::new();
+        if let Some((_, previous)) = &changed {
             // Still under the lock: a listener a mirror binds right now is
             // pointed after this, at the owner this assignment names.
             self.remote
                 .listeners
                 .apply(&next, &|owner| self.remote.target(owner));
+            // Under the lock too, so exactly one reassignment sees a pending
+            // choice apply.
+            switched = self.take_switches(previous, &next);
         }
         // Before waking anything: a woken mirror and the route publisher
         // reassign in turn, and this lock is not reentrant.
@@ -237,7 +245,41 @@ impl Inner {
             }
             self.publish_routes();
         }
+        for (lane, to, from) in switched {
+            self.announce_switch(&lane, Some(&to), from.as_deref());
+        }
         (version, next)
+    }
+
+    /// Takes the pending choices of `remote.use` that `next` applies, as
+    /// `(lane, chosen box, box that served the lane in `previous`)`, and
+    /// forgets those no longer chosen.
+    fn take_switches(
+        &self,
+        previous: &Assignment,
+        next: &Assignment,
+    ) -> Vec<(String, String, Option<String>)> {
+        let mut switches = lock(&self.remote.pending_switches);
+        let choices = lock(&self.remote.choices).clone();
+        let mut applied = Vec::new();
+        switches.retain(|lane, host| {
+            if choices.get(lane) != Some(host) {
+                return false;
+            }
+            if !next.mirrors(host, lane) {
+                return true;
+            }
+            let from = previous
+                .mirrored
+                .iter()
+                .find(|(_, mirrored)| mirrored == lane)
+                .map(|(other, _)| other.clone());
+            if from.as_ref() != Some(host) {
+                applied.push((lane.clone(), host.clone(), from));
+            }
+            false
+        });
+        applied
     }
 
     /// The assignment's inputs: this machine's lanes from `local`, counted
@@ -285,7 +327,7 @@ impl Inner {
                 let built = lock(&conn.view).built.clone();
                 let mut lanes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
                 let mut ports: BTreeMap<String, Vec<PortUse>> = BTreeMap::new();
-                for unit in registry.units().filter(|unit| unit.mirrorable()) {
+                for unit in mirror::mirrorable_units(&registry) {
                     let lane = mirror::lane_ref(&unit.key.lane);
                     if !built.contains(&lane) {
                         continue;
@@ -385,16 +427,40 @@ impl Inner {
             ));
         }
         self.load_choices().await;
+        // The box's registry lists its lanes as soon as `remote connect`
+        // returns, the assignment only once the mirror built them. A lane
+        // still not built after the wait is chosen like one of a box that is
+        // not connected.
+        let chosen = args.host.as_ref().and_then(|host| {
+            lock(&self.remote.hosts)
+                .get(host)
+                .filter(|conn| !conn.ended())
+                .cloned()
+        });
+        let built = match chosen {
+            Some(conn) => conn.lane_built(&lane, APPLY_WAIT).await,
+            None => LaneBuild::Done,
+        };
         // One at a time, and against `remote disconnect`: the check, the
         // store and memory see the same choices.
         let choosing = self.remote.connecting.lock().await;
         let local = self.local_route_entries();
         let (_, before) = self.reassign_with(&local);
         let (_, boxes) = self.assign_inputs(&local);
-        let mut pending = false;
+        let mut waits_for = None;
+        let mut nothing_to_mirror = false;
         let (previous, replaced) = match &args.host {
             Some(host) => {
-                pending = !self.check_box_lane(host, &lane, &local).await?;
+                if !self.check_box_lane(host, &lane, &local).await? {
+                    waits_for = Some(wire::WaitsFor::Connect);
+                } else {
+                    match built {
+                        LaneBuild::Done => {}
+                        LaneBuild::TimedOut => waits_for = Some(wire::WaitsFor::Mirror),
+                        LaneBuild::NothingToMirror => nothing_to_mirror = true,
+                    }
+                }
+                let pending = waits_for.is_some();
                 let hosts = boxes
                     .iter()
                     .find(|other| other.host == *host)
@@ -406,7 +472,7 @@ impl Inner {
                 let previous = if before.mirrors(host, &lane) {
                     Some(host.clone())
                 } else if pending {
-                    // Whichever box serves the lane until the chosen one connects.
+                    // Whichever box serves the lane until the chosen one has it.
                     before
                         .mirrored
                         .iter()
@@ -425,7 +491,19 @@ impl Inner {
                     })
                     .await
                     .map_err(crate::registry::store_error)?;
+                // Both under the switches lock, which `take_switches` takes
+                // before it reads the choices, so it never sees the pending
+                // switch without its choice.
+                // A lane with nothing to mirror applies once it has
+                // something, as a pending choice applies once it can.
+                let mut switches = lock(&self.remote.pending_switches);
                 lock(&self.remote.choices).insert(lane.clone(), host.clone());
+                if pending || nothing_to_mirror {
+                    switches.insert(lane.clone(), host.clone());
+                } else {
+                    switches.remove(&lane);
+                }
+                drop(switches);
                 (previous, replaced)
             }
             None => {
@@ -453,6 +531,7 @@ impl Inner {
                     .collect();
                 let choices = lock(&self.remote.choices).clone();
                 let replaced = clashing_choices(&lane, &hosts, None, &boxes, &choices);
+                lock(&self.remote.pending_switches).remove(&lane);
                 (before.yielded.get(&lane).cloned(), replaced)
             }
         };
@@ -479,15 +558,21 @@ impl Inner {
             Some(host) => after.mirrors(host, &lane),
             None => !after.yielded.contains_key(&lane),
         };
-        if mirrored && previous != args.host {
+        // A choice recorded in `pending_switches` is announced by the
+        // reassignment that applies it, which may have been the one above.
+        let deferred = waits_for.is_some() || nothing_to_mirror;
+        if mirrored && !deferred && previous != args.host {
             self.announce_switch(&lane, args.host.as_deref(), previous.as_deref());
         }
+        let waits_for = waits_for.filter(|_| !mirrored);
         Ok(json!({
             "lane": lane,
             "host": args.host,
             "previous": previous,
             "mirrored": mirrored,
-            "pending": pending,
+            "pending": waits_for.is_some(),
+            "waits_for": waits_for,
+            "nothing_to_mirror": nothing_to_mirror && !mirrored,
             // The lane's own choice, which `--local` deletes, is `previous`.
             "replaced": replaced
                 .iter()

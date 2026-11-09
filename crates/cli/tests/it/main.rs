@@ -46,7 +46,9 @@ fn request(action: Action) -> devlanes_proto::Request {
         | Action::Attach(r)
         | Action::Open(r)
         | Action::ExportEnv { request: r, .. }
-        | Action::Shell(r) => r,
+        | Action::Shell(r)
+        // `lane new --start`: the start, which carries what the command adds.
+        | Action::LaneNewThenStart { start: r, .. } => r,
         _ => panic!("expected request action"),
     }
 }
@@ -201,7 +203,7 @@ fn entire_command_inventory_builds_actions() {
         (&["lane", "ls"], Some(Method::LaneList)),
         (
             &["lane", "new", "--name", "review", "--start"],
-            Some(Method::LaneNew),
+            Some(Method::Start),
         ),
         (
             &["lane", "clean", "acme@2", "--yes"],
@@ -717,7 +719,10 @@ fn environment_is_captured_only_for_relevant_methods() {
         (vec!["exec", "--name", "demo", "--", "echo"], true),
         (vec!["lane", "resume"], true),
         (vec!["run", "--list"], false),
-        (vec!["env", "show"], false),
+        // The CA variables are set against the shell that asks.
+        (vec!["env", "show"], true),
+        (vec!["env", "export"], true),
+        (vec!["env", "shell"], true),
         // A lane that never started plans the unit with this shell's env.
         (vec!["env", "show", "api"], true),
         (vec!["env", "export", "api"], true),
@@ -767,6 +772,22 @@ fn typed_params_preserve_opaque_refs_argv_and_context() {
     assert_eq!(req.context.lane.as_deref(), Some("feat/checkout"));
     assert_eq!(req.context.project.as_deref(), Some("acme"));
     assert!(req.context.yes);
+    // `lane new --start` starts the new lane as `start` would, with its flags.
+    let cli = Cli::parse_from([
+        "devlanes",
+        "--timeout",
+        "5s",
+        "--env",
+        "A=1",
+        "lane",
+        "new",
+        "--start",
+    ]);
+    let params: Selection =
+        serde_json::from_value(request(action(&cli, &runtime(&cli, OutputMode::Agent))).params)
+            .expect("start selection");
+    assert_eq!(params.timeout_ms, Some(5000));
+    assert_eq!(params.env, Some(BTreeMap::from([("A".into(), "1".into())])));
     let cli = Cli::parse_from([
         "devlanes",
         "exec",
@@ -1472,14 +1493,7 @@ fn exit_codes_follow_the_method() {
         code(Method::Start, start(false, false, json!([]))),
         exit::FAILED
     );
-    assert_eq!(
-        code(
-            Method::LaneNew,
-            json!({"lane": "acme@3", "start": start(false, true, json!([]))})
-        ),
-        exit::TIMEOUT
-    );
-    assert_eq!(code(Method::LaneNew, json!({"lane": "acme@3"})), exit::OK);
+
     // A unit stopped by SIGTERM keeps its 143; that is a normal stop.
     let stopped = json!({"items": [{"lane": "acme@2", "state": "stopped",
         "units": [{"name": "api", "state": "stopped", "exit_code": 143}]}]});

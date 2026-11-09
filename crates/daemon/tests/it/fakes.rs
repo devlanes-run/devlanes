@@ -712,6 +712,11 @@ pub struct FakeInfra {
     /// `port_needs` builds its needs from the spec's plain containers as the
     /// real provider does, instead of the fixed lane need `infra.db/5432`.
     pub ports_from_spec: Arc<Mutex<bool>>,
+    /// `observe` answers `Unknown` for every key, as when Docker times out.
+    pub observe_unknown: Arc<Mutex<bool>>,
+    /// `observe` answers that the engine does not run, as when its endpoint
+    /// refuses the connection.
+    pub engine_down: Arc<Mutex<bool>>,
 }
 
 /// The `StartedAt` of a container whose run no test set.
@@ -746,6 +751,12 @@ impl FakeInfra {
     /// What the engine says about `key` of `spec`: the lane's `db` replicas
     /// and the shared `cache`, each running unless a knob says otherwise.
     fn observation(&self, spec: &InfraSpec, key: &str) -> Observation {
+        if self.engine_down.lock().is_ok_and(|down| *down) {
+            return Observation::EngineStopped;
+        }
+        if self.observe_unknown.lock().is_ok_and(|unknown| *unknown) {
+            return Observation::Unknown;
+        }
         match key {
             "db" => {
                 let state = self.namespace_db_state.lock().ok().and_then(|s| s.clone());

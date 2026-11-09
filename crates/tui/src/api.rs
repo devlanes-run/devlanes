@@ -412,12 +412,29 @@ impl Metrics {
 /// a closed channel without one means the connection closed cleanly.
 pub struct EventStream {
     events: mpsc::Receiver<Result<Event, ApiError>>,
+    /// What the daemon of this stream's connection advertised in its `Hello`.
+    features: Vec<String>,
 }
 
 impl EventStream {
-    /// Wraps a channel; fakes push events into the sending half.
+    /// Wraps a channel, with no features; fakes push events into the sending half.
     pub fn new(events: mpsc::Receiver<Result<Event, ApiError>>) -> Self {
-        Self { events }
+        Self {
+            events,
+            features: Vec::new(),
+        }
+    }
+
+    /// The stream of a connection whose daemon advertised `features`.
+    #[must_use]
+    pub fn with_features(mut self, features: Vec<String>) -> Self {
+        self.features = features;
+        self
+    }
+
+    /// The features the daemon of this stream's connection advertised.
+    pub fn features(&self) -> &[String] {
+        &self.features
     }
 
     /// Waits for the next event; `None` means the subscription is gone.
@@ -594,9 +611,10 @@ pub trait DaemonApi: Send + Sync {
     }
     /// `remote.use`: makes box `host`'s lane `lane` (`acme@0`) the one this
     /// machine mirrors, or this machine's own lane when `host` is `None`.
-    /// Answers `{lane, host, previous, mirrored, pending}` once the mirrors
-    /// applied it. `pending` is true for a box that is not connected, which
-    /// gets the choice when it connects.
+    /// Answers `{lane, host, previous, mirrored, pending, waits_for}` once the
+    /// mirrors applied it. `pending` is true for a box that is not connected,
+    /// which gets the choice when it connects (`waits_for: connect`), and for
+    /// a connected box whose lane is not mirrored here yet (`mirror`).
     async fn use_lane(&self, _lane: String, _host: Option<String>) -> Result<Value, ApiError> {
         Err(ApiError::Rpc(RpcError::new(
             "unknown_method",
@@ -1067,7 +1085,8 @@ impl DaemonApi for ClientApi {
         let id = client
             .begin_request(Method::Subscribe, json!({}), self.context(None, false))
             .await?;
-        Ok(pump_events(client, id))
+        let features = client.peer.features.clone();
+        Ok(pump_events(client, id).with_features(features))
     }
 
     /// Calls `infra.logs` with `follow` on a dedicated connection; dropping the

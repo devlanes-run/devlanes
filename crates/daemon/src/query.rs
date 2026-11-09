@@ -1073,22 +1073,37 @@ impl Inner {
         let policy = Policy::of(Method::Env);
         if args.lane_env || args.unit.is_none() {
             let (project, lane) = self.lane(context, policy).await?;
-            let (resolved, layers) = self
-                .resolve_lane_env(
+            // The shell that asked is never stored: the CA variables are
+            // computed against it, and its own values are not part of the answer.
+            let shell = crate::engine::carries_env(context);
+            let command = self
+                .command_env(
                     &project,
                     &lane,
-                    crate::engine::carries_env(context).unwrap_or_default(),
+                    crate::command_env::CommandEnvRequest {
+                        shell: shell.as_deref(),
+                        overrides: &Default::default(),
+                    },
                 )
                 .await?;
-            let env = devlanes_core::env::assemble([
-                (EnvLayer::Devlanes, resolved.lane_env().clone()),
-                (EnvLayer::Global, layers.global),
-                (EnvLayer::Profile, layers.profile),
-            ]);
+            let env: std::collections::BTreeMap<&String, &String> = command
+                .env
+                .values
+                .iter()
+                .filter(|(key, _)| {
+                    command
+                        .env
+                        .sources
+                        .get(*key)
+                        .copied()
+                        .unwrap_or(EnvLayer::Client)
+                        != EnvLayer::Client
+                })
+                .collect();
             let reference = lane.st().reference(&project.name());
-            let mut result = json!({"lane": reference, "env": env.values});
-            if !layers.unset.is_empty() {
-                result["left_out"] = crate::resolve::left_out(&layers.unset);
+            let mut result = json!({"lane": reference, "env": env});
+            if !command.left_out.is_empty() {
+                result["left_out"] = crate::command_env::left_out(&command.left_out);
             }
             return Ok(result);
         }
@@ -1103,13 +1118,9 @@ impl Inner {
             .units
             .get(&name)
             .filter(|rec| rec.host.is_alive())
-            .map(|rec| (rec.env.clone(), rec.notes.clone(), rec.left_out.clone()));
-        let mut left_out = std::collections::BTreeMap::new();
-        let (env, notes) = match live {
-            Some((env, notes, unset)) => {
-                left_out = unset;
-                (env, notes)
-            }
+            .map(|rec| rec.launch.clone());
+        let launch = match live {
+            Some(launch) => launch,
             None => {
                 let resolved = self
                     .resolve_with(&project, &lane, crate::engine::carries_env(context))
@@ -1143,12 +1154,10 @@ impl Inner {
                             3,
                         )
                     })?;
-                (
-                    Arc::new(crate::lifecycle::copy_env(&launch.env)),
-                    launch.notes.clone(),
-                )
+                Arc::new(crate::model::LaunchRecord::planned(launch))
             }
         };
+        let (env, notes) = (&launch.env, &launch.notes);
         let mut result = if args.explain {
             let items: Vec<Value> = env
                 .values
@@ -1162,8 +1171,8 @@ impl Inner {
         } else {
             json!({"lane": reference, "unit": name, "env": env.values})
         };
-        if !left_out.is_empty() {
-            result["left_out"] = crate::resolve::left_out(&left_out);
+        if !launch.left_out.is_empty() {
+            result["left_out"] = crate::command_env::left_out(&launch.left_out);
         }
         Ok(result)
     }

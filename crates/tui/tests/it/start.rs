@@ -135,6 +135,7 @@ async fn run(
     let (start_tx, start_rx) = mpsc::channel(16);
     let handoff = StartHandoff {
         label: "start".into(),
+        lane: None,
         frames: vec![phase("infra", "started")],
         stream: start_rx,
     };

@@ -33,6 +33,9 @@ pub enum StartFrame {
 pub struct StartHandoff {
     /// The command's verb: `start`, `restart`, `reload`, `resume` or `new lane`.
     pub label: String,
+    /// The lane the daemon started, when the request asked for `start.accepted`
+    /// ([`await_start`]).
+    pub lane: Option<String>,
     /// Frames that arrived before the TUI opened.
     pub frames: Vec<StartFrame>,
     /// The rest of the request.
@@ -80,33 +83,57 @@ pub fn follow_start(mut client: Client, id: u64) -> mpsc::Receiver<StartFrame> {
 /// its result, or `wait` without an answer. A failure before that is returned
 /// as the error a CLI would print. A `lane.changed` alone does not count: the
 /// daemon sends the lane's snapshot before it checks the config.
+///
+/// With `accepted` (the request asked for `start.accepted`), nothing before
+/// that event counts and `wait` begins with it, so the handoff always names
+/// the lane the daemon started: from `start.accepted`, or from the result's
+/// `lane` when the answer comes first (a `reload` that restarts nothing).
 pub async fn await_start(
     label: String,
     mut stream: mpsc::Receiver<StartFrame>,
     wait: Duration,
+    accepted: bool,
 ) -> Result<StartHandoff, ApiError> {
-    let deadline = Instant::now() + wait;
+    let mut deadline = (!accepted).then(|| Instant::now() + wait);
     let mut frames = Vec::new();
+    let mut lane = None;
     loop {
-        let frame = match tokio::time::timeout_at(deadline, stream.recv()).await {
-            Err(_) => break,
-            Ok(None) => {
-                return Err(ApiError::Disconnected(
-                    "the daemon closed the connection".into(),
-                ));
-            }
-            Ok(Some(frame)) => frame,
+        let next = match deadline {
+            Some(deadline) => match tokio::time::timeout_at(deadline, stream.recv()).await {
+                Err(_) => break,
+                Ok(next) => next,
+            },
+            None => stream.recv().await,
+        };
+        let Some(frame) = next else {
+            return Err(ApiError::Disconnected(
+                "the daemon closed the connection".into(),
+            ));
         };
         let frame = match frame {
             StartFrame::Done(Err(error)) => return Err(error),
+            StartFrame::Event(event) if event.event == events::START_ACCEPTED => {
+                lane = event.data["lane"].as_str().map(str::to_owned);
+                deadline = Some(Instant::now() + wait);
+                continue;
+            }
             frame => frame,
         };
         let underway = match &frame {
-            StartFrame::Done(_) => true,
-            StartFrame::Event(event) => matches!(
-                event.event.as_str(),
-                events::PHASE | events::TASK | events::UNIT_CHANGED
-            ),
+            StartFrame::Done(Ok(data)) => {
+                if accepted && lane.is_none() {
+                    lane = data["lane"].as_str().map(str::to_owned);
+                }
+                true
+            }
+            StartFrame::Done(Err(_)) => true,
+            StartFrame::Event(event) => {
+                deadline.is_some()
+                    && matches!(
+                        event.event.as_str(),
+                        events::PHASE | events::TASK | events::UNIT_CHANGED
+                    )
+            }
         };
         frames.push(frame);
         if underway {
@@ -115,6 +142,7 @@ pub async fn await_start(
     }
     Ok(StartHandoff {
         label,
+        lane,
         frames,
         stream,
     })
@@ -378,14 +406,11 @@ pub(crate) fn start_failures(value: &Value) -> Vec<UnitFailureData> {
 }
 
 /// The start results in a response: `start` and `restart` answer one,
-/// `lane.new` nests it under `start`, `resume` lists one per lane (or its error).
+/// `resume` lists one per lane (or its error).
 fn start_results(value: &Value) -> Vec<Result<StartResult, (String, RpcError)>> {
     let parse = |value: &Value| serde_json::from_value::<StartResult>(value.clone()).ok();
     if value.get("ready").is_some() {
         return parse(value).map(Ok).into_iter().collect();
-    }
-    if let Some(start) = value.get("start") {
-        return parse(start).map(Ok).into_iter().collect();
     }
     value
         .get("items")
@@ -455,24 +480,42 @@ mod tests {
             .send(StartFrame::Done(Err(ApiError::Rpc(refused.clone()))))
             .await
             .ok();
-        let result = await_start("start".into(), receiver, Duration::from_secs(5)).await;
+        let result = await_start("start".into(), receiver, Duration::from_secs(5), false).await;
         assert!(matches!(result, Err(ApiError::Rpc(error)) if error == refused));
     }
 
-    #[tokio::test]
+    // The clock is paused: a wait passes the moment nothing else can run.
+    #[tokio::test(start_paused = true)]
     async fn the_first_phase_or_a_quiet_daemon_opens_the_tui() {
-        let (sender, receiver) = mpsc::channel(8);
+        let wait = Duration::from_millis(300);
         let phase = event(
             events::PHASE,
             json!({"lane": "acme@1", "phase": "infra", "state": "started"}),
         );
-        sender.send(StartFrame::Event(phase)).await.ok();
-        let handoff = await_start("start".into(), receiver, Duration::from_secs(5)).await;
+        let (sender, receiver) = mpsc::channel(8);
+        sender.send(StartFrame::Event(phase.clone())).await.ok();
+        let handoff = await_start("start".into(), receiver, wait, false).await;
         assert!(matches!(handoff, Ok(h) if h.frames.len() == 1));
         // Nothing at all: after the wait the start counts as underway.
         let (_sender, receiver) = mpsc::channel(8);
-        let handoff = await_start("start".into(), receiver, Duration::from_millis(20)).await;
+        let handoff = await_start("start".into(), receiver, wait, false).await;
         assert!(matches!(handoff, Ok(h) if h.frames.is_empty()));
+        // A start accepted only after the wait (the stop of a whole-lane
+        // restart comes first) still names its lane.
+        let (sender, receiver) = mpsc::channel(8);
+        let late = async {
+            tokio::time::sleep(wait * 3).await;
+            let accepted = event(
+                events::START_ACCEPTED,
+                json!({"lane": "acme@1", "start_id": 4}),
+            );
+            sender.send(StartFrame::Event(accepted)).await.ok();
+            sender.send(StartFrame::Event(phase)).await.ok();
+        };
+        let (handoff, ()) = tokio::join!(await_start("restart".into(), receiver, wait, true), late);
+        let handoff = handoff.expect("handoff");
+        assert_eq!(handoff.lane.as_deref(), Some("acme@1"));
+        assert_eq!(handoff.frames.len(), 1);
     }
 
     #[test]

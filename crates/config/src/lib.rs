@@ -54,8 +54,8 @@ pub use setting::{
 pub use tags::{TagColor, TagConfig};
 pub use user::*;
 pub use validation::{
-    CheckReport, ConfigWarning, PresetPorts, PresetValidator, validate,
-    validate_with_compose_services, validate_with_preset_ports, validate_with_presets,
+    CheckReport, ConfigWarning, PresetPorts, PresetValidator, infra_alias, unknown_infra_name,
+    validate, validate_with_compose_services, validate_with_preset_ports, validate_with_presets,
     validate_with_registry,
 };
 

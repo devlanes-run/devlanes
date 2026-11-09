@@ -5,11 +5,11 @@
 use std::{sync::Arc, time::Duration};
 
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
-use devlanes_proto::{Event, events};
-use devlanes_term::{Links, Notifications, NotifyStyle, POP_TITLE, PUSH_TITLE};
+use devlanes_proto::{Event, events, features};
+use devlanes_term::{Links, Notifications, NotifyStyle, POP_TITLE, PUSH_TITLE, Progress};
 use devlanes_tui::{
     DaemonApi, Options,
-    app::{App, Effect, Msg},
+    app::{App, Effect, Msg, StartFrame},
     drive,
 };
 use futures_util::stream;
@@ -80,38 +80,110 @@ fn notices(effects: &[Effect]) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test]
-async fn notifications_need_an_unfocused_terminal_and_a_long_start() -> TestResult {
-    let mut app = loaded().await?;
-    app.notify_after = Duration::ZERO;
-    // Focused: the user sees it happen.
-    app.update(changed(main_lane("starting", "ready", "starting")));
-    assert!(notices(&app.update(changed(main_lane("running", "ready", "ready")))).is_empty());
+/// A `lane.phase` event of start `id` of acme@0.
+fn phase_event(id: u64) -> Event {
+    Event {
+        seq: 3,
+        event: events::PHASE.into(),
+        data: json!({"lane": "acme@0", "phase": "services", "state": "started", "start_id": id}),
+    }
+}
 
-    app.update(Msg::Focus(false));
-    app.update(changed(main_lane("starting", "ready", "starting")));
-    let ended = app.update(changed(main_lane("running", "ready", "ready")));
-    assert_eq!(notices(&ended), ["acme@0 is up: 2 of 2 ready"]);
-    // A failed start says so.
-    app.update(changed(main_lane("starting", "ready", "starting")));
-    let failed = app.update(changed(main_lane("failed", "ready", "failed")));
-    assert_eq!(notices(&failed), ["start of acme@0 failed: 1 failed"]);
-    // A running service that fails outside a start crashed.
-    app.update(changed(main_lane("running", "ready", "ready")));
+/// [`phase_event`] from the subscription.
+fn phase_of(id: u64) -> Msg {
+    Msg::Event(phase_event(id))
+}
+
+/// The end of start `id` of acme@0.
+fn ended(id: u64) -> Msg {
+    Msg::Event(Event {
+        seq: 4,
+        event: events::START_ENDED.into(),
+        data: json!({"lane": "acme@0", "start_id": id}),
+    })
+}
+
+/// acme@0's api exiting with 137.
+fn api_crashed() -> Msg {
     let mut crashed = unit("acme@0", "api", "failed");
     crashed.exit_code = Some(137);
-    let effects = app.update(Msg::Event(Event {
+    Msg::Event(Event {
         seq: 9,
         event: events::UNIT_CHANGED.into(),
         data: json!({ "unit": crashed }),
-    }));
-    assert_eq!(notices(&effects), ["acme@0:api crashed: exited 137"]);
+    })
+}
+
+/// A subscription to a daemon that sends `start.ended`.
+fn tracking() -> Msg {
+    Msg::Subscribed(Ok(vec![features::START_ENDED.into()]))
+}
+
+const CRASH: &str = "acme@0:api crashed: exited 137";
+
+#[tokio::test]
+async fn notifications_need_an_unfocused_terminal_and_a_long_start() -> TestResult {
+    let mut app = loaded().await?;
+    app.update(tracking());
+    app.notify_after = Duration::ZERO;
+    // Focused: the user sees it happen.
+    app.update(phase_of(1));
+    app.update(changed(main_lane("running", "ready", "ready")));
+    assert!(notices(&app.update(ended(1))).is_empty());
+
+    app.update(Msg::Focus(false));
+    app.update(phase_of(2));
+    app.update(changed(main_lane("running", "ready", "ready")));
+    assert_eq!(
+        notices(&app.update(ended(2))),
+        ["acme@0 is up: 2 of 2 ready"]
+    );
+    // The TUI's own start request delivers an event of start 2 after the
+    // subscription brought its end: the start stays over.
+    app.update(Msg::Start(StartFrame::Event(phase_event(2))));
+    assert_eq!(app.start_progress(), Progress::Clear);
+    // A failed start says so when it ends; its failure is no crash.
+    app.update(phase_of(3));
+    assert!(notices(&app.update(changed(main_lane("failed", "ready", "failed")))).is_empty());
+    assert_eq!(
+        notices(&app.update(ended(3))),
+        ["start of acme@0 failed: 1 failed"]
+    );
+    // A start that answered with web still starting: the lane still reads
+    // `starting`, but no start runs, so api failing is a crash.
+    app.update(phase_of(4));
+    app.update(changed(main_lane("starting", "ready", "starting")));
+    app.update(ended(4));
+    assert_eq!(notices(&app.update(api_crashed())), [CRASH]);
+    // Two starts of the lane: one ending leaves the other running.
+    app.update(changed(main_lane("running", "ready", "ready")));
+    app.update(phase_of(5));
+    app.update(phase_of(6));
+    app.update(ended(5));
+    assert!(notices(&app.update(api_crashed())).is_empty());
+    // A lost connection may have lost start 6's end: after reconnecting, a
+    // crash is a crash until a start shows itself again.
+    app.update(changed(main_lane("running", "ready", "ready")));
+    app.update(Msg::EventsEnded(None));
+    app.update(tracking());
+    assert_eq!(notices(&app.update(api_crashed())), [CRASH]);
+    // A daemon without `start.ended`: no start is tracked, so a crash during
+    // one is a crash and its end, seen only in the lane's word, notifies nobody.
+    app.update(changed(main_lane("running", "ready", "ready")));
+    app.update(Msg::EventsEnded(None));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
+    app.update(phase_of(7));
+    app.update(changed(main_lane("starting", "ready", "starting")));
+    assert_eq!(notices(&app.update(api_crashed())), [CRASH]);
+    assert!(notices(&app.update(changed(main_lane("running", "ready", "ready")))).is_empty());
 
     // A quick start is not worth one.
     let mut quick = loaded().await?;
+    quick.update(tracking());
     quick.update(Msg::Focus(false));
-    quick.update(changed(main_lane("starting", "ready", "starting")));
-    assert!(notices(&quick.update(changed(main_lane("running", "ready", "ready")))).is_empty());
+    quick.update(phase_of(1));
+    quick.update(changed(main_lane("running", "ready", "ready")));
+    assert!(notices(&quick.update(ended(1))).is_empty());
     Ok(())
 }
 

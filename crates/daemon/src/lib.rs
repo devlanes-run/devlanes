@@ -8,6 +8,7 @@ mod attach;
 pub mod bus;
 mod certs;
 mod clean_plan;
+mod command_env;
 mod config_show;
 mod control;
 pub mod diagnostics;
@@ -1026,6 +1027,7 @@ async fn serve_client(
             devlanes_proto::features::RELOAD,
             devlanes_proto::features::STATUS_HERE,
             devlanes_proto::features::START_ENDED,
+            devlanes_proto::features::START_ACCEPTED,
         ]
         .map(String::from),
     );

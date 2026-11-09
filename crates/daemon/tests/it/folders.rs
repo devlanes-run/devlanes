@@ -389,45 +389,6 @@ async fn lane_new_answers_with_the_project_folder() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// `lane new --start` starts the lane with the request's `--env` overrides.
-async fn lane_new_start_uses_the_env_overrides() {
-    tokio::time::timeout(LIMIT, async {
-        let tmp = temp();
-        let config = "project: demo\nservices:\n  worker:\n    run: \"printenv FROM_FLAG; sleep\"\n    pty: false\n";
-        let main = repo(&tmp.path, "r", config);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
-        h.call(
-            Method::LaneNew,
-            json!({"name": "review", "start": true, "env": {"FROM_FLAG": "1"}}),
-            cx(&main),
-        )
-        .await
-        .expect("lane new --start");
-        let lines = crate::eventually(std::time::Duration::from_secs(5), || async {
-            let value = h
-                .call(Method::Logs, json!({"units": ["worker"]}), on_lane(&main, "review"))
-                .await
-                .ok()?;
-            let lines: Vec<String> = value["items"]
-                .as_array()?
-                .iter()
-                .filter_map(|line| line["text"].as_str().map(str::to_owned))
-                .collect();
-            (!lines.is_empty()).then_some(lines)
-        })
-        .await
-        .expect("worker logged");
-        assert_eq!(lines, ["1"]);
-        h.call(Method::Stop, json!({}), on_lane(&main, "review"))
-            .await
-            .expect("stop");
-        h.close().await;
-    })
-    .await
-    .expect("timeout");
-}
-
-#[tokio::test(flavor = "multi_thread")]
 /// A lone unit selector that matches no unit but is a lane number or a `lane
 /// new` name names that lane in the error; a branch or folder name does not,
 /// since those are often a mistyped unit of the current lane.

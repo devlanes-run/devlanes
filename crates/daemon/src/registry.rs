@@ -2200,19 +2200,7 @@ impl Inner {
     ) -> Result<LaneView, RpcError> {
         let (config, allocation, env, infra_ns) = {
             let st = lane.st();
-            // Running units keep the layout they started with while the file is broken.
-            let kept = st.last_good.clone().filter(|_| st.any_running());
-            let config = match (&st.config, kept) {
-                (ConfigState::Loaded(config), _) => config.clone(),
-                (_, Some(config)) => config,
-                (ConfigState::Invalid(error), None) => return Err(error.clone()),
-                (ConfigState::Missing, None) => {
-                    return Err(RpcError::new("no_config", json!({"path": st.path}), 1));
-                }
-                (ConfigState::Elsewhere(other), None) => {
-                    return Err(crate::model::elsewhere_error(other, None));
-                }
-            };
+            let config = st.effective_config(None)?;
             let allocation = st
                 .allocation
                 .clone()

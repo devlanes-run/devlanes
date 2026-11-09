@@ -146,6 +146,10 @@ fn apply_start_restore(action: Action) -> Action {
             request: adjust(request),
             forced,
         },
+        Action::LaneNewThenStart { create, start } => Action::LaneNewThenStart {
+            create,
+            start: adjust(start),
+        },
         other => other,
     }
 }
@@ -163,46 +167,60 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             let paths = paths()?;
             // Before the request: switching to an installed update restarts the daemon.
             crate::update::startup(runtime, &paths).await;
-            let context = crate::driver::start_context(&request);
-            let code = rpc(cli, runtime, request).await?;
+            let context = request.context.clone();
+            let (code, started) = rpc_start(cli, runtime, request).await?;
             if code != 0 {
                 return Ok(code);
             }
+            // Scoped to the lane the start answered for: a cwd-only first `status`
+            // would register the cwd's project when the start named another one's.
+            let lane = started
+                .as_ref()
+                .and_then(|data| data.get("lane"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let context = devlanes_proto::Context { lane, ..context };
             crate::wiring::open_ui(runtime, &paths, Some(context)).await
         }
         Action::RpcThenOfferStart(request) => {
-            let data = match call(request.clone()).await {
-                Ok(data) => data,
-                Err(error) => {
-                    let rendered = runtime
-                        .reporter()
-                        .error(&error, hint_for(&error, &request).as_ref());
-                    emit(&rendered);
-                    return Ok(rendered.exit_code);
-                }
+            let lane = match create_lane(runtime, &request, true).await? {
+                Ok(lane) => lane,
+                Err(code) => return Ok(code),
             };
-            let code = render_result(
-                runtime,
-                request.method,
-                &data,
-                more_hint(request.method, &request),
-            )?;
-            let Some(lane) = data.pointer("/lane/reference").and_then(Value::as_str) else {
-                return Ok(code);
-            };
-            if code != 0 || !confirm(runtime, &format!("start {lane} now?"))? {
-                return Ok(code);
+            if !confirm(runtime, &format!("start {lane} now?"))? {
+                return Ok(0);
             }
             // Exactly what the printed `next:` command does, TUI and all.
             let usage = |error: &dyn std::fmt::Display| {
                 RpcError::new("usage", json!({"message": error.to_string()}), 2)
             };
             let cli = <Cli as devlanes_cli::clap::Parser>::try_parse_from([
-                "devlanes", "start", "--lane", lane,
+                "devlanes", "start", "--lane", &lane,
             ])
             .map_err(|error| usage(&error))?;
             let action = cli.action(runtime).map_err(|error| usage(&error))?;
             Box::pin(run(&cli, runtime, action)).await
+        }
+        Action::LaneNewThenStart { create, mut start } => {
+            let lane = match create_lane(runtime, &create, false).await? {
+                Ok(lane) => lane,
+                Err(code) => return Ok(code),
+            };
+            start.context.lane = Some(lane);
+            match cli.start_in_ui(runtime) {
+                Some(forced) => {
+                    Box::pin(run(
+                        cli,
+                        runtime,
+                        Action::StartUi {
+                            request: start,
+                            forced,
+                        },
+                    ))
+                    .await
+                }
+                None => rpc(cli, runtime, start).await,
+            }
         }
         Action::Ui(context) => ui(runtime, context).await,
         Action::StartUi { request, forced } => {
@@ -422,8 +440,66 @@ async fn call(request: Request) -> Result<Value, RpcError> {
         .map_err(rpc_error)
 }
 
+/// Sends `lane.new` and renders its answer, with the `start` command as `next:`
+/// when `offer_start` (the command may end without starting the lane). Returns
+/// the new lane's reference, or the exit code of an error already rendered. An
+/// answer without a lane is an error: nothing could be started on it.
+async fn create_lane(
+    runtime: &Runtime,
+    request: &Request,
+    offer_start: bool,
+) -> Result<Result<String, u8>, RpcError> {
+    let data = match call(request.clone()).await {
+        Ok(data) => data,
+        Err(error) => {
+            let rendered = runtime
+                .reporter()
+                .error(&error, hint_for(&error, request).as_ref());
+            emit(&rendered);
+            return Ok(Err(rendered.exit_code));
+        }
+    };
+    let Some(lane) = data.pointer("/lane/reference").and_then(Value::as_str) else {
+        return Err(RpcError::new(
+            "bad_response",
+            json!({"message": "lane.new answered without a lane"}),
+            1,
+        ));
+    };
+    let mut report = Report::new(request.method, &data);
+    if let Some(next) = offer_start
+        .then(|| start_hint(request.method, &data))
+        .flatten()
+    {
+        report = report.with_next(next);
+    }
+    match render_report(runtime, &report)? {
+        0 => Ok(Ok(lane.to_owned())),
+        code => Ok(Err(code)),
+    }
+}
+
+/// `devlanes start --lane <ref>` for the lane a `lane.new` answer created; the
+/// `next:` of a `lane new` that does not start it.
+fn start_hint(method: Method, data: &Value) -> Option<Hint> {
+    let lane = data.pointer("/lane/reference").and_then(Value::as_str);
+    (method == Method::LaneNew)
+        .then_some(lane)
+        .flatten()
+        .map(|lane| Hint::command(["start", "--lane", lane]))
+}
+
 /// Streams events, renders the final result, and maps Ctrl-C to a detach.
 async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcError> {
+    rpc_start(cli, runtime, request).await.map(|(code, _)| code)
+}
+
+/// [`rpc`], also returning a `start`'s result when it answered with one.
+async fn rpc_start(
+    cli: &Cli,
+    runtime: &Runtime,
+    request: Request,
+) -> Result<(u8, Option<Value>), RpcError> {
     let paths = paths()?;
     let mut client = match request.method {
         // A daemon that cannot open state.db (STATE_LEGACY_SCHEMA) never starts, so
@@ -431,7 +507,9 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
         Method::DaemonResetState => match Client::connect(&paths).await {
             Ok(client) => client,
             Err(error) if error.is_not_running() => {
-                return reset_state_offline(runtime, &paths, request.context.yes).await;
+                return reset_state_offline(runtime, &paths, request.context.yes)
+                    .await
+                    .map(|code| (code, None));
             }
             Err(error) => return Err(rpc_error(error)),
         },
@@ -446,7 +524,7 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                         ..Rendered::default()
                     });
                 }
-                return Ok(0);
+                return Ok((0, None));
             }
             Err(error) => return Err(rpc_error(error)),
         },
@@ -465,7 +543,7 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
             Err(error) if error.is_not_running() => {
                 let rendered = daemon_not_running(runtime, &paths);
                 emit(&rendered);
-                return Ok(rendered.exit_code);
+                return Ok((rendered.exit_code, None));
             }
             Err(error) => return Err(rpc_error(error)),
         },
@@ -477,7 +555,8 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                 crate::notices::annotate_doctor(None, &mut data).await;
                 data["service"] = crate::daemon::service_report().await;
                 crate::local_doctor::add_wsl(&mut data).await;
-                return render_result(runtime, Method::Doctor, &data, None);
+                return render_result(runtime, Method::Doctor, &data, None)
+                    .map(|code| (code, None));
             }
             Err(error) => return Err(rpc_error(error)),
         },
@@ -608,8 +687,15 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                             {
                                 data["log_tail"] = json!(stream.hidden_tail());
                             }
-                            let code =
-                                render_result(runtime, method, &data, more_hint(method, &request))?;
+                            let mut report = Report::new(method, &data);
+                            if let Some(more) = more_hint(method, &request) {
+                                report = report.with_more(more);
+                            }
+                            // A plain `lane new` ends here, with its lane not started.
+                            if let Some(next) = start_hint(method, &data) {
+                                report = report.with_next(next);
+                            }
+                            let code = render_report(runtime, &report)?;
                             // A task's hidden output is in its unit's log; a steps-only
                             // task has no unit, so there is nothing to point at.
                             if let Some(stream) = &log_stream
@@ -666,7 +752,9 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
         _ = tokio::signal::ctrl_c() => {
             // Detaching is not a failure: the bar just goes.
             progress.finish(true).await;
-            return interrupted(cli, runtime, &paths, &request).await;
+            return interrupted(cli, runtime, &paths, &request)
+                .await
+                .map(|code| (code, None));
         }
     };
     progress.finish(matches!(result, Ok(0))).await;
@@ -684,7 +772,7 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
         }
         crate::notices::after_command(&mut client, runtime, &paths, method).await;
     }
-    result
+    result.map(|code| (code, started))
 }
 
 /// Ctrl-C during a request, per [`InterruptPolicy`]: services never stop, but a
@@ -957,7 +1045,13 @@ pub(crate) fn render_result(
     if let Some(more) = more {
         report = report.with_more(more);
     }
-    let rendered = runtime.reporter().result(&report).map_err(|error| {
+    render_report(runtime, &report)
+}
+
+/// [`render_result`] for a report the caller built, such as one with a `next:` hint.
+fn render_report(runtime: &Runtime, report: &Report<'_>) -> Result<u8, RpcError> {
+    let (method, data) = (report.method, report.data);
+    let rendered = runtime.reporter().result(report).map_err(|error| {
         RpcError::new("render_failed", json!({"message": error.to_string()}), 1)
     })?;
     // Read before the macro, which brings tracing's own `Value` into scope.

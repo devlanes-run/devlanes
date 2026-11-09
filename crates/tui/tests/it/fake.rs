@@ -117,7 +117,8 @@ impl DaemonApi for FakeApi {
         if let Ok(mut events) = self.events.lock() {
             *events = Some(sender);
         }
-        Ok(EventStream::new(receiver))
+        let features = vec![devlanes_proto::features::START_ENDED.to_owned()];
+        Ok(EventStream::new(receiver).with_features(features))
     }
 
     async fn attach(&self, lane: String, params: AttachParams) -> Result<AttachSession, ApiError> {

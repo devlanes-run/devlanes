@@ -15,8 +15,8 @@ use devlanes_core::{
     env::Environment,
 };
 use devlanes_proto::{
-    Actor, Leftovers, LogQuery, RpcError, StartResult, StoppingStep, UnitFailureData, UnitSummary,
-    events,
+    Actor, Event, Leftovers, LogQuery, RpcError, StartResult, StoppingStep, UnitFailureData,
+    UnitSummary, events,
 };
 use devlanes_resolve::{Launch, ReadySpec, ResolvedCommand, ResolvedLane, ResolvedService};
 use devlanes_state::{CleanLane, DesiredState, TaskRunInput};
@@ -35,8 +35,8 @@ use crate::{
     infra_restarts::{COMMAND_INFRA_WAIT, Settled},
     integrations::{InfraPortNeed, InfraSpec, ManagedUnit, PlannedUnit, StartedAt},
     model::{
-        Brought, Closing, EnvMap, Kind, LaneRt, ProjectRt, StartCtl, StartSlot, Unassigned,
-        UnitRec, core_actor, is_mine, unassigned, unit_summary,
+        Brought, Closing, EnvMap, Kind, LaneRt, LaunchRecord, ProjectRt, StartCtl, StartSlot,
+        Unassigned, UnitRec, core_actor, is_mine, unassigned, unit_summary,
     },
     ready::Readiness,
     registry::{internal, store_error},
@@ -68,7 +68,8 @@ pub(crate) struct SpawnRequest {
     pub name: String,
     pub kind: Kind,
     pub spec: LaunchSpec,
-    pub env: Arc<Environment>,
+    /// What `env show <unit>` reports for the run.
+    pub launch: Arc<LaunchRecord>,
     pub files: Vec<PreparedFile>,
     pub actor: Actor,
     pub ports: BTreeMap<String, u16>,
@@ -92,8 +93,6 @@ pub(crate) struct SpawnRequest {
     pub keep_awake: bool,
     /// A service run's [`crate::drift::Fingerprint`]; `None` for one-shot units.
     pub fingerprint: Option<crate::drift::Fingerprint>,
-    /// Launch notes, for `env --explain`.
-    pub notes: Vec<String>,
 }
 
 /// Copies an environment with its provenance (the type is deliberately not `Clone`).
@@ -115,7 +114,7 @@ impl SpawnRequest {
             name: service.unit.clone(),
             kind: Kind::Service,
             spec: service.launch.to_spec(service.pty, TerminalSize::default()),
-            env: Arc::new(copy_env(&service.launch.env)),
+            launch: Arc::new(LaunchRecord::planned(&service.launch)),
             files: service.launch.files.clone(),
             actor: actor.clone(),
             ports,
@@ -133,7 +132,6 @@ impl SpawnRequest {
             role: "service",
             keep_awake: service.keep_awake,
             fingerprint: Some(crate::drift::Fingerprint::of(service)),
-            notes: service.launch.notes.clone(),
         }
     }
 
@@ -153,7 +151,7 @@ impl SpawnRequest {
             name: name.to_owned(),
             kind,
             spec,
-            env: Arc::new(copy_env(&launch.env)),
+            launch: Arc::new(LaunchRecord::planned(launch)),
             files: launch.files.clone(),
             actor: actor.clone(),
             ports: BTreeMap::new(),
@@ -171,7 +169,6 @@ impl SpawnRequest {
             role: kind.word(),
             keep_awake: false,
             fingerprint: None,
-            notes: launch.notes.clone(),
         }
     }
 }
@@ -192,7 +189,7 @@ pub(crate) struct NotStartedRec {
     pub autostart: bool,
     pub stop: StopPolicy,
     pub literal_port: Option<u16>,
-    pub env: Arc<Environment>,
+    pub launch: Arc<LaunchRecord>,
     pub preset: Option<String>,
     pub files: Vec<PreparedFile>,
     pub color: Option<String>,
@@ -227,7 +224,7 @@ impl NotStartedRec {
             autostart: service.autostart,
             stop: StopPolicy::default(),
             literal_port: None,
-            env: Arc::new(Environment::default()),
+            launch: Arc::default(),
             preset: None,
             files: Vec::new(),
             color: Some(service.color.clone()),
@@ -2135,6 +2132,9 @@ pub(crate) struct StartOptions {
     /// daemon's resume plan), so names the config no longer has are left out with
     /// a warning instead of failing the start.
     pub restoring: bool,
+    /// The request's session, told [`events::START_ACCEPTED`] once the start is
+    /// installed (`Selection::accepted`).
+    pub accepted: Option<Session>,
 }
 
 type Spawned = (UnitHost, Arc<dyn ManagedUnit>);
@@ -2259,7 +2259,7 @@ impl Inner {
                         autostart: request.autostart,
                         stop: request.stop,
                         literal_port: request.literal_port,
-                        env: request.env,
+                        launch: request.launch,
                         preset: request.preset,
                         files: request.files,
                         color: Some(color),
@@ -2342,9 +2342,7 @@ impl Inner {
                 autostart: request.autostart,
                 stop: request.stop,
                 literal_port: request.literal_port,
-                env: request.env,
-                notes: request.notes,
-                left_out: BTreeMap::new(),
+                launch: request.launch,
                 failure_tail: Vec::new(),
                 failure_tail_styled: Vec::new(),
                 preset: request.preset,
@@ -2451,10 +2449,8 @@ impl Inner {
                     autostart: rec.autostart,
                     stop: rec.stop,
                     literal_port: rec.literal_port,
-                    env: rec.env,
-                    // Never alive, so `env --explain` resolves afresh and reads neither.
-                    notes: Vec::new(),
-                    left_out: BTreeMap::new(),
+                    // Never alive, so `env show` resolves afresh and does not read it.
+                    launch: rec.launch,
                     failure_tail: vec![rec.note],
                     failure_tail_styled: Vec::new(),
                     preset: rec.preset,
@@ -3268,6 +3264,8 @@ impl Inner {
         // whole-lane stop fires its token, a single-unit stop withdraws units
         // through it without waiting.
         let slot = lane.begin_start(&self.shutdown, start_id);
+        self.send_accepted(options.accepted.as_ref(), project, lane, start_id)
+            .await;
         // Before anything that can wait, so the units read `queued` the moment
         // the request arrives.
         self.mark_waiting(project, lane, &options, start_id);
@@ -3276,6 +3274,29 @@ impl Inner {
         self.forget_waiting(project, lane, start_id);
         self.end_start(project, lane, slot);
         result
+    }
+
+    /// Sends `start.accepted` for the start `start_id` to `session`, once its
+    /// control is installed on `lane`, so a `start.cancel` sent after it always
+    /// finds the start. A client that left never fails the start.
+    async fn send_accepted(
+        &self,
+        session: Option<&Session>,
+        project: &ProjectRt,
+        lane: &LaneRt,
+        start_id: u64,
+    ) {
+        let Some(session) = session else {
+            return;
+        };
+        let reference = lane.st().reference(&project.name());
+        let accepted = Event {
+            // Sent on the request only, outside the bus sequence.
+            seq: 0,
+            event: events::START_ACCEPTED.into(),
+            data: json!({"lane": reference, "start_id": start_id}),
+        };
+        let _ = session.event(accepted).await;
     }
 
     /// Ends a start, whatever it returned: uninstalls its control from the
@@ -4201,6 +4222,8 @@ impl Inner {
         }
         let start_id = options.start_id.unwrap_or_else(|| self.new_start_id());
         let slot = lane.begin_start(&self.shutdown, start_id);
+        self.send_accepted(options.accepted.as_ref(), project, lane, start_id)
+            .await;
         let result = self
             .run_restart(project, lane, selectors, options, &slot)
             .await
@@ -4688,6 +4711,7 @@ impl Inner {
                 start_id: None,
                 arrival: None,
                 restoring: false,
+                accepted: None,
             },
         )
         .await
@@ -5238,6 +5262,7 @@ mod tests {
             start_id: None,
             arrival: None,
             restoring: true,
+            accepted: None,
         };
         let (selection, dropped) =
             start_selection(&config, None, &[], &options, true).expect("selection");

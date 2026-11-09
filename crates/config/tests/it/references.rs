@@ -66,7 +66,7 @@ fn unknown_references_are_rejected() {
         ),
         (
             "project: demo\nglobal_env:\n  DB: '${{ infra.postgres.port }}'\n",
-            "global_env.DB: unknown container `postgres`",
+            "global_env.DB: unknown container or Compose service `postgres`",
         ),
         (
             "project: demo\nservices:\n  api: { run: server }\nprofiles:\n  remote:\n    include: [api]\n    env: { URL: '${{ lanes.main.services.ap.url }}' }\n",

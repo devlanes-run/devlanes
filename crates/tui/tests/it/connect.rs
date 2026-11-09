@@ -29,7 +29,7 @@ async fn boxes_app(width: u16, height: u16, hosts: Value) -> App {
     let api = FakeApi::with_lanes(mixed_lanes());
     let mut app = App::new(width, height);
     app.update(Msg::Status(api.status().await));
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     app.update(shifted('B'));
     app.update(Msg::Boxes(Ok(json!({"items": hosts}))));
     app.update(Msg::Clients(Ok(json!({"items": [], "now_ms": 0}))));

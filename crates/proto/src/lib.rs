@@ -40,7 +40,7 @@ impl Hello {
 
 /// Names a daemon lists in [`Hello::features`].
 pub mod features {
-    /// `start`, `restart`, `resume`, `lane.new` with `start` and `wait` given
+    /// `start`, `restart`, `resume` and `wait` given
     /// `"events": true` stream their lanes' `lane.phase` (own starts only, by
     /// `start_id`), `task`, `unit.changed` and `lane.changed` events on the
     /// request itself, all before its response. Older daemons ignore the flag.
@@ -56,6 +56,10 @@ pub mod features {
     pub const STATUS_HERE: &str = "status_here";
     /// The daemon sends [`super::events::START_ENDED`] for every start.
     pub const START_ENDED: &str = "start_ended";
+    /// `start`, `restart` and `reload` with [`super::Selection::accepted`] send
+    /// [`super::events::START_ACCEPTED`], and [`super::Method::StartCancel`]
+    /// ends a start by its id.
+    pub const START_ACCEPTED: &str = "start_accepted";
 }
 
 /// Attribution is supplied by clients and never inferred by the daemon.
@@ -145,6 +149,13 @@ pub enum Method {
     Reload,
     #[serde(rename = "resume")]
     Resume,
+    /// Ends the start (or restart) whose [`events::START_ACCEPTED`] named
+    /// `start_id` ([`StartCancelParams`]), on any lane; the start answers its
+    /// own request with `start_cancelled` and what it brought up. Reply
+    /// `{cancelled}`: `false` when no start has that id any more, because it
+    /// already answered. Advertised as [`features::START_ACCEPTED`].
+    #[serde(rename = "start.cancel")]
+    StartCancel,
     /// Lane summaries of the request's scope: a [`Page`] of [`LaneSummary`].
     /// With a `here_for` param (a method name), or without `all`, the reply also
     /// has `here`, the reference of the request's own lane as that method (default
@@ -306,14 +317,27 @@ pub enum Method {
     /// choice wins: choices of other lanes it clashes with are deleted.
     ///
     /// Replies once the routes and listeners lead to the chosen lane:
-    /// `{lane, host, previous, mirrored, pending, replaced}`, where
-    /// `previous` is the box that served the hostnames before (null for this
-    /// machine), `mirrored` whether the chosen lane serves them now and
-    /// `replaced` the deleted choices as `[{lane, host}]`. For `host: null`
-    /// these are the choices that took the lane's hostnames. A box known here
-    /// but not connected keeps the choice until it connects: the reply then
-    /// has `mirrored: false` and `pending: true`. A switch emits one
-    /// `remote.warning` notice with code `lane_switched`. Errors, each with a
+    /// `{lane, host, previous, mirrored, pending, waits_for,
+    /// nothing_to_mirror, replaced}`, where `previous` is the box that served
+    /// the hostnames before (null for this machine), `mirrored` whether the
+    /// chosen lane serves them now and `replaced` the deleted choices as
+    /// `[{lane, host}]`. For `host: null` these are the choices that took the
+    /// lane's hostnames. Clients read the reply with
+    /// [`remote::UseOutcome::of_reply`].
+    ///
+    /// A box known here but not connected keeps the choice until it
+    /// connects, and a connected box whose lane this machine has not mirrored
+    /// yet, such as right after `connect`, until it is: the reply then has
+    /// `mirrored: false`, `pending: true`, `waits_for` `connect` or `mirror`
+    /// ([`remote::WaitsFor`], null when not pending) and as `previous` the
+    /// box that serves the hostnames meanwhile. A daemon from before
+    /// `waits_for` leaves it out, and only a box that is not connected made
+    /// its choices pending. `nothing_to_mirror` is true when the chosen box
+    /// lane has nothing this machine mirrors (no service, container or
+    /// external port). The choice is kept, and applies once the lane has
+    /// such a unit. A switch emits one `remote.warning` notice with code
+    /// `lane_switched`, also a choice that applies later (unless the daemon
+    /// restarted meanwhile). Errors, each with a
     /// `message`: `box_unknown`, `lane_not_on_box` (the connected box has no
     /// such lane), `local_lane_running` (a running local lane, named by
     /// `local_lane`, keeps the hostnames or has the same reference. Its
@@ -554,6 +578,17 @@ pub struct Selection {
     /// give units other settings than these. Older daemons ignore it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub needs_profile_settings: bool,
+    /// Send [`events::START_ACCEPTED`] on this request once the start is
+    /// installed, whatever `events` says (`start`, `restart` and `reload`; see
+    /// [`features::START_ACCEPTED`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub accepted: bool,
+}
+
+/// Params of [`Method::StartCancel`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartCancelParams {
+    pub start_id: u64,
 }
 
 /// Profile name that resets a lane to its default selection (see [`Selection::profiles`]).
@@ -1446,6 +1481,56 @@ pub mod remote {
         pub host: Option<String>,
     }
 
+    /// What a pending `remote.use` choice waits for, as its reply's
+    /// `waits_for`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum WaitsFor {
+        /// The chosen box to connect.
+        Connect,
+        /// This machine to mirror the lane of the connected box.
+        Mirror,
+    }
+
+    /// What a `remote.use` reply says about the chosen lane, read the same
+    /// way by every client.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum UseOutcome {
+        /// The chosen lane serves the hostnames now.
+        Mirrored,
+        /// The choice applies once what it waits for happened.
+        Pending(WaitsFor),
+        /// The chosen box lane has nothing this machine mirrors: no service,
+        /// container or external port.
+        NothingToMirror,
+        /// Chosen, but not serving the hostnames for a reason `remote ls`
+        /// shows.
+        NotMirrored,
+    }
+
+    impl UseOutcome {
+        /// Reads a `remote.use` reply. A daemon from before `waits_for` made
+        /// only a disconnected box's choice pending, so a pending reply
+        /// without it waits for the box to connect. A reply without
+        /// `mirrored` counts as mirrored.
+        pub fn of_reply(reply: &serde_json::Value) -> Self {
+            let flag = |key: &str| reply.get(key).and_then(serde_json::Value::as_bool);
+            if flag("pending") == Some(true) {
+                let waits_for = reply
+                    .get("waits_for")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or(WaitsFor::Connect);
+                return Self::Pending(waits_for);
+            }
+            match (flag("mirrored"), flag("nothing_to_mirror")) {
+                (Some(false), Some(true)) => Self::NothingToMirror,
+                (Some(false), _) => Self::NotMirrored,
+                _ => Self::Mirrored,
+            }
+        }
+    }
+
     /// Reads a field that must be present but may be `null`. Serde lets an
     /// `Option` field be left out unless it has a `deserialize_with`.
     fn nullable<'de, D: serde::Deserializer<'de>>(
@@ -1468,7 +1553,8 @@ pub mod remote {
     /// `holds`, `containers` when only that lane's containers run, such as
     /// ones that came back after a reboot. `lane_switched` is a notice, not a
     /// problem: `lane`, `to` and `from` (boxes, null for this machine) and
-    /// `message`, after `remote.use` moved a lane.
+    /// `message`, after `remote.use` moved a lane or a pending choice of it
+    /// applied.
     pub const WARNING_EVENT: &str = "remote.warning";
     /// `{host}` on a client daemon, at most a few times a second, when what
     /// `host.list` says about the box changed apart from its link state (which
@@ -1786,6 +1872,11 @@ pub mod events {
     /// its outcome: after the start's last `lane.changed` and after the lane
     /// stopped counting it. `lane` is the canonical reference.
     pub const START_ENDED: &str = "start.ended";
+    /// `{lane, start_id}`, sent only on a request with
+    /// [`super::Selection::accepted`] once its start is installed on the lane,
+    /// before any event of that start. [`super::Method::StartCancel`] with this
+    /// `start_id` ends the start from then on. `lane` is the canonical reference.
+    pub const START_ACCEPTED: &str = "start.accepted";
     /// `{lane, task, state, exit_code?, reason?, finished_at_ms?}` for task runs.
     /// `state` is `started`, `skipped`, or how the run ended in unit state words:
     /// `exited`, `failed` (with the unit's `reason`) or `stopped`.
