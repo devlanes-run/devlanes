@@ -9,7 +9,9 @@ use std::{
 use devlanes_config::{ComposeFiles, ContainerConfig, PreparedContext, ProjectConfig, Run};
 use devlanes_core::ports::{PortBlock, PortName};
 use devlanes_proto::RpcError;
-use devlanes_resolve::{LaneFacts, ResolveError, ResolveInput, ResolvedLane};
+use devlanes_resolve::{
+    InputsKey, LaneFacts, References, ResolveError, ResolveInput, ResolvedLane,
+};
 use devlanes_state::{Allocation, BlockOwner};
 use serde_json::{Value, json};
 
@@ -128,6 +130,7 @@ impl Inner {
     ) -> Result<Arc<ResolvedLane>, RpcError> {
         self.resolve_planned(project, lane, fallback, None, None, None, false)
             .await
+            .map(|(resolved, _)| resolved)
     }
 
     /// Plans what `run <task>` needs: the task and, through its `steps`, the
@@ -150,18 +153,20 @@ impl Inner {
             .and_then(|config| task_units(config, task));
         self.resolve_planned(project, lane, None, None, Some(extra), only.as_ref(), false)
             .await
+            .map(|(resolved, _)| resolved)
     }
 
     /// Like [`Self::resolve_full`], against `config` instead of the lane's current
     /// one: a start keeps planning what it selected even if the file reloads.
     /// `only` limits the planned units as in [`devlanes_resolve::ResolveInput::only`].
+    /// Returns the plan with the key of its inputs, which its runs keep.
     pub(crate) async fn resolve_config(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
         config: Arc<devlanes_config::ProjectConfig>,
         only: Option<&BTreeSet<String>>,
-    ) -> Result<Arc<ResolvedLane>, RpcError> {
+    ) -> Result<(Arc<ResolvedLane>, InputsKey), RpcError> {
         self.resolve_planned(project, lane, None, Some(config), None, only, false)
             .await
     }
@@ -180,24 +185,21 @@ impl Inner {
     ) -> Result<Arc<ResolvedLane>, RpcError> {
         self.resolve_planned(project, lane, None, config, None, only, true)
             .await
+            .map(|(resolved, _)| resolved)
     }
 
-    /// Shared body of the resolve methods, under the lane's profiles; `config`
-    /// overrides the lane's, `extra` is layered over the lane's overrides, `only`
-    /// limits the planned units, and `dry` plans as [`Self::resolve_dry`] says.
-    #[allow(clippy::too_many_arguments)]
-    async fn resolve_planned(
+    /// What a plan of the lane reads, gathered without calling a contributor or
+    /// creating anything, so the drift pass can key it cheaply. `config`
+    /// replaces the lane's and `fallback` stands for a missing client env.
+    pub(crate) async fn gather(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
         fallback: Option<Arc<EnvMap>>,
         config: Option<Arc<devlanes_config::ProjectConfig>>,
-        extra: Option<&EnvMap>,
-        only: Option<&BTreeSet<String>>,
-        dry: bool,
-    ) -> Result<Arc<ResolvedLane>, RpcError> {
+    ) -> Result<Gathered, RpcError> {
         let reference = lane.st().reference(&project.name());
-        let (config, env, infra_ns) = {
+        let (config, env, infra, references) = {
             let st = lane.st();
             let config = match (config, st.config()) {
                 (Some(config), _) => config,
@@ -215,11 +217,49 @@ impl Inner {
                 .cloned()
                 .or(fallback)
                 .ok_or_else(|| RpcError::new("needs_env", json!({"lane": reference}), 1))?;
-            (config, env, st.infra().namespace_value())
+            // A start overtaken by a reload plans from a config the lane no
+            // longer keeps references for.
+            let references = st
+                .references()
+                .filter(|_| {
+                    st.config()
+                        .loaded()
+                        .is_some_and(|own| Arc::ptr_eq(own, &config))
+                })
+                .cloned();
+            (config, env, st.infra().namespace_value(), references)
         };
-        let mut inputs = self.lane_inputs(project, lane, &config).await?;
+        let references = references.unwrap_or_else(|| Arc::new(References::of(config.as_ref())));
+        let inputs = self.lane_inputs(project, lane, &config).await?;
+        Ok(Gathered {
+            config,
+            env,
+            infra,
+            inputs,
+            references,
+        })
+    }
+
+    /// Shared body of the resolve methods, under the lane's profiles; `config`
+    /// overrides the lane's, `extra` is layered over the lane's overrides, `only`
+    /// limits the planned units, and `dry` plans as [`Self::resolve_dry`] says.
+    /// Returns the plan with the key of what it read.
+    #[allow(clippy::too_many_arguments)]
+    async fn resolve_planned(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+        fallback: Option<Arc<EnvMap>>,
+        config: Option<Arc<devlanes_config::ProjectConfig>>,
+        extra: Option<&EnvMap>,
+        only: Option<&BTreeSet<String>>,
+        dry: bool,
+    ) -> Result<(Arc<ResolvedLane>, InputsKey), RpcError> {
+        let reference = lane.st().reference(&project.name());
+        let mut gathered = self.gather(project, lane, fallback, config).await?;
         if let Some(extra) = extra {
-            inputs
+            gathered
+                .inputs
                 .overrides
                 .extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
@@ -230,9 +270,13 @@ impl Inner {
                 .instrument(tracing::debug_span!("lane data"))
                 .await?;
         }
-        let mut input = inputs.input(self, &config, &env, &infra_ns);
-        input.contributors = if dry { &[] } else { &self.integ.contributors };
+        let mut input = gathered.input(self);
+        if dry {
+            input.contributors = &[];
+        }
         input.only = only;
+        let key = input.key(&gathered.references);
+        let (config, infra_ns) = (&gathered.config, &gathered.infra);
         let resolved = devlanes_resolve::resolve_lane(input)
             .instrument(tracing::debug_span!(
                 "resolve lane",
@@ -248,12 +292,12 @@ impl Inner {
                 .services
                 .values()
                 .map(|service| (service.name.as_str(), service.port, &service.ports)),
-            &infra_ns,
+            infra_ns,
         );
-        if let Some(error) = self.external_conflict(&config, lane, own) {
+        if let Some(error) = self.external_conflict(config, lane, own) {
             return Err(error);
         }
-        Ok(Arc::new(resolved))
+        Ok((Arc::new(resolved), key))
     }
 
     /// What resolving the lane against `config` reads besides the client env
@@ -557,7 +601,7 @@ impl Inner {
         };
         let primary = PrimaryWorktree {
             root: self.primary_path(project),
-            branch: branch.or_else(|| Some(project.st().primary_branch.clone())),
+            branch: branch.or_else(|| Some(project.st().primary_branch().to_owned())),
             relative: project.config_path().0,
         };
         self.provisional_shared_spec(&config, project.name(), &primary, env)
@@ -676,8 +720,34 @@ impl LaneInputs {
         input.overrides = &self.overrides;
         input.script_runners = &inner.integ.script_runners;
         input.ca_env = &inner.integ.ca_env;
-        input.public_https_port = inner.integ.routes.https_port();
+        input.public_https_port = inner.https_port;
         input
+    }
+}
+
+/// What a plan of a lane reads ([`Inner::gather`]).
+pub(crate) struct Gathered {
+    config: Arc<ProjectConfig>,
+    env: Arc<EnvMap>,
+    infra: Value,
+    inputs: LaneInputs,
+    /// What `config`'s expressions read of `lanes.main` and `projects`.
+    references: Arc<References>,
+}
+
+impl Gathered {
+    /// The resolver's input with every contributor and no unit limit.
+    fn input<'a>(&'a self, inner: &'a Inner) -> ResolveInput<'a> {
+        let mut input = self
+            .inputs
+            .input(inner, &self.config, &self.env, &self.infra);
+        input.contributors = &inner.integ.contributors;
+        input
+    }
+
+    /// The key of a plan of these inputs ([`ResolveInput::key`]).
+    pub(crate) fn key(&self, inner: &Inner) -> InputsKey {
+        self.input(inner).key(&self.references)
     }
 }
 

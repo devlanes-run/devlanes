@@ -715,8 +715,8 @@ impl Inner {
     /// and the next activity or tick tries again.
     pub(crate) async fn wake_lane(
         self: &Arc<Self>,
-        project: &ProjectRt,
-        lane: &LaneRt,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
         activity: Option<Activity>,
     ) -> bool {
         let board = &self.opts.idle;

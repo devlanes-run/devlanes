@@ -433,17 +433,13 @@ impl Inner {
     }
 
     /// After a namespace change outside a start: routes follow the new ports,
-    /// and the running units that read them show drift.
+    /// and the lane's event carries the drift of the units that read them.
     pub(crate) async fn infra_namespace_changed(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
     ) {
         self.refresh_views(project).await;
-        let running = lane.st().any_running();
-        if running {
-            self.update_drift(project, lane).await;
-        }
         self.emit_lane(project, lane);
     }
 }

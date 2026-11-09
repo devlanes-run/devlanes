@@ -337,7 +337,6 @@ pub(crate) struct LaneSt {
     record: Option<Lane>,
     pub unassigned: Option<RpcError>,
     config: ConfigState,
-    pub config_changed: bool,
     env: Option<Arc<EnvMap>>,
     overrides: EnvMap,
     /// Profiles of the last start, in the order given; empty means the default.
@@ -424,28 +423,24 @@ pub(crate) struct LaneSt {
     /// names another project, the lane's layout and routes keep following it, so a
     /// typo or a rebase conflict does not take running services off the proxy.
     pub last_good: Option<Arc<ProjectConfig>>,
-    /// How the running units differ from what the current config would start, by
-    /// unit; see [`crate::drift`].
-    pub drift: BTreeMap<String, crate::drift::UnitDrift>,
-    /// The infra settings differ from the ones of the lane's last whole start.
-    pub infra_changed: bool,
-    /// The config and services of the lane's last whole start, which `added` and
-    /// `infra_changed` compare against.
+    /// How the running units differ from what the current config would start;
+    /// written only by the lane's drift pass ([`crate::drift`]).
+    drift: crate::drift::Drift,
+    /// The infra settings and left-out units of the lane's last whole start,
+    /// which `infra_changed` and `added` compare against.
     started_with: Option<crate::drift::StartedWith>,
+    /// The last run of each service the config no longer has, once it stopped:
+    /// `logs`, `debug why` and `debug errors` still find it.
+    past: BTreeMap<String, UnitRec>,
+    /// What the expressions of the loaded config read of `lanes.main` and
+    /// `projects`, kept with it.
+    references: Option<Arc<devlanes_resolve::References>>,
+    /// Ticked by every setter of a fact above.
+    facts: crate::units::FactsClock,
     /// Settings this worktree's file sets differently from the primary worktree's,
     /// where the primary's applies (`project_setting_ignored`) or the lanes share one
     /// container (`infra_spec_conflict`).
     pub divergent: Vec<devlanes_proto::LaneWarning>,
-    /// Why the last drift computation could not plan the running units, which a
-    /// `reload` reports instead of "nothing to reload".
-    pub drift_error: Option<RpcError>,
-    /// Bumped by every drift update, start and stop, so a computation that began
-    /// before one of them does not overwrite its result.
-    pub drift_generation: u64,
-    /// Calls of `update_drift` under way on this lane.
-    pub drift_updates: usize,
-    /// The `drift_generation` of the last drift computation that was applied.
-    pub drift_applied: u64,
     /// Set while an explicit daemon shutdown runs this lane's `lane.stop`
     /// tasks: their spawns pass the refusal that starts with the shutdown.
     pub shutdown_hooks: bool,
@@ -543,12 +538,14 @@ impl PowerWord for devlanes_core::Power {
 pub(crate) const ALIAS_MARK: &str = "#lane=";
 
 impl LaneSt {
-    /// A lane in its initial, unassigned state.
+    /// A lane in its initial, unassigned state, whose facts tick `facts`, the
+    /// engine's clock.
     pub(crate) fn new(
         identity: String,
         path: PathBuf,
         branch: Option<String>,
         present: bool,
+        facts: crate::units::FactsClock,
     ) -> Self {
         Self {
             identity,
@@ -558,7 +555,6 @@ impl LaneSt {
             record: None,
             unassigned: None,
             config: ConfigState::Missing,
-            config_changed: false,
             env: None,
             overrides: EnvMap::new(),
             profiles: Vec::new(),
@@ -592,14 +588,12 @@ impl LaneSt {
             config_stamp: None,
             config_files: Vec::new(),
             last_good: None,
-            drift: BTreeMap::new(),
-            infra_changed: false,
+            drift: crate::drift::Drift::default(),
             started_with: None,
+            past: BTreeMap::new(),
+            references: None,
+            facts,
             divergent: Vec::new(),
-            drift_error: None,
-            drift_generation: 0,
-            drift_updates: 0,
-            drift_applied: 0,
             shutdown_hooks: false,
             wanted: false,
             sweeping: false,
@@ -628,11 +622,14 @@ impl LaneSt {
         self.path = path;
         self.branch = branch;
         self.present = present;
+        self.facts.tick();
     }
 
     /// Records that the worktree's folder is gone; returns whether it was there.
     pub(crate) fn mark_missing(&mut self) -> bool {
-        std::mem::replace(&mut self.present, false)
+        let was = std::mem::replace(&mut self.present, false);
+        self.facts.tick();
+        was
     }
 
     /// The lane's record; `None` while unassigned.
@@ -643,6 +640,7 @@ impl LaneSt {
     /// Replaces the lane's record.
     pub(crate) fn set_record(&mut self, record: Option<Lane>) {
         self.record = record;
+        self.facts.tick();
     }
 
     /// The lane's port block and offsets; `None` while it has none.
@@ -653,6 +651,7 @@ impl LaneSt {
     /// Replaces the lane's port block and offsets.
     pub(crate) fn set_allocation(&mut self, allocation: Option<Allocation>) {
         self.allocation = allocation;
+        self.facts.tick();
     }
 
     /// The project file as of the last reload.
@@ -660,9 +659,19 @@ impl LaneSt {
         &self.config
     }
 
-    /// Stores the project file a reload read.
+    /// Stores the project file a reload read, with what its expressions read.
     pub(crate) fn set_config(&mut self, config: ConfigState) {
+        self.references = config
+            .loaded()
+            .map(|config| Arc::new(devlanes_resolve::References::of(config.as_ref())));
         self.config = config;
+        self.facts.tick();
+    }
+
+    /// What the expressions of the loaded config read of `lanes.main` and
+    /// `projects`; `None` while no config is loaded.
+    pub(crate) fn references(&self) -> Option<&Arc<devlanes_resolve::References>> {
+        self.references.as_ref()
     }
 
     /// The lane's layout; `None` before it first resolved or once it no longer does.
@@ -673,6 +682,7 @@ impl LaneSt {
     /// Replaces the lane's layout.
     pub(crate) fn set_view(&mut self, view: Option<Arc<LaneView>>) {
         self.view = view;
+        self.facts.tick();
     }
 
     /// The client environment of the lane's last start; `None` before one.
@@ -683,6 +693,7 @@ impl LaneSt {
     /// Replaces the lane's client environment.
     pub(crate) fn set_env(&mut self, env: Arc<EnvMap>) {
         self.env = Some(env);
+        self.facts.tick();
     }
 
     /// The lane's `--env` overrides.
@@ -693,6 +704,7 @@ impl LaneSt {
     /// Replaces the lane's `--env` overrides.
     pub(crate) fn set_overrides(&mut self, overrides: EnvMap) {
         self.overrides = overrides;
+        self.facts.tick();
     }
 
     /// Profiles of the last start, in the order given; empty means the default.
@@ -703,27 +715,106 @@ impl LaneSt {
     /// Replaces the lane's profiles.
     pub(crate) fn set_profiles(&mut self, profiles: Vec<String>) {
         self.profiles = profiles;
+        self.facts.tick();
     }
 
-    /// The lane's units that ran under this daemon, by unit name.
+    /// The lane's units that ran under this daemon, by unit name: units of the
+    /// current config, and removed ones while they run.
     pub(crate) fn units(&self) -> &BTreeMap<String, UnitRec> {
         &self.units
     }
 
-    /// Records a run of `name`, replacing the unit's previous one.
+    /// Records a run of `name`, replacing the unit's previous one. The one
+    /// place a run is inserted: the unit is no longer a past one, nor left out.
     pub(crate) fn record_unit(&mut self, name: String, rec: UnitRec) {
+        self.past.remove(&name);
+        if let Some(started) = &mut self.started_with {
+            started.left_out.remove(&name);
+        }
         self.units.insert(name, rec);
+        self.facts.tick();
     }
 
     /// The record of `name`, to change in place.
     pub(crate) fn unit_mut(&mut self, name: &str) -> Option<&mut UnitRec> {
+        // Under the lane lock the caller holds, so a pass that reads the new
+        // count also sees the change.
+        self.facts.tick();
         self.units.get_mut(name)
     }
 
     /// Forgets every unit and orphan, as a lane whose records are released does.
     pub(crate) fn clear_units(&mut self) {
         self.units.clear();
+        self.past.clear();
         self.orphans.clear();
+        self.facts.tick();
+    }
+
+    /// The last runs of services the config no longer has, by unit name.
+    pub(crate) fn past(&self) -> &BTreeMap<String, UnitRec> {
+        &self.past
+    }
+
+    /// The record of `name`, or its last run when the config dropped it.
+    pub(crate) fn unit_or_past(&self, name: &str) -> Option<&UnitRec> {
+        self.units.get(name).or_else(|| self.past.get(name))
+    }
+
+    /// Moves the records of services that no longer run and that the current
+    /// layout does not lay out to [`Self::past`], with their usage. Checked
+    /// against the lane as it is now, so a run spawned meanwhile stays.
+    pub(crate) fn retire_dropped(&mut self) {
+        let Some(view) = &self.view else {
+            return;
+        };
+        let dropped: Vec<String> = self
+            .units
+            .iter()
+            .filter(|(name, rec)| {
+                rec.kind == Kind::Service
+                    && !rec.host.is_alive()
+                    && !view.services.iter().any(|service| service.unit == **name)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        if dropped.is_empty() {
+            return;
+        }
+        for name in dropped {
+            if let Some(rec) = self.units.remove(&name) {
+                self.usage.remove(&name);
+                self.past.insert(name, rec);
+            }
+        }
+        self.facts.tick();
+    }
+
+    /// The lane's drift as its last pass applied it.
+    pub(crate) fn drift(&self) -> &crate::drift::Drift {
+        &self.drift
+    }
+
+    /// Stores a drift pass's result; returns whether what clients see changed.
+    pub(crate) fn apply_drift(&mut self, drift: crate::drift::Drift) -> bool {
+        let changed = !self.drift.shows_like(&drift);
+        self.drift = drift;
+        changed
+    }
+
+    /// The project file changed what this lane runs: some unit has drift, the
+    /// infra settings changed, the running units could not be compared with the
+    /// file, or a start still running planned from a config the file no longer
+    /// matches.
+    pub(crate) fn config_changed(&self) -> bool {
+        !self.drift.units.is_empty()
+            || self.drift.infra_changed
+            || self.drift.unplanned.is_some()
+            || self.starts.iter().any(|start| {
+                start
+                    .planned_from()
+                    .is_some_and(|used| !crate::drift::same_config(self.config.loaded(), used))
+            })
     }
 
     /// Previous daemons' processes still running, by unit name.
@@ -734,11 +825,14 @@ impl LaneSt {
     /// Records a previous daemon's process of `name` unless one is recorded.
     pub(crate) fn insert_orphan(&mut self, name: String, orphan: Orphan) {
         self.orphans.entry(name).or_insert(orphan);
+        self.facts.tick();
     }
 
     /// Forgets the orphan `name`, once it ended or was stopped.
     pub(crate) fn remove_orphan(&mut self, name: &str) -> Option<Orphan> {
-        self.orphans.remove(name)
+        let removed = self.orphans.remove(name);
+        self.facts.tick();
+        removed
     }
 
     /// Units a start was asked for and has not handed to the start gate or
@@ -749,6 +843,8 @@ impl LaneSt {
 
     /// The waiting units, to add or remove some.
     pub(crate) fn waiting_mut(&mut self) -> &mut BTreeMap<String, Waiting> {
+        // Under the lane lock, as in `unit_mut`.
+        self.facts.tick();
         &mut self.waiting
     }
 
@@ -760,6 +856,25 @@ impl LaneSt {
     /// Replaces what the lane's last whole start brought up.
     pub(crate) fn set_started_with(&mut self, started: Option<crate::drift::StartedWith>) {
         self.started_with = started;
+        self.facts.tick();
+    }
+
+    /// Adds the units among `units` that have no record to the units left out
+    /// on purpose since the lane's last whole start, once a start's services
+    /// phase ended. A unit leaves them when it runs ([`Self::record_unit`]).
+    pub(crate) fn leave_out_unrecorded(&mut self, units: impl IntoIterator<Item = String>) {
+        let Some(started) = &mut self.started_with else {
+            return;
+        };
+        let before = started.left_out.len();
+        started.left_out.extend(
+            units
+                .into_iter()
+                .filter(|unit| !self.units.contains_key(unit)),
+        );
+        if started.left_out.len() != before {
+            self.facts.tick();
+        }
     }
 
     /// For an extra lane of another worktree's folder (`lane new --name`): the
@@ -884,6 +999,9 @@ impl LaneSt {
     pub(crate) fn replace_infra(&mut self, read: InfraRead) -> bool {
         let changed = self.infra.replace(read);
         self.claim_containers();
+        if changed {
+            self.facts.tick();
+        }
         changed
     }
 
@@ -892,6 +1010,10 @@ impl LaneSt {
     pub(crate) fn merge_infra(&mut self, read: &InfraRead, keys: &BTreeSet<String>) -> bool {
         let changed = self.infra.merge(read, keys);
         self.claim_containers();
+        // Only the namespace reaches a plan.
+        if changed {
+            self.facts.tick();
+        }
         changed
     }
 
@@ -1022,48 +1144,6 @@ impl LaneSt {
             .any(|unit| unit.kind == Kind::Service && unit.host.is_alive())
     }
 
-    /// Whether the lane's view lays out a service unit named `name`; true while
-    /// there is no view yet.
-    fn lays_out(&self, name: &str) -> bool {
-        self.view
-            .as_ref()
-            .is_none_or(|view| view.services.iter().any(|service| service.unit == name))
-    }
-
-    /// Whether status lists this record. A service the config dropped is listed
-    /// while it runs; once it stopped or failed only `logs` and `debug` show it,
-    /// since it no longer is one of the lane's services.
-    pub(crate) fn shows_unit(&self, name: &str, unit: &UnitRec) -> bool {
-        unit.kind != Kind::Service || unit.host.is_alive() || self.lays_out(name)
-    }
-
-    /// Drops from the last whole start the units the config dropped and that no
-    /// longer run: they are not "left out on purpose", so adding them back to the
-    /// file makes them `added`.
-    pub(crate) fn forget_dropped_units(&mut self) {
-        let Some(started) = &self.started_with else {
-            return;
-        };
-        if self.view.is_none() {
-            return;
-        }
-        let dropped: Vec<String> = started
-            .units
-            .iter()
-            .filter(|unit| {
-                !self.lays_out(unit)
-                    && !self.orphans.contains_key(*unit)
-                    && !self.units.get(*unit).is_some_and(|rec| rec.host.is_alive())
-            })
-            .cloned()
-            .collect();
-        if let Some(started) = &mut self.started_with {
-            for unit in dropped {
-                started.units.remove(&unit);
-            }
-        }
-    }
-
     /// Canonical reference: `project@index`; while unassigned, an extra lane's
     /// `project@<name>`, else `project@<dir>`.
     pub(crate) fn reference(&self, project: &str) -> String {
@@ -1096,10 +1176,8 @@ impl LaneSt {
         if self.starts_in_phases() > 0 {
             return "starting";
         }
-        let failed = self.units.iter().any(|(name, unit)| {
-            unit.kind == Kind::Service
-                && matches!(unit.host.state(), UnitState::Failed(_))
-                && self.shows_unit(name, unit)
+        let failed = self.units.values().any(|unit| {
+            unit.kind == Kind::Service && matches!(unit.host.state(), UnitState::Failed(_))
         });
         if failed {
             return "failed";
@@ -1185,6 +1263,8 @@ pub(crate) struct LaneRt {
     /// Held while a start checks and runs setup entries, so two starts never
     /// run the same entry at once.
     pub setup: tokio::sync::Mutex<()>,
+    /// The lane's single-flight drift job.
+    pub drift_job: crate::drift::DriftJob,
 }
 
 impl LaneRt {
@@ -1368,6 +1448,9 @@ pub(crate) struct StartCtl {
     /// Task units the start may still run, known once it resolved the lane. A
     /// stop can name them before (or while) they spawn.
     planned: Mutex<BTreeSet<String>>,
+    /// The config the start plans from, once it took it; a reload in the
+    /// middle of the start leaves it as it was.
+    config: std::sync::OnceLock<Arc<ProjectConfig>>,
 }
 
 impl StartCtl {
@@ -1387,7 +1470,18 @@ impl StartCtl {
             withdrawn: Mutex::new(BTreeMap::new()),
             tasks: Mutex::new(BTreeMap::new()),
             planned: Mutex::new(BTreeSet::new()),
+            config: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Records the config the start plans from. The first call wins.
+    pub(crate) fn plans_from(&self, config: Arc<ProjectConfig>) {
+        let _ = self.config.set(config);
+    }
+
+    /// The config the start plans from, once it took one.
+    pub(crate) fn planned_from(&self) -> Option<&Arc<ProjectConfig>> {
+        self.config.get()
     }
 
     /// The `start_id` of this start.
@@ -1576,12 +1670,16 @@ impl Drop for StartSlot {
 /// Mutable state of a project.
 pub(crate) struct ProjectSt {
     pub name: String,
-    pub root: PathBuf,
-    pub common_dir: Option<PathBuf>,
-    pub primary_branch: String,
+    /// Where the project's repository is; changed only through
+    /// [`ProjectRt::set_home`], since plans read the primary worktree.
+    root: PathBuf,
+    common_dir: Option<PathBuf>,
+    primary_branch: String,
     /// Environment of the last request that carried one, for auto-started worktrees.
     pub last_env: Option<Arc<EnvMap>>,
-    pub lanes: BTreeMap<WorktreeId, Arc<LaneRt>>,
+    /// Changed only through [`ProjectRt::insert_lane`] and
+    /// [`ProjectRt::remove_lane`], since other lanes' plans read it.
+    lanes: BTreeMap<WorktreeId, Arc<LaneRt>>,
     /// The project file's directory relative to each worktree root.
     pub config_dir: PathBuf,
     /// The project file's name in that directory, `devlanes.yaml` unless `--file`
@@ -1608,9 +1706,83 @@ pub(crate) struct ProjectRt {
     pub st: Mutex<ProjectSt>,
     pub watching: AtomicBool,
     pub watch: tokio_util::sync::CancellationToken,
+    /// The engine's clock, ticked by changes to the lane map and config path.
+    pub facts: crate::units::FactsClock,
+}
+
+impl ProjectSt {
+    /// A project's state with `lanes`.
+    pub(crate) fn new(
+        name: String,
+        root: PathBuf,
+        common_dir: Option<PathBuf>,
+        primary_branch: String,
+        lanes: BTreeMap<WorktreeId, Arc<LaneRt>>,
+        config_dir: PathBuf,
+        config_file: String,
+    ) -> Self {
+        Self {
+            name,
+            root,
+            common_dir,
+            primary_branch,
+            last_env: None,
+            lanes,
+            config_dir,
+            config_file,
+        }
+    }
+
+    /// The lane runtime of `worktree`.
+    pub(crate) fn lane(&self, worktree: &WorktreeId) -> Option<&Arc<LaneRt>> {
+        self.lanes.get(worktree)
+    }
+
+    /// The repository root the project was registered from.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The repository's Git common directory; `None` outside Git.
+    pub(crate) fn common_dir(&self) -> Option<&Path> {
+        self.common_dir.as_deref()
+    }
+
+    /// The branch of the primary worktree.
+    pub(crate) fn primary_branch(&self) -> &str {
+        &self.primary_branch
+    }
 }
 
 impl ProjectRt {
+    /// Puts `lane` in the project's map as the runtime of `worktree`.
+    pub(crate) fn insert_lane(&self, worktree: WorktreeId, lane: Arc<LaneRt>) {
+        self.st().lanes.insert(worktree, lane);
+        self.facts.tick();
+    }
+
+    /// Points the project at the repository it now lives in.
+    pub(crate) fn set_home(
+        &self,
+        root: PathBuf,
+        common_dir: Option<PathBuf>,
+        primary_branch: String,
+    ) {
+        {
+            let mut st = self.st();
+            st.root = root;
+            st.common_dir = common_dir;
+            st.primary_branch = primary_branch;
+        }
+        self.facts.tick();
+    }
+
+    /// Takes the runtime of `worktree` out of the project's map.
+    pub(crate) fn remove_lane(&self, worktree: &WorktreeId) {
+        self.st().lanes.remove(worktree);
+        self.facts.tick();
+    }
+
     /// Locks the project state for a short critical section.
     pub(crate) fn st(&self) -> MutexGuard<'_, ProjectSt> {
         lock(&self.st)
@@ -1629,9 +1801,12 @@ impl ProjectRt {
 
     /// Records where the project file now is.
     pub(crate) fn set_config_path(&self, dir: PathBuf, file: String) {
-        let mut st = self.st();
-        st.config_dir = dir;
-        st.config_file = file;
+        {
+            let mut st = self.st();
+            st.config_dir = dir;
+            st.config_file = file;
+        }
+        self.facts.tick();
     }
 
     /// Lanes in worktree order.
@@ -1922,7 +2097,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         }
     }
     for (name, unit) in &lane.units {
-        if lane.shows_unit(name, unit) && !units.iter().any(|summary| &summary.name == name) {
+        if !units.iter().any(|summary| &summary.name == name) {
             units.push(unit_summary(&reference, name, unit));
         }
     }
@@ -1936,6 +2111,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         apply_order(lane, summary);
         summary.drift = lane
             .drift
+            .units
             .get(&summary.name)
             .map(crate::drift::UnitDrift::wire);
         // Only supervised processes are throttled or frozen; orphans and finished
@@ -1963,10 +2139,6 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
     } else {
         lane.profiles.clone()
     };
-    // Nothing running has no drift, the rule `update_drift` applies. It also hides a
-    // flag that `reload_config` set on an idle lane while another operation held its
-    // `op`.
-    let live = lane.any_running() || !lane.starts.is_empty();
     LaneSummary {
         warnings: lane.warnings(&reference),
         reference,
@@ -1976,8 +2148,8 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         name: lane.alias().map(|(_, name)| name.to_owned()),
         path: lane.path.clone(),
         state: lane.state_word().into(),
-        config_changed: lane.config_changed && live,
-        infra_changed: lane.infra_changed && live,
+        config_changed: lane.config_changed(),
+        infra_changed: lane.drift.infra_changed,
         units,
         profile: profiles.first().cloned(),
         profiles,

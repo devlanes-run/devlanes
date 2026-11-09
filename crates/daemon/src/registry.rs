@@ -722,8 +722,8 @@ impl Inner {
         let (known_root, known_identity) = {
             let st = project.st();
             (
-                st.root.clone(),
-                st.common_dir.clone().unwrap_or_else(|| st.root.clone()),
+                st.root().to_path_buf(),
+                st.common_dir().unwrap_or(st.root()).to_path_buf(),
             )
         };
         if !same_path(&known_identity, &identity) {
@@ -879,10 +879,7 @@ impl Inner {
             })
             .await
             .map_err(store_error)?;
-        let mut st = project.st();
-        st.root = root.to_owned();
-        st.common_dir = common_dir;
-        st.primary_branch = primary_branch.to_owned();
+        project.set_home(root.to_owned(), common_dir, primary_branch.to_owned());
         Ok(())
     }
 
@@ -947,24 +944,10 @@ impl Inner {
             }
         }
         self.refresh_views(project).await;
-        self.drift_after_reload(project, &lanes).await;
-        Ok(())
-    }
-
-    /// Recomputes the drift of the running ones among `lanes` after their configs
-    /// were reloaded and views refreshed outside [`Self::fresh_config`].
-    pub(crate) async fn drift_after_reload(
-        self: &Arc<Self>,
-        project: &Arc<ProjectRt>,
-        lanes: &[Arc<LaneRt>],
-    ) {
-        for lane in lanes {
-            let running = lane.st().any_running();
-            if running {
-                self.update_drift(project, lane).await;
-                self.emit_lane(project, lane);
-            }
+        for lane in &lanes {
+            self.emit_lane(project, lane);
         }
+        Ok(())
     }
 
     /// Creates the in-memory project and loads its persisted worktrees and lanes.
@@ -989,6 +972,7 @@ impl Inner {
                 worktree.path.clone(),
                 worktree.branch.clone(),
                 worktree.present,
+                self.clock.clone(),
             );
             let record = lanes
                 .iter()
@@ -1010,30 +994,32 @@ impl Inner {
             id,
             sync: tokio::sync::Mutex::new(()),
             shared_infra: tokio::sync::RwLock::new(()),
-            st: std::sync::Mutex::new(ProjectSt {
+            st: std::sync::Mutex::new(ProjectSt::new(
                 name,
                 root,
                 common_dir,
                 primary_branch,
-                last_env: None,
-                lanes: map,
+                map,
                 config_dir,
                 config_file,
-            }),
+            )),
             watching: std::sync::atomic::AtomicBool::new(false),
             watch: self.shutdown.child_token(),
+            facts: self.clock.clone(),
         });
         lock(&self.projects).insert(id, project.clone());
+        // Other projects' plans read this one's running lanes.
+        self.clock.tick();
         Ok(project)
     }
 
     /// The primary worktree: lane 0 once it exists, else the [`primary_tree`], else
     /// the project root.
     pub(crate) fn primary_path(&self, project: &ProjectRt) -> PathBuf {
+        let lanes = project.lanes();
         let st = project.st();
-        let lanes: Vec<_> = st.lanes.values().cloned().collect();
-        let primary = st.primary_branch.clone();
-        let root = st.root.clone();
+        let primary = st.primary_branch().to_owned();
+        let root = st.root().to_path_buf();
         drop(st);
         let mut trees = Vec::with_capacity(lanes.len());
         for lane in &lanes {
@@ -1088,7 +1074,10 @@ impl Inner {
     ) -> Result<SyncReport, RpcError> {
         let (root, common_dir) = {
             let st = project.st();
-            (st.root.clone(), st.common_dir.clone())
+            (
+                st.root().to_path_buf(),
+                st.common_dir().map(Path::to_path_buf),
+            )
         };
         let Some(common_dir) = common_dir else {
             return Ok(SyncReport::default());
@@ -1141,7 +1130,7 @@ impl Inner {
                 .await
                 .map_err(store_error)?;
             seen.insert(record.id);
-            let existing = project.st().lanes.get(&record.id).cloned();
+            let existing = project.st().lane(&record.id).cloned();
             let lane = match existing {
                 Some(lane) => lane,
                 None => {
@@ -1152,9 +1141,10 @@ impl Inner {
                             tree.path.clone(),
                             tree.branch.clone(),
                             false,
+                            self.clock.clone(),
                         ),
                     );
-                    project.st().lanes.insert(record.id, lane.clone());
+                    project.insert_lane(record.id, lane.clone());
                     lane
                 }
             };
@@ -1269,8 +1259,12 @@ impl Inner {
         changed.extend(assigned);
         self.update_moves(project);
         self.refresh_views(project).await;
-        // The reload stamped these files, so the poller will not get to their drift.
-        self.drift_after_reload(project, &reloaded).await;
+        // The reload stamped these files, so the poller will not emit for them.
+        for lane in reloaded {
+            if !changed.iter().any(|known| Arc::ptr_eq(known, &lane)) {
+                changed.push(lane);
+            }
+        }
         for lane in changed {
             self.emit_lane(project, &lane);
         }
@@ -1296,7 +1290,7 @@ impl Inner {
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
     ) -> Result<Vec<Arc<LaneRt>>, RpcError> {
-        let primary = project.st().primary_branch.clone();
+        let primary = project.st().primary_branch().to_owned();
         // `lanes.max` is project-wide: the primary worktree's file sets it, and one that
         // leaves it unset means no limit. A lane's own file counts only while the
         // primary's does not load.
@@ -1392,7 +1386,7 @@ impl Inner {
     /// holding it moves off. Under CI a lane that holds lane 0 keeps it, and nobody
     /// moves onto it.
     pub(crate) fn update_moves(&self, project: &ProjectRt) {
-        let primary = project.st().primary_branch.clone();
+        let primary = project.st().primary_branch().to_owned();
         let lanes = project.lanes();
         let used: BTreeSet<u32> = lanes.iter().filter_map(|l| l.st().index()).collect();
         let free = (1..).find(|i| !used.contains(i)).unwrap_or(1);
@@ -1958,10 +1952,9 @@ impl Inner {
         vec![lane.st().path().join(config_dir).join(config_file)]
     }
 
-    /// Reloads one lane's config. A change while units run, or while a start or
-    /// another operation holds the lane, sets `config_changed`; running units are
-    /// never touched (plan 5.8). A file that names another project leaves the lane
-    /// with [`ConfigState::Elsewhere`].
+    /// Reloads one lane's config. Running units are never touched (plan 5.8); the
+    /// lane's drift says what the change means for them. A file that names another
+    /// project leaves the lane with [`ConfigState::Elsewhere`].
     pub(crate) async fn reload_config(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -2001,25 +1994,10 @@ impl Inner {
             },
             "config read"
         );
-        let in_flight = lane.op.try_write().is_err();
         {
             let mut st = lane.st();
             st.config_stamp = Some(stamp);
             st.config_files = files;
-            let before = match st.config() {
-                ConfigState::Loaded(config) => serde_json::to_value(config.as_ref()).ok(),
-                _ => None,
-            };
-            let after = match &config {
-                ConfigState::Loaded(config) => serde_json::to_value(config.as_ref()).ok(),
-                _ => None,
-            };
-            let differs = before != after || before.is_none();
-            // A start in flight spawns with the config it began with; the drift
-            // computed once it ends says what this edit changed.
-            if differs && (in_flight || !st.starts.is_empty()) {
-                st.config_changed = true;
-            }
             if let ConfigState::Loaded(loaded) = &config {
                 st.last_good = Some(loaded.clone());
             }
@@ -2052,12 +2030,6 @@ impl Inner {
             tracing::warn!(code = %error.code, "lane assignment failed");
         }
         self.refresh_views(project).await;
-        // After the refresh, so new ports have offsets and the layout lists new
-        // services. A `.env` edit leaves the config as it was, so plans decide.
-        let running = lane.st().any_running();
-        if running {
-            self.update_drift(project, lane).await;
-        }
         self.emit_lane(project, lane);
     }
 
@@ -2106,6 +2078,7 @@ impl Inner {
                 .map_or(u32::MAX, |i| if i == 0 { 0 } else { i })
         });
         let mut main_services: Option<Value> = None;
+        let mut replaced = Vec::new();
         for lane in lanes {
             let index = lane.st().index();
             if index.is_none() {
@@ -2167,6 +2140,12 @@ impl Inner {
                     .then_some(error);
                 }
             }
+            replaced.push(lane.clone());
+        }
+        // A changed layout is news, and a lane that reads `lanes.main` may now
+        // have drift from lane 0's: its event comes with a pass.
+        for lane in &replaced {
+            self.emit_lane_event(project, lane);
         }
         let _span = tracing::debug_span!("publish routes").entered();
         self.publish_routes();
@@ -2262,7 +2241,7 @@ impl Inner {
         input.contributors = &self.integ.contributors;
         input.ca_env = &self.integ.ca_env;
         // Each call builds the proxy's status, so read it once per view.
-        let https_port = self.integ.routes.https_port();
+        let https_port = self.https_port;
         input.public_https_port = https_port;
         let layout = devlanes_resolve::lane_layout(&input)
             .map_err(|error| crate::resolve::resolve_error(&error, reference))?;
@@ -2316,15 +2295,19 @@ impl Inner {
     }
 
     /// Emits `lane.changed` with a fresh summary and republishes routes.
-    pub(crate) fn emit_lane(&self, project: &ProjectRt, lane: &LaneRt) {
+    pub(crate) fn emit_lane(&self, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
         self.emit_lane_event(project, lane);
         self.publish_routes();
     }
 
     /// Emits `lane.changed` with a summary taken now. The lane's publish lock
     /// spans taking and sending it, so concurrent callers cannot deliver an older
-    /// summary after a newer one.
-    pub(crate) fn emit_lane_event(&self, project: &ProjectRt, lane: &LaneRt) {
+    /// summary after a newer one. A lane whose drift is behind gets a pass, whose
+    /// own `lane.changed` carries the new drift.
+    pub(crate) fn emit_lane_event(&self, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
+        if let Some(engine) = self.me.upgrade() {
+            engine.refresh_drift(project, lane);
+        }
         let name = project.name();
         let _publish = lock(&lane.publish);
         // A worktree without a lane is nobody's business; a cleaned lane already
@@ -2626,6 +2609,7 @@ pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
         desired: tokio::sync::Mutex::new(()),
         decide: tokio::sync::Mutex::new(()),
         setup: tokio::sync::Mutex::new(()),
+        drift_job: crate::drift::DriftJob::default(),
     })
 }
 

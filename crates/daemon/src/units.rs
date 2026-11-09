@@ -111,6 +111,27 @@ pub struct UnitInfo {
     /// Runs in a PTY. A pipe unit has no terminal to resize, and its bare `\n`
     /// line ends need a carriage return for the screen model.
     pub pty: bool,
+    /// Ticked when the run ends, since a lane's drift depends on what runs.
+    pub facts: FactsClock,
+}
+
+/// Counts changes to the facts a lane's drift is computed from. One per
+/// engine, shared by every lane, since a lane's plan also reads lane 0's
+/// layout and other projects' running lanes.
+#[derive(Debug, Clone, Default)]
+pub struct FactsClock(Arc<std::sync::atomic::AtomicU64>);
+
+impl FactsClock {
+    /// Records that a fact changed. Called after the change, so whoever reads
+    /// the new count also sees it.
+    pub fn tick(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// The number of changes so far.
+    pub fn now(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
 }
 
 /// Disk bounds from the user's `logs.retention`, applied to every unit's log.
@@ -397,6 +418,7 @@ impl UnitHost {
         }));
         inner.log_signals.finish.store(true, Ordering::SeqCst);
         let _ = inner.log_tx.send(LogCommand::Finish);
+        inner.info.facts.tick();
         Ok(host)
     }
 
@@ -1112,6 +1134,7 @@ impl Inner {
         // Before the exit goes out, so whoever sees it also sees the time.
         self.ended_at_ms.store(now_ms(), Ordering::SeqCst);
         self.exit.send_replace(Some(outcome));
+        self.info.facts.tick();
         // The flag also finishes a log thread that is between commands.
         self.log_signals.finish.store(true, Ordering::SeqCst);
         let _ = self.log_tx.send(LogCommand::Finish);
@@ -1480,6 +1503,7 @@ mod tests {
             log_dir: dir.path().join(run.to_string()),
             retention: LogRetention::default(),
             pty,
+            facts: FactsClock::default(),
         };
         let identity = Some(unit.identity);
         UnitHost::start(info, unit, identity)

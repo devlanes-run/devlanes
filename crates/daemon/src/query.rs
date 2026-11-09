@@ -302,6 +302,8 @@ impl Inner {
             None => None,
         };
         let lanes = scope.lanes();
+        // Drift that includes every change made before this request.
+        self.current_drift(&lanes).await;
         let mine = args.mine.then_some(&context.actor);
         let items = self.summaries(&lanes, mine);
         if args.watch {
@@ -347,6 +349,7 @@ impl Inner {
             .read_scope(context, false, Policy::of(Method::LaneList))
             .await?
             .lanes();
+        self.current_drift(&lanes).await;
         serde_json::to_value(Page::complete(self.summaries(&lanes, None)))
             .map_err(|e| internal("encode", e))
     }
@@ -360,7 +363,7 @@ impl Inner {
         query: LogQuery,
     ) -> Result<Resumable, RpcError> {
         let (project, lane) = pair;
-        let host = lane.st().units().get(unit).map(|rec| rec.host.clone());
+        let host = lane.st().unit_or_past(unit).map(|rec| rec.host.clone());
         match host {
             // A closed run's snapshot misses notes written after it, such as a
             // failed respawn's `[devlanes]` line; the directory has them.
@@ -415,9 +418,11 @@ impl Inner {
                     .map(|s| (s.name.as_str(), s.unit.as_str()))
             });
             let selectors = crate::engine::expand_replicas(&selectors, services);
+            // A service the file dropped keeps its last run's logs.
             let mut names: Vec<(String, Vec<String>)> = st
                 .units()
                 .iter()
+                .chain(st.past())
                 .filter(|(_, rec)| !query.mine || is_mine(&rec.host.info().actor, &context.actor))
                 .map(|(name, rec)| (name.clone(), rec.tags.clone()))
                 .collect();
@@ -753,6 +758,7 @@ impl Inner {
                 let units: Vec<_> = st
                     .units()
                     .iter()
+                    .chain(st.past())
                     .map(|(name, rec)| {
                         (
                             name.clone(),
@@ -877,7 +883,7 @@ impl Inner {
                 .record()
                 .map(|record| record.services.clone())
                 .unwrap_or_default();
-            let host = st.units().get(&name).map(|rec| rec.host.clone());
+            let host = st.unit_or_past(&name).map(|rec| rec.host.clone());
             let service = st
                 .view()
                 .and_then(|v| v.services.iter().find(|s| s.unit == name).cloned());
@@ -996,7 +1002,10 @@ impl Inner {
         let mut result =
             json!({"lane": reference, "unit": name, "state": state, "reasons": reasons});
         // What the last run left behind: kept daemons, or processes that escaped.
-        let leftovers = lane.st().units().get(&name).map(|rec| rec.leftovers(&name));
+        let leftovers = lane
+            .st()
+            .unit_or_past(&name)
+            .map(|rec| rec.leftovers(&name));
         if let Some(leftovers) = leftovers.filter(|l| !l.is_empty()) {
             if !leftovers.left_running.is_empty() {
                 result["left_running"] = json!(leftovers.left_running);

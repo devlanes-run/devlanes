@@ -104,8 +104,12 @@ pub(crate) fn copy_env(env: &Environment) -> Environment {
 }
 
 impl SpawnRequest {
-    /// Request for one service replica.
-    pub(crate) fn service(service: &ResolvedService, actor: &Actor) -> Self {
+    /// Request for one service replica of a plan whose inputs have `inputs`.
+    pub(crate) fn service(
+        service: &ResolvedService,
+        actor: &Actor,
+        inputs: devlanes_resolve::InputsKey,
+    ) -> Self {
         let mut ports = service.ports.clone();
         ports.insert("default".into(), service.port);
         let mut urls = vec![service.url.clone()];
@@ -131,7 +135,7 @@ impl SpawnRequest {
             goal: RunGoal::Ready(Some(ready_word(&service.ready.check))),
             role: "service",
             keep_awake: service.keep_awake,
-            fingerprint: Some(crate::drift::Fingerprint::of(service)),
+            fingerprint: Some(crate::drift::Fingerprint::of(service, inputs)),
         }
     }
 
@@ -585,6 +589,9 @@ pub(crate) struct StartCx {
     pub reference: String,
     pub actor: Actor,
     pub services: Vec<String>,
+    /// `services` as selected, before resolution dropped the ones whose
+    /// `autostart` evaluated false.
+    pub selected: Vec<String>,
     /// `Selection::autostart_pending`: entries of `services` that resolution drops
     /// when their `autostart` expression evaluates to false.
     pub autostart_pending: Vec<String>,
@@ -600,6 +607,8 @@ pub(crate) struct StartCx {
     pub setup_only: bool,
     pub session: Option<Session>,
     pub resolved: Option<Arc<ResolvedLane>>,
+    /// The key of `resolved`'s inputs, which the units it spawns keep.
+    pub inputs: Option<devlanes_resolve::InputsKey>,
     pub deadline: Instant,
     pub already_running: Vec<String>,
     pub failures: Vec<UnitFailureData>,
@@ -633,12 +642,6 @@ pub(crate) struct StartCx {
     /// This start wrote new profiles to the lane: it named profiles other than
     /// the ones the lane had, and stored them.
     pub profiles_changed: bool,
-    /// Recompute drift once the start ends: it changed a running lane's profiles,
-    /// which the units it left alone may not have.
-    pub recheck_drift: bool,
-    /// Running units the start left alone whose settings differ from what its
-    /// profiles plan, with the differing fields.
-    pub profile_stale: Vec<(String, Vec<String>)>,
 }
 
 impl StartCx {
@@ -972,7 +975,8 @@ impl LanePhase for ResolvePhase {
             .resolve_config(&cx.project, &cx.lane, cx.config.clone(), only.as_ref())
             .await
         {
-            Ok(resolved) => {
+            Ok((resolved, inputs)) => {
+                cx.inputs = Some(inputs);
                 // Infra came up already when it was on; this governs `infra.setup`.
                 cx.infra_enabled &= resolved.infra_enabled;
                 // A failed plan keeps its service, so the services phase reports it.
@@ -1398,6 +1402,20 @@ impl LanePhase for ServicesPhase {
         let spawned = Self::spawn(engine, cx).await;
         // Nothing more spawns: a waiting restart of a withdrawn unit may go.
         cx.ctl.services_done.cancel();
+        // What a bring-up selected and did not run (withdrawn, an `autostart`
+        // that evaluated false) was left out on purpose, and so is what any
+        // start left queued in the start gate at its deadline until it spawns:
+        // neither is `added`. Before the units leave `waiting`, so no pass sees
+        // them in neither.
+        let units: Vec<String> = if cx.whole_lane {
+            cx.selected
+                .iter()
+                .flat_map(|service| crate::drift::units_of(&cx.config, service))
+                .collect()
+        } else {
+            cx.ctl.started()
+        };
+        cx.lane.st().leave_out_unrecorded(units);
         engine.forget_waiting(&cx.project, &cx.lane, cx.start_id);
         let joined = match spawned {
             Ok(joined) => joined,
@@ -1442,7 +1460,7 @@ impl ServicesPhase {
         if cx.setup_only {
             return Err(PhaseResult::Skipped(reason("setup_only", json!({}))));
         }
-        let Some(resolved) = cx.resolved.clone() else {
+        let (Some(resolved), Some(inputs)) = (cx.resolved.clone(), cx.inputs) else {
             return Err(PhaseResult::Skipped(reason("not_resolved", json!({}))));
         };
         if cx.services.is_empty() {
@@ -1483,22 +1501,13 @@ impl ServicesPhase {
                     });
                     continue;
                 }
-                let (alive, fingerprint) = cx
+                let alive = cx
                     .lane
                     .st()
                     .units()
                     .get(&service.unit)
-                    .filter(|rec| rec.host.is_alive())
-                    .map_or((false, None), |rec| (true, rec.fingerprint.clone()));
+                    .is_some_and(|rec| rec.host.is_alive());
                 if alive {
-                    if cx.profiles_changed
-                        && let Some(fingerprint) = fingerprint
-                    {
-                        let fields = fingerprint.changes(&crate::drift::Fingerprint::of(service));
-                        if !fields.is_empty() {
-                            cx.profile_stale.push((service.unit.clone(), fields));
-                        }
-                    }
                     cx.already_running.push(service.unit.clone());
                     continue;
                 }
@@ -1594,7 +1603,9 @@ impl ServicesPhase {
             }
         }
         // Each spawn waits for a start slot; see `pacing`.
-        engine.spawn_services(cx, &to_spawn, &resolved).await;
+        engine
+            .spawn_services(cx, &to_spawn, &resolved, inputs)
+            .await;
         let mut joined_any = false;
         for (unit, other) in joined {
             match joined_outcome(&cx.ctl, cx.deadline, &unit, &other).await {
@@ -2319,6 +2330,7 @@ impl Inner {
             log_dir: log_dir.clone(),
             retention: crate::units::LogRetention::from_config(&self.opts.user.logs.retention),
             pty,
+            facts: self.clock.clone(),
         };
         let unit: Arc<dyn Unit> = managed.clone();
         let host = match UnitHost::start(info, unit, identity).await {
@@ -2452,6 +2464,7 @@ impl Inner {
             log_dir: rec.log_dir.clone(),
             retention: crate::units::LogRetention::from_config(&self.opts.user.logs.retention),
             pty: false,
+            facts: self.clock.clone(),
         };
         let managed: Arc<dyn ManagedUnit> = Arc::new(crate::spawn_error::NotStarted);
         let unit: Arc<dyn Unit> = managed.clone();
@@ -2670,8 +2683,8 @@ impl Inner {
     /// Emits `unit.changed` and `lane.changed` for one unit.
     pub(crate) fn emit_unit(
         &self,
-        project: &ProjectRt,
-        lane: &LaneRt,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
         name: &str,
         host: &UnitHost,
     ) {
@@ -2812,8 +2825,8 @@ impl Inner {
     /// holds `op`, and anything it does not spawn leaves the list with it.
     fn mark_waiting(
         &self,
-        project: &ProjectRt,
-        lane: &LaneRt,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
         options: &StartOptions,
         start_id: u64,
     ) {
@@ -2871,7 +2884,7 @@ impl Inner {
     /// Drops the `queued` marks of start `start_id` once its services phase is
     /// over: what it spawned shows its own state, what it did not goes back to
     /// idle.
-    fn forget_waiting(&self, project: &ProjectRt, lane: &LaneRt, start_id: u64) {
+    fn forget_waiting(&self, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>, start_id: u64) {
         let forgot = {
             let mut st = lane.st();
             let before = st.waiting().len();
@@ -3359,7 +3372,7 @@ impl Inner {
     /// Ends a start, whatever it returned: uninstalls its control from the
     /// lane, emits the lane's `lane.changed`, then `start.ended`. Consumes the
     /// slot, so it runs once per start id.
-    pub(crate) fn end_start(&self, project: &ProjectRt, lane: &LaneRt, slot: StartSlot) {
+    pub(crate) fn end_start(&self, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>, slot: StartSlot) {
         let start_id = slot.ctl.start_id();
         drop(slot);
         self.emit_lane(project, lane);
@@ -3443,6 +3456,8 @@ impl Inner {
         // errors name the pre-move reference too, so a typo on an idle lane that
         // `apply_move` then renumbers names its old index.
         let config = lane.st().config().require(&initial).map_err(fail)?;
+        // From here an edit that overtakes the start shows as `config_changed`.
+        slot.ctl.plans_from(config.clone());
         let (saved, lane_profiles) = {
             let st = lane.st();
             (st.record().cloned(), st.profiles().to_vec())
@@ -3536,14 +3551,10 @@ impl Inner {
             if whole_lane {
                 st.started_at_ms = Some(now_ms());
                 st.usage.clear();
-                st.config_changed = false;
-                st.drift.clear();
-                st.drift_error = None;
-                st.drift_generation += 1;
-                st.infra_changed = false;
                 st.set_started_with(Some(crate::drift::StartedWith::new(
                     &config,
                     &selection.profiles,
+                    &selection.services,
                 )));
                 st.skipped_tasks.clear();
             }
@@ -3555,6 +3566,7 @@ impl Inner {
             reference: reference.clone(),
             actor: options.actor.clone(),
             services: selection.services.clone(),
+            selected: selection.services.clone(),
             autostart_pending: selection.autostart_pending.clone(),
             profiles: selection.profiles.clone(),
             infra_enabled,
@@ -3563,6 +3575,7 @@ impl Inner {
             setup_only: options.setup_only,
             session: options.session.clone(),
             resolved: None,
+            inputs: None,
             deadline: Instant::now() + options.timeout,
             already_running: Vec::new(),
             failures: Vec::new(),
@@ -3580,8 +3593,6 @@ impl Inner {
             arrival: options.arrival,
             dropped,
             profiles_changed,
-            recheck_drift: profiles_changed && !whole_lane,
-            profile_stale: Vec::new(),
         };
         tracing::debug!(
             lane = %reference,
@@ -3757,26 +3768,32 @@ impl Inner {
             .extend(self.ca_warnings(&cx.reference, cx.lane.st().view().map(|view| view.as_ref())));
         let path = cx.lane.st().path().to_path_buf();
         warnings.extend(self.windows_drive_warning(&cx.reference, &path).await);
-        cx.profile_stale
-            .retain(|(unit, _)| !withdrawn.contains_key(unit));
-        if !cx.profile_stale.is_empty() {
-            warnings.push(profile_not_applied(
-                &cx.reference,
-                &cx.profiles,
-                &cx.profile_stale,
-            ));
+        // The profile write ticked the drift clock, so the pass this waits for
+        // planned the units the start left running under the new profiles.
+        if cx.profiles_changed && !whole_lane {
+            self.current_drift(&[(cx.project.clone(), cx.lane.clone())])
+                .await;
+            let stale: Vec<(String, Vec<String>)> = {
+                let st = cx.lane.st();
+                cx.already_running
+                    .iter()
+                    .filter_map(|unit| match st.drift().units.get(unit) {
+                        Some(crate::drift::UnitDrift::Changed(fields)) => {
+                            Some((unit.clone(), fields.clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+            if !stale.is_empty() {
+                warnings.push(profile_not_applied(&cx.reference, &cx.profiles, &stale));
+            }
         }
         for warning in &warnings {
             self.bus.emit(
                 events::LANE_WARNING,
                 json!({"lane": cx.reference, "code": warning.code, "data": warning.data}),
             );
-        }
-        // What it spawned matches the file, unless the file changed during the start.
-        let spawned = self.settle_drift(&cx.project, &cx.lane, &cx.config, &started);
-        // The units it left alone may lack the new profiles' settings.
-        if cx.recheck_drift && !spawned {
-            self.spawn_drift(&cx.project, &cx.lane);
         }
         StartResult {
             warnings,
@@ -4357,6 +4374,7 @@ impl Inner {
         };
         let units = crate::engine::match_units(&selectors, &candidates, &reference)?;
         let config = lane.st().config().require(&reference)?;
+        ctl.plans_from(config.clone());
         // A container that restarted may publish other ports than the lane
         // stored; the background refresh may not have read them yet.
         let deadline = Instant::now() + options.timeout;
@@ -4369,7 +4387,7 @@ impl Inner {
             )),
         };
         settled?;
-        let resolved = self
+        let (resolved, inputs) = self
             .resolve_config(project, lane, config.clone(), None)
             .await?;
         // A previous daemon's process is replaced like a running one: terminate it
@@ -4432,6 +4450,7 @@ impl Inner {
             lane: lane.clone(),
             reference: reference.clone(),
             actor: options.actor.clone(),
+            selected: services.clone(),
             services,
             autostart_pending: Vec::new(),
             profiles: lane.st().profiles().to_vec(),
@@ -4441,6 +4460,7 @@ impl Inner {
             setup_only: false,
             session: options.session.clone(),
             resolved: Some(resolved),
+            inputs: Some(inputs),
             deadline: Instant::now() + options.timeout,
             already_running: Vec::new(),
             failures: Vec::new(),
@@ -4458,8 +4478,6 @@ impl Inner {
             arrival: options.arrival,
             dropped: Dropped::default(),
             profiles_changed: false,
-            recheck_drift: false,
-            profile_stale: Vec::new(),
         };
         // A restart is a services phase alone; its events carry the plan as a start's do.
         let phase = ServicesPhase.name();
@@ -4631,7 +4649,7 @@ impl Inner {
             }
             // A request still holding this runtime fails with `unassigned`.
             lane.st().set_record(None);
-            project.st().lanes.remove(&lane.worktree);
+            project.remove_lane(&lane.worktree);
             lane.watch.cancel();
             // While another lane used the shared containers they may still run,
             // and only a kept project keeps their block reserved.
@@ -4639,7 +4657,7 @@ impl Inner {
             if (used || !self.forget_if_empty(project).await)
                 && let Some(replacement) = replacement
             {
-                project.st().lanes.insert(lane.worktree, replacement);
+                project.insert_lane(lane.worktree, replacement);
             }
         }
         // A file held open (Windows) keeps the folder; `lane gc` deletes it later.
@@ -4686,8 +4704,7 @@ impl Inner {
         registered
             && project
                 .st()
-                .lanes
-                .get(&lane.worktree)
+                .lane(&lane.worktree)
                 .is_some_and(|held| Arc::ptr_eq(held, lane))
     }
 
@@ -4710,6 +4727,7 @@ impl Inner {
                 st.path().to_path_buf(),
                 st.branch().map(str::to_owned),
                 true,
+                self.clock.clone(),
             )
         };
         let replacement = crate::registry::new_lane(lane.worktree, st);
@@ -4737,6 +4755,8 @@ impl Inner {
             return false;
         }
         crate::model::lock(&self.projects).remove(&project.id);
+        // Other projects' plans read this one's running lanes.
+        self.clock.tick();
         project.watch.cancel();
         for lane in project.lanes() {
             lane.watch.cancel();
@@ -5108,7 +5128,7 @@ impl Inner {
         self.resolve_config(&cx.project, &cx.lane, cx.config.clone(), None)
             .await
             .ok()
-            .is_none_or(|resolved| resolved.infra_enabled)
+            .is_none_or(|(resolved, _)| resolved.infra_enabled)
     }
 }
 

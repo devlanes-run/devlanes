@@ -733,7 +733,13 @@ mod tests {
     /// ones without a published port count as down. `oom` counts as up.
     #[test]
     fn a_lane_held_by_its_containers_names_them() {
-        let mut st = LaneSt::new("id".into(), "/repo".into(), None, true);
+        let mut st = LaneSt::new(
+            "id".into(),
+            "/repo".into(),
+            None,
+            true,
+            crate::units::FactsClock::default(),
+        );
         let mut worker = container(
             "acme-lane0-worker-1",
             false,

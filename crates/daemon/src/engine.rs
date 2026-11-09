@@ -116,6 +116,15 @@ impl EngineOptions {
 
 /// Shared engine state. Methods live in sibling modules as `impl Inner` blocks.
 pub(crate) struct Inner {
+    /// This engine, for work a `&self` caller starts in the background, such as
+    /// a drift pass an event asks for.
+    pub me: std::sync::Weak<Inner>,
+    /// Counts changes to the facts lanes' drift is computed from ([`crate::drift`]).
+    pub clock: crate::units::FactsClock,
+    /// The port the proxy's HTTPS listener bound, read once when the engine is
+    /// built; every reader in the daemon (plans, layouts, routes, remote,
+    /// `daemon.status`) uses this copy.
+    pub https_port: Option<u16>,
     pub opts: EngineOptions,
     pub store: Store,
     pub integ: Integrations,
@@ -176,8 +185,13 @@ impl Engine {
         shutdown: CancellationToken,
     ) -> Self {
         let resume = opts.resume.take();
+        // The listener bound before the engine was built, so its port is fixed.
+        let https_port = integ.routes.https_port();
         Self {
-            inner: Arc::new(Inner {
+            inner: Arc::new_cyclic(|me| Inner {
+                me: me.clone(),
+                clock: crate::units::FactsClock::default(),
+                https_port,
                 opts,
                 store,
                 integ,
@@ -526,7 +540,7 @@ impl Inner {
                     "warnings": self.opts.user.warnings(),
                 },
                 // What `devlanes tunnel` tells connected clients about this box.
-                "https_port": self.integ.routes.https_port(),
+                "https_port": self.https_port,
                 "ports_range": self.opts.user.ports.range,
                 "setup": self.setup_status().await,
                 "idle_exit": self.idle_exit_status(),

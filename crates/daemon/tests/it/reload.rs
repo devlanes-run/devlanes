@@ -1,10 +1,12 @@
 //! Drift between a running lane and its edited project file, `reload`, which applies
 //! only the difference, and `restart` without units, which restarts the whole lane.
 
+use std::time::Duration;
+
 use devlanes_proto::{LaneSummary, Method, Page, StartResult, UnitDrift};
 use serde_json::json;
 
-use crate::{LIMIT, Setup, cx, harness, repo, temp};
+use crate::{LIMIT, Setup, cx, eventually, harness, repo, temp};
 
 const BEFORE: &str = "project: demo\nservices:\n  web: { run: \"echo one; sleep\", ready: started }\n  api: { run: sleep, ready: started }\n";
 const AFTER: &str = "project: demo\nservices:\n  web: { run: \"echo two; sleep\", ready: started }\n  worker: { run: sleep, ready: started }\n";
@@ -423,6 +425,250 @@ async fn restart_without_units_restarts_the_whole_lane() {
         assert!(
             again.warnings.iter().all(|w| w.code != "exec_stopped"),
             "{again:?}"
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// A lane with a per-lane container and one service.
+const INFRA: &str = "project: demo\ninfra:\n  containers:\n    db: { image: \"postgres:16\", ports: { pg: 5432 }, per_lane: true }\nservices:\n  api: { run: sleep, ready: started }\n";
+
+#[tokio::test(flavor = "multi_thread")]
+/// An edit while `infra up` holds an idle lane changes nothing that runs, so
+/// the lane has no `config changed` note once an exec unit runs there.
+async fn an_edit_while_infra_comes_up_leaves_no_note() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", INFRA);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+        *h.infra.up_gate.lock().expect("lock") = Some(gate.clone());
+        let edit = async {
+            eventually(Duration::from_secs(5), || async {
+                h.infra
+                    .calls
+                    .entries()
+                    .contains(&"up 0".to_owned())
+                    .then_some(())
+            })
+            .await
+            .expect("infra up waits in the provider");
+            std::fs::write(
+                main.join("devlanes.yaml"),
+                INFRA.replace("run: sleep", "run: \"echo two; sleep\""),
+            )
+            .expect("edit");
+            // Reloads the file while `infra up` holds the lane.
+            lane(&h, &main).await;
+            gate.notify_one();
+        };
+        let (up, ()) = tokio::join!(h.call(Method::InfraUp, json!({}), cx(&main)), edit);
+        up.expect("infra up");
+        h.call(
+            Method::Exec,
+            json!({"name": "job", "command": ["sleep"]}),
+            cx(&main),
+        )
+        .await
+        .expect("exec");
+        let running = lane(&h, &main).await;
+        assert_eq!(running.state, "running", "{running:?}");
+        assert!(!running.config_changed, "{running:?}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A service dropped from the file shows `removed` while it runs and leaves
+/// status once it exited on its own, with no note left; its logs stay. Put back,
+/// it is `added` and `reload` starts it. A stop's effect on drift shows in the
+/// next status at once.
+async fn a_removed_service_comes_and_goes_with_its_runs() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let before = "project: demo\nservices:\n  web: { run: sleep, ready: started }\n  worker: { run: sleep, ready: started }\n  api: { run: \"echo api; hold\", ready: started }\n";
+        let edited = "project: demo\nservices:\n  web: { run: sleep, ready: started }\n  worker: { run: \"echo two; sleep\", ready: started }\n";
+        let main = repo(&tmp.path, "r", before);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        std::fs::write(main.join("devlanes.yaml"), edited).expect("drop api");
+        let kinds = |lane: &LaneSummary| {
+            drift(lane)
+                .into_iter()
+                .map(|(unit, drift)| (unit, drift.kind))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kinds(&lane(&h, &main).await),
+            [
+                ("api".to_owned(), "removed".to_owned()),
+                ("worker".to_owned(), "changed".to_owned())
+            ]
+        );
+        h.call(Method::Stop, json!({"units": ["worker"]}), cx(&main))
+            .await
+            .expect("stop worker");
+        let stopped = lane(&h, &main).await;
+        assert_eq!(
+            kinds(&stopped),
+            [("api".to_owned(), "removed".to_owned())],
+            "{stopped:?}"
+        );
+
+        h.runner.release();
+        let exited = eventually(Duration::from_secs(5), || async {
+            let lane = lane(&h, &main).await;
+            lane.units
+                .iter()
+                .all(|unit| unit.name != "api")
+                .then_some(lane)
+        })
+        .await
+        .expect("api leaves status once it exited");
+        assert!(!exited.config_changed, "{exited:?}");
+        let logs = h
+            .call(Method::Logs, json!({"units": ["api"]}), cx(&main))
+            .await
+            .expect("logs of the removed service");
+        assert_eq!(logs["items"][0]["text"], "api", "{logs}");
+
+        std::fs::write(
+            main.join("devlanes.yaml"),
+            format!("{edited}  api: {{ run: sleep, ready: started }}\n"),
+        )
+        .expect("put api back");
+        assert_eq!(
+            kinds(&lane(&h, &main).await),
+            [("api".to_owned(), "added".to_owned())]
+        );
+        let back: StartResult = serde_json::from_value(
+            h.call(Method::Reload, json!({}), cx(&main))
+                .await
+                .expect("reload"),
+        )
+        .expect("result");
+        assert_eq!(back.started, ["demo@0:api"], "{back:?}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A value a service reads from the client's shell through `${{ env.NAME }}` is
+/// drift after a start from a shell where it differs, with no edit.
+async fn a_shell_value_the_file_reads_is_drift() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: demo\nservices:\n  web: { run: sleep, ready: started, env: { GREETING: \"${{ env.GREETING }}\" } }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let shell = |greeting: &str| {
+            let mut env = crate::client_env();
+            env.insert("GREETING".into(), greeting.into());
+            devlanes_proto::Context {
+                env: Some(env),
+                ..cx(&main)
+            }
+        };
+        h.call(Method::Start, json!({}), shell("one"))
+            .await
+            .expect("start");
+        assert!(drift(&lane(&h, &main).await).is_empty());
+        h.call(Method::Start, json!({}), shell("two"))
+            .await
+            .expect("start from another shell");
+        assert_eq!(
+            drift(&lane(&h, &main).await),
+            [(
+                "web".to_owned(),
+                UnitDrift {
+                    kind: "changed".into(),
+                    fields: vec!["env GREETING".into()]
+                }
+            )]
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Drift plans a running unit again only when one of its plan's inputs changed:
+/// a stop, or another project's lane starting when the file reads no
+/// `projects.*`, calls no contributor. An edit plans the edited service once.
+async fn a_stop_or_another_project_plans_nothing() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BEFORE);
+        let other = repo(
+            &tmp.path,
+            "o",
+            "project: other\nservices:\n  site: { run: sleep, ready: started }\n",
+        );
+        let journal = crate::PlanJournal::default();
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                contributors: vec![std::sync::Arc::new(journal.clone())],
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        lane(&h, &main).await;
+        let planned = journal.planned.entries().len();
+        h.call(Method::Stop, json!({"units": ["api"]}), cx(&main))
+            .await
+            .expect("stop api");
+        lane(&h, &main).await;
+        assert_eq!(
+            journal.planned.entries().len(),
+            planned,
+            "a stop plans nothing"
+        );
+        h.call(Method::Start, json!({}), cx(&other))
+            .await
+            .expect("start the other project");
+        let planned = journal.planned.entries().len();
+        lane(&h, &main).await;
+        assert_eq!(
+            journal.planned.entries().len(),
+            planned,
+            "another project's lane is no input of this one"
+        );
+        std::fs::write(
+            main.join("devlanes.yaml"),
+            BEFORE.replace("echo one", "echo three"),
+        )
+        .expect("edit");
+        let edited = lane(&h, &main).await;
+        assert_eq!(&journal.planned.entries()[planned..], ["Service web"]);
+        assert_eq!(
+            drift(&edited),
+            [(
+                "web".to_owned(),
+                UnitDrift {
+                    kind: "changed".into(),
+                    fields: vec!["run".into()]
+                }
+            )]
         );
         h.close().await;
     })

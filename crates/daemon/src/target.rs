@@ -387,7 +387,10 @@ impl Inner {
         for project in projects {
             let (common_dir, primary) = {
                 let st = project.st();
-                (st.common_dir.clone(), st.primary_branch.clone())
+                (
+                    st.common_dir().map(Path::to_path_buf),
+                    st.primary_branch().to_owned(),
+                )
             };
             let Some(common_dir) = common_dir else {
                 continue;

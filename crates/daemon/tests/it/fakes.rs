@@ -706,6 +706,8 @@ pub struct FakeInfra {
     pub cache_down: Arc<Mutex<bool>>,
     /// When set, `wait_healthy` waits for a notification before it answers.
     pub wait_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
+    /// When set, `up` waits for a notification after recording `up <lane>`.
+    pub up_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
     /// When set, `down` waits for a notification between recording `down`
     /// and `down done`.
     pub down_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
@@ -889,6 +891,10 @@ impl InfraProvider for FakeInfra {
     }
     async fn up(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
         self.record(format!("up {}", spec.lane));
+        let gate = self.up_gate.lock().ok().and_then(|gate| gate.clone());
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
         if let Some(error) = self.fail_up.lock().ok().and_then(|e| e.clone()) {
             return Err(error);
         }

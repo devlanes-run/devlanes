@@ -11,6 +11,7 @@ const INTERNAL: &[&str] = &[
     // `internal()` failures: the generic `code: message` line is enough.
     "config_check",
     "config_show",
+    "drift_failed",
     "encode",
     "input_failed",
     "io",
