@@ -13,6 +13,7 @@
 //! [`lane_layout`] is the synchronous subset (ports, URLs, routes) for idle lanes,
 //! routing tables and the `lanes.main.services` namespace of lane 0.
 
+mod command;
 mod error;
 mod facts;
 mod layout;
@@ -22,6 +23,7 @@ mod ports;
 mod select;
 mod util;
 
+pub use command::{CommandLayers, LeftOut, command_reads_infra, lane_command_env};
 pub use error::ResolveError;
 pub use facts::{LANE_DATA_ENV, LaneFacts, branch_label, lane_name};
 pub use layout::{fixed_block_start, https_url, lane_layout, tag_colors};

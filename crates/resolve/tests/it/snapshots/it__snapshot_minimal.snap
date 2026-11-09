@@ -25,16 +25,6 @@ expression: lane_view(&lane)
     "http://localhost:21001",
     "http://127.0.0.1:21001"
   ],
-  "lane_env": {
-    "DEVLANES": "1",
-    "DEVLANES_CA_CERT": "/home/dev/.devlanes/ca/ca.pem",
-    "DEVLANES_LANE": "1",
-    "DEVLANES_LANE_DATA": "/home/dev/.devlanes/data/acme/11",
-    "DEVLANES_LANE_NAME": "lane1",
-    "DEVLANES_LANE_PROJECT": "acme",
-    "DEVLANES_PUBLIC_URL_API": "https://api.acme1.localhost",
-    "DEVLANES_PUBLIC_URL_WEB": "https://acme1.localhost"
-  },
   "errors": {},
   "warnings": [],
   "services": {

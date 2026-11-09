@@ -6,11 +6,14 @@ expression: text
 DEVLANES=1
 GREETING=hi
 # DATABASE_URL left out: infra postgres is not up; devlanes infra up
+# REDIS_URL left out: Docker is not running; devlanes doctor
 --- plain (exit 0)
 DEVLANES=1
 GREETING=hi
 # DATABASE_URL left out: infra postgres is not up; devlanes infra up
+# REDIS_URL left out: Docker is not running; devlanes doctor
 --- agent (exit 0)
 DEVLANES=1
 GREETING=hi
 # DATABASE_URL left out: infra postgres is not up; devlanes infra up
+# REDIS_URL left out: Docker is not running; devlanes doctor

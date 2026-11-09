@@ -4,7 +4,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use devlanes_core::contrib::runtime_ca_env;
 use devlanes_proto::{Event, LogLine, LogQuery, Method, Request, RpcError, Selection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -103,8 +102,14 @@ pub trait WithDriver: Send {
     ) -> Result<WithStart, RpcError>;
     /// Returns the partial-start ownership journal; must exclude pre-existing units.
     fn ownership(&self) -> WithOwnership;
-    /// Returns the lane environment, including DEVLANES_PUBLIC_URL_<SERVICE> and CA variables.
-    async fn env(&mut self, lane: &str) -> Result<BTreeMap<String, String>, RpcError>;
+    /// Returns the lane environment devlanes adds to `shell`: DEVLANES_*,
+    /// DEVLANES_PUBLIC_URL_<SERVICE>, `global_env`, and the CA variables `shell`
+    /// does not set, so test code calling `https://*.localhost` trusts the proxy.
+    async fn env(
+        &mut self,
+        lane: &str,
+        shell: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, String>, RpcError>;
     /// Returns every page of run logs, not a presentation-budgeted tail.
     async fn logs(&mut self, lane: &str, query: LaneLogQuery) -> Result<Vec<UnitLogs>, RpcError>;
     /// Returns the lane's reference and each unit's usage over the current lane
@@ -173,13 +178,10 @@ pub async fn run_with<D: WithDriver + ?Sized>(
             {
                 emit(rendered);
             }
-            match driver.env(&ownership.lane).await {
+            match driver.env(&ownership.lane, &plan.env).await {
                 Ok(lane_env) => {
                     let mut env = plan.env.clone();
                     env.extend(lane_env);
-                    // Test code calling `https://*.localhost` then trusts the proxy.
-                    let ca = runtime_ca_env(&env, |name| env.contains_key(name));
-                    env.extend(ca);
                     match driver
                         .spawn_command(&plan.command, &env, &plan.start.context.cwd)
                         .await

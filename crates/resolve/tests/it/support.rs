@@ -370,7 +370,6 @@ pub fn lane_view(lane: &ResolvedLane) -> Value {
             if r.host_header_upstream { " (upstream host)" } else { "" },
         )).collect::<Vec<_>>(),
         "origins": lane.origins,
-        "lane_env": lane.lane_env(),
         "errors": lane.errors.iter().map(|(k, e)| (k.clone(), Value::from(e.to_string()))).collect::<serde_json::Map<_, _>>(),
         "warnings": lane.warnings,
         "services": services,

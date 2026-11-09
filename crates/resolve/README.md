@@ -48,6 +48,7 @@ In the daemon the block and offsets come from `devlanes-state`, and `ResolveInpu
 - `tag_colors`: tag colors from the config's `tags:` map, for `devlanes_core::color::unit_color`.
 - `lane_layout`: ports, URLs, routes and `lane_env()` without contributors, for idle lanes and lane 0's `services_namespace()`.
 - `resolve_lane`: the full `ResolvedLane` with a `Launch` per unit.
+- `lane_command_env`: the layers devlanes adds to a command outside a unit (`exec`, `env show`), given each declared container's `InfraState`; values that read a stopped container are left out, a misspelled container is an error.
 - `fixed_block_start`: block start from `lanes.vars.port` or a matrix row.
 - `detect_platform`: the platform for a unit without `platform:`, from contributor claims (highest confidence, then higher priority, then smaller id). resolve has no built-in file rules.
 

@@ -1209,6 +1209,20 @@ async fn exec_gets_the_lane_environment() {
             env.get("NODE_EXTRA_CA_CERTS").map(|(v, _)| v.as_str()),
             Some("/mine.pem")
         );
+
+        // The lane's env (`env export`, `with`) sets the CA variables the
+        // asking shell does not, and leaves the shell's own out.
+        let mut shell = cx(&main);
+        if let Some(env) = shell.env.as_mut() {
+            env.insert("NODE_EXTRA_CA_CERTS".into(), "/mine.pem".into());
+        }
+        let lane = h
+            .call(Method::Env, json!({}), shell)
+            .await
+            .expect("env");
+        assert!(lane["env"].get("NODE_EXTRA_CA_CERTS").is_none(), "{lane}");
+        assert_eq!(lane["env"]["SSL_CERT_FILE"], "/ca/bundle.pem");
+        assert_eq!(lane["env"]["GREETING"], "hi-main");
         h.close().await;
     })
     .await
@@ -1256,48 +1270,113 @@ async fn exec_keeps_the_last_good_config_while_the_lane_runs() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// Before the lane's infra is up, exec and `env show` leave out the lane values
-/// that read it and name them; a value that fails for another reason still
-/// refuses, without calling the valid file invalid.
+/// Exec and `env show` read the lane's infra as Docker reports it, on a lane
+/// that never started: a value that reads a running container is set, one
+/// that reads a stopped container, or any while Docker is not running, is left
+/// out and named, a misspelled container is an error even next to a stopped
+/// one, and a container Docker did not answer for refuses unless `--env` sets
+/// the value.
 async fn exec_leaves_out_values_that_wait_on_infra() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
+        // With Compose, the fake's `db` and `cache` are the declared names.
         let config = BASIC.replace(
             "services:\n",
-            "infra:\n  containers:\n    postgres: { image: \"postgres:16\", ports: { \"5432\": 5432 } }\nglobal_env:\n  GREETING: hi\n  DATABASE_URL: \"postgres://127.0.0.1:${{ infra.postgres.port }}/app\"\nservices:\n",
+            "infra:\n  compose: compose.yaml\nglobal_env:\n  GREETING: hi\n  DATABASE_URL: \"postgres://127.0.0.1:${{ infra.db.port }}/app\"\nservices:\n",
         );
         let main = repo(&tmp.path, "r", &config);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
-        let unit = h
-            .call(
-                Method::Exec,
-                json!({"name": "tool", "command": ["sleep"]}),
-                cx(&main),
-            )
+        std::fs::write(main.join("compose.yaml"), "services: {}\n").expect("compose");
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        let exec = |name: &'static str, env: Value| {
+            let h = &h;
+            let context = cx(&main);
+            async move {
+                h.call(
+                    Method::Exec,
+                    json!({"name": name, "command": ["sleep"], "env": env}),
+                    context,
+                )
+                .await
+            }
+        };
+        let set = |knob: &std::sync::Mutex<bool>, on: bool| {
+            *knob.lock().expect("knob") = on;
+        };
+
+        // Docker does not answer in time: nothing is guessed.
+        set(&h.infra.observe_unknown, true);
+        let refused = exec("slow", json!({})).await.expect_err("db unknown");
+        assert_eq!(refused.code, "infra_unknown", "{refused:?}");
+        assert_eq!(
+            refused.data["keys"],
+            json!([{"key": "DATABASE_URL", "infra": "db"}])
+        );
+        exec("given", json!({"DATABASE_URL": "x"}))
             .await
-            .expect("exec runs before infra is up");
-        let waits = json!([{"key": "DATABASE_URL", "infra": "postgres"}]);
-        assert_eq!(unit["left_out"], waits);
+            .expect("--env replaces the value");
+        let env = explained(&h, "given", cx(&main)).await;
+        assert_eq!(
+            env.get("DATABASE_URL").map(|(v, _)| v.as_str()),
+            Some("x")
+        );
+        set(&h.infra.observe_unknown, false);
+
+        // A stopped container.
+        *h.infra.namespace_db_state.lock().expect("state") = Some("exited 1".into());
+        let unit = exec("down", json!({})).await.expect("exec");
+        assert_eq!(
+            unit["left_out"],
+            json!([{"key": "DATABASE_URL", "infra": "db"}])
+        );
+
+        // Docker not running.
+        set(&h.infra.engine_down, true);
+        let unit = exec("engine", json!({})).await.expect("exec");
+        assert_eq!(
+            unit["left_out"],
+            json!([{"key": "DATABASE_URL", "infra": "db", "reason": "engine_not_running"}])
+        );
+
+        // A misspelled name is an error, though `db` is down.
+        let typo = config.replace(
+            "  GREETING: hi\n",
+            "  GREETING: hi\n  TYPO: \"${{ infra.db.port }}/${{ infra.dbb.port }}\"\n",
+        );
+        std::fs::write(main.join("devlanes.yaml"), &typo).expect("edit");
+        let refused = exec("typo", json!({})).await.expect_err("dbb");
+        assert_eq!(refused.code, "config_error", "{refused:?}");
+        assert_eq!(refused.data["path"], "global_env.TYPO");
+        std::fs::write(main.join("devlanes.yaml"), &config).expect("edit");
+
+        // Running again.
+        set(&h.infra.engine_down, false);
+        *h.infra.namespace_db_state.lock().expect("state") = None;
+        let unit = exec("tool", json!({})).await.expect("exec");
+        assert!(unit.get("left_out").is_none(), "{unit}");
         let env = explained(&h, "tool", cx(&main)).await;
-        assert_eq!(env.get("GREETING").map(|(v, _)| v.as_str()), Some("hi"));
-        assert!(!env.contains_key("DATABASE_URL"));
+        let url = env.get("DATABASE_URL").map(|(v, _)| v.clone());
+        // The fake's port comes from the lane's block, which allocates it at
+        // a start; the value being there is the point.
+        assert!(url.is_some(), "{env:?}");
         let lane = h
             .call(Method::Env, json!({}), cx(&main))
             .await
             .expect("env show");
-        assert_eq!(lane["env"]["GREETING"], "hi");
-        assert_eq!(lane["left_out"], waits);
+        assert_eq!(lane["env"]["DATABASE_URL"].as_str(), url.as_deref());
+        assert!(lane.get("left_out").is_none(), "{lane}");
 
+        // A value that fails for another reason refuses, without calling the
+        // valid file invalid.
         let missing = config.replace("  GREETING: hi\n", "  GREETING: \"${{ env.MISSING }}\"\n");
         std::fs::write(main.join("devlanes.yaml"), missing).expect("edit");
-        let refused = h
-            .call(
-                Method::Exec,
-                json!({"name": "again", "command": ["sleep"]}),
-                cx(&main),
-            )
-            .await
-            .expect_err("env.MISSING has no value");
+        let refused = exec("again", json!({})).await.expect_err("no env.MISSING");
         assert_eq!(refused.code, "unresolved_value", "{refused:?}");
         assert_eq!(refused.data["path"], "global_env.GREETING");
         h.close().await;
