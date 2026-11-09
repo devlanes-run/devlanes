@@ -36,6 +36,9 @@ pub struct WithOwnership {
     pub lane: String,
     /// Canonical unit references created by this invocation, excluding already-running units.
     pub units: Vec<String>,
+    /// Setup entries (`setup.<name>`) and tasks the start ran, failed ones
+    /// included, as canonical references: their logs belong to the run.
+    pub ran: Vec<String>,
     /// True only when this invocation brought up the whole previously idle lane.
     pub whole_lane: bool,
     pub daemon_spawned: bool,
@@ -143,23 +146,8 @@ pub async fn run_with<D: WithDriver + ?Sized>(
         ..WithOutcome::default()
     };
     let mut phases = crate::PhaseLines::new(runtime);
-    // `(lane, task)` of each task this start ran: their logs belong to the run
-    // although the start result lists only the services it spawned.
-    let mut tasks: Vec<(String, String)> = Vec::new();
     let start = driver
         .start(&plan.start, &mut |event| {
-            if event.event == devlanes_proto::events::TASK {
-                let field = |key: &str| {
-                    event
-                        .data
-                        .get(key)
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                };
-                if matches!(field("state"), "done" | "exited" | "failed" | "stopped") {
-                    tasks.push((field("lane").to_owned(), field("task").to_owned()));
-                }
-            }
             if let Ok(mut rendered) = reporter.event(Method::Start, &event) {
                 phases.rewrite(&event, &mut rendered.stdout);
                 emit(rendered);
@@ -281,20 +269,17 @@ pub async fn run_with<D: WithDriver + ?Sized>(
     }
     // Artifacts and the summary cover what this invocation started, not every
     // unit that already ran in the lane.
-    let owned = |unit: &str| {
-        ownership.units.iter().any(|owned| {
+    let named = |references: &[String], unit: &str| {
+        references.iter().any(|owned| {
             owned == unit || owned.rsplit_once(':').is_some_and(|(_, name)| name == unit)
         })
     };
+    let owned = |unit: &str| named(&ownership.units, unit);
     if let Some(directory) = &plan.logs_dir {
-        let ran = |unit: &str| {
-            tasks
-                .iter()
-                .any(|(lane, task)| *lane == ownership.lane && task == unit)
-        };
+        // The start's tasks and setup entries too, though it spawned no service for them.
         let owned_logs: Vec<UnitLogs> = logs
             .iter()
-            .filter(|unit| owned(&unit.unit) || ran(&unit.unit))
+            .filter(|unit| owned(&unit.unit) || named(&ownership.ran, &unit.unit))
             .cloned()
             .collect();
         match write_log_artifacts(directory, &owned_logs).await {

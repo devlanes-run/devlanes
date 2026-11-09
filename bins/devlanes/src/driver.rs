@@ -215,9 +215,9 @@ impl ClientDriver {
             .await;
     }
 
-    /// The start's answer, keeping what it brought up as the run's ownership:
-    /// from its result, or from the `lane`, `started` and `whole_lane` the
-    /// daemon puts into a start's error.
+    /// The start's answer, keeping what it brought up and ran as the run's
+    /// ownership: from its result, or from the `lane`, `started`, `ran` and
+    /// `whole_lane` the daemon puts into a start's error.
     fn answer(&mut self, outcome: Outcome) -> Result<WithStart, RpcError> {
         let data = match outcome {
             Outcome::Ok { data } => data,
@@ -225,11 +225,18 @@ impl ClientDriver {
                 if let Some(lane) = error.data.get("lane").and_then(Value::as_str) {
                     self.ownership.lane = lane.to_owned();
                 }
-                if let Some(started) = error.data.get("started").and_then(Value::as_array) {
-                    self.ownership.units = started
-                        .iter()
-                        .filter_map(|v| v.as_str().map(str::to_owned))
-                        .collect();
+                let references = |key: &str| {
+                    error.data.get(key).and_then(Value::as_array).map(|list| {
+                        list.iter()
+                            .filter_map(|v| v.as_str().map(str::to_owned))
+                            .collect::<Vec<_>>()
+                    })
+                };
+                if let Some(started) = references("started") {
+                    self.ownership.units = started;
+                }
+                if let Some(ran) = references("ran") {
+                    self.ownership.ran = ran;
                 }
                 self.ownership.whole_lane =
                     error.data.get("whole_lane").and_then(Value::as_bool) == Some(true);
@@ -242,6 +249,7 @@ impl ClientDriver {
         })?;
         self.ownership.lane.clone_from(&result.lane);
         self.ownership.units.clone_from(&result.started);
+        self.ownership.ran.clone_from(&result.ran);
         self.ownership.whole_lane = result.whole_lane;
         Ok(WithStart {
             ready: result.ready && result.failures.is_empty(),
@@ -1028,7 +1036,7 @@ mod tests {
                     .send(send(asked.id, Outcome::Ok { data: cancelled }))
                     .await
                     .expect("cancelled");
-                let data = json!({"lane": "acme@0", "started": ["acme@0:web"], "ran": [], "whole_lane": true});
+                let data = json!({"lane": "acme@0", "started": ["acme@0:web"], "ran": ["acme@0:hang"], "whole_lane": true});
                 let error = RpcError::new("start_cancelled", data, 1);
                 start
                     .send(send(begun.id, Outcome::Error { error }))
@@ -1057,6 +1065,8 @@ mod tests {
             let owned = driver.ownership();
             assert_eq!(owned.lane, "acme@0");
             assert_eq!(owned.units, ["acme@0:web"]);
+            // The task the cancel interrupted ran, so `--logs-dir` writes its log.
+            assert_eq!(owned.ran, ["acme@0:hang"]);
             assert!(owned.whole_lane);
             let asked = daemon.await.expect("daemon");
             assert_eq!(asked.method, Method::StartCancel);

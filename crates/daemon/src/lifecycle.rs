@@ -571,6 +571,14 @@ impl PhaseResult {
     }
 }
 
+/// The start phase running a hook task, put on the task's `task` events so
+/// clients tie its end to the phase's step.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PhaseOf {
+    pub start_id: u64,
+    pub phase: &'static str,
+}
+
 /// Mutable context threaded through the start pipeline.
 pub(crate) struct StartCx {
     pub project: Arc<ProjectRt>,
@@ -1130,6 +1138,10 @@ impl LanePhase for SetupPhase {
                 cx.leftovers
                     .extend(ended_leftovers(&cx.lane, &format!("setup.{name}"), host));
             }
+            // It ran, whether or not it succeeded; failures are listed too.
+            if result.is_ok() {
+                cx.ctl.push_ran(format!("setup.{name}"));
+            }
             let done = match &result {
                 Ok(outcome) => outcome.counts_done(),
                 // It never ran; `ignore_errors` lets the start go on unless a stop
@@ -1152,7 +1164,6 @@ impl LanePhase for SetupPhase {
                 {
                     return PhaseResult::Error(store_error(error));
                 }
-                cx.ctl.push_ran(format!("setup.{name}"));
                 continue;
             }
             let unit = format!("setup.{name}");
@@ -1254,6 +1265,10 @@ impl LanePhase for TasksPhase {
         if chosen.is_empty() {
             return PhaseResult::Skipped(reason("no_tasks", json!({})));
         }
+        let phase = Some(PhaseOf {
+            start_id: cx.start_id,
+            phase: self.name(),
+        });
         // The services phase decided whether the services are ready.
         if self.after && !cx.services_ready {
             if cx.timed_out {
@@ -1265,6 +1280,7 @@ impl LanePhase for TasksPhase {
                         "skipped",
                         None,
                         Some(json!({"code": "timed_out"})),
+                        phase,
                     );
                 }
                 return PhaseResult::Skipped(reason("timed_out", json!({})));
@@ -1278,6 +1294,7 @@ impl LanePhase for TasksPhase {
                     "skipped",
                     None,
                     Some(json!({"code": "service_failed", "units": units})),
+                    phase,
                 );
             }
             return PhaseResult::Skipped(reason("service_failed", json!({"units": units})));
@@ -1300,6 +1317,7 @@ impl LanePhase for TasksPhase {
                     "skipped",
                     None,
                     Some(json!({"code": "cancelled_by_stop"})),
+                    phase,
                 );
                 continue;
             }
@@ -1314,8 +1332,14 @@ impl LanePhase for TasksPhase {
                     cx.session.as_ref(),
                     &cx.cancel,
                     0,
+                    phase,
                 )
                 .await;
+            // It ran, also when it failed or a stop interrupted it: its log
+            // belongs to the start either way.
+            if outcome.is_ok() {
+                cx.ctl.push_ran(name.clone());
+            }
             if cx.cancel.is_cancelled() {
                 return PhaseResult::Error(start_cancelled(cx));
             }
@@ -1323,7 +1347,7 @@ impl LanePhase for TasksPhase {
                 cx.leftovers.extend(outcome.leftovers.iter().cloned());
             }
             match outcome {
-                Ok(outcome) if outcome.counts_done() => cx.ctl.push_ran(name),
+                Ok(outcome) if outcome.counts_done() => {}
                 Ok(TaskOutcome { code, host, .. }) => {
                     let mut failure = match &host {
                         Some(host) => failure_of(&cx.reference, &name, host).await,
@@ -2670,7 +2694,7 @@ impl Inner {
         self.emit_lane(project, lane);
     }
 
-    /// Emits a `task` event.
+    /// Emits a `task` event, with the start phase that runs the task.
     pub(crate) fn task_event(
         &self,
         lane: &str,
@@ -2678,6 +2702,7 @@ impl Inner {
         state: &str,
         exit_code: Option<i32>,
         reason: Option<Value>,
+        phase: Option<PhaseOf>,
     ) {
         let mut data = json!({"lane": lane, "task": task, "state": state});
         if let Some(code) = exit_code {
@@ -2685,6 +2710,10 @@ impl Inner {
         }
         if let Some(reason) = reason {
             data["reason"] = reason;
+        }
+        if let Some(PhaseOf { start_id, phase }) = phase {
+            data["start_id"] = json!(start_id);
+            data["phase"] = json!(phase);
         }
         if !matches!(state, "started" | "skipped") {
             data["finished_at_ms"] = json!(now_ms());
@@ -2980,6 +3009,7 @@ impl Inner {
     /// `cancel` fires, the running unit is stopped and no further step starts;
     /// the outcome then has no exit code. The row is finished and the closing
     /// `task` event emitted on every path, a dropped future included.
+    /// `phase` is the start phase that runs it, sent on its `task` events.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_task<'a>(
         self: &'a Arc<Self>,
@@ -2992,6 +3022,7 @@ impl Inner {
         session: Option<&'a Session>,
         cancel: &'a CancellationToken,
         depth: usize,
+        phase: Option<PhaseOf>,
     ) -> BoxFuture<'a, Result<TaskOutcome, RpcError>> {
         Box::pin(async move {
             let reference = lane.st().reference(&project.name());
@@ -3018,7 +3049,7 @@ impl Inner {
                 .as_ref()
                 .map(|r| r.id)
                 .ok_or_else(|| unassigned(&reference, Unassigned::NoRecord))?;
-            self.task_event(&reference, name, "started", None, None);
+            self.task_event(&reference, name, "started", None, None, phase);
             let hash = loaded_config(lane).and_then(|config| task_hash(&config, name));
             let run = self
                 .store
@@ -3038,6 +3069,7 @@ impl Inner {
                 run: Some(run.id),
                 reference: reference.clone(),
                 task: name.to_owned(),
+                phase,
             };
             let result: Result<TaskOutcome, RpcError> = async {
                 let mut outcome = TaskOutcome {
@@ -3086,6 +3118,7 @@ impl Inner {
                                     session,
                                     cancel,
                                     depth + 1,
+                                    None,
                                 )
                                 .await?
                             };
@@ -3148,7 +3181,7 @@ impl Inner {
                     Some(json!({"code": error.code, "data": error.data})),
                 ),
             };
-            self.close_task_run(run.id, &reference, name, code, state, reason, hash)
+            self.close_task_run(run.id, &reference, name, code, state, reason, hash, phase)
                 .await;
             guard.run = None;
             result
@@ -3168,6 +3201,7 @@ impl Inner {
         state: &str,
         reason: Option<Value>,
         spec_hash: Option<String>,
+        phase: Option<PhaseOf>,
     ) {
         let finished = self
             .store
@@ -3176,7 +3210,7 @@ impl Inner {
         if let Err(error) = finished {
             tracing::warn!(%error, task, "task run not recorded as finished");
         }
-        self.task_event(reference, task, state, code, reason);
+        self.task_event(reference, task, state, code, reason, phase);
     }
 
     /// Runs a setup/teardown entry as a task step, or on its own through `run`,
@@ -4185,7 +4219,7 @@ impl Inner {
             }
             let outcome = self
                 .run_task(
-                    project, lane, resolved, name, trigger, actor, None, cancel, 0,
+                    project, lane, resolved, name, trigger, actor, None, cancel, 0, None,
                 )
                 .await;
             results.push(match outcome {
@@ -5109,6 +5143,7 @@ struct TaskRunGuard {
     run: Option<devlanes_state::TaskRunId>,
     reference: String,
     task: String,
+    phase: Option<PhaseOf>,
 }
 
 impl Drop for TaskRunGuard {
@@ -5123,6 +5158,7 @@ impl Drop for TaskRunGuard {
         let engine = self.engine.clone();
         let reference = std::mem::take(&mut self.reference);
         let task = std::mem::take(&mut self.task);
+        let phase = self.phase;
         runtime.spawn(async move {
             engine
                 .close_task_run(
@@ -5133,6 +5169,7 @@ impl Drop for TaskRunGuard {
                     "failed",
                     Some(json!({"code": "cancelled"})),
                     None,
+                    phase,
                 )
                 .await;
         });

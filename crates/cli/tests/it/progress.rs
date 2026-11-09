@@ -300,25 +300,31 @@ fn a_finished_task_replaces_its_phase_line() {
         }
         ("lane.phase", data)
     };
-    let task = |lane: &str, task: &str| {
-        (
-            "task",
-            json!({"lane": lane, "task": task, "state": "done", "exit_code": 0}),
-        )
+    // The end of a task a start's phase runs carries the phase and `start_id`;
+    // the task's own steps carry neither.
+    let task = |lane: &str, task: &str, phase: Option<&str>| {
+        let mut data = json!({"lane": lane, "task": task, "state": "exited", "exit_code": 0});
+        if let Some(phase) = phase {
+            data["phase"] = json!(phase);
+            data["start_id"] = json!(4);
+        }
+        ("task", data)
     };
     let events = [
         phase("tasks", "started", None),
         phase("tasks", "progress", Some(("install", 1, 1))),
         // Another lane's task in between: the line is no longer last, so stays.
-        task("acme@2", "build"),
-        task("acme@1", "install"),
+        task("acme@2", "build", Some("tasks")),
+        task("acme@1", "install", Some("tasks")),
         phase("tasks", "done", None),
         phase("services", "ready", None),
         phase("after-services", "started", None),
         phase("after-services", "progress", Some(("seed", 1, 2))),
-        task("acme@1", "seed"),
+        task("acme@1", "seed", Some("after-services")),
         phase("after-services", "progress", Some(("notify", 2, 2))),
-        task("acme@1", "notify"),
+        // A step of `notify` ends first: the line saying `notify` runs stays.
+        task("acme@1", "ping", None),
+        task("acme@1", "notify", Some("after-services")),
         phase("after-services", "done", None),
     ];
     let erase = "\x1b[1A\x1b[2K";
@@ -334,12 +340,13 @@ fn a_finished_task_replaces_its_phase_line() {
 {erase}\u{2026} after-services: seed (1 of 2)\n\
 {erase}\u{2713} seed\n\
 \u{2026} after-services: notify (2 of 2)\n\
-{erase}\u{2713} notify\n"
+\u{2713} ping\n\
+\u{2713} notify\n"
         )
     );
     // Plain output says when the services were ready, before the tasks that waited.
     assert_eq!(
         rewritten(&runtime(&["devlanes"], false, false), &events),
-        "ok build\nok install\nok services ready\nok seed\nok notify\n"
+        "ok build\nok install\nok services ready\nok seed\nok ping\nok notify\n"
     );
 }
