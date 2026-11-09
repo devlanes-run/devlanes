@@ -1368,17 +1368,20 @@ impl LanePhase for ServicesPhase {
         let spawned = Self::spawn(engine, cx).await;
         // Nothing more spawns: a waiting restart of a withdrawn unit may go.
         cx.ctl.services_done.cancel();
-        // What the bring-up selected and did not run (withdrawn, an `autostart`
-        // that evaluated false) was left out on purpose, so it is not `added`.
-        // Before the units leave `waiting`, so no pass sees them in neither.
-        if cx.whole_lane {
-            let units: Vec<String> = cx
-                .selected
+        // What a bring-up selected and did not run (withdrawn, an `autostart`
+        // that evaluated false) was left out on purpose, and so is what any
+        // start left queued in the start gate at its deadline until it spawns:
+        // neither is `added`. Before the units leave `waiting`, so no pass sees
+        // them in neither.
+        let units: Vec<String> = if cx.whole_lane {
+            cx.selected
                 .iter()
                 .flat_map(|service| crate::drift::units_of(&cx.config, service))
-                .collect();
-            cx.lane.st().leave_out_unrecorded(units);
-        }
+                .collect()
+        } else {
+            cx.ctl.started()
+        };
+        cx.lane.st().leave_out_unrecorded(units);
         engine.forget_waiting(&cx.project, &cx.lane, cx.start_id);
         let joined = match spawned {
             Ok(joined) => joined,

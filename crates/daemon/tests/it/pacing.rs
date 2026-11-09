@@ -355,6 +355,48 @@ async fn queued_units_stop_bypass_and_restart() {
         assert!(bypass.ready && !bypass.timed_out, "{bypass:?}");
         assert_eq!(gate.snapshot().in_flight, 1, "bypass took no slot");
 
+        // A service added to the file is `added` until a start asks for it,
+        // and no drift while that start waits for a slot.
+        std::fs::write(
+            main.join("devlanes.yaml"),
+            format!("{THREE}  d: {{ run: \"echo d; sleep\", ready: started }}\n"),
+        )
+        .expect("add d");
+        let drift_of_d = |lanes: &[LaneSummary]| {
+            lanes[0]
+                .units
+                .iter()
+                .find(|unit| unit.name == "d")
+                .and_then(|unit| unit.drift.clone())
+                .map(|drift| drift.kind)
+        };
+        assert_eq!(
+            drift_of_d(&status(&h, cx(&main)).await).as_deref(),
+            Some("added")
+        );
+        let ask = async {
+            let queued = eventually(Duration::from_secs(5), || async {
+                let lanes = status(&h, cx(&main)).await;
+                (state_of(&lanes, "d").as_deref() == Some("queued")).then_some(lanes)
+            })
+            .await
+            .expect("d waits for a slot");
+            assert_eq!(drift_of_d(&queued), None, "{queued:?}");
+            assert!(!queued[0].config_changed, "{queued:?}");
+            h.call(Method::Stop, json!({"units": ["d"]}), cx(&main))
+                .await
+                .expect("stop d");
+        };
+        let (start_d, ()) = tokio::join!(
+            h.call(
+                Method::Start,
+                json!({"units": ["d"], "timeout_ms": 10_000}),
+                cx(&main)
+            ),
+            ask
+        );
+        start_d.expect("start d");
+
         let restart: Value = h
             .call(
                 Method::Restart,

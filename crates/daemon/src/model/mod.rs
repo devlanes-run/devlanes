@@ -859,18 +859,22 @@ impl LaneSt {
         self.facts.tick();
     }
 
-    /// Adds the units among `units` that have no record to the units the
-    /// lane's last whole start left out, once its services phase ended.
+    /// Adds the units among `units` that have no record to the units left out
+    /// on purpose since the lane's last whole start, once a start's services
+    /// phase ended. A unit leaves them when it runs ([`Self::record_unit`]).
     pub(crate) fn leave_out_unrecorded(&mut self, units: impl IntoIterator<Item = String>) {
         let Some(started) = &mut self.started_with else {
             return;
         };
+        let before = started.left_out.len();
         started.left_out.extend(
             units
                 .into_iter()
                 .filter(|unit| !self.units.contains_key(unit)),
         );
-        self.facts.tick();
+        if started.left_out.len() != before {
+            self.facts.tick();
+        }
     }
 
     /// For an extra lane of another worktree's folder (`lane new --name`): the

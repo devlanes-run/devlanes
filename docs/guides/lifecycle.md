@@ -26,11 +26,11 @@ On a terminal, `daemon stop` and `daemon restart` show each step as it happens: 
 
 ## Editing the project file
 
-devlanes reads a lane's config again when any file it was loaded from changes: the project file, the files it `extends`, their local files (the primary worktree's copy too, when the lane falls back to it) and the `.env` its expressions read. An edit never stops or restarts running units. Routing settings apply as soon as the file changes, without `reload`: a service's `hosts` and `host_header`, `infra.hosts`, `infra.external`, `infra.hidden` and a service's `hidden`. Units whose environment includes one of those URLs still show `env` drift. Otherwise, each running unit shows how it differs from what the file would start now, and a missing one that the file would start shows too:
+devlanes reads a lane's config again when any file it was loaded from changes: the project file, the files it `extends`, their local files (the primary worktree's copy too, when the lane falls back to it) and the `.env` its expressions read. An edit never stops or restarts running units. Routing settings apply as soon as the file changes, without `reload`: a service's `hosts` and `host_header`, `infra.hosts`, `infra.external`, `infra.hidden` and a service's `hidden`. Units whose environment includes one of those URLs still show `env` drift. A value a unit reads from your shell through `${{ env.NAME }}` shows as `env NAME` drift after a start from a shell where it differs. Otherwise, each running unit shows how it differs from what the file would start now, and a missing one that the file would start shows too:
 
 - `changed`, with the fields that differ: `run`, `cwd`, `ports`, `pty`, `ready`, `stop`, `files` (a file devlanes writes for the unit, such as a preset's config overlay) and `env NAME` for each variable, named without its value;
 - `removed`: it runs and the file no longer has it;
-- `added`: the lane's profiles select it now, did not at the lane's last whole start (or the file dropped it and it stopped since), and it is not running. A service you left out with `devlanes start api` never counts as added.
+- `added`: the lane's profiles select it and it has not run since the lane's last whole start, or only before the file dropped it. A service you left out with `devlanes start api` never counts as added, and one that stopped or failed stays as it is.
 
 `devlanes status` says `config changed` on the lane with what differs and the command that applies it, and `--json` has each unit's `drift`. In the TUI the lane and each unit that differs are marked, and the lane's details pane lists them, such as `api: run, env API_URL` and `worker: removed`.
 
