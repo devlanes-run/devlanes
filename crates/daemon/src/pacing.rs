@@ -177,11 +177,13 @@ impl Inner {
     /// arrived ([`StartCx::arrival`]), so requests are served in arrival order
     /// however long their earlier phases (infra, setup, tasks) take. Starts
     /// without one (auto-start) take their place when the services phase begins.
+    /// `inputs` is the key of the plan `resolved` came from.
     pub(crate) async fn spawn_services(
         self: &Arc<Self>,
         cx: &mut StartCx,
         services: &[&ResolvedService],
         resolved: &ResolvedLane,
+        inputs: devlanes_resolve::InputsKey,
     ) {
         if services.is_empty() {
             return;
@@ -253,7 +255,7 @@ impl Inner {
                 project: cx.project.clone(),
                 lane: cx.lane.clone(),
                 reference: cx.reference.clone(),
-                request: SpawnRequest::service(service, &cx.actor),
+                request: SpawnRequest::service(service, &cx.actor, inputs),
                 ready: service.ready.clone(),
                 ticket,
                 id,

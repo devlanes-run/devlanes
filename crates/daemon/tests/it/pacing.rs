@@ -276,8 +276,13 @@ async fn queued_units_stop_bypass_and_restart() {
         let lanes = status(&h, cx(&main)).await;
         assert_eq!(state_of(&lanes, "a").as_deref(), Some("ready"));
         assert_eq!(state_of(&lanes, "b").as_deref(), Some("queued"));
-        // The start returned, but its queued units still have to start.
+        // The start returned, but its queued units still have to start; they are
+        // no drift, and nothing the file changed.
         assert_eq!(lanes[0].state, "starting");
+        assert!(
+            lanes[0].units.iter().all(|unit| unit.drift.is_none()) && !lanes[0].config_changed,
+            "{lanes:?}"
+        );
         let reason = lanes[0]
             .units
             .iter()

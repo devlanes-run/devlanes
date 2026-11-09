@@ -4,7 +4,7 @@ use std::path::PathBuf;
 pub const LANE_DATA_ENV: &str = "DEVLANES_LANE_DATA";
 
 /// What the daemon knows about one lane before resolving its config.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct LaneFacts {
     /// `project` from the config.
     pub project: String,

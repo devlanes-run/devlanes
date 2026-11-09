@@ -16,6 +16,7 @@
 mod command;
 mod error;
 mod facts;
+mod key;
 mod layout;
 mod model;
 mod plan;
@@ -26,6 +27,7 @@ mod util;
 pub use command::{CommandLayers, LeftOut, command_reads_infra, lane_command_env};
 pub use error::ResolveError;
 pub use facts::{LANE_DATA_ENV, LaneFacts, branch_label, lane_name};
+pub use key::{InputsKey, References};
 pub use layout::{fixed_block_start, https_url, lane_layout, tag_colors};
 pub use model::*;
 pub use plan::{container_ready, detect_platform, resolve_lane};

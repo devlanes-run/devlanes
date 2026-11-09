@@ -1,6 +1,19 @@
 //! Drift: how a lane's running units differ from what its project file would start
 //! now, per unit, and `reload`, which applies only that. Everything here lives in
 //! memory: a fingerprint holds environment values, so it never reaches state.db.
+//!
+//! One job per lane computes it ([`DriftJob`]). A pass reads the lane's facts
+//! (config, layout, profiles, client env, overrides, allocation, infra namespace,
+//! units, orphans, waiting units, last whole start) and, through the plan's inputs,
+//! lane 0's layout and other projects' running lanes. Those facts change only
+//! through setters that tick the engine's [`FactsClock`], and a run's exit ticks it
+//! too. A pass records the count it started from. A reader that needs current drift
+//! (`status`, `lane ls`, `reload`, the `start --profile` warning) asks for a pass
+//! when the lane is behind the count it saw, and waits until a pass that started
+//! from at least that count applied.
+//!
+//! A pass plans only the running units whose plan inputs changed since their spawn
+//! or their last answer ([`InputsKey`]), so stops, exits and spawns plan nothing.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -10,14 +23,15 @@ use std::{
 
 use devlanes_core::env::EnvLayer;
 use devlanes_proto::{Context, LaneWarning, RpcError, Selection, StartResult, UnitDrift as Wire};
-use devlanes_resolve::ResolvedService;
+use devlanes_resolve::{InputsKey, ResolvedService};
+use futures_util::FutureExt as _;
 use serde_json::{Value, json};
 
 use crate::{
     Session,
-    engine::{Inner, carries_env, params},
+    engine::{Inner, LanePair, carries_env, params},
     lifecycle::StartOptions,
-    model::{Kind, LaneRt, LaneSt, ProjectRt},
+    model::{Kind, LaneRt, ProjectRt, lock},
     registry::internal,
     stream::LaneEvents,
 };
@@ -35,11 +49,13 @@ pub(crate) struct Fingerprint {
     ports: BTreeMap<String, u16>,
     ready: devlanes_resolve::Ready,
     stop: String,
+    /// The key of the plan the run was spawned from.
+    inputs: InputsKey,
 }
 
 impl Fingerprint {
-    /// The fingerprint of a planned service replica.
-    pub(crate) fn of(service: &ResolvedService) -> Self {
+    /// The fingerprint of a planned service replica, from a plan with `inputs`.
+    pub(crate) fn of(service: &ResolvedService, inputs: InputsKey) -> Self {
         let mut ports = service.ports.clone();
         ports.insert("default".into(), service.port);
         Self {
@@ -72,10 +88,12 @@ impl Fingerprint {
             ports,
             ready: service.ready.clone(),
             stop: format!("{:?}", service.stop),
+            inputs,
         }
     }
 
-    /// What differs from `now`, by name: `run` for the command, `env KEY` per variable.
+    /// What differs from `now`, by name: `run` for the command, `env KEY` per
+    /// variable. The plan keys are not compared.
     pub(crate) fn changes(&self, now: &Self) -> Vec<String> {
         let mut fields = Vec::new();
         if self.program != now.program || self.args != now.args {
@@ -119,8 +137,8 @@ pub(crate) enum UnitDrift {
     Changed(Vec<String>),
     /// Runs, and the config no longer has it.
     Removed,
-    /// The lane's profiles select it now, it was not selected at the lane's last
-    /// whole start, and it is not running.
+    /// The lane's profiles select it, it has not run since the lane's last whole
+    /// start, and that start did not leave it out on purpose.
     Added,
 }
 
@@ -144,24 +162,69 @@ impl UnitDrift {
     }
 }
 
-/// The units the lane's profiles selected at its last whole start, replicas
-/// included, and the infra settings it started with. A unit the profiles select now
-/// but did not then (a new service, or a replica of a raised `replicas`) is `added`;
-/// one the user stopped or left out on purpose (`start api` alone) never is.
+/// Why the running units could not be compared with the file.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Unplanned {
+    /// The file does not load.
+    FileInvalid,
+    /// Planning failed with this error, which `reload` answers with.
+    PlanFailed(RpcError),
+}
+
+/// What a plan said about one run, kept while the run and the plan's inputs stay.
+#[derive(Clone)]
+struct Answer {
+    run: Arc<Fingerprint>,
+    key: InputsKey,
+    drift: Option<UnitDrift>,
+}
+
+/// A lane's drift as a pass computed it.
+#[derive(Clone, Default)]
+pub(crate) struct Drift {
+    /// Per unit.
+    pub units: BTreeMap<String, UnitDrift>,
+    /// The infra settings differ from the ones of the lane's last whole start.
+    pub infra_changed: bool,
+    /// Units run and could not be compared with the file.
+    pub unplanned: Option<Unplanned>,
+    /// The plan answers behind `units`, by unit.
+    answers: BTreeMap<String, Answer>,
+}
+
+impl Drift {
+    /// Whether `other` shows the same to clients.
+    pub(crate) fn shows_like(&self, other: &Self) -> bool {
+        self.units == other.units
+            && self.infra_changed == other.infra_changed
+            && self.unplanned == other.unplanned
+    }
+}
+
+/// The infra settings of the lane's last whole start and the units it left out
+/// on purpose: units its profiles select that its selection did not name (`start
+/// api` alone), and those of its selection that got no run (an `autostart` that
+/// evaluated false, a stop that withdrew them). They never count as `added`.
 #[derive(Debug, Clone)]
 pub(crate) struct StartedWith {
-    pub units: BTreeSet<String>,
     pub infra: Value,
+    pub left_out: BTreeSet<String>,
 }
 
 impl StartedWith {
-    /// Taken when a whole-lane start begins, with the profiles it starts with.
-    pub(crate) fn new(config: &devlanes_config::ProjectConfig, profiles: &[String]) -> Self {
+    /// Taken when a whole-lane start begins, with the profiles it starts with
+    /// and the services it selected.
+    pub(crate) fn new(
+        config: &devlanes_config::ProjectConfig,
+        profiles: &[String],
+        selected: &[String],
+    ) -> Self {
         Self {
-            units: devlanes_resolve::select_profiles(config, profiles, &[])
+            left_out: devlanes_resolve::select_profiles(config, profiles, &[])
                 .map(|selection| selection.services)
                 .unwrap_or_default()
                 .iter()
+                .filter(|service| !selected.contains(service))
                 .flat_map(|service| units_of(config, service))
                 .collect(),
             infra: started_infra(config),
@@ -184,7 +247,7 @@ fn started_infra(config: &devlanes_config::ProjectConfig) -> Value {
 
 /// The unit names of `service` in `config`: the service name, or `<service>.<N>` for
 /// each replica when there are several, as the resolver lays them out.
-fn units_of(config: &devlanes_config::ProjectConfig, service: &str) -> Vec<String> {
+pub(crate) fn units_of(config: &devlanes_config::ProjectConfig, service: &str) -> Vec<String> {
     match config.services.get(service).and_then(|s| s.replicas) {
         Some(count) if count > 1 => (1..=count).map(|n| format!("{service}.{n}")).collect(),
         _ => vec![service.to_owned()],
@@ -204,246 +267,300 @@ pub(crate) fn service_of<'a>(
         .then_some(base)
 }
 
-/// The running service units of a lane with their fingerprints.
-fn running_services(st: &LaneSt) -> Vec<(String, Option<Arc<Fingerprint>>)> {
-    st.units()
-        .iter()
-        .filter(|(_, rec)| rec.kind == Kind::Service && rec.host.is_alive())
-        .map(|(unit, rec)| (unit.clone(), rec.fingerprint.clone()))
-        .collect()
+/// Whether the loaded config `current` is `used`, or reads the same. Compares
+/// pointers first: they differ only while a start an edit overtook runs.
+pub(crate) fn same_config(
+    current: Option<&Arc<devlanes_config::ProjectConfig>>,
+    used: &Arc<devlanes_config::ProjectConfig>,
+) -> bool {
+    current.is_some_and(|current| {
+        Arc::ptr_eq(current, used)
+            || serde_json::to_value(current.as_ref()).ok()
+                == serde_json::to_value(used.as_ref()).ok()
+    })
+}
+
+/// The single-flight drift job of one lane.
+pub(crate) struct DriftJob {
+    /// A leaf lock: nothing is taken while it is held.
+    state: std::sync::Mutex<JobState>,
+    /// The clock count the last applied pass started from.
+    applied: tokio::sync::watch::Sender<u64>,
+}
+
+/// Whether a pass is asked for and whether a runner is active.
+#[derive(Default)]
+struct JobState {
+    requested: bool,
+    running: bool,
+}
+
+impl Default for DriftJob {
+    /// No pass applied yet.
+    fn default() -> Self {
+        Self {
+            state: std::sync::Mutex::new(JobState::default()),
+            applied: tokio::sync::watch::Sender::new(0),
+        }
+    }
+}
+
+impl DriftJob {
+    /// Asks for a pass; true when no runner is active, so the caller starts one.
+    fn request(&self) -> bool {
+        let mut state = lock(&self.state);
+        state.requested = true;
+        !std::mem::replace(&mut state.running, true)
+    }
+
+    /// For the runner: true when a pass is asked for, which it then runs. False
+    /// ends the runner, under the lock a request takes, so no request is lost.
+    fn take(&self) -> bool {
+        let mut state = lock(&self.state);
+        if std::mem::take(&mut state.requested) {
+            true
+        } else {
+            state.running = false;
+            false
+        }
+    }
+
+    /// Whether the last applied pass started before the clock read `seen`.
+    fn behind(&self, seen: u64) -> bool {
+        *self.applied.borrow() < seen
+    }
+}
+
+/// The facts of one lane a pass reads under the lane lock.
+struct Taken {
+    config: Option<Arc<devlanes_config::ProjectConfig>>,
+    /// Running service units and their fingerprints.
+    running: Vec<(String, Option<Arc<Fingerprint>>)>,
+    recorded: BTreeSet<String>,
+    orphans: BTreeSet<String>,
+    /// `(service, unit)` of each laid out service unit.
+    laid_out: Vec<(String, String)>,
+    started: Option<StartedWith>,
+    waiting: BTreeSet<String>,
+    profiles: Vec<String>,
+    answers: BTreeMap<String, Answer>,
 }
 
 impl Inner {
-    /// Recomputes the lane's drift against its current config. Nothing running, or
-    /// no loaded config, leaves no drift: the error a broken file gives is the lane's
-    /// reason instead. A lane whose plan fails keeps no per-unit drift either.
-    ///
-    /// A computation dropped because a stop or start bumped the generation runs
-    /// again once no other one is under way or applied since: those bumps do not
-    /// replan, so the drift from before the edit would otherwise stay.
-    pub(crate) async fn update_drift(
-        self: &Arc<Self>,
-        project: &Arc<ProjectRt>,
-        lane: &Arc<LaneRt>,
-    ) {
-        /// Lowers `drift_updates` on drop, so a request future dropped mid-plan
-        /// does not leave the count raised.
-        struct Underway<'a>(&'a LaneRt);
-        impl Drop for Underway<'_> {
-            fn drop(&mut self) {
-                let mut st = self.0.st();
-                st.drift_updates = st.drift_updates.saturating_sub(1);
-            }
+    /// Asks for a drift pass of `lane`, starting its runner when none runs.
+    /// Requests during a pass make it run once more.
+    pub(crate) fn request_drift(self: &Arc<Self>, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
+        if !lane.drift_job.request() {
+            return;
         }
-        lane.st().drift_updates += 1;
-        let underway = Underway(lane);
-        let (applied, generation) = self.update_drift_once(project, lane).await;
-        drop(underway);
-        let rerun = {
-            let st = lane.st();
-            !applied && st.drift_updates == 0 && st.drift_applied < generation
-        };
-        if rerun {
-            self.spawn_drift(project, lane);
-        }
-    }
-
-    /// One drift computation: whether it applied its result, and the generation it
-    /// took.
-    async fn update_drift_once(
-        self: &Arc<Self>,
-        project: &Arc<ProjectRt>,
-        lane: &Arc<LaneRt>,
-    ) -> (bool, u64) {
-        let (config, running, orphans, started, profiles, in_flight, generation) = {
-            let mut st = lane.st();
-            // Taken now: a later update, start or stop bumps it, and this one's
-            // result, planned from an older state, is then dropped.
-            st.drift_generation += 1;
-            (
-                st.config().loaded().cloned(),
-                running_services(&st),
-                st.orphans().keys().cloned().collect::<BTreeSet<String>>(),
-                st.started_with().cloned(),
-                st.profiles().to_vec(),
-                !st.starts.is_empty(),
-                st.drift_generation,
-            )
-        };
-        if running.is_empty() {
-            let mut st = lane.st();
-            st.forget_dropped_units();
-            st.drift.clear();
-            st.drift_error = None;
-            st.infra_changed = false;
-            // A start in flight spawns from the config it began with; its end decides.
-            if !in_flight {
-                st.config_changed = false;
-            }
-            st.drift_applied = generation;
-            return (true, generation);
-        }
-        let Some(config) = config else {
-            // A file that does not load still changed what the running units came from.
-            let mut st = lane.st();
-            st.drift.clear();
-            st.drift_error = None;
-            st.config_changed = true;
-            st.drift_applied = generation;
-            return (true, generation);
-        };
-        let mut drift = BTreeMap::new();
-        // Only the running services the file still has are planned: each plan can
-        // cost a contributor call.
-        let mut only = BTreeSet::new();
-        for (unit, _) in &running {
-            match service_of(&config, unit) {
-                Some(service) => {
-                    only.insert(format!("services.{service}"));
-                }
-                None => {
-                    drift.insert(unit.clone(), UnitDrift::Removed);
-                }
-            }
-        }
-        let planned = if only.is_empty() {
-            None
-        } else {
-            Some(
-                self.resolve_config(project, lane, config.clone(), Some(&only))
-                    .await,
-            )
-        };
-        let plan_error = match &planned {
-            Some(Err(error)) => Some(error.clone()),
-            _ => None,
-        };
-        if let Some(Ok(resolved)) = &planned {
-            for (unit, fingerprint) in &running {
-                if drift.contains_key(unit) {
-                    continue;
-                }
-                // Fewer replicas leave the extra ones out of the plan.
-                let Some(service) = resolved.services.get(unit) else {
-                    drift.insert(unit.clone(), UnitDrift::Removed);
-                    continue;
-                };
-                // A unit without one was started by a daemon that did not keep it.
-                let Some(fingerprint) = fingerprint else {
-                    continue;
-                };
-                let fields = fingerprint.changes(&Fingerprint::of(service));
-                if !fields.is_empty() {
-                    drift.insert(unit.clone(), UnitDrift::Changed(fields));
-                }
-            }
-        }
-        let selected = devlanes_resolve::select_profiles(&config, &profiles, &[])
-            .map(|selection| selection.services)
-            .unwrap_or_default();
-        let laid_out: Vec<(String, String)> = lane
-            .st()
-            .view()
-            .map(|view| {
-                view.services
-                    .iter()
-                    .map(|service| (service.name.clone(), service.unit.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        // Without a whole start to compare with (a lane brought back next to a previous
-        // daemon's processes), nothing counts as added.
-        if let Some(started) = &started {
-            for (service, unit) in laid_out {
-                // A previous daemon's process runs the unit too, unsupervised.
-                let alive =
-                    running.iter().any(|(running, _)| *running == unit) || orphans.contains(&unit);
-                if selected.contains(&service) && !started.units.contains(&unit) && !alive {
-                    drift.insert(unit, UnitDrift::Added);
-                }
-            }
-        }
-        let infra_changed = started.is_some_and(|started| started_infra(&config) != started.infra);
-        let mut st = lane.st();
-        // Whether a unit is gone does not depend on this plan, so it holds even when
-        // the plan's result is dropped below.
-        st.forget_dropped_units();
-        if st.drift_generation != generation {
-            return (false, generation);
-        }
-        // A plan that fails also means the file no longer matches what runs.
-        st.config_changed = !drift.is_empty() || infra_changed || plan_error.is_some();
-        st.drift = drift;
-        st.drift_error = plan_error;
-        st.infra_changed = infra_changed;
-        st.drift_applied = generation;
-        (true, generation)
-    }
-
-    /// After a start: the units it spawned match the file when the start used the
-    /// lane's current config, so only their drift goes, without a new plan. A start
-    /// that planned from a config edited meanwhile gets a full recomputation, and
-    /// this returns true.
-    pub(crate) fn settle_drift(
-        self: &Arc<Self>,
-        project: &Arc<ProjectRt>,
-        lane: &Arc<LaneRt>,
-        used: &Arc<devlanes_config::ProjectConfig>,
-        spawned: &[String],
-    ) -> bool {
-        // A unit a reload added counts as started: stopping it later is on purpose.
-        {
-            let mut st = lane.st();
-            if let Some(mut started) = st.started_with().cloned() {
-                started.units.extend(spawned.iter().cloned());
-                st.set_started_with(Some(started));
-            }
-        }
-        let current = lane.st().config().loaded().cloned();
-        let same = current.is_some_and(|current| {
-            Arc::ptr_eq(&current, used)
-                || serde_json::to_value(current.as_ref()).ok()
-                    == serde_json::to_value(used.as_ref()).ok()
-        });
-        if !same {
-            self.spawn_drift(project, lane);
-            return true;
-        }
-        let mut st = lane.st();
-        st.drift_generation += 1;
-        st.drift.retain(|unit, _| !spawned.contains(unit));
-        st.config_changed = !st.drift.is_empty() || st.infra_changed;
-        false
-    }
-
-    /// After a stop: drift of units that no longer run goes, except `added`, which
-    /// is about units that do not run. Units the config dropped and that no longer
-    /// run leave the last whole start too, so adding them back makes them `added`.
-    pub(crate) fn prune_drift(&self, lane: &LaneRt) {
-        let mut st = lane.st();
-        st.drift_generation += 1;
-        st.forget_dropped_units();
-        let alive: BTreeSet<String> = running_services(&st)
-            .into_iter()
-            .map(|(unit, _)| unit)
-            .collect();
-        st.drift
-            .retain(|unit, drift| *drift == UnitDrift::Added || alive.contains(unit));
-        if alive.is_empty() {
-            st.drift.clear();
-            st.infra_changed = false;
-        }
-        st.config_changed = !st.drift.is_empty() || st.infra_changed;
-    }
-
-    /// [`Self::update_drift`] in the background, then a `lane.changed`, for callers
-    /// that must not wait for a plan (a start's result, a reload).
-    pub(crate) fn spawn_drift(self: &Arc<Self>, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
         let (engine, project, lane) = (self.clone(), project.clone(), lane.clone());
         tokio::spawn(async move {
-            engine.update_drift(&project, &lane).await;
-            engine.emit_lane(&project, &lane);
+            while lane.drift_job.take() {
+                engine.drift_pass(&project, &lane).await;
+            }
         });
+    }
+
+    /// Asks for a pass of `lane` when it is behind the clock, without waiting.
+    pub(crate) fn refresh_drift(self: &Arc<Self>, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
+        if lane.drift_job.behind(self.clock.now()) {
+            self.request_drift(project, lane);
+        }
+    }
+
+    /// Waits until the drift of each of `lanes` includes every fact change made
+    /// before this call: at most the pass in flight plus one, per lane, with
+    /// the lanes in parallel.
+    pub(crate) async fn current_drift(self: &Arc<Self>, lanes: &[LanePair]) {
+        let seen = self.clock.now();
+        let waits = lanes
+            .iter()
+            .filter(|(_, lane)| lane.drift_job.behind(seen))
+            .map(|(project, lane)| {
+                self.request_drift(project, lane);
+                let mut applied = lane.drift_job.applied.subscribe();
+                async move {
+                    // The sender lives on the lane, which `lanes` holds.
+                    let _ = applied.wait_for(|at| *at >= seen).await;
+                }
+            })
+            .collect::<Vec<_>>();
+        futures_util::future::join_all(waits).await;
+    }
+
+    /// One pass: computes the lane's drift from its facts as of now, applies it
+    /// with its plan answers, retires the records of dropped services, and emits
+    /// `lane.changed` when what clients see changed. A pass that panics keeps
+    /// the previous per-unit drift and records the panic, so `reload` refuses
+    /// instead of acting on it; it still counts as applied.
+    async fn drift_pass(self: &Arc<Self>, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
+        let at = self.clock.now();
+        let computed = std::panic::AssertUnwindSafe(self.compute_drift(project, lane))
+            .catch_unwind()
+            .await;
+        let drift = match computed {
+            Ok(drift) => drift,
+            Err(panic) => {
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_owned())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "the drift pass panicked".to_owned());
+                let reference = lane.st().reference(&project.name());
+                tracing::error!(lane = %reference, %message, "drift pass panicked");
+                let mut kept = lane.st().drift().clone();
+                kept.unplanned = Some(Unplanned::PlanFailed(internal("drift_failed", message)));
+                kept
+            }
+        };
+        let changed = {
+            let mut st = lane.st();
+            let shown = st.apply_drift(drift);
+            let before = st.units().len();
+            st.retire_dropped();
+            shown || st.units().len() != before
+        };
+        lane.drift_job.applied.send_if_modified(|applied| {
+            let newer = at > *applied;
+            if newer {
+                *applied = at;
+            }
+            newer
+        });
+        if changed {
+            self.emit_lane(project, lane);
+        }
+    }
+
+    /// The lane's drift against its current config. Nothing running leaves no
+    /// drift; a file that does not load leaves no per-unit drift.
+    async fn compute_drift(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+    ) -> Drift {
+        let taken = {
+            let st = lane.st();
+            Taken {
+                config: st.config().loaded().cloned(),
+                running: st
+                    .units()
+                    .iter()
+                    .filter(|(_, rec)| rec.kind == Kind::Service && rec.host.is_alive())
+                    .map(|(unit, rec)| (unit.clone(), rec.fingerprint.clone()))
+                    .collect(),
+                recorded: st.units().keys().cloned().collect(),
+                orphans: st.orphans().keys().cloned().collect(),
+                laid_out: st
+                    .view()
+                    .map(|view| {
+                        view.services
+                            .iter()
+                            .map(|service| (service.name.clone(), service.unit.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                started: st.started_with().cloned(),
+                waiting: st.waiting().keys().cloned().collect(),
+                profiles: st.profiles().to_vec(),
+                answers: st.drift().answers.clone(),
+            }
+        };
+        let mut drift = Drift::default();
+        if taken.running.is_empty() {
+            return drift;
+        }
+        let Some(config) = taken.config else {
+            drift.unplanned = Some(Unplanned::FileInvalid);
+            return drift;
+        };
+        let key = match self.gather(project, lane, None, Some(config.clone())).await {
+            Ok(gathered) => Some(gathered.key(self)),
+            Err(error) => {
+                drift.unplanned = Some(Unplanned::PlanFailed(error));
+                None
+            }
+        };
+        let mut stale: Vec<(&String, &Arc<Fingerprint>)> = Vec::new();
+        for (unit, fingerprint) in &taken.running {
+            if service_of(&config, unit).is_none() {
+                drift.units.insert(unit.clone(), UnitDrift::Removed);
+                continue;
+            }
+            // A run without one (spawned outside a plan) is never compared.
+            let (Some(fingerprint), Some(key)) = (fingerprint, key) else {
+                continue;
+            };
+            if fingerprint.inputs == key {
+                continue;
+            }
+            match taken.answers.get(unit) {
+                Some(answer) if Arc::ptr_eq(&answer.run, fingerprint) && answer.key == key => {
+                    if let Some(unit_drift) = &answer.drift {
+                        drift.units.insert(unit.clone(), unit_drift.clone());
+                    }
+                    drift.answers.insert(unit.clone(), answer.clone());
+                }
+                _ => stale.push((unit, fingerprint)),
+            }
+        }
+        if !stale.is_empty() {
+            // Only the stale units' services are planned: each plan can cost a
+            // contributor call.
+            let only: BTreeSet<String> = stale
+                .iter()
+                .filter_map(|(unit, _)| service_of(&config, unit))
+                .map(|service| format!("services.{service}"))
+                .collect();
+            match self
+                .resolve_config(project, lane, config.clone(), Some(&only))
+                .await
+            {
+                Ok((resolved, key)) => {
+                    for (unit, fingerprint) in stale {
+                        let unit_drift = match resolved.services.get(unit) {
+                            // Fewer replicas leave the extra ones out of the plan.
+                            None => Some(UnitDrift::Removed),
+                            Some(service) => {
+                                let fields = fingerprint.changes(&Fingerprint::of(service, key));
+                                (!fields.is_empty()).then_some(UnitDrift::Changed(fields))
+                            }
+                        };
+                        if let Some(unit_drift) = &unit_drift {
+                            drift.units.insert(unit.clone(), unit_drift.clone());
+                        }
+                        drift.answers.insert(
+                            unit.clone(),
+                            Answer {
+                                run: fingerprint.clone(),
+                                key,
+                                drift: unit_drift,
+                            },
+                        );
+                    }
+                }
+                Err(error) => drift.unplanned = Some(Unplanned::PlanFailed(error)),
+            }
+        }
+        // Without a whole start to compare with (a lane brought back next to a previous
+        // daemon's processes), nothing counts as added.
+        if let Some(started) = &taken.started {
+            let selected = devlanes_resolve::select_profiles(&config, &taken.profiles, &[])
+                .map(|selection| selection.services)
+                .unwrap_or_default();
+            for (service, unit) in taken.laid_out {
+                let added = selected.contains(&service)
+                    && !taken.recorded.contains(&unit)
+                    && !taken.orphans.contains(&unit)
+                    && !taken.waiting.contains(&unit)
+                    && !started.left_out.contains(&unit);
+                if added {
+                    drift.units.insert(unit, UnitDrift::Added);
+                }
+            }
+            drift.infra_changed = started_infra(&config) != started.infra;
+        }
+        drift
     }
 
     /// `reload`: applies the lane's drift. Removed units stop, changed ones restart
@@ -468,7 +585,7 @@ impl Inner {
         let name = project.name();
         let reference = lane.st().reference(&name);
         lane.st().config().require(&reference)?;
-        self.update_drift(&project, &lane).await;
+        self.current_drift(&[(project.clone(), lane.clone())]).await;
         let (drift, whole) = {
             let st = lane.st();
             if !st.any_running() {
@@ -493,21 +610,20 @@ impl Inner {
                         .collect(),
                 )
             };
-            // A plan that failed has no per-unit answer; its error is the answer.
-            if st.drift.is_empty()
-                && let Some(error) = &st.drift_error
-            {
+            // Without a plan the drift is incomplete; its error is the answer.
+            if let Some(Unplanned::PlanFailed(error)) = &st.drift().unplanned {
                 return Err(error.clone());
             }
             let drift: BTreeMap<String, UnitDrift> = st
-                .drift
+                .drift()
+                .units
                 .iter()
                 .filter(|(unit, _)| picked.as_ref().is_none_or(|picked| picked.contains(*unit)))
                 .map(|(unit, drift)| (unit.clone(), drift.clone()))
                 .collect();
             (
                 drift,
-                selectors.is_empty() && (st.infra_changed || st.ports_pending),
+                selectors.is_empty() && (st.drift().infra_changed || st.ports_pending),
             )
         };
         let options = |start_id| StartOptions {
@@ -594,7 +710,6 @@ impl Inner {
                 }),
             });
         }
-        self.prune_drift(&lane);
         self.emit_lane(&project, &lane);
         serde_json::to_value(result).map_err(|e| internal("encode", e))
     }

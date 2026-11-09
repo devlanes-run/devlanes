@@ -262,10 +262,7 @@ impl Inner {
                         .stop_lane(project, lane, None, Some(&context.actor), false)
                         .await
                     {
-                        Ok(units) => {
-                            stopped.extend(units);
-                            self.prune_drift(lane);
-                        }
+                        Ok(units) => stopped.extend(units),
                         Err(error) => errors.push(json!({
                             "lane": lane.st().reference(&project.name()),
                             "error": error,
@@ -286,8 +283,6 @@ impl Inner {
             stopped = self
                 .stop_lane(&project, &lane, selectors, mine, selection.transient)
                 .await?;
-            // A stopped unit has no drift left to report.
-            self.prune_drift(&lane);
         }
         let mut result =
             serde_json::to_value(Page::complete(stopped)).map_err(|e| internal("encode", e))?;
@@ -682,9 +677,9 @@ impl Inner {
             .map_err(store_error)?;
         let lane = crate::registry::new_lane(
             record.id,
-            crate::model::LaneSt::new(identity, path, branch, true),
+            crate::model::LaneSt::new(identity, path, branch, true, self.clock.clone()),
         );
-        project.st().lanes.insert(record.id, lane.clone());
+        project.insert_lane(record.id, lane.clone());
         drop(sync);
         self.reload_config(project, &lane).await;
         self.claim_lane(project, &lane).await;
@@ -1439,6 +1434,7 @@ impl Inner {
             st.clear_units();
         }
         lock(&self.projects).clear();
+        self.clock.tick();
         // The store lost them too, and the routes below must not follow them.
         self.forget_all_choices();
         self.publish_routes();
@@ -1520,10 +1516,6 @@ impl Inner {
         drop(claim);
         // What `infra_namespace_changed` does, under the `op` this holds.
         self.refresh_views_held(&project, &lane).await;
-        let running = lane.st().any_running();
-        if running {
-            self.update_drift(&project, &lane).await;
-        }
         self.emit_lane(&project, &lane);
         Ok(
             json!({"lane": lane.st().reference(&project.name()), "infra": report, "endpoints": endpoints}),
