@@ -36,16 +36,6 @@ pub struct Resume {
     pub trailing: usize,
 }
 
-impl Resume {
-    /// Continues right after `line`, owing no context.
-    pub fn after(line: &LogLine) -> Self {
-        Self {
-            cursor: Some(format!("{}#{}", line.unit, line.seq)),
-            trailing: 0,
-        }
-    }
-}
-
 impl UnitLog {
     /// Queries a fresh [`UnitLog::reader`] snapshot. Callers sharing the log behind a
     /// lock should take the snapshot under it and query after releasing it.
