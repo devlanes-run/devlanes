@@ -903,89 +903,65 @@ mod tests {
         let shell = devlanes_shell_windows::windows_shell()
             .await
             .expect("Git for Windows' sh.exe");
-        let dir = tempfile::tempdir().expect("tempdir");
-        let marker = dir.path().join("pid");
-        let errors = dir.path().join("pid.err");
-        let env = windows_env(&[("MARK", &marker.to_string_lossy().replace('\\', "/"))]);
-        // The sleep never ends by itself, so only the job can have ended it.
-        //
-        // `/proc/<pid>/winpid` is the Windows PID behind an MSYS one. MSYS
-        // gives `$!` a new Windows PID when the forked shell execs `sleep`, so
-        // a read before that names a copy that exits at once. The loop keeps
-        // the marker current until the test sees `sleep.exe` and retries a
-        // write that failed; the attempt's deadline ends it.
-        //
-        // Redirections stay on external commands because the shell's three
-        // standard streams share one `NUL` handle, and a redirection in the
-        // shell itself (`exec 2>`, `read <`) closes it for the other two.
-        let script = "sleep infinity & while :; do \
-             cat /proc/$!/winpid > \"$MARK.tmp\" 2>> \"$MARK.err\" \
-             && mv -f \"$MARK.tmp\" \"$MARK\" 2>> \"$MARK.err\"; sleep 0.2; done";
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("listener");
+        let port = listener.local_addr().expect("address").port().to_string();
+        let env = windows_env(&[("DL_PORT", &port)]);
+        // The background cat echoes a connection to the test until the test
+        // closes its end, so only the job can end cat before that, and the
+        // connection's end is cat's end. A cat the job missed exits when the
+        // test drops the connection.
+        let script = "cat <> /dev/tcp/127.0.0.1/$DL_PORT >&0 & wait";
         // Tokio does not advance a paused clock while a `spawn_blocking` task
-        // (the watcher below) runs, so the deadline passes only when the test
-        // advances it, however long `sh.exe` takes to start the sleep. The
-        // real-time limits below only catch a hang and, together, stay under
-        // nextest's 180 s limit.
+        // (the attempt's wait for sh.exe) runs, so the deadline passes only
+        // when the test advances it, however long sh.exe takes to start cat.
+        // Paused only after the shell lookup, which has its own real-time
+        // timeout.
         tokio::time::pause();
-        let attempt = tokio::spawn({
-            let cwd = dir.path().to_path_buf();
-            async move {
-                let deadline = Instant::now() + CMD_ATTEMPT;
-                windows::cmd_succeeds(&shell, script, &cwd, &env, deadline).await
-            }
+        let mut attempt = tokio::spawn(async move {
+            let deadline = Instant::now() + CMD_ATTEMPT;
+            let cwd = std::env::temp_dir();
+            windows::cmd_succeeds(&shell, script, &cwd, &env, deadline).await
         });
-        // Real time from here on: the paused clock would not wait.
-        let background = tokio::task::spawn_blocking(move || {
-            let limit = std::time::Instant::now() + Duration::from_secs(100);
-            while std::time::Instant::now() < limit {
-                if let Ok(text) = std::fs::read_to_string(&marker)
-                    && let Ok(pid) = text.trim().parse::<u32>()
-                    && let Ok(Some(info)) = devlanes_sys::process(pid)
-                    && !info.zombie
-                    && info.name.eq_ignore_ascii_case("sleep.exe")
-                {
-                    return Some(info.identity());
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            None
-        })
-        .await
-        .expect("watcher");
-        let Some(background) = background else {
-            let errors = std::fs::read_to_string(&errors).unwrap_or_default();
-            // A detached attempt would keep its job, and `sh.exe` in `dir`,
-            // until the runtime shuts down, after `dir` tried to delete itself.
-            attempt.abort();
-            let _ = attempt.await;
-            panic!("the background sleep did not start; the shell wrote: {errors:?}");
+        // Real time bounds the test, since the paused clock would not wait.
+        // Dropping `done` ends the guard; a panic drops the attempt, whose job
+        // then ends the tree.
+        let (done, cancelled) = std::sync::mpsc::channel::<()>();
+        let mut guard =
+            tokio::task::spawn_blocking(move || cancelled.recv_timeout(Duration::from_secs(60)));
+        let (mut background, _) = tokio::select! {
+            accepted = listener.accept() => accepted.expect("accept"),
+            _ = &mut guard => panic!("the background cat did not connect within 60 s"),
         };
-        // The attempt may not have set its deadline yet when the marker
-        // appears; each advance passes whatever deadline it has set.
-        let limit = std::time::Instant::now() + Duration::from_secs(30);
-        while !attempt.is_finished() {
-            assert!(
-                std::time::Instant::now() < limit,
-                "the attempt ends at its deadline"
-            );
-            tokio::time::advance(CMD_ATTEMPT).await;
-        }
-        assert!(!attempt.await.expect("attempt"));
-        // Ending a job's processes is asynchronous.
-        let alive = tokio::task::spawn_blocking(move || {
-            let limit = std::time::Instant::now() + Duration::from_secs(30);
-            while std::time::Instant::now() < limit {
-                if !devlanes_sys::matches(&background).unwrap_or(false) {
-                    return false;
-                }
-                std::thread::sleep(Duration::from_millis(50));
+        // The shell's forked child connects before it execs cat, so only an
+        // echo shows that cat runs and holds the connection. A connection lost
+        // on the way fails here instead of passing the final read.
+        let mut byte = [0_u8; 1];
+        background.write_all(b"x").await.expect("write");
+        tokio::select! {
+            echo = background.read_exact(&mut byte) => {
+                echo.expect("the background cat closed its connection before the cut-off");
             }
-            let _ = devlanes_sys::terminate_verified(&background, 1);
-            true
-        })
-        .await
-        .expect("liveness check");
-        assert!(!alive, "the background sleep outlived its probe");
+            _ = &mut guard => panic!("the background cat did not echo within 60 s"),
+        };
+        // The attempt may not have set its deadline yet when cat echoes; each
+        // advance passes whatever deadline it has set.
+        let passed = loop {
+            tokio::select! {
+                finished = &mut attempt => break finished.expect("attempt"),
+                _ = &mut guard => panic!("the attempt did not end at its deadline"),
+                () = tokio::time::advance(CMD_ATTEMPT) => {}
+            }
+        };
+        assert!(!passed);
+        // With nothing left to echo, the read returns only once cat is gone.
+        let ended = tokio::select! {
+            _ = background.read(&mut byte) => true,
+            _ = &mut guard => false,
+        };
+        drop(done);
+        assert!(ended, "the background cat outlived its probe");
     }
 
     /// A `cmd` check without Git's `sh.exe` fails at once with
