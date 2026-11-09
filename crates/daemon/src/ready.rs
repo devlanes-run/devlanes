@@ -908,16 +908,16 @@ mod tests {
             .expect("listener");
         let port = listener.local_addr().expect("address").port().to_string();
         let env = windows_env(&[("DL_PORT", &port)]);
-        // The background sleep holds a connection to the test from just before
-        // it starts until its process ends, so the connection's end is the
-        // sleep's end. It outlasts the real-time guard below, so only the job
-        // can have ended it in time, and a sleep the job missed still exits.
-        let script = "sleep 120 > /dev/tcp/127.0.0.1/$DL_PORT & wait";
+        // The background cat echoes a connection to the test until the test
+        // closes its end, so only the job can end cat before that, and the
+        // connection's end is cat's end. A cat the job missed exits when the
+        // test drops the connection.
+        let script = "cat <> /dev/tcp/127.0.0.1/$DL_PORT >&0 & wait";
         // Tokio does not advance a paused clock while a `spawn_blocking` task
         // (the attempt's wait for sh.exe) runs, so the deadline passes only
-        // when the test advances it, however long sh.exe takes to start the
-        // sleep. Paused only after the shell lookup, which has its own
-        // real-time timeout.
+        // when the test advances it, however long sh.exe takes to start cat.
+        // Paused only after the shell lookup, which has its own real-time
+        // timeout.
         tokio::time::pause();
         let mut attempt = tokio::spawn(async move {
             let deadline = Instant::now() + CMD_ATTEMPT;
@@ -932,10 +932,21 @@ mod tests {
             tokio::task::spawn_blocking(move || cancelled.recv_timeout(Duration::from_secs(60)));
         let (mut background, _) = tokio::select! {
             accepted = listener.accept() => accepted.expect("accept"),
-            _ = &mut guard => panic!("the background sleep did not start within 60 s"),
+            _ = &mut guard => panic!("the background cat did not connect within 60 s"),
         };
-        // The attempt may not have set its deadline yet when the sleep
-        // connects; each advance passes whatever deadline it has set.
+        // The shell's forked child connects before it execs cat, so only an
+        // echo shows that cat runs and holds the connection. A connection lost
+        // on the way fails here instead of passing the final read.
+        let mut byte = [0_u8; 1];
+        background.write_all(b"x").await.expect("write");
+        tokio::select! {
+            echo = background.read_exact(&mut byte) => {
+                echo.expect("the background cat closed its connection before the cut-off");
+            }
+            _ = &mut guard => panic!("the background cat did not echo within 60 s"),
+        };
+        // The attempt may not have set its deadline yet when cat echoes; each
+        // advance passes whatever deadline it has set.
         let passed = loop {
             tokio::select! {
                 finished = &mut attempt => break finished.expect("attempt"),
@@ -944,14 +955,13 @@ mod tests {
             }
         };
         assert!(!passed);
-        // The sleep writes nothing, so the read returns only once it is gone.
-        let mut byte = [0_u8; 1];
+        // With nothing left to echo, the read returns only once cat is gone.
         let ended = tokio::select! {
             _ = background.read(&mut byte) => true,
             _ = &mut guard => false,
         };
         drop(done);
-        assert!(ended, "the background sleep outlived its probe");
+        assert!(ended, "the background cat outlived its probe");
     }
 
     /// A `cmd` check without Git's `sh.exe` fails at once with
