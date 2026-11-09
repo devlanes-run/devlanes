@@ -611,7 +611,7 @@ async fn a_shell_value_the_file_reads_is_drift() {
 /// Drift plans a running unit again only when one of its plan's inputs changed:
 /// a stop, or another project's lane starting when the file reads no
 /// `projects.*`, calls no contributor. An edit plans the edited service once.
-async fn stops_and_exits_plan_nothing() {
+async fn a_stop_or_another_project_plans_nothing() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", BEFORE);
