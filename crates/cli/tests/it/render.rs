@@ -3101,7 +3101,7 @@ fn remote_use_says_where_the_lane_comes_from() {
     tasks["nothing_to_mirror"] = json!(true);
     assert_eq!(
         human(tasks),
-        "fork-b's acme@0 is chosen, but it only has tasks, which this machine does not mirror.\n"
+        "fork-b's acme@0 is chosen, but it has nothing this machine mirrors: no service, container or external port.\n"
     );
     // Connected, but the box's lane is not mirrored here yet.
     let mut unmirrored = reply(json!("fork-b"), json!("fork-a"), false);

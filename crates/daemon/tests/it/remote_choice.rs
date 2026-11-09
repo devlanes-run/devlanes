@@ -900,7 +900,8 @@ async fn a_lane_without_hostnames_switches_by_its_port() {
         none_of(&seen, &["port_in_use", "lane_skipped"]);
 
         // A box lane with only a task has nothing this machine mirrors, and
-        // the reply says so rather than leaving `remote ls` to explain.
+        // the reply says so rather than leaving `remote ls` to explain. The
+        // choice applies, with its notice, once the lane gains a service.
         let tasks = repo(
             &tmp.path,
             "taskrepo",
@@ -920,6 +921,23 @@ async fn a_lane_without_hostnames_switches_by_its_port() {
             Ok(json!({"lane": "taskapp@0", "host": "beta", "previous": null,
                       "mirrored": false, "pending": false, "waits_for": null,
                       "nothing_to_mirror": true, "replaced": []}))
+        );
+        tokio::fs::write(
+            tasks.join("devlanes.yaml"),
+            "project: taskapp\ntasks:\n  hello: { run: \"echo hi\" }\nservices:\n  web:\n    run: sleep\n",
+        )
+        .await
+        .expect("task lane config");
+        beta.h
+            .call(Method::Start, json!({}), cx(&tasks))
+            .await
+            .expect("box service start");
+        let seen = warnings_until_code(&mut frames, "lane_switched", "taskapp@0").await;
+        let notice = seen.last().expect("lane_switched");
+        assert_eq!(
+            (&notice["to"], &notice["from"]),
+            (&json!("beta"), &Value::Null),
+            "{notice}"
         );
 
         session.close();

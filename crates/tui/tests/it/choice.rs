@@ -942,8 +942,9 @@ async fn a_switch_refused_for_a_running_lane_offers_to_stop_it() -> TestResult {
 }
 
 /// A box that is not connected keeps the choice for when it connects, and a
-/// connected one for when its lane is mirrored here. A lane with only tasks
-/// has nothing to mirror, and the notice says so.
+/// connected one for when its lane is mirrored here. A lane without a
+/// service, container or external port has nothing to mirror, and the
+/// notice says so.
 #[tokio::test]
 async fn a_choice_that_does_not_serve_yet_says_why() {
     for (fields, notice) in [
@@ -957,7 +958,7 @@ async fn a_choice_that_does_not_serve_yet_says_why() {
         ),
         (
             json!({"pending": false, "nothing_to_mirror": true}),
-            "fork-b's acme@1 is chosen, but it only has tasks, which this machine does not mirror",
+            "fork-b's acme@1 is chosen, but it has nothing this machine mirrors: no service, container or external port",
         ),
     ] {
         let mut app = with_forks(120, 30).await;

@@ -2266,7 +2266,7 @@ pub(super) fn remote_use(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         }
         UseOutcome::NothingToMirror => {
             return vec![format!(
-                "{owner} {lane} is chosen, but it only has tasks, which this machine does not mirror."
+                "{owner} {lane} is chosen, but it has nothing this machine mirrors: no service, container or external port."
             )];
         }
         UseOutcome::NotMirrored => {

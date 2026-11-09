@@ -4945,7 +4945,7 @@ impl App {
                         "{lane} will come from {from} once this machine mirrors it"
                     )),
                     UseOutcome::NothingToMirror => Some(format!(
-                        "{} is chosen, but it only has tasks, which this machine does not mirror",
+                        "{} is chosen, but it has nothing this machine mirrors: no service, container or external port",
                         lane_of(host, lane)
                     )),
                     UseOutcome::NotMirrored => Some(format!(

@@ -309,20 +309,23 @@ pub enum Method {
     /// `{lane, host, previous, mirrored, pending, waits_for,
     /// nothing_to_mirror, replaced}`, where `previous` is the box that served
     /// the hostnames before (null for this machine), `mirrored` whether the
-    /// chosen lane serves them now, `nothing_to_mirror` true when the chosen
-    /// box lane only has tasks, which are never mirrored, and `replaced` the
-    /// deleted choices as `[{lane, host}]`. Clients read the reply with
-    /// [`remote::UseOutcome::of_reply`]. For `host: null`
-    /// these are the choices that took the lane's hostnames. A box known here
-    /// but not connected keeps the choice until it connects, and a connected
-    /// box whose lane this machine has not mirrored yet, such as right after
-    /// `connect`, until it is: the reply then has `mirrored: false`,
-    /// `pending: true`, `waits_for` `connect` or `mirror`
+    /// chosen lane serves them now and `replaced` the deleted choices as
+    /// `[{lane, host}]`. For `host: null` these are the choices that took the
+    /// lane's hostnames. Clients read the reply with
+    /// [`remote::UseOutcome::of_reply`].
+    ///
+    /// A box known here but not connected keeps the choice until it
+    /// connects, and a connected box whose lane this machine has not mirrored
+    /// yet, such as right after `connect`, until it is: the reply then has
+    /// `mirrored: false`, `pending: true`, `waits_for` `connect` or `mirror`
     /// ([`remote::WaitsFor`], null when not pending) and as `previous` the
     /// box that serves the hostnames meanwhile. A daemon from before
     /// `waits_for` leaves it out, and only a box that is not connected made
-    /// its choices pending. A switch emits one `remote.warning` notice with code
-    /// `lane_switched`, a pending choice once it applies (unless the daemon
+    /// its choices pending. `nothing_to_mirror` is true when the chosen box
+    /// lane has nothing this machine mirrors (no service, container or
+    /// external port). The choice is kept, and applies once the lane has
+    /// such a unit. A switch emits one `remote.warning` notice with code
+    /// `lane_switched`, also a choice that applies later (unless the daemon
     /// restarted meanwhile). Errors, each with a
     /// `message`: `box_unknown`, `lane_not_on_box` (the connected box has no
     /// such lane), `local_lane_running` (a running local lane, named by
@@ -1466,8 +1469,8 @@ pub mod remote {
         Mirrored,
         /// The choice applies once what it waits for happened.
         Pending(WaitsFor),
-        /// The chosen box lane only has tasks, which this machine never
-        /// mirrors.
+        /// The chosen box lane has nothing this machine mirrors: no service,
+        /// container or external port.
         NothingToMirror,
         /// Chosen, but not serving the hostnames for a reason `remote ls`
         /// shows.

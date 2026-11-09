@@ -529,8 +529,9 @@ pub(crate) struct HostConn {
 pub(super) enum LaneBuild {
     /// The mirror built it, or the link ended, so nothing is left to wait for.
     Done,
-    /// The registry lists no unit of the lane this machine mirrors, such as
-    /// one with only tasks, so the mirror never builds it.
+    /// The registry lists no unit of the lane this machine mirrors (no
+    /// service, container or external port), so the mirror does not build
+    /// it until it has one.
     NothingToMirror,
     /// The time ran out first.
     TimedOut,

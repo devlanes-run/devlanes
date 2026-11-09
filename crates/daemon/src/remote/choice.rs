@@ -494,9 +494,11 @@ impl Inner {
                 // Both under the switches lock, which `take_switches` takes
                 // before it reads the choices, so it never sees the pending
                 // switch without its choice.
+                // A lane with nothing to mirror applies once it has
+                // something, as a pending choice applies once it can.
                 let mut switches = lock(&self.remote.pending_switches);
                 lock(&self.remote.choices).insert(lane.clone(), host.clone());
-                if pending {
+                if pending || nothing_to_mirror {
                     switches.insert(lane.clone(), host.clone());
                 } else {
                     switches.remove(&lane);
@@ -556,9 +558,10 @@ impl Inner {
             Some(host) => after.mirrors(host, &lane),
             None => !after.yielded.contains_key(&lane),
         };
-        // A pending choice is announced by the reassignment that applies it,
-        // which may have been the one above.
-        if mirrored && waits_for.is_none() && previous != args.host {
+        // A choice recorded in `pending_switches` is announced by the
+        // reassignment that applies it, which may have been the one above.
+        let deferred = waits_for.is_some() || nothing_to_mirror;
+        if mirrored && !deferred && previous != args.host {
             self.announce_switch(&lane, args.host.as_deref(), previous.as_deref());
         }
         let waits_for = waits_for.filter(|_| !mirrored);
