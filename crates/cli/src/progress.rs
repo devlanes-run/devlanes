@@ -35,9 +35,6 @@ pub fn start_tracker(request: &Request) -> Option<StartTracker> {
             Some(StartTracker::command().with_units(units()))
         }
         Method::Resume => Some(StartTracker::command()),
-        Method::LaneNew if request.params.get("start").and_then(Value::as_bool) == Some(true) => {
-            Some(StartTracker::command())
-        }
         // The daemon streams only the unit a unit target names.
         Method::Wait => request
             .params

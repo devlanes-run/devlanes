@@ -640,7 +640,8 @@ impl Executor {
                             return;
                         }
                     };
-                    if !deliver(&sender, Msg::Subscribed(Ok(()))).await {
+                    let features = stream.features().to_vec();
+                    if !deliver(&sender, Msg::Subscribed(Ok(features))).await {
                         return;
                     }
                     let reason = loop {

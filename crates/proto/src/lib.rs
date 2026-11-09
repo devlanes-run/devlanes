@@ -40,7 +40,7 @@ impl Hello {
 
 /// Names a daemon lists in [`Hello::features`].
 pub mod features {
-    /// `start`, `restart`, `resume`, `lane.new` with `start` and `wait` given
+    /// `start`, `restart`, `resume` and `wait` given
     /// `"events": true` stream their lanes' `lane.phase` (own starts only, by
     /// `start_id`), `task`, `unit.changed` and `lane.changed` events on the
     /// request itself, all before its response. Older daemons ignore the flag.
@@ -56,6 +56,10 @@ pub mod features {
     pub const STATUS_HERE: &str = "status_here";
     /// The daemon sends [`super::events::START_ENDED`] for every start.
     pub const START_ENDED: &str = "start_ended";
+    /// `start`, `restart` and `reload` with [`super::Selection::accepted`] send
+    /// [`super::events::START_ACCEPTED`], and [`super::Method::StartCancel`]
+    /// ends a start by its id.
+    pub const START_ACCEPTED: &str = "start_accepted";
 }
 
 /// Attribution is supplied by clients and never inferred by the daemon.
@@ -145,6 +149,13 @@ pub enum Method {
     Reload,
     #[serde(rename = "resume")]
     Resume,
+    /// Ends the start (or restart) whose [`events::START_ACCEPTED`] named
+    /// `start_id` ([`StartCancelParams`]), on any lane; the start answers its
+    /// own request with `start_cancelled` and what it brought up. Reply
+    /// `{cancelled}`: `false` when no start has that id any more, because it
+    /// already answered. Advertised as [`features::START_ACCEPTED`].
+    #[serde(rename = "start.cancel")]
+    StartCancel,
     /// Lane summaries of the request's scope: a [`Page`] of [`LaneSummary`].
     /// With a `here_for` param (a method name), or without `all`, the reply also
     /// has `here`, the reference of the request's own lane as that method (default
@@ -554,6 +565,17 @@ pub struct Selection {
     /// give units other settings than these. Older daemons ignore it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub needs_profile_settings: bool,
+    /// Send [`events::START_ACCEPTED`] on this request once the start is
+    /// installed, whatever `events` says (`start`, `restart` and `reload`; see
+    /// [`features::START_ACCEPTED`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub accepted: bool,
+}
+
+/// Params of [`Method::StartCancel`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartCancelParams {
+    pub start_id: u64,
 }
 
 /// Profile name that resets a lane to its default selection (see [`Selection::profiles`]).
@@ -1786,6 +1808,11 @@ pub mod events {
     /// its outcome: after the start's last `lane.changed` and after the lane
     /// stopped counting it. `lane` is the canonical reference.
     pub const START_ENDED: &str = "start.ended";
+    /// `{lane, start_id}`, sent only on a request with
+    /// [`super::Selection::accepted`] once its start is installed on the lane,
+    /// before any event of that start. [`super::Method::StartCancel`] with this
+    /// `start_id` ends the start from then on. `lane` is the canonical reference.
+    pub const START_ACCEPTED: &str = "start.accepted";
     /// `{lane, task, state, exit_code?, reason?, finished_at_ms?}` for task runs.
     /// `state` is `started`, `skipped`, or how the run ended in unit state words:
     /// `exited`, `failed` (with the unit's `reason`) or `stopped`.

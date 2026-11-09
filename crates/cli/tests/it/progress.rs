@@ -74,7 +74,6 @@ fn starting_commands_follow_progress_and_others_do_not() {
         (Method::Restart, json!({"units": []})),
         (Method::Reload, json!({})),
         (Method::Resume, json!({})),
-        (Method::LaneNew, json!({"name": "review", "start": true})),
         (Method::Wait, json!({"target": "acme@1:api"})),
     ] {
         let tracker = start_tracker(&request(method, params, None));
@@ -86,7 +85,7 @@ fn starting_commands_follow_progress_and_others_do_not() {
         );
     }
     for (method, params) in [
-        (Method::LaneNew, json!({"name": "review", "start": false})),
+        (Method::LaneNew, json!({"name": "review"})),
         (Method::Stop, json!({})),
         (Method::Status, json!({})),
         (Method::Logs, json!({})),
@@ -107,7 +106,8 @@ fn built(args: &[&str], runtime: &Runtime) -> Request {
         Ok(
             Action::Rpc(request)
             | Action::StartUi { request, .. }
-            | Action::RpcThenOfferStart(request),
+            | Action::RpcThenOfferStart(request)
+            | Action::LaneNewThenStart { start: request, .. },
         ) => request,
         _ => panic!("{args:?} builds no request"),
     }

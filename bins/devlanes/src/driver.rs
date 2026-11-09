@@ -10,8 +10,8 @@ use devlanes_cli::{
 use devlanes_client::{Client, Error as ClientError, Paths};
 use devlanes_ipc::Frame;
 use devlanes_proto::{
-    Context, Control, Event, LaneSummary, LogLine, LogQuery, Method, Outcome, Page, Request,
-    RpcError, Selection, StartResult,
+    Context, Control, Event, LogLine, LogQuery, Method, Outcome, Page, Request, RpcError,
+    Selection, StartResult,
 };
 use serde_json::{Value, json};
 #[cfg(unix)]
@@ -147,19 +147,6 @@ impl ClientDriver {
         self.signals.as_mut()?.0.try_recv().ok()
     }
 
-    /// Lane summaries in the scope of `context`; the start's ownership comes from
-    /// comparing a snapshot before the start with one after an interrupt.
-    async fn lanes(&mut self, context: &Context) -> Option<Vec<LaneSummary>> {
-        let data = self
-            .client
-            .request(Method::Status, json!({}), context.clone())
-            .await
-            .ok()?;
-        serde_json::from_value::<Page<LaneSummary>>(data)
-            .ok()
-            .map(|page| page.items)
-    }
-
     /// One unit's lines after `cursor`, page by page until the daemon has no more.
     async fn rest_of_unit(
         &mut self,
@@ -210,25 +197,66 @@ impl ClientDriver {
         }
     }
 
-    /// [`Self::lanes`] for a start's `context`, and the context that answered, for
-    /// the snapshot after an interrupt. A lane that does not resolve yet (the branch
-    /// of a worktree added a moment ago) falls back to its project, or to the cwd
-    /// for a short reference, which resolves through the cwd anyway.
-    async fn start_snapshot(&mut self, context: &Context) -> (Option<Vec<LaneSummary>>, Context) {
-        let lanes = self.lanes(context).await;
-        let Some(reference) = context.lane.as_deref().filter(|_| lanes.is_none()) else {
-            return (lanes, context.clone());
+    /// Asks the daemon to end the start `start_id`, on a connection of its own,
+    /// since this one waits for the start's answer. The answer says what the
+    /// start brought up whether it was cancelled or had answered already, so
+    /// the reply does not matter. When the cancel cannot be sent, a second
+    /// signal still leaves.
+    async fn cancel_start(&self, start_id: u64) {
+        let Ok(mut client) = Client::connect(&self.paths).await else {
+            return;
         };
-        let project = reference
-            .parse::<devlanes_core::refs::LaneRef>()
-            .ok()
-            .and_then(|lane| lane.project);
-        let fallback = Context {
-            lane: None,
-            project: project.or_else(|| context.project.clone()),
-            ..context.clone()
+        let _ = client
+            .request(
+                Method::StartCancel,
+                json!({"start_id": start_id}),
+                self.lane_context(""),
+            )
+            .await;
+    }
+
+    /// The start's answer, keeping what it brought up as the run's ownership:
+    /// from its result, or from the `lane`, `started` and `whole_lane` the
+    /// daemon puts into a start's error.
+    fn answer(&mut self, outcome: Outcome) -> Result<WithStart, RpcError> {
+        let data = match outcome {
+            Outcome::Ok { data } => data,
+            Outcome::Error { error } => {
+                if let Some(lane) = error.data.get("lane").and_then(Value::as_str) {
+                    self.ownership.lane = lane.to_owned();
+                }
+                if let Some(started) = error.data.get("started").and_then(Value::as_array) {
+                    self.ownership.units = started
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect();
+                }
+                self.ownership.whole_lane =
+                    error.data.get("whole_lane").and_then(Value::as_bool) == Some(true);
+                return Err(error);
+            }
         };
-        (self.lanes(&fallback).await, fallback)
+        let raw = data.clone();
+        let result: StartResult = serde_json::from_value(data).map_err(|error| {
+            RpcError::new("bad_response", json!({"message": error.to_string()}), 1)
+        })?;
+        self.ownership.lane.clone_from(&result.lane);
+        self.ownership.units.clone_from(&result.started);
+        self.ownership.whole_lane = result.whole_lane;
+        Ok(WithStart {
+            ready: result.ready && result.failures.is_empty(),
+            failures: result
+                .failures
+                .into_iter()
+                .map(|failure| UnitFailure {
+                    lane: failure.lane,
+                    unit: failure.unit,
+                    exit_code: failure.exit_code,
+                    log_tail: failure.log_tail,
+                })
+                .collect(),
+            result: raw,
+        })
     }
 
     /// One request, mapping transport failures to the structured error shape.
@@ -259,75 +287,6 @@ impl ClientDriver {
             Err(error) => Err(rpc_error(error)),
         }
     }
-}
-
-/// `request`'s context with `lane` set to the lane the daemon resolves for the
-/// start (a unit's lane before `--lane`). A `status` with it registers nothing
-/// from the cwd when that lane names a known project.
-pub fn start_context(request: &Request) -> Context {
-    let unit_lane = request
-        .params
-        .get("units")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        // A unit that does not parse is reported by the start itself.
-        .find_map(|unit| unit.parse::<devlanes_core::refs::UnitRef>().ok()?.lane)
-        .map(|lane| match lane.project {
-            Some(project) => format!("{project}@{}", lane.selector),
-            None => lane.selector,
-        });
-    Context {
-        lane: unit_lane.or_else(|| request.context.lane.clone()),
-        ..request.context.clone()
-    }
-}
-
-/// The lane and units an interrupted start owns, from lane snapshots taken before
-/// the start and after the interrupt: units active now that were not active before.
-/// A lane that was idle (or did not exist) before belongs to the start as a whole.
-/// `lane` comes from the request, the first snapshot or the start's events;
-/// otherwise the lane whose worktree contains `cwd`.
-pub fn interrupted_ownership(
-    before: &[LaneSummary],
-    after: &[LaneSummary],
-    lane: Option<&str>,
-    cwd: &Path,
-) -> Option<WithOwnership> {
-    let current = match lane {
-        Some(lane) => after
-            .iter()
-            .find(|summary| summary.reference == lane || summary.branch.as_deref() == Some(lane)),
-        None => after
-            .iter()
-            .filter(|summary| devlanes_core::paths::path_starts_with(cwd, &summary.path))
-            .max_by_key(|summary| summary.path.as_os_str().len()),
-    }?;
-    let previous = before
-        .iter()
-        .find(|summary| summary.reference == current.reference);
-    // Not running: nothing this start may stop. `orphaned` units belong to nobody here.
-    let active = |state: &str| !matches!(state, "idle" | "stopped" | "exited" | "unassigned");
-    let units = current
-        .units
-        .iter()
-        .filter(|unit| active(&unit.state) && unit.state != "orphaned")
-        .filter(|unit| {
-            !previous.is_some_and(|lane| {
-                lane.units
-                    .iter()
-                    .any(|old| old.name == unit.name && active(&old.state) && old.state != "failed")
-            })
-        })
-        .map(|unit| format!("{}:{}", current.reference, unit.name))
-        .collect();
-    Some(WithOwnership {
-        lane: current.reference.clone(),
-        units,
-        whole_lane: previous.is_none_or(|lane| lane.state == "idle"),
-        daemon_spawned: false,
-    })
 }
 
 /// The start error for a signal; `with` exits `128 + n` after its teardown.
@@ -520,7 +479,11 @@ fn icacls_fix(path: &Path) -> Option<String> {
 
 #[async_trait]
 impl WithDriver for ClientDriver {
-    /// Streams start events and keeps ownership even when the start fails part-way.
+    /// Streams start events and keeps ownership even when the start fails
+    /// part-way. A signal ends the start with `start.cancel` and still waits
+    /// for its answer, which says what it brought up; a signal before
+    /// `start.accepted` waits for it. A second signal leaves at once with the
+    /// lane alone.
     async fn start(
         &mut self,
         request: &Request,
@@ -532,14 +495,14 @@ impl WithDriver for ClientDriver {
             if let Some(stop) = self.pending_signal() {
                 return Err(interrupted(stop));
             }
-            // Snapshots name the started lane, so `with beta@0:web` in another
-            // project's folder does not register that folder's project.
-            let context = start_context(request);
-            // Only needed to work out ownership if a signal cuts the start short.
-            let (before, snapshot) = match self.signals {
-                Some(_) => self.start_snapshot(&context).await,
-                None => (None, context.clone()),
-            };
+            // Without `start.accepted` a signal could not end the start, and the
+            // units it brings up after the teardown would keep running.
+            if !self
+                .client
+                .supports(devlanes_proto::features::START_ACCEPTED)
+            {
+                return Err(self.client.daemon_outdated("devlanes with"));
+            }
             let id = self
                 .client
                 .begin_request(
@@ -549,94 +512,55 @@ impl WithDriver for ClientDriver {
                 )
                 .await
                 .map_err(rpc_error)?;
-            // A lane-scoped snapshot holds the lane under its full reference, which
-            // `interrupted_ownership` matches; a short `1` matches no summary.
-            let mut lane = match before.as_deref() {
-                Some([one]) if snapshot.lane.is_some() => Some(one.reference.clone()),
-                _ => context.lane.clone(),
-            };
+            // The start's id from `start.accepted`, and the first signal.
+            let mut start_id = None;
+            let mut stopped = None;
             loop {
                 let frame = match self.signals.as_mut() {
                     Some(signals) => tokio::select! {
-                        frame = self.client.next_frame() => frame,
-                        Some(stop) = signals.0.recv() => {
-                            // The daemon keeps starting after a client leaves, so the units
-                            // this start brought up so far are stopped by the teardown.
-                            if let Some(before) = &before {
-                                let after = self.lanes(&snapshot).await.unwrap_or_default();
-                                if let Some(owned) = interrupted_ownership(
-                                    before,
-                                    &after,
-                                    lane.as_deref(),
-                                    &request.context.cwd,
-                                ) {
-                                    self.ownership = WithOwnership {
-                                        daemon_spawned: self.ownership.daemon_spawned,
-                                        ..owned
-                                    };
-                                }
-                            }
-                            return Err(interrupted(stop));
-                        }
+                        frame = self.client.next_frame() => Ok(frame),
+                        Some(stop) = signals.0.recv() => Err(stop),
                     },
-                    None => self.client.next_frame().await,
+                    None => Ok(self.client.next_frame().await),
+                };
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(stop) => {
+                        if let Some(first) = stopped {
+                            return Err(interrupted(first));
+                        }
+                        stopped = Some(stop);
+                        if let Some(start_id) = start_id {
+                            self.cancel_start(start_id).await;
+                        }
+                        continue;
+                    }
                 };
                 match frame.map_err(rpc_error)? {
-                    Frame::Control(Control::Event(event)) => {
-                        // A start's events name only its own lane, in full, so they
-                        // replace a seed that matches no summary (a folder name).
-                        if let Some(name) = event.data.get("lane").and_then(Value::as_str) {
-                            lane = Some(name.to_owned());
+                    Frame::Control(Control::Event(event))
+                        if event.event == devlanes_proto::events::START_ACCEPTED =>
+                    {
+                        if let Some(lane) = event.data.get("lane").and_then(Value::as_str) {
+                            self.ownership.lane = lane.to_owned();
                         }
+                        start_id = event.data.get("start_id").and_then(Value::as_u64);
+                        if let (Some(_), Some(start_id)) = (stopped, start_id) {
+                            self.cancel_start(start_id).await;
+                        }
+                    }
+                    // After a signal the start only winds down; its cancelled phases
+                    // would read as failures of their own.
+                    Frame::Control(Control::Event(_)) if stopped.is_some() => {}
+                    Frame::Control(Control::Event(event)) => {
                         progress.event(&event);
                         crate::terminal::title_event(&mut self.title, &event);
                         events(event)
                     }
                     Frame::Control(Control::Response(response)) if response.id == id => {
-                        return match response.result {
-                            Outcome::Ok { data } => {
-                                let raw = data.clone();
-                                let result: StartResult =
-                                    serde_json::from_value(data).map_err(|error| {
-                                        RpcError::new(
-                                            "bad_response",
-                                            json!({"message": error.to_string()}),
-                                            1,
-                                        )
-                                    })?;
-                                self.ownership.lane.clone_from(&result.lane);
-                                self.ownership.units.clone_from(&result.started);
-                                self.ownership.whole_lane = result.whole_lane;
-                                Ok(WithStart {
-                                    ready: result.ready && result.failures.is_empty(),
-                                    failures: result
-                                        .failures
-                                        .into_iter()
-                                        .map(|failure| UnitFailure {
-                                            lane: failure.lane,
-                                            unit: failure.unit,
-                                            exit_code: failure.exit_code,
-                                            log_tail: failure.log_tail,
-                                        })
-                                        .collect(),
-                                    result: raw,
-                                })
-                            }
-                            Outcome::Error { error } => {
-                                // A failed start may still name its lane, so teardown can find it.
-                                if let Some(lane) = error.data.get("lane").and_then(Value::as_str) {
-                                    self.ownership.lane = lane.to_owned();
-                                }
-                                if let Some(started) =
-                                    error.data.get("started").and_then(Value::as_array)
-                                {
-                                    self.ownership.units = started
-                                        .iter()
-                                        .filter_map(|v| v.as_str().map(str::to_owned))
-                                        .collect();
-                                }
-                                Err(error)
-                            }
+                        let answer = self.answer(response.result);
+                        return match stopped {
+                            Some(stop) => Err(interrupted(stop)),
+                            None => answer,
                         };
                     }
                     _ => {}
@@ -905,64 +829,6 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
-    /// A lane summary with `(unit, state)` pairs.
-    fn lane(state: &str, units: &[(&str, &str)]) -> LaneSummary {
-        LaneSummary {
-            reference: "acme@2".into(),
-            branch: Some("feat/billing".into()),
-            path: "/work/acme-2".into(),
-            state: state.into(),
-            units: units
-                .iter()
-                .map(|(name, state)| devlanes_proto::UnitSummary {
-                    name: (*name).into(),
-                    lane: "acme@2".into(),
-                    state: (*state).into(),
-                    ..devlanes_proto::UnitSummary::default()
-                })
-                .collect(),
-            ..LaneSummary::default()
-        }
-    }
-
-    /// An interrupted start owns what became active since the snapshot, never what
-    /// ran before or what a previous daemon left running.
-    #[test]
-    fn interrupted_start_owns_only_what_it_started() {
-        let before = [lane(
-            "running",
-            &[
-                ("db", "ready"),
-                ("api", "stopped"),
-                ("old", "orphaned"),
-                ("web", "failed"),
-            ],
-        )];
-        let after = [lane(
-            "starting",
-            &[
-                ("db", "ready"),
-                ("api", "starting"),
-                ("old", "orphaned"),
-                ("web", "queued"),
-                ("seed", "idle"),
-            ],
-        )];
-        let cwd = Path::new("/work/acme-2/src");
-        let owned = interrupted_ownership(&before, &after, None, cwd).expect("lane");
-        assert_eq!(owned.lane, "acme@2");
-        assert_eq!(owned.units, ["acme@2:api", "acme@2:web"]);
-        assert!(!owned.whole_lane);
-        let by_branch =
-            interrupted_ownership(&before, &after, Some("feat/billing"), Path::new("/"));
-        assert_eq!(by_branch.map(|owned| owned.lane).as_deref(), Some("acme@2"));
-        // An idle lane, or one that did not exist yet, belongs to the start as a whole.
-        let idle = [lane("idle", &[("db", "idle")])];
-        assert!(interrupted_ownership(&idle, &after, None, cwd).is_some_and(|o| o.whole_lane));
-        assert!(interrupted_ownership(&[], &after, None, cwd).is_some_and(|o| o.whole_lane));
-        assert!(interrupted_ownership(&before, &after, None, Path::new("/elsewhere")).is_none());
-    }
-
     /// A fake daemon on `paths.socket`: answers hello, then hands every request of
     /// each accepted connection to `answer`; `None` drops that connection.
     async fn fake_daemon(
@@ -1116,6 +982,93 @@ mod tests {
                     .iter()
                     .all(|request| request.method == Method::Stop)
             );
+        })
+        .await
+        .expect("in time");
+    }
+
+    /// A signal during a start ends it with `start.cancel` on a second
+    /// connection, for the id `start.accepted` named whichever came first, and
+    /// `with` owns what the start's answer says it brought up.
+    #[tokio::test]
+    async fn a_signal_cancels_the_start_and_keeps_what_it_answered() {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let paths = test_paths(&temp.path().join("h"));
+            let mut listener = devlanes_ipc::local::LocalListener::bind(&paths.socket)
+                .await
+                .expect("bind");
+            let (requested, start_requested) = tokio::sync::oneshot::channel();
+            let daemon = tokio::spawn(async move {
+                let mut hello = devlanes_proto::Hello::current(0);
+                hello
+                    .features
+                    .push(devlanes_proto::features::START_ACCEPTED.into());
+                let mut accept = async || {
+                    let stream = listener.accept().await.expect("accept");
+                    let mut connection = devlanes_ipc::Connection::new(stream);
+                    connection.recv().await.expect("hello");
+                    let hello = Control::Hello(hello.clone());
+                    connection.send(Frame::Control(hello)).await.expect("hello");
+                    connection
+                };
+                let request = |frame| match frame {
+                    Ok(Frame::Control(Control::Request(request))) => request,
+                    _ => panic!("a request"),
+                };
+                let send = |id, result| Frame::Control(Control::Response(devlanes_proto::Response { id, result }));
+                let mut start = accept().await;
+                let begun = request(start.recv().await);
+                let _ = requested.send(());
+                let accepted = Event {
+                    seq: 0,
+                    event: devlanes_proto::events::START_ACCEPTED.into(),
+                    data: json!({"lane": "acme@0", "start_id": 7}),
+                };
+                start
+                    .send(Frame::Control(Control::Event(accepted)))
+                    .await
+                    .expect("accepted");
+                let mut cancel = accept().await;
+                let asked = request(cancel.recv().await);
+                let cancelled = json!({"cancelled": true});
+                cancel
+                    .send(send(asked.id, Outcome::Ok { data: cancelled }))
+                    .await
+                    .expect("cancelled");
+                let data = json!({"lane": "acme@0", "started": ["acme@0:web"], "ran": [], "whole_lane": true});
+                let error = RpcError::new("start_cancelled", data, 1);
+                start
+                    .send(send(begun.id, Outcome::Error { error }))
+                    .await
+                    .expect("answer");
+                asked
+            });
+            let client = Client::connect(&paths).await.expect("connect");
+            let (signal, signals) = mpsc::unbounded_channel();
+            let mut driver = ClientDriver::new(client, Context::default(), paths.clone())
+                .with_signals(Signals(signals));
+            let request = Request {
+                id: 0,
+                method: Method::Start,
+                params: json!({"accepted": true}),
+                context: Context::default(),
+            };
+            let interrupt = async {
+                start_requested.await.expect("start sent");
+                signal.send(Stop::Interrupt).expect("signal");
+            };
+            let mut events = |_| {};
+            let (started, ()) = tokio::join!(driver.start(&request, &mut events), interrupt);
+            let error = started.expect_err("interrupted");
+            assert_eq!((error.code.as_str(), error.exit_code), ("interrupted", 130));
+            let owned = driver.ownership();
+            assert_eq!(owned.lane, "acme@0");
+            assert_eq!(owned.units, ["acme@0:web"]);
+            assert!(owned.whole_lane);
+            let asked = daemon.await.expect("daemon");
+            assert_eq!(asked.method, Method::StartCancel);
+            assert_eq!(asked.params["start_id"], 7);
         })
         .await
         .expect("in time");

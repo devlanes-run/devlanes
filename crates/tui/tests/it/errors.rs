@@ -488,7 +488,7 @@ async fn every_failure_goes_to_the_list() -> TestResult {
     let rpc = |code: &str| ApiError::Rpc(RpcError::new(code, json!({"message": "boom"}), 1));
     app.update(Msg::Subscribed(Err(rpc("unsupported_method"))));
     app.update(Msg::Reconnect);
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     app.update(Msg::Status(Err(rpc("state_error"))));
     app.update(Msg::Metrics(Err(rpc("not_supported_yet"))));
     // The same metrics failure every tick is reported once.

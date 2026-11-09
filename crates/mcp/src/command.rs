@@ -114,7 +114,7 @@ impl Call {
     }
 
     /// Whether the command blocks until units are ready (`start`, `restart`,
-    /// `reload`, `wait`, `with`, `lane resume`).
+    /// `reload`, `wait`, `with`, `lane resume`, `lane new --start`).
     pub fn blocks(&self) -> bool {
         matches!(
             &self.cli.command,
@@ -125,7 +125,7 @@ impl Call {
                     | Command::Wait { .. }
                     | Command::With(_)
                     | Command::Lane {
-                        command: LaneCommand::Resume { .. }
+                        command: LaneCommand::Resume { .. } | LaneCommand::New { start: true, .. }
                     }
             )
         )

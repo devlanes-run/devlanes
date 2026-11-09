@@ -313,7 +313,7 @@ async fn snapshot_monitor_tab() -> TestResult {
         },
     ];
     let (mut app, _) = loaded(&api, 100, 20).await;
-    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Subscribed(Ok(Vec::new())));
     let effects = app.update(shifted('M'));
     assert_eq!(app.view, View::Monitor);
     // Before the first frame: two seconds of history per terminal column.
@@ -1660,7 +1660,7 @@ async fn disconnect_backs_off_and_resubscribes() -> TestResult {
         [Effect::ScheduleReconnect { after_ms: 1000 }]
     ));
     app.update(Msg::Reconnect);
-    let effects = app.update(Msg::Subscribed(Ok(())));
+    let effects = app.update(Msg::Subscribed(Ok(Vec::new())));
     assert_eq!(app.connection, Connection::Online);
     assert!(
         matches!(effects.first(), Some(Effect::Refresh)),
@@ -1794,7 +1794,7 @@ async fn focus_needs_a_live_stream() -> TestResult {
 async fn status_is_queried_after_the_subscription_opens() -> TestResult {
     let mut app = App::new(100, 24);
     assert!(matches!(app.start().as_slice(), [Effect::Subscribe]));
-    let effects = app.update(Msg::Subscribed(Ok(())));
+    let effects = app.update(Msg::Subscribed(Ok(Vec::new())));
     assert!(
         matches!(effects.as_slice(), [Effect::Refresh, Effect::FetchBoxes]),
         "{effects:?}"

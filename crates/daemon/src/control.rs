@@ -12,8 +12,8 @@ use std::{
 use devlanes_config::OpaqueExtensions;
 use devlanes_core::{LaunchSpec, TerminalSize, ports::PortName};
 use devlanes_proto::{
-    Context, ExecParams, Method, Page, ResumePlan, RpcError, RunParams, Selection, UnitSummary,
-    events,
+    Context, ExecParams, Method, Page, ResumePlan, RpcError, RunParams, Selection,
+    StartCancelParams, UnitSummary, events,
 };
 use devlanes_resolve::ResolvedLane;
 use devlanes_state::DesiredState;
@@ -60,14 +60,10 @@ struct LaneNewParams {
     /// Name of that extra lane.
     #[serde(default)]
     name: Option<String>,
+    /// Sent by CLIs that started the new lane through `lane.new`. It is refused
+    /// before a lane is created, so such a CLI does not leave one unstarted.
     #[serde(default)]
     start: bool,
-    /// Stream the start's lane events on the request.
-    #[serde(default)]
-    events: bool,
-    /// `--env` overrides for the start.
-    #[serde(default)]
-    env: EnvMap,
 }
 
 /// `lane.clean` parameters.
@@ -212,6 +208,7 @@ impl Inner {
                 start_id: Some(start_id),
                 arrival,
                 restoring: false,
+                accepted: selection.accepted.then(|| session.clone()),
             },
         );
         let mut result = self.with_lane_events(session, stream, start).await?;
@@ -365,6 +362,7 @@ impl Inner {
             start_id: Some(start_id),
             arrival,
             restoring: false,
+            accepted: selection.accepted.then(|| session.clone()),
         };
         let result = if selectors.is_empty() {
             let restart = self.restart_lane(&project, &lane, options);
@@ -374,6 +372,22 @@ impl Inner {
             self.with_lane_events(session, stream, restart).await?
         };
         serde_json::to_value(result).map_err(|e| internal("encode", e))
+    }
+
+    /// `start.cancel`: fires the cancel of the start `start_id`, on whichever
+    /// lane runs it. `{cancelled: false}` when no start has that id any more:
+    /// it already answered its own request.
+    pub(crate) fn start_cancel_method(&self, value: Value) -> Result<Value, RpcError> {
+        let args: StartCancelParams = required(value)?;
+        let start = self
+            .all_lanes()
+            .into_iter()
+            .flat_map(|(_, lane)| lane.running_starts())
+            .find(|start| start.start_id() == args.start_id);
+        if let Some(start) = &start {
+            start.cancel.cancel();
+        }
+        Ok(json!({"cancelled": start.is_some()}))
     }
 
     /// `resume`: starts every lane whose desired state is running, with this shell's env.
@@ -428,6 +442,7 @@ impl Inner {
                             start_id: Some(start_id),
                             arrival,
                             restoring: false,
+                            accepted: None,
                         },
                     )
                 },
@@ -500,6 +515,7 @@ impl Inner {
                             start_id: None,
                             arrival,
                             restoring: true,
+                            accepted: None,
                         },
                     )
                     .await;
@@ -520,14 +536,13 @@ impl Inner {
         futures_util::future::join_all(starts).await;
     }
 
-    /// `lane.new`: another lane for the cwd's folder, started when asked.
+    /// `lane.new`: another lane for the cwd's folder. Clients start it with a
+    /// plain `start` on the returned lane.
     pub(crate) async fn lane_new(
         self: &Arc<Self>,
         value: Value,
         context: &Context,
-        session: &Session,
     ) -> Result<Value, RpcError> {
-        let arrival = self.arrive();
         let args: LaneNewParams = required(value)?;
         if let Some(branch) = &args.branch {
             return Err(RpcError::new(
@@ -535,6 +550,13 @@ impl Inner {
                 json!({"message": format!(
                     "devlanes no longer creates worktrees; run `git worktree add <path> {branch}`, then `devlanes start` in it"
                 )}),
+                2,
+            ));
+        }
+        if args.start {
+            return Err(RpcError::new(
+                "bad_request",
+                json!({"message": "this devlanes client is older than the daemon; run devlanes lane new, then devlanes start --lane <name>"}),
                 2,
             ));
         }
@@ -559,38 +581,7 @@ impl Inner {
         } else {
             path.join(config_dir)
         };
-        let mut result = json!({"lane": summary, "name": extra, "folder": folder});
-        if args.start {
-            // Older CLIs send no environment for `lane new --start`.
-            let env = carries_env(context).or_else(|| project.st().last_env.clone());
-            let start_id = self.new_start_id();
-            let stream = args
-                .events
-                .then(|| LaneEvents::starts(vec![(project.clone(), lane.clone())], vec![start_id]));
-            let start = self.start_lane(
-                &project,
-                &lane,
-                StartOptions {
-                    selectors: Vec::new(),
-                    profiles: Vec::new(),
-                    transient: false,
-                    needs_profile_settings: false,
-                    env,
-                    overrides: Some(args.env.clone()),
-                    actor: context.actor.clone(),
-                    timeout: self.opts.start_timeout,
-                    session: None,
-                    setup_only: false,
-                    all_at_once: false,
-                    start_id: Some(start_id),
-                    arrival,
-                    restoring: false,
-                },
-            );
-            let start = self.with_lane_events(session, stream, start).await?;
-            result["start"] = serde_json::to_value(start).map_err(|e| internal("encode", e))?;
-        }
-        Ok(result)
+        Ok(json!({"lane": summary, "name": extra, "folder": folder}))
     }
 
     /// Another lane for `base`'s folder (`lane new`): its own worktree row,

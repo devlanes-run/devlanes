@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use devlanes_cli::{Hint, Rendered, Runtime};
 use devlanes_client::{Client, Paths};
-use devlanes_proto::{Method, Request, RpcError};
+use devlanes_proto::{Context, Method, Request, RpcError};
 use devlanes_tui::{
     ApiError,
     start::{StartExit, StartFrame, StartHandoff, await_start, follow_start},
@@ -36,7 +36,6 @@ fn label(method: Method) -> &'static str {
         Method::Restart => "restart",
         Method::Reload => "reload",
         Method::Resume => "resume",
-        Method::LaneNew => "new lane",
         _ => "start",
     }
 }
@@ -56,13 +55,22 @@ pub async fn run(
     let mut client = Client::connect_or_spawn(paths).await.map_err(rpc_error)?;
     let mut params = request.params.clone();
     params["events"] = json!(true);
+    // The lane the daemon started, for the TUI's scope.
+    let accepted = matches!(
+        request.method,
+        Method::Start | Method::Restart | Method::Reload
+    ) && client.supports(devlanes_proto::features::START_ACCEPTED);
+    if accepted {
+        params["accepted"] = json!(true);
+    }
     let id = client
         .begin_request(request.method, params, request.context.clone())
         .await
         .map_err(rpc_error)?;
     let stream = follow_start(client, id);
+    let verb = label(request.method).into();
     let waited = tokio::select! {
-        waited = await_start(label(request.method).into(), stream, OPEN_AFTER) => waited,
+        waited = await_start(verb, stream, OPEN_AFTER, accepted) => waited,
         _ = tokio::signal::ctrl_c() => {
             keeps_running();
             return Ok(DETACHED);
@@ -80,10 +88,16 @@ pub async fn run(
     if let Some(data) = nothing_reloaded(request.method, &handoff) {
         return crate::commands::render_result(runtime, request.method, data, None);
     }
-    // Scoped to the started lane: a cwd-only first `status` would register the
-    // cwd's project when the start named another project's lane.
+    // Scoped to the lane the daemon started: a cwd-only first `status` would
+    // register the cwd's project when the start named another project's lane.
+    // Without `start.accepted` (an older daemon, `resume`, `lane new`) the
+    // request's own context.
+    let scope = Context {
+        lane: handoff.lane.clone().or(request.context.lane),
+        ..request.context
+    };
     let options = devlanes_tui::Options {
-        scope: Some(crate::driver::start_context(&request)),
+        scope: Some(scope),
         ..crate::wiring::tui_options(paths).await
     };
     let (exit, relaunch) = devlanes_tui::run_start(paths.clone(), options, handoff)
@@ -149,6 +163,7 @@ mod tests {
     fn a_reload_that_started_nothing_skips_the_tui() {
         let handoff = |data: Value| StartHandoff {
             label: "reload".into(),
+            lane: None,
             frames: vec![StartFrame::Done(Ok(data))],
             stream: tokio::sync::mpsc::channel(1).1,
         };

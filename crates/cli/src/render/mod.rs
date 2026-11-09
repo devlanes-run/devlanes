@@ -222,7 +222,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
 pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> {
     let starting = matches!(
         method,
-        Method::Start | Method::Restart | Method::Reload | Method::Resume | Method::LaneNew
+        Method::Start | Method::Restart | Method::Reload | Method::Resume
     );
     match event.event.as_str() {
         events::PHASE if starting => other::phase_line(&event.data, cx).into_iter().collect(),
