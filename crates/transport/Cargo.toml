@@ -23,3 +23,6 @@ tokio-util = { workspace = true, features = ["compat"] }
 tracing.workspace = true
 yamux = "0.14"
 zstd.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
