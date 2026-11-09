@@ -2080,6 +2080,42 @@ async fn logs_follow_keeps_the_filter() {
     .expect("timeout");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+/// A follower reads the next run of a unit that stopped and started again.
+/// The follower reads only when woken, so a missed wake hangs this test.
+async fn logs_follow_reads_the_next_run() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BASIC);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let run = |value: &str| json!({"units": ["worker"], "env": {"RUN": value}});
+        start(&h, cx(&main), run("one")).await;
+        let (session, mut frames) = h.session();
+        let follow = h.call_on(
+            Method::Logs,
+            json!({"units": ["worker"], "follow": true}),
+            cx(&main),
+            &session,
+        );
+        let read = async {
+            let first = next_log_text(&mut frames).await;
+            h.call(Method::Stop, json!({}), cx(&main))
+                .await
+                .expect("stop");
+            start(&h, cx(&main), run("two")).await;
+            let second = next_log_text(&mut frames).await;
+            session.close();
+            [first, second]
+        };
+        let (followed, texts) = tokio::join!(follow, read);
+        followed.expect("follow");
+        assert_eq!(texts, ["one", "two"]);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 /// The text of the next `log` event sent to a session.
 async fn next_log_text(frames: &mut tokio::sync::mpsc::Receiver<Frame>) -> String {
     loop {

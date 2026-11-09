@@ -7,9 +7,13 @@ use devlanes_core::env::EnvLayer;
 use devlanes_logs::{Resumable, Resume};
 use devlanes_proto::{Context, LaneSummary, LogQuery, Method, Page, RpcError, events};
 use devlanes_state::EndedBy;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::time::Instant;
+use tokio::{
+    sync::{broadcast, watch},
+    time::Instant,
+};
 
 use crate::{
     Session,
@@ -18,7 +22,7 @@ use crate::{
     registry::internal,
     stream::LaneEvents,
     target::Policy,
-    units::{UnitHost, UnitState, now_ms, query_log_dir},
+    units::{Logged, UnitHost, UnitState, now_ms, query_log_dir},
 };
 
 /// `status` parameters.
@@ -201,6 +205,49 @@ async fn process_name(pid: u32) -> Option<String> {
     .await
     .ok()
     .flatten()
+}
+
+/// Resolves once one of `written` reports lines its log thread stored. A
+/// finished log never stores more, so its closed watch is left out.
+async fn any_written(written: &mut [watch::Receiver<Logged>]) {
+    let mut changes: FuturesUnordered<_> =
+        written.iter_mut().map(|logged| logged.changed()).collect();
+    while let Some(changed) = changes.next().await {
+        if changed.is_ok() {
+            return;
+        }
+    }
+    std::future::pending().await
+}
+
+/// Resolves once a unit of `units` runs another run than `hosts` (the ones
+/// last read, `None` for no run), checked at each `unit.changed` of the bus.
+/// Missed events count as a change.
+async fn run_replaced(
+    changes: &mut broadcast::Receiver<devlanes_proto::Event>,
+    lane: &crate::model::LaneRt,
+    units: &[String],
+    hosts: &[Option<UnitHost>],
+) {
+    loop {
+        match changes.recv().await {
+            Ok(event) if event.event == events::UNIT_CHANGED => {
+                let st = lane.st();
+                let replaced = units.iter().zip(hosts).any(|(unit, read)| {
+                    match (st.units.get(unit).map(|rec| &rec.host), read) {
+                        (Some(now), Some(read)) => !now.same_run(read),
+                        (now, read) => now.is_some() != read.is_some(),
+                    }
+                });
+                if replaced {
+                    return;
+                }
+            }
+            Ok(_) => {}
+            Err(broadcast::error::RecvError::Lagged(_)) => return,
+            Err(broadcast::error::RecvError::Closed) => std::future::pending().await,
+        }
+    }
 }
 
 impl Inner {
@@ -481,7 +528,8 @@ impl Inner {
 
     /// Streams new lines of `units` that `filter` (the first page's query)
     /// selects until the client disconnects, following restarts. Each unit's
-    /// reads continue from its entry in `resumes`.
+    /// reads continue from its entry in `resumes`. It reads again when a
+    /// unit's log thread stores lines or a unit's run is replaced.
     async fn follow_logs(
         &self,
         lane: Arc<crate::model::LaneRt>,
@@ -491,10 +539,21 @@ impl Inner {
         session: &Session,
     ) {
         let disconnected = session.disconnected();
+        // Subscribed before the first read, so no replaced run goes unnoticed.
+        let mut changes = self.bus.subscribe();
         loop {
+            let mut hosts = Vec::with_capacity(units.len());
+            let mut written = Vec::with_capacity(units.len());
+            let mut more = false;
             for (unit, resume) in units.iter().zip(&mut resumes) {
                 let host = lane.st().units.get(unit).map(|rec| rec.host.clone());
+                hosts.push(host.clone());
                 let Some(host) = host else { continue };
+                // Taken before the read: lines stored after it mark the watch
+                // changed, and every line stored before it is in the read.
+                let mut logged = host.watch_logged();
+                logged.borrow_and_update();
+                written.push(logged);
                 let query = LogQuery {
                     cursor: resume.cursor.clone(),
                     max_bytes: Some(256 * 1024),
@@ -507,6 +566,8 @@ impl Inner {
                     continue;
                 };
                 *resume = read.resume;
+                // A full page leaves stored lines unread, which no watch reports again.
+                more |= read.page.truncated;
                 for line in read.page.items {
                     let event = devlanes_proto::Event {
                         seq: 0,
@@ -518,9 +579,13 @@ impl Inner {
                     }
                 }
             }
+            if more {
+                continue;
+            }
             tokio::select! {
                 () = disconnected.cancelled() => return,
-                () = tokio::time::sleep(Duration::from_millis(250)) => {}
+                () = any_written(&mut written) => {}
+                () = run_replaced(&mut changes, &lane, &units, &hosts) => {}
             }
         }
     }
