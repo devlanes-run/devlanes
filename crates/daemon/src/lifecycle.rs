@@ -35,8 +35,8 @@ use crate::{
     infra_restarts::{COMMAND_INFRA_WAIT, Settled},
     integrations::{InfraPortNeed, InfraSpec, ManagedUnit, PlannedUnit, StartedAt},
     model::{
-        Brought, Closing, EnvMap, Kind, LaneRt, ProjectRt, StartCtl, StartSlot, Unassigned,
-        UnitRec, core_actor, is_mine, unassigned, unit_summary,
+        Brought, Closing, EnvMap, Kind, LaneRt, LaunchRecord, ProjectRt, StartCtl, StartSlot,
+        Unassigned, UnitRec, core_actor, is_mine, unassigned, unit_summary,
     },
     ready::Readiness,
     registry::{internal, store_error},
@@ -68,7 +68,8 @@ pub(crate) struct SpawnRequest {
     pub name: String,
     pub kind: Kind,
     pub spec: LaunchSpec,
-    pub env: Arc<Environment>,
+    /// What `env show <unit>` reports for the run.
+    pub launch: Arc<LaunchRecord>,
     pub files: Vec<PreparedFile>,
     pub actor: Actor,
     pub ports: BTreeMap<String, u16>,
@@ -92,8 +93,6 @@ pub(crate) struct SpawnRequest {
     pub keep_awake: bool,
     /// A service run's [`crate::drift::Fingerprint`]; `None` for one-shot units.
     pub fingerprint: Option<crate::drift::Fingerprint>,
-    /// Launch notes, for `env --explain`.
-    pub notes: Vec<String>,
 }
 
 /// Copies an environment with its provenance (the type is deliberately not `Clone`).
@@ -115,7 +114,7 @@ impl SpawnRequest {
             name: service.unit.clone(),
             kind: Kind::Service,
             spec: service.launch.to_spec(service.pty, TerminalSize::default()),
-            env: Arc::new(copy_env(&service.launch.env)),
+            launch: Arc::new(LaunchRecord::planned(&service.launch)),
             files: service.launch.files.clone(),
             actor: actor.clone(),
             ports,
@@ -133,7 +132,6 @@ impl SpawnRequest {
             role: "service",
             keep_awake: service.keep_awake,
             fingerprint: Some(crate::drift::Fingerprint::of(service)),
-            notes: service.launch.notes.clone(),
         }
     }
 
@@ -153,7 +151,7 @@ impl SpawnRequest {
             name: name.to_owned(),
             kind,
             spec,
-            env: Arc::new(copy_env(&launch.env)),
+            launch: Arc::new(LaunchRecord::planned(launch)),
             files: launch.files.clone(),
             actor: actor.clone(),
             ports: BTreeMap::new(),
@@ -171,7 +169,6 @@ impl SpawnRequest {
             role: kind.word(),
             keep_awake: false,
             fingerprint: None,
-            notes: launch.notes.clone(),
         }
     }
 }
@@ -192,7 +189,7 @@ pub(crate) struct NotStartedRec {
     pub autostart: bool,
     pub stop: StopPolicy,
     pub literal_port: Option<u16>,
-    pub env: Arc<Environment>,
+    pub launch: Arc<LaunchRecord>,
     pub preset: Option<String>,
     pub files: Vec<PreparedFile>,
     pub color: Option<String>,
@@ -227,7 +224,7 @@ impl NotStartedRec {
             autostart: service.autostart,
             stop: StopPolicy::default(),
             literal_port: None,
-            env: Arc::new(Environment::default()),
+            launch: Arc::default(),
             preset: None,
             files: Vec::new(),
             color: Some(service.color.clone()),
@@ -2262,7 +2259,7 @@ impl Inner {
                         autostart: request.autostart,
                         stop: request.stop,
                         literal_port: request.literal_port,
-                        env: request.env,
+                        launch: request.launch,
                         preset: request.preset,
                         files: request.files,
                         color: Some(color),
@@ -2345,9 +2342,7 @@ impl Inner {
                 autostart: request.autostart,
                 stop: request.stop,
                 literal_port: request.literal_port,
-                env: request.env,
-                notes: request.notes,
-                left_out: BTreeMap::new(),
+                launch: request.launch,
                 failure_tail: Vec::new(),
                 failure_tail_styled: Vec::new(),
                 preset: request.preset,
@@ -2454,10 +2449,8 @@ impl Inner {
                     autostart: rec.autostart,
                     stop: rec.stop,
                     literal_port: rec.literal_port,
-                    env: rec.env,
-                    // Never alive, so `env --explain` resolves afresh and reads neither.
-                    notes: Vec::new(),
-                    left_out: BTreeMap::new(),
+                    // Never alive, so `env show` resolves afresh and does not read it.
+                    launch: rec.launch,
                     failure_tail: vec![rec.note],
                     failure_tail_styled: Vec::new(),
                     preset: rec.preset,

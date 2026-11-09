@@ -582,9 +582,17 @@ impl WithDriver for ClientDriver {
         self.ownership.clone()
     }
 
-    /// Lane-level env: DEVLANES_*, DEVLANES_PUBLIC_URL_<SERVICE>, CA variables.
-    async fn env(&mut self, lane: &str) -> Result<BTreeMap<String, String>, RpcError> {
-        let context = self.lane_context(lane);
+    /// Lane-level env: DEVLANES_*, DEVLANES_PUBLIC_URL_<SERVICE>, `global_env`
+    /// and the CA variables `shell` does not set. The daemon does not keep `shell`.
+    async fn env(
+        &mut self,
+        lane: &str,
+        shell: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, String>, RpcError> {
+        let context = Context {
+            env: Some(shell.clone()),
+            ..self.lane_context(lane)
+        };
         let data = self
             .call(Method::Env, json!({"lane_env": true}), context)
             .await?;

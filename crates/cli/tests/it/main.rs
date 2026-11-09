@@ -719,7 +719,10 @@ fn environment_is_captured_only_for_relevant_methods() {
         (vec!["exec", "--name", "demo", "--", "echo"], true),
         (vec!["lane", "resume"], true),
         (vec!["run", "--list"], false),
-        (vec!["env", "show"], false),
+        // The CA variables are set against the shell that asks.
+        (vec!["env", "show"], true),
+        (vec!["env", "export"], true),
+        (vec!["env", "shell"], true),
         // A lane that never started plans the unit with this shell's env.
         (vec!["env", "show", "api"], true),
         (vec!["env", "export", "api"], true),

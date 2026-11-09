@@ -21,6 +21,8 @@ error: port 5173 is taken by shop@1:web
 hint: devlanes stop shop@1:web
 error: Docker isn't running or can't be reached
 hint: devlanes doctor
+error: DATABASE_URL needs infra postgres, and Docker did not answer in time
+hint: devlanes doctor
 error: timed out waiting for acme@2:api
 hint: devlanes debug why acme@2:api
 error: acme@2:job is still running after 5s

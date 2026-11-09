@@ -632,14 +632,14 @@ fn validate_inner<E: Extensions>(
         lane_keys.insert(key.clone());
         lane_keys.insert(key.replace('-', "_"));
     }
-    expression_graph(config, &lane_keys)?;
+    expression_graph(config, &lane_keys, compose)?;
     if let Some(matrix) = &config.lanes.matrix {
         // Each matrix row is the lane's vars for one lane, so each row gets its own graph.
         for (index, row) in matrix.iter().enumerate() {
             let mut lane_config = config.clone();
             lane_config.lanes.vars = row.clone();
             lane_config.lanes.matrix = None;
-            expression_graph(&lane_config, &lane_keys).map_err(|e| {
+            expression_graph(&lane_config, &lane_keys, compose).map_err(|e| {
                 ConfigError::plain(e.message.replacen(
                     "lanes.vars.",
                     &format!("lanes.matrix.{index}."),
@@ -982,12 +982,31 @@ fn dashed_name_hint(text: &str) -> Option<String> {
     None
 }
 
+/// The message for `infra.<name>` naming none of the `declared` containers and
+/// Compose services. `config check` and the commands that evaluate a lane's
+/// values (`exec`, `env show`) both word it so, which keeps `config check`'s
+/// hint true.
+pub fn unknown_infra_name<'a>(name: &str, declared: impl IntoIterator<Item = &'a str>) -> String {
+    format!(
+        "unknown container or Compose service `{name}`{}",
+        crate::loader::did_you_mean(name, declared)
+    )
+}
+
+/// Whether `infra.<reference>` names the container or Compose service `name`:
+/// by its name, or with underscores for its dashes, as expressions write it.
+pub fn infra_alias(name: &str, reference: &str) -> bool {
+    name == reference || name.replace('-', "_") == reference
+}
+
 /// Check one static reference against the names the runtime context defines.
+/// `compose` holds the project's Compose service names when they are known.
 fn check_reference<E: Extensions>(
     config: &ProjectConfig<E>,
     path: &str,
     reference: &str,
     lane_keys: &BTreeSet<String>,
+    compose: Option<&HashSet<String>>,
 ) -> Result<(), ConfigError> {
     let components: Vec<&str> = reference.split('.').collect();
     let at = |i: usize| components.get(i).copied();
@@ -1050,16 +1069,27 @@ fn check_reference<E: Extensions>(
                 .containers
                 .iter()
                 .find(|(key, _)| *key == name || key.replace('-', "_") == name);
-            if container.is_none() && config.infra.compose.is_none() {
+            // Compose service names are known only once the integration read the
+            // Compose model; without a compose file the containers are all.
+            let declared = match (config.infra.compose.is_some(), compose) {
+                (false, _) => Some(config.infra.containers.keys().collect::<Vec<_>>()),
+                (true, Some(services)) => Some(
+                    config
+                        .infra
+                        .containers
+                        .keys()
+                        .chain(services.iter())
+                        .collect(),
+                ),
+                (true, None) => None,
+            };
+            if let Some(declared) = declared
+                && container.is_none()
+                && !declared.iter().any(|known| infra_alias(known, name))
+            {
                 return Err(fail(
                     path,
-                    format!(
-                        "unknown container `{name}`; infra.containers does not declare it and there is no compose file{}",
-                        crate::loader::did_you_mean(
-                            name,
-                            config.infra.containers.keys().map(String::as_str)
-                        )
-                    ),
+                    unknown_infra_name(name, declared.iter().map(|known| known.as_str())),
                 ));
             }
             attribute(
@@ -1099,10 +1129,12 @@ fn check_reference<E: Extensions>(
     }
 }
 
-/// Build dependency edges from MiniJinja's static references, including PORT derivation.
+/// Build dependency edges from MiniJinja's static references, including PORT
+/// derivation. `compose` holds the Compose service names when they are known.
 fn expression_graph<E: Extensions>(
     config: &ProjectConfig<E>,
     lane_keys: &BTreeSet<String>,
+    compose: Option<&HashSet<String>>,
 ) -> Result<(), ConfigError> {
     let value = serde_json::to_value(config).map_err(|e| ConfigError::plain(e.to_string()))?;
     let mut all = Vec::new();
@@ -1151,7 +1183,7 @@ fn expression_graph<E: Extensions>(
             })
         };
         for reference in &refs {
-            check_reference(config, &path, reference, lane_keys).map_err(|error| {
+            check_reference(config, &path, reference, lane_keys, compose).map_err(|error| {
                 match dashed_name_hint(&text) {
                     Some(hint) => fail(&path, hint),
                     None => error,

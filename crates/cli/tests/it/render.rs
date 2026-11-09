@@ -602,12 +602,14 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             {"key": "NODE_ENV", "value": "development", "layer": "service"},
         ], "notes": ["npm: pnpm 10.4.1 (packageManager in package.json)"], "truncated": false, "next_cursor": null}),
         ),
-        // The lane's env before its infra is up: a value that reads it waits.
+        // The lane's env while a container is stopped, and while Docker is not
+        // running: a value that reads one waits.
         (
             "env_left_out",
             Method::Env,
             json!({"lane": "acme@2", "env": {"DEVLANES": "1", "GREETING": "hi"},
-                   "left_out": [{"key": "DATABASE_URL", "infra": "postgres"}]}),
+                   "left_out": [{"key": "DATABASE_URL", "infra": "postgres"},
+                                {"key": "REDIS_URL", "infra": "redis", "reason": "engine_not_running"}]}),
         ),
         (
             "url",
@@ -2243,6 +2245,11 @@ fn daemon_errors_are_worded_with_hints() {
         RpcError::new(
             "docker_unavailable",
             json!({"message": "no Docker engine is reachable"}),
+            1,
+        ),
+        RpcError::new(
+            "infra_unknown",
+            json!({"lane": "acme@2", "keys": [{"key": "DATABASE_URL", "infra": "postgres"}]}),
             1,
         ),
         RpcError::new("timeout", json!({"lane": "acme@2", "unit": "api"}), 124),

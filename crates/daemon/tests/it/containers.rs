@@ -162,6 +162,39 @@ async fn a_missing_compose_file_fails_the_start_before_docker() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// `config check` holds `infra.<name>` against the Compose services too, so the
+/// misspelled name `exec` refuses is reported where its hint sends the user.
+async fn config_check_reports_a_misspelled_compose_service() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: demo\ninfra:\n  compose: compose.yaml\nglobal_env:\n  CACHE_URL: \"redis://127.0.0.1:${{ infra.dbb.port }}\"\nservices:\n  api: { run: sleep, ready: started }\n";
+        let main = repo(&tmp.path, "r", config);
+        std::fs::write(main.join("compose.yaml"), "services: {}\n").expect("compose");
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        let error = h
+            .call(Method::ConfigCheck, json!({}), cx(&main))
+            .await
+            .expect_err("dbb is not declared");
+        assert_eq!(error.code, "config_error", "{error:?}");
+        assert_eq!(error.data["line"], 5, "{error:?}");
+        let message = error.data["message"].as_str().unwrap_or_default();
+        assert!(message.contains("global_env.CACHE_URL"), "{message}");
+        assert!(message.contains("`dbb`"), "{message}");
+        assert!(message.contains("did you mean `db`"), "{message}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// `infra.hosts` object entries route to the named published port with their
 /// `fallback` and `host_header`, like service hosts.
 async fn infra_host_objects_keep_port_fallback_and_host_header() {
