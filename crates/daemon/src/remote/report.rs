@@ -118,7 +118,7 @@ impl Inner {
     /// `alias` is the name the client connects to this box by. Clients
     /// without a report (older releases) are left out.
     pub(crate) fn client_urls(&self, target: &UnitTarget<'_>) -> Vec<Value> {
-        let box_port = self.integ.routes.https_port();
+        let box_port = self.https_port;
         lock(&self.remote.clients)
             .values()
             .filter_map(|(_, client)| {

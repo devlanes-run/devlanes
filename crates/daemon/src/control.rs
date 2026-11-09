@@ -1585,7 +1585,7 @@ impl Inner {
                     let (dir, name) = project.config_path();
                     lane.st().path().join(dir).join(name)
                 });
-                let branch = project.st().primary_branch.clone();
+                let branch = project.st().primary_branch().to_owned();
                 let primary = PrimaryWorktree {
                     root: self.primary_path(project),
                     branch: Some(branch),

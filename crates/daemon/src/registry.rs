@@ -722,8 +722,8 @@ impl Inner {
         let (known_root, known_identity) = {
             let st = project.st();
             (
-                st.root.clone(),
-                st.common_dir.clone().unwrap_or_else(|| st.root.clone()),
+                st.root().to_path_buf(),
+                st.common_dir().unwrap_or(st.root()).to_path_buf(),
             )
         };
         if !same_path(&known_identity, &identity) {
@@ -879,10 +879,7 @@ impl Inner {
             })
             .await
             .map_err(store_error)?;
-        let mut st = project.st();
-        st.root = root.to_owned();
-        st.common_dir = common_dir;
-        st.primary_branch = primary_branch.to_owned();
+        project.set_home(root.to_owned(), common_dir, primary_branch.to_owned());
         Ok(())
     }
 
@@ -1021,8 +1018,8 @@ impl Inner {
     pub(crate) fn primary_path(&self, project: &ProjectRt) -> PathBuf {
         let lanes = project.lanes();
         let st = project.st();
-        let primary = st.primary_branch.clone();
-        let root = st.root.clone();
+        let primary = st.primary_branch().to_owned();
+        let root = st.root().to_path_buf();
         drop(st);
         let mut trees = Vec::with_capacity(lanes.len());
         for lane in &lanes {
@@ -1077,7 +1074,10 @@ impl Inner {
     ) -> Result<SyncReport, RpcError> {
         let (root, common_dir) = {
             let st = project.st();
-            (st.root.clone(), st.common_dir.clone())
+            (
+                st.root().to_path_buf(),
+                st.common_dir().map(Path::to_path_buf),
+            )
         };
         let Some(common_dir) = common_dir else {
             return Ok(SyncReport::default());
@@ -1290,7 +1290,7 @@ impl Inner {
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
     ) -> Result<Vec<Arc<LaneRt>>, RpcError> {
-        let primary = project.st().primary_branch.clone();
+        let primary = project.st().primary_branch().to_owned();
         // `lanes.max` is project-wide: the primary worktree's file sets it, and one that
         // leaves it unset means no limit. A lane's own file counts only while the
         // primary's does not load.
@@ -1386,7 +1386,7 @@ impl Inner {
     /// holding it moves off. Under CI a lane that holds lane 0 keeps it, and nobody
     /// moves onto it.
     pub(crate) fn update_moves(&self, project: &ProjectRt) {
-        let primary = project.st().primary_branch.clone();
+        let primary = project.st().primary_branch().to_owned();
         let lanes = project.lanes();
         let used: BTreeSet<u32> = lanes.iter().filter_map(|l| l.st().index()).collect();
         let free = (1..).find(|i| !used.contains(i)).unwrap_or(1);

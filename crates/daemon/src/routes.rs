@@ -417,7 +417,7 @@ impl Inner {
                     .collect(),
             ),
         };
-        let https_port = self.integ.routes.https_port();
+        let https_port = self.https_port;
         let unmirrored = self.route_unmirrored();
         let items: Vec<Value> = self
             .route_entries()

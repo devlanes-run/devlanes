@@ -746,6 +746,7 @@ pub trait RouteSink: Send + Sync {
     }
     /// Port the HTTPS listener bound (443, its fallback or `proxy.https_port`),
     /// read from [`Self::status`]'s `https: {bound, port}`; public URLs carry it.
+    /// The engine reads it once, when it is built.
     fn https_port(&self) -> Option<u16> {
         let status = self.status();
         let https = status.get("https")?;

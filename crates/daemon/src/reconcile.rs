@@ -197,9 +197,9 @@ impl Inner {
                 let (root, common_dir, primary) = {
                     let st = project.st();
                     (
-                        st.root.clone(),
-                        st.common_dir.clone(),
-                        st.primary_branch.clone(),
+                        st.root().to_path_buf(),
+                        st.common_dir().map(std::path::Path::to_path_buf),
+                        st.primary_branch().to_owned(),
                     )
                 };
                 let repository = match common_dir {

@@ -601,7 +601,7 @@ impl Inner {
         };
         let primary = PrimaryWorktree {
             root: self.primary_path(project),
-            branch: branch.or_else(|| Some(project.st().primary_branch.clone())),
+            branch: branch.or_else(|| Some(project.st().primary_branch().to_owned())),
             relative: project.config_path().0,
         };
         self.provisional_shared_spec(&config, project.name(), &primary, env)

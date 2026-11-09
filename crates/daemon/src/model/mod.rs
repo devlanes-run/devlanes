@@ -1670,9 +1670,11 @@ impl Drop for StartSlot {
 /// Mutable state of a project.
 pub(crate) struct ProjectSt {
     pub name: String,
-    pub root: PathBuf,
-    pub common_dir: Option<PathBuf>,
-    pub primary_branch: String,
+    /// Where the project's repository is; changed only through
+    /// [`ProjectRt::set_home`], since plans read the primary worktree.
+    root: PathBuf,
+    common_dir: Option<PathBuf>,
+    primary_branch: String,
     /// Environment of the last request that carried one, for auto-started worktrees.
     pub last_env: Option<Arc<EnvMap>>,
     /// Changed only through [`ProjectRt::insert_lane`] and
@@ -1735,12 +1737,43 @@ impl ProjectSt {
     pub(crate) fn lane(&self, worktree: &WorktreeId) -> Option<&Arc<LaneRt>> {
         self.lanes.get(worktree)
     }
+
+    /// The repository root the project was registered from.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The repository's Git common directory; `None` outside Git.
+    pub(crate) fn common_dir(&self) -> Option<&Path> {
+        self.common_dir.as_deref()
+    }
+
+    /// The branch of the primary worktree.
+    pub(crate) fn primary_branch(&self) -> &str {
+        &self.primary_branch
+    }
 }
 
 impl ProjectRt {
     /// Puts `lane` in the project's map as the runtime of `worktree`.
     pub(crate) fn insert_lane(&self, worktree: WorktreeId, lane: Arc<LaneRt>) {
         self.st().lanes.insert(worktree, lane);
+        self.facts.tick();
+    }
+
+    /// Points the project at the repository it now lives in.
+    pub(crate) fn set_home(
+        &self,
+        root: PathBuf,
+        common_dir: Option<PathBuf>,
+        primary_branch: String,
+    ) {
+        {
+            let mut st = self.st();
+            st.root = root;
+            st.common_dir = common_dir;
+            st.primary_branch = primary_branch;
+        }
         self.facts.tick();
     }
 

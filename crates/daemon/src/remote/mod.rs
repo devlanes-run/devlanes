@@ -1523,7 +1523,7 @@ impl Inner {
     /// machine's stopped lanes whose hostnames a chosen box lane serves.
     pub(crate) async fn host_list(self: &Arc<Self>) -> Result<Value, RpcError> {
         self.load_choices().await;
-        let https_port = self.integ.routes.https_port();
+        let https_port = self.https_port;
         let suffixes = mirror::route_suffixes(self);
         let open_ports = self.remote.box_ports.lock().await.open.clone();
         let stored = self.store.remote_hosts().await.unwrap_or_default();
@@ -1860,7 +1860,7 @@ impl Inner {
     /// `proxy_port_in_use` to each box needing it, again only when the reason
     /// changes. Looking up the holder can be slow, so it runs without the lock.
     pub(super) async fn reconcile_box_ports(self: &Arc<Self>) {
-        let own = self.integ.routes.https_port();
+        let own = self.https_port;
         let mut wanted: BTreeMap<u16, Vec<Arc<HostConn>>> = BTreeMap::new();
         for conn in self.remote.all() {
             let port = conn.handshake().0.https_port;
@@ -2225,7 +2225,7 @@ impl Inner {
     /// `conn`'s mirror report with this machine's HTTPS port, and whether it
     /// serves the box's: the same port, or the box's extra port opened here.
     async fn mirror_report_of(&self, conn: &HostConn) -> wire::MirrorReport {
-        let own = self.integ.routes.https_port();
+        let own = self.https_port;
         let theirs = conn.handshake().0.https_port;
         let serves = match (theirs, own) {
             (Some(theirs), Some(own)) if theirs != own => {

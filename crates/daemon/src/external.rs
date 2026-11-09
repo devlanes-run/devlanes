@@ -250,7 +250,7 @@ impl Inner {
         let http = "the devlanes proxy's HTTP port";
         [
             (bound("https"), https),
-            (self.integ.routes.https_port(), https),
+            (self.https_port, https),
             (Some(proxy.https_port), https),
             (bound("http"), http),
             (Some(proxy.http_port), http),

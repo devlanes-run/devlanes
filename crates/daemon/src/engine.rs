@@ -121,8 +121,9 @@ pub(crate) struct Inner {
     pub me: std::sync::Weak<Inner>,
     /// Counts changes to the facts lanes' drift is computed from ([`crate::drift`]).
     pub clock: crate::units::FactsClock,
-    /// The port the proxy's HTTPS listener bound, read once: plans and layouts
-    /// put it in public URLs.
+    /// The port the proxy's HTTPS listener bound, read once when the engine is
+    /// built; every reader in the daemon (plans, layouts, routes, remote,
+    /// `daemon.status`) uses this copy.
     pub https_port: Option<u16>,
     pub opts: EngineOptions,
     pub store: Store,
@@ -539,7 +540,7 @@ impl Inner {
                     "warnings": self.opts.user.warnings(),
                 },
                 // What `devlanes tunnel` tells connected clients about this box.
-                "https_port": self.integ.routes.https_port(),
+                "https_port": self.https_port,
                 "ports_range": self.opts.user.ports.range,
                 "setup": self.setup_status().await,
                 "idle_exit": self.idle_exit_status(),
