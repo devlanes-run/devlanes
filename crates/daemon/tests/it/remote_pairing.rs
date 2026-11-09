@@ -533,8 +533,8 @@ async fn revoking_one_client_leaves_another_connected() {
         })
         .await;
         assert!(waiting.is_some(), "{}", first.host().await);
-        // Long enough for a session the revoke ended by mistake to go down.
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        // The revoke ends a session only by ending its feed, before it
+        // answers, and counts each in `ended`: the one it ended is the first's.
         assert_eq!(second.host().await["state"], "connected");
         let entry = listed(&side, &second_id).await.expect("still paired");
         assert_eq!(entry["paired"], true, "{entry}");

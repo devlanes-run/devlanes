@@ -204,6 +204,8 @@ async fn a_background_connect_waits_for_the_record() {
         })
         .await;
         assert!(served.is_some(), "the box serves the client");
+        // Kept: nothing shows when a connect that skipped the record would
+        // have answered.
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(
             !connecting.is_finished(),
@@ -394,7 +396,8 @@ async fn a_disconnect_during_the_restore_wins() {
             engine.handle(request, session).await
         });
         // Time for a disconnect that does not wait for the restore to run
-        // first; the outcome must be the same either way.
+        // first; the outcome must be the same either way. Kept: nothing shows
+        // that the disconnect reached the restore's lock.
         tokio::time::sleep(Duration::from_millis(200)).await;
         controls.open.release();
         let disconnected = disconnecting
@@ -645,7 +648,8 @@ async fn a_restored_command_box_without_its_command_fails() {
             *client.controls.handed_out.lock().expect("handed out"),
             [("box".to_owned(), true)]
         );
-        // The failure stays; no link retries in the background.
+        // The failure stays; no link retries in the background. Kept: a retry
+        // would come on a timer, and nothing marks when it would have run.
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(client.host().await["state"], "failed");
 

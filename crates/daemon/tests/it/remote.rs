@@ -45,7 +45,7 @@ use devlanes_daemon::{
 use devlanes_ipc::Frame;
 use devlanes_pki::CertificateAuthority;
 use devlanes_proto::{
-    Context, Control, LaneSummary, Method, Page, Request, RpcError,
+    Context, Control, Event, LaneSummary, Method, Page, Request, RpcError,
     remote::{PROMPT_EVENT, RemoteClient},
 };
 use devlanes_state::Store;
@@ -60,6 +60,7 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
+    sync::broadcast,
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -1338,16 +1339,7 @@ async fn colliding_lane_is_skipped() {
             .call(Method::LaneList, json!({}), cx(&local_repo))
             .await
             .expect("local lane list");
-        let (session, mut frames) = Session::local(9_001);
-        let request = Request {
-            id: 1,
-            method: Method::Subscribe,
-            params: json!({"follow": true}),
-            context: Context::default(),
-        };
-        let engine = client.h.engine.clone();
-        let watching = session.clone();
-        let events = tokio::spawn(async move { engine.handle(request, watching).await });
+        let mut bus = client.h.engine.subscribe();
         client
             .h
             .call(
@@ -1367,47 +1359,71 @@ async fn colliding_lane_is_skipped() {
         .await
         .expect("lane skipped");
         assert_eq!(skipped["ports"], json!([]), "no ports of the skipped lane");
-        let warned = tokio::time::timeout(Duration::from_secs(5), async {
-            while let Some(frame) = frames.recv().await {
-                if let Frame::Control(Control::Event(event)) = frame
-                    && event.event == "remote.warning"
-                    && event.data["code"] == "lane_skipped"
-                {
-                    return true;
+        let warned = tokio::time::timeout(SOON, async {
+            loop {
+                match bus.recv().await {
+                    Ok(event)
+                        if event.event == "remote.warning"
+                            && event.data["code"] == "lane_skipped" =>
+                    {
+                        return true;
+                    }
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => return false,
                 }
             }
-            false
         })
         .await
         .unwrap_or(false);
         assert!(warned, "skip is announced");
-        session.close();
-        let _ = events.await;
 
         // A stopped local lane keeps its view and routes, so the box lane stays
-        // skipped through the reconciles the start and the stop trigger.
+        // skipped through the reconciles the start and the stop trigger. The
+        // mirror shows each by the cause it lists for the skip.
+        let skipped_for = |cause: &'static str| {
+            let client = &client;
+            async move {
+                let host = eventually(SOON, || async {
+                    let host = client.host().await;
+                    host["skipped_lanes"]
+                        .as_array()?
+                        .iter()
+                        .any(|l| l["lane"] == "boxapp@0" && l["cause"] == cause)
+                        .then_some(host)
+                })
+                .await;
+                match host {
+                    Some(host) => host,
+                    None => panic!("skipped for {cause}: {}", client.host().await),
+                }
+            }
+        };
+        held_events(&mut bus);
         client
             .h
             .call(Method::Start, json!({"units": ["web"]}), cx(&local_repo))
             .await
             .expect("local start");
+        skipped_for("local_running").await;
         client
             .h
             .call(Method::Stop, json!({}), cx(&local_repo))
             .await
             .expect("local stop");
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-        while tokio::time::Instant::now() < deadline {
-            let host = client.host().await;
-            assert!(
-                host["skipped_lanes"]
-                    .as_array()
-                    .is_some_and(|lanes| lanes.iter().any(|l| l["lane"] == "boxapp@0")),
-                "a stopped local lane still holds its hostnames: {host}"
-            );
-            assert_eq!(host["ports"], json!([]), "{host}");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        let host = skipped_for("local_stopped").await;
+        assert_eq!(host["ports"], json!([]), "{host}");
+        // A mirror that gave the lane up in between warns again when it skips
+        // the lane once more.
+        let again: Vec<Value> = held_events(&mut bus)
+            .into_iter()
+            .filter(|event| {
+                event.event == "remote.warning"
+                    && event.data["code"] == "lane_skipped"
+                    && event.data["lane"] == "boxapp@0"
+            })
+            .map(|event| event.data)
+            .collect();
+        assert!(again.is_empty(), "the lane stayed skipped: {again:?}");
 
         // Cleaning the local lane releases its hostnames: the box lane is mirrored.
         let yes = Context {
@@ -1458,14 +1474,30 @@ impl Dialer for SwitchDialer {
     }
 }
 
-/// Connects to `[::1]:<port>` and waits until the mirror closes the connection.
-async fn knock(port: u16) {
+/// Connects to `[::1]:<port>` and waits until the mirror closes the connection;
+/// false when it did not within [`SOON`].
+async fn knock(port: u16) -> bool {
     let attempt = async {
         let mut stream = TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await.ok()?;
         let mut rest = Vec::new();
         stream.read_to_end(&mut rest).await.ok()
     };
-    let _ = tokio::time::timeout(Duration::from_secs(5), attempt).await;
+    matches!(tokio::time::timeout(SOON, attempt).await, Ok(Some(_)))
+}
+
+/// The events `bus` holds now. Fails when it fell behind and dropped some,
+/// since what is left then cannot show that an event never came.
+fn held_events(bus: &mut broadcast::Receiver<Event>) -> Vec<Event> {
+    let mut events = Vec::new();
+    loop {
+        match bus.try_recv() {
+            Ok(event) => events.push(event),
+            Err(broadcast::error::TryRecvError::Lagged(missed)) => {
+                panic!("the test's bus subscription dropped {missed} events")
+            }
+            Err(_) => return events,
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1490,16 +1522,7 @@ async fn refused_opens_are_reported() {
             .expect("box start");
         let echo_port = box_port(&side.h, 0, "echo").await;
         let client = ClientSide::start(&tmp, "client", "25500-25999", &side).await;
-        let (session, mut frames) = Session::local(9_002);
-        let request = Request {
-            id: 1,
-            method: Method::Subscribe,
-            params: json!({"follow": true}),
-            context: Context::default(),
-        };
-        let engine = client.h.engine.clone();
-        let watching = session.clone();
-        let events = tokio::spawn(async move { engine.handle(request, watching).await });
+        let mut bus = client.h.engine.subscribe();
         client
             .h
             .call(
@@ -1517,7 +1540,10 @@ async fn refused_opens_are_reported() {
 
         dialer.refuse.store(true, Ordering::SeqCst);
         for _ in 0..3 {
-            knock(echo_port).await;
+            assert!(
+                knock(echo_port).await,
+                "the mirror closes a refused connection"
+            );
         }
         let port_entry = || async {
             client.host().await["ports"]
@@ -1535,18 +1561,13 @@ async fn refused_opens_are_reported() {
         assert!(message.contains("refused by the test"), "{failed}");
         assert!(failed["last_error"]["at_ms"].as_u64().is_some(), "{failed}");
 
-        let mut warnings = Vec::new();
-        let _ = tokio::time::timeout(Duration::from_secs(2), async {
-            while let Some(frame) = frames.recv().await {
-                if let Frame::Control(Control::Event(event)) = frame
-                    && event.event == "remote.warning"
-                    && event.data["code"] == "open_failed"
-                {
-                    warnings.push(event.data);
-                }
-            }
-        })
-        .await;
+        // The mirror closes a refused connection only after it recorded and
+        // warned about the failed open, so every knock's warning is on the bus.
+        let warnings: Vec<Value> = held_events(&mut bus)
+            .into_iter()
+            .filter(|event| event.event == "remote.warning" && event.data["code"] == "open_failed")
+            .map(|event| event.data)
+            .collect();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(warnings[0]["host"], "box");
         assert_eq!(warnings[0]["port"], echo_port);
@@ -1563,8 +1584,6 @@ async fn refused_opens_are_reported() {
         .await;
         assert!(cleared.is_some(), "a working open clears last_error");
 
-        session.close();
-        let _ = events.await;
         client.stop().await;
         side.stop().await;
     })
