@@ -29,7 +29,7 @@ impl Inner {
                 self.fresh_config(&project, &lane).await;
                 let st = lane.st();
                 let reference = st.reference(&project.name());
-                let config = st.config.require(&reference)?;
+                let config = st.config().require(&reference)?;
                 (project.name(), Some(reference), config)
             }
             LaneOrFile::File { config, .. } => (config.project.clone(), None, config),

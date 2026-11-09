@@ -309,11 +309,11 @@ fn refusal(code: &str, data: Value) -> RpcError {
 /// The lane's live service processes when it may go idle now, else why not.
 fn idle_units(st: &LaneSt, reference: &str) -> Result<Vec<Named>, RpcError> {
     let lane = json!({"lane": reference});
-    if st.record.is_none() {
+    if st.record().is_none() {
         return Err(refusal("lane_not_running", lane));
     }
-    if !st.orphans.is_empty() {
-        let units: Vec<&String> = st.orphans.keys().collect();
+    if !st.orphans().is_empty() {
+        let units: Vec<&String> = st.orphans().keys().collect();
         return Err(refusal(
             "lane_has_orphans",
             json!({"lane": reference, "units": units}),
@@ -327,7 +327,7 @@ fn idle_units(st: &LaneSt, reference: &str) -> Result<Vec<Named>, RpcError> {
     {
         return Err(refusal("lane_busy", lane));
     }
-    let live = || st.units.iter().filter(|(_, rec)| rec.host.is_alive());
+    let live = || st.units().iter().filter(|(_, rec)| rec.host.is_alive());
     // A running task or exec does work the user waits for.
     let tasks: Vec<&String> = live()
         .filter(|(_, rec)| rec.kind != Kind::Service)
@@ -351,8 +351,7 @@ fn idle_units(st: &LaneSt, reference: &str) -> Result<Vec<Named>, RpcError> {
             keep_awake.push(name.clone());
             // The config key is per service, not per replica.
             let service = st
-                .view
-                .as_ref()
+                .view()
                 .and_then(|view| view.services.iter().find(|s| s.unit == *name))
                 .map_or_else(|| name.clone(), |s| s.name.clone());
             if !services.contains(&service) {
@@ -526,7 +525,7 @@ impl Inner {
                 let st = lane.st();
                 (
                     st.power.clone(),
-                    st.units.values().any(|rec| rec.host.is_alive()),
+                    st.units().values().any(|rec| rec.host.is_alive()),
                 )
             };
             // First sight of the lane: its idle time counts from now, with no
@@ -751,7 +750,7 @@ impl Inner {
         }
         let units: Vec<Named> = lane
             .st()
-            .units
+            .units()
             .iter()
             .filter(|(_, rec)| rec.host.is_alive())
             .map(|(name, rec)| (name.clone(), rec.managed.clone()))
@@ -809,10 +808,10 @@ impl Inner {
         let mut owners: BTreeMap<u16, String> = BTreeMap::new();
         for (reference, (_, lane)) in lanes {
             let st = lane.st();
-            if !st.units.values().any(|rec| rec.host.is_alive()) {
+            if !st.units().values().any(|rec| rec.host.is_alive()) {
                 continue;
             }
-            for rec in st.units.values().filter(|rec| rec.host.is_alive()) {
+            for rec in st.units().values().filter(|rec| rec.host.is_alive()) {
                 for port in rec.ports.values().copied().chain(rec.literal_port) {
                     owners.insert(port, reference.clone());
                 }
@@ -892,7 +891,7 @@ impl Inner {
                     .as_ref()
                     .is_some_and(|power| power.level == Power::Frozen);
                 let units = st
-                    .units
+                    .units()
                     .iter()
                     .filter(|(_, rec)| rec.kind == Kind::Service && rec.host.is_alive())
                     .map(|(name, _)| name.clone())

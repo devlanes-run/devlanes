@@ -133,8 +133,8 @@ impl Inner {
                 .flat_map(|(project, lane)| {
                     let st = lane.st();
                     let reference = st.reference(&project.name());
-                    st.view
-                        .iter()
+                    st.view()
+                        .into_iter()
                         .flat_map(|view| &view.externals)
                         .map(|external| {
                             (

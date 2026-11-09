@@ -64,7 +64,7 @@ impl Inner {
             .filter_map(|(project, lane)| {
                 let st = lane.st();
                 st.listed()
-                    .then(|| (st.reference(&project.name()), st.path.clone()))
+                    .then(|| (st.reference(&project.name()), st.path().to_path_buf()))
             })
             .collect();
         let warnings = on_windows_drives(lanes).await?;

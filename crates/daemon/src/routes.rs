@@ -126,7 +126,7 @@ impl Inner {
                 let name = project.name();
                 let (running, index, path) = {
                     let st = lane.st();
-                    (st.any_running(), st.index(), st.path.clone())
+                    (st.any_running(), st.index(), st.path().to_path_buf())
                 };
                 (
                     (!running, name, index.is_none(), index, path),
@@ -144,7 +144,7 @@ impl Inner {
         for (_, project, lane) in lanes {
             let name = project.name();
             let st = lane.st();
-            let Some(view) = &st.view else { continue };
+            let Some(view) = st.view() else { continue };
             let reference = st.reference(&name);
             let hint = format!("devlanes start --lane {reference}");
             let running = st.any_running();
@@ -153,7 +153,7 @@ impl Inner {
                 // A live unit keeps the ports it was spawned with; the view
                 // follows the config, which may have changed since (plan 5.8).
                 let port = st
-                    .units
+                    .units()
                     .get(&route.unit)
                     .filter(|rec| rec.host.is_alive())
                     .and_then(|rec| rec.ports.get(&route.port_name).copied())
@@ -362,8 +362,7 @@ impl Inner {
             .map(|warning| {
                 let path = match warning.code.as_str() {
                     "host_conflict" => lane
-                        .view
-                        .as_ref()
+                        .view()
                         .and_then(|view| {
                             let host = &warning.data["host"];
                             let service = view
@@ -481,7 +480,7 @@ impl Inner {
 
 /// What the proxy shows for a unit's route.
 fn route_status(st: &LaneSt, unit: &str) -> RouteStatus {
-    match st.units.get(unit) {
+    match st.units().get(unit) {
         Some(rec) => match rec.host.state() {
             // Services, the only units routed, never reach `Running`.
             UnitState::Ready | UnitState::Running => RouteStatus::Ready,
@@ -492,7 +491,7 @@ fn route_status(st: &LaneSt, unit: &str) -> RouteStatus {
             UnitState::Stopping | UnitState::Stopped(_) | UnitState::Exited(_) => RouteStatus::Idle,
         },
         // A previous daemon's process may still serve the port.
-        None if st.orphans.contains_key(unit) => RouteStatus::Ready,
+        None if st.orphans().contains_key(unit) => RouteStatus::Ready,
         None => RouteStatus::Idle,
     }
 }

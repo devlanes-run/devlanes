@@ -145,7 +145,7 @@ impl Inner {
     ) -> Result<Arc<ResolvedLane>, RpcError> {
         let only = lane
             .st()
-            .config
+            .config()
             .loaded()
             .and_then(|config| task_units(config, task));
         self.resolve_planned(project, lane, None, None, Some(extra), only.as_ref(), false)
@@ -199,7 +199,7 @@ impl Inner {
         let reference = lane.st().reference(&project.name());
         let (config, env, infra_ns) = {
             let st = lane.st();
-            let config = match (config, &st.config) {
+            let config = match (config, st.config()) {
                 (Some(config), _) => config,
                 (None, ConfigState::Loaded(config)) => config.clone(),
                 (None, ConfigState::Invalid(error)) => return Err(error.clone()),
@@ -211,8 +211,8 @@ impl Inner {
                 }
             };
             let env = st
-                .env
-                .clone()
+                .env()
+                .cloned()
                 .or(fallback)
                 .ok_or_else(|| RpcError::new("needs_env", json!({"lane": reference}), 1))?;
             (config, env, st.infra().namespace_value())
@@ -268,13 +268,13 @@ impl Inner {
         let (allocation, overrides, profiles, index) = {
             let st = lane.st();
             let allocation = st
-                .allocation
-                .clone()
+                .allocation()
+                .cloned()
                 .ok_or_else(|| unassigned(&st.reference(&project.name()), Unassigned::NoPorts))?;
             (
                 allocation,
-                st.overrides.clone(),
-                st.profiles.clone(),
+                st.overrides().clone(),
+                st.profiles().to_vec(),
                 st.index(),
             )
         };
@@ -295,12 +295,9 @@ impl Inner {
         let lanes_main = if index == Some(0) {
             None
         } else {
-            project.lane_by_index(0).and_then(|main| {
-                main.st()
-                    .view
-                    .as_ref()
-                    .map(|view| view.services_namespace.clone())
-            })
+            project
+                .lane_by_index(0)
+                .and_then(|main| main.st().view().map(|view| view.services_namespace.clone()))
         };
         let projects = self.projects_namespace(project, lane);
         Ok(LaneInputs {
@@ -320,8 +317,8 @@ impl Inner {
         let (label, name) = {
             let st = lane.st();
             (
-                st.branch.as_deref().map(devlanes_resolve::branch_label),
-                st.record.as_ref().map(|r| r.name.clone()),
+                st.branch().map(devlanes_resolve::branch_label),
+                st.record().map(|r| r.name.clone()),
             )
         };
         let mut namespace = serde_json::Map::new();
@@ -337,15 +334,14 @@ impl Inner {
             let pick =
                 |predicate: &dyn Fn(&LaneRt) -> bool| lanes.iter().find(|l| predicate(l)).cloned();
             let chosen = pick(&|l| {
-                label.is_some()
-                    && l.st().branch.as_deref().map(devlanes_resolve::branch_label) == label
+                label.is_some() && l.st().branch().map(devlanes_resolve::branch_label) == label
             })
             .or_else(|| {
-                pick(&|l| name.is_some() && l.st().record.as_ref().map(|r| r.name.clone()) == name)
+                pick(&|l| name.is_some() && l.st().record().map(|r| r.name.clone()) == name)
             })
             .or_else(|| pick(&|l| l.st().index() == Some(0)));
             if let Some(chosen) = chosen
-                && let Some(view) = chosen.st().view.clone()
+                && let Some(view) = chosen.st().view().cloned()
             {
                 namespace.insert(other.name(), json!({"services": view.services_namespace}));
             }
@@ -364,19 +360,19 @@ impl Inner {
         let (config, allocation, view, env, infra_ns) = {
             let st = lane.st();
             let config = st
-                .config
+                .config()
                 .loaded()
                 .cloned()
-                .ok_or_else(|| RpcError::new("no_config", json!({"path": st.path}), 1))?;
+                .ok_or_else(|| RpcError::new("no_config", json!({"path": st.path()}), 1))?;
             let allocation = st
-                .allocation
-                .clone()
+                .allocation()
+                .cloned()
                 .ok_or_else(|| unassigned(&reference, Unassigned::NoPorts))?;
             (
                 config,
                 allocation,
-                st.view.clone(),
-                st.env.clone(),
+                st.view().cloned(),
+                st.env().cloned(),
                 st.infra().namespace_value(),
             )
         };
@@ -543,11 +539,11 @@ impl Inner {
                 let st = lane.st();
                 // A file that stopped loading still names what its last good load
                 // brought up.
-                match (st.config.loaded().or(st.last_good.as_ref()), &st.config) {
-                    (Some(config), _) => (config.clone(), st.branch.clone()),
+                match (st.config().loaded().or(st.last_good.as_ref()), st.config()) {
+                    (Some(config), _) => (config.clone(), st.branch().map(str::to_owned)),
                     (None, ConfigState::Invalid(error)) => return Err(error.clone()),
                     (None, _) => {
-                        return Err(RpcError::new("no_config", json!({"path": st.path}), 1));
+                        return Err(RpcError::new("no_config", json!({"path": st.path()}), 1));
                     }
                 }
             }

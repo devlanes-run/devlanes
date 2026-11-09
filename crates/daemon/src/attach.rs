@@ -126,7 +126,7 @@ impl Inner {
                 return Err(error);
             }
             let host = st
-                .units
+                .units()
                 .get(&name)
                 .map(|rec| rec.host.clone())
                 .ok_or_else(|| {

@@ -527,7 +527,7 @@ impl Inner {
 
     /// Metrics series per unit; empty while the lane has no record.
     fn unit_series(&self, cx: &StartCx, services: &[&ResolvedService]) -> HashMap<String, String> {
-        let Some(lane_id) = cx.lane.st().record.as_ref().map(|record| record.id) else {
+        let Some(lane_id) = cx.lane.st().record().map(|record| record.id) else {
             return HashMap::new();
         };
         services
@@ -638,8 +638,7 @@ impl Inner {
             Some(selectors) => {
                 let tags = |unit: &str| {
                     lane.st()
-                        .view
-                        .as_ref()
+                        .view()
                         .and_then(|view| view.services.iter().find(|s| s.unit == unit))
                         .map(|service| service.tags.clone())
                         .unwrap_or_default()
@@ -650,7 +649,7 @@ impl Inner {
                     .collect();
                 let selectors = {
                     let st = lane.st();
-                    let services = st.view.iter().flat_map(|view| {
+                    let services = st.view().into_iter().flat_map(|view| {
                         view.services
                             .iter()
                             .map(|s| (s.name.as_str(), s.unit.as_str()))

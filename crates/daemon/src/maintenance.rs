@@ -564,7 +564,7 @@ impl Inner {
                 .iter()
                 .flat_map(|(_, lane)| {
                     lane.st()
-                        .units
+                        .units()
                         .values()
                         .map(|unit| unit.host.clone())
                         .collect::<Vec<_>>()

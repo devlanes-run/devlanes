@@ -46,22 +46,22 @@ impl Inner {
             let st = lane.st();
             let reference = st.reference(&name);
             let mut running: Vec<Value> = st
-                .units
+                .units()
                 .iter()
                 .filter(|(_, rec)| rec.host.is_alive())
                 .map(|(unit, rec)| {
                     json!({"unit": format!("{reference}:{unit}"), "actor": rec.host.info().actor})
                 })
                 .collect();
-            running.extend(st.orphans.iter().map(|(unit, orphan)| {
+            running.extend(st.orphans().iter().map(|(unit, orphan)| {
                 json!({"unit": format!("{reference}:{unit}"), "actor": orphan.actor})
             }));
             // `clean_lane` runs no hooks for these, as `hooks_runnable` says.
-            let hooks_skipped = if !st.present {
+            let hooks_skipped = if !st.present() {
                 Some("worktree_missing")
-            } else if st.record.is_none() {
+            } else if st.record().is_none() {
                 Some("unassigned")
-            } else if st.env.is_none() {
+            } else if st.env().is_none() {
                 Some("needs_env")
             } else {
                 None
@@ -70,9 +70,9 @@ impl Inner {
                 "lane": reference,
                 "project": name,
                 "index": st.index(),
-                "branch": st.branch,
-                "path": st.path,
-                "worktree": if st.present { "present" } else { "missing" },
+                "branch": st.branch(),
+                "path": st.path(),
+                "worktree": if st.present() { "present" } else { "missing" },
                 "running": running,
                 "tasks": [],
                 "teardown": [],
@@ -83,14 +83,14 @@ impl Inner {
                 "infra_error": null,
                 "data_dir": null,
                 "logs_bytes": null,
-                "ports": st.view.as_ref().map(|view| json!({"start": view.block.0, "size": view.block.1})),
+                "ports": st.view().map(|view| json!({"start": view.block.0, "size": view.block.1})),
             });
             (
                 plan,
-                st.record.clone(),
+                st.record().cloned(),
                 st.index(),
                 hooks_skipped.is_none(),
-                st.config.loaded().cloned(),
+                st.config().loaded().cloned(),
             )
         };
         // As in `clean_lane`: tasks and teardown come from the lane's current

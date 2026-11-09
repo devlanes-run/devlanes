@@ -216,7 +216,7 @@ impl Inner {
                 continue;
             }
             let mut summary = lane_summary(&project.name(), &lane.st());
-            if lane.st().record.is_some() {
+            if lane.st().record().is_some() {
                 crate::model::add_shared(&mut summary, &crate::model::shared_containers(project));
             }
             self.fill_queued_with(gate.as_ref(), &mut summary);
@@ -311,7 +311,7 @@ impl Inner {
         query: LogQuery,
     ) -> Result<Page<LogLine>, RpcError> {
         let (project, lane) = pair;
-        let host = lane.st().units.get(unit).map(|rec| rec.host.clone());
+        let host = lane.st().units().get(unit).map(|rec| rec.host.clone());
         match host {
             // A closed run's snapshot misses notes written after it, such as a
             // failed respawn's `[devlanes]` line; the directory has them.
@@ -351,19 +351,19 @@ impl Inner {
         }
         let (candidates, selectors) = {
             let st = lane.st();
-            let services = st.view.iter().flat_map(|view| {
+            let services = st.view().into_iter().flat_map(|view| {
                 view.services
                     .iter()
                     .map(|s| (s.name.as_str(), s.unit.as_str()))
             });
             let selectors = crate::engine::expand_replicas(&selectors, services);
             let mut names: Vec<(String, Vec<String>)> = st
-                .units
+                .units()
                 .iter()
                 .filter(|(_, rec)| !query.mine || is_mine(&rec.host.info().actor, &context.actor))
                 .map(|(name, rec)| (name.clone(), rec.tags.clone()))
                 .collect();
-            if let Some(view) = &st.view
+            if let Some(view) = st.view()
                 && !query.mine
             {
                 for service in &view.services {
@@ -384,7 +384,7 @@ impl Inner {
             }
             candidates.iter().map(|(name, _)| name.clone()).collect()
         } else {
-            let config = lane.st().config.loaded().cloned();
+            let config = lane.st().config().loaded().cloned();
             let selectors = step_units(selectors, &candidates, config.as_deref());
             crate::engine::match_units(&selectors, &candidates, &reference)?
         };
@@ -464,7 +464,7 @@ impl Inner {
         let disconnected = session.disconnected();
         loop {
             for unit in &units {
-                let host = lane.st().units.get(unit).map(|rec| rec.host.clone());
+                let host = lane.st().units().get(unit).map(|rec| rec.host.clone());
                 let Some(host) = host else { continue };
                 let query = LogQuery {
                     cursor: cursors.get(unit).cloned(),
@@ -521,10 +521,9 @@ impl Inner {
             Ok(((_, lane), selectors)) => {
                 let st = lane.st();
                 let selector = selectors.first().cloned().unwrap_or_default();
-                let known = st.units.contains_key(&selector)
+                let known = st.units().contains_key(&selector)
                     || st
-                        .view
-                        .as_ref()
+                        .view()
                         .is_some_and(|v| v.services.iter().any(|s| s.unit == selector));
                 known.then_some(selector)
             }
@@ -554,12 +553,12 @@ impl Inner {
                     let st = lane.st();
                     let hosts = match &unit {
                         Some(unit) => st
-                            .units
+                            .units()
                             .get(unit)
                             .map(|rec| vec![(unit.clone(), rec.host.clone())])
                             .unwrap_or_default(),
                         None => st
-                            .units
+                            .units()
                             .iter()
                             .filter(|(_, rec)| rec.kind == Kind::Service)
                             .map(|(name, rec)| (name.clone(), rec.host.clone()))
@@ -655,7 +654,7 @@ impl Inner {
             let (reference, lane_id, units) = {
                 let st = lane.st();
                 let units: Vec<_> = st
-                    .units
+                    .units()
                     .iter()
                     .map(|(name, rec)| {
                         (
@@ -668,7 +667,7 @@ impl Inner {
                     .collect();
                 (
                     st.reference(&project.name()),
-                    st.record.as_ref().map(|r| r.id),
+                    st.record().map(|r| r.id),
                     units,
                 )
             };
@@ -778,21 +777,19 @@ impl Inner {
             let orphan = st.orphan_error(&project.name(), &name);
             // A start by name adds to these, and a plain start brings them back.
             let saved: Vec<String> = st
-                .record
-                .as_ref()
+                .record()
                 .map(|record| record.services.clone())
                 .unwrap_or_default();
-            let host = st.units.get(&name).map(|rec| rec.host.clone());
+            let host = st.units().get(&name).map(|rec| rec.host.clone());
             let service = st
-                .view
-                .as_ref()
+                .view()
                 .and_then(|v| v.services.iter().find(|s| s.unit == name).cloned());
             (
                 host,
                 service,
                 st.view_error.clone(),
-                st.env.is_none(),
-                st.config.clone(),
+                st.env().is_none(),
+                st.config().clone(),
                 st.starts_in_phases() > 0,
                 st.unassigned.clone(),
                 orphan,
@@ -902,7 +899,7 @@ impl Inner {
         let mut result =
             json!({"lane": reference, "unit": name, "state": state, "reasons": reasons});
         // What the last run left behind: kept daemons, or processes that escaped.
-        let leftovers = lane.st().units.get(&name).map(|rec| rec.leftovers(&name));
+        let leftovers = lane.st().units().get(&name).map(|rec| rec.leftovers(&name));
         if let Some(leftovers) = leftovers.filter(|l| !l.is_empty()) {
             if !leftovers.left_running.is_empty() {
                 result["left_running"] = json!(leftovers.left_running);
@@ -921,13 +918,13 @@ impl Inner {
     async fn closed_ports(&self, lane: &crate::model::LaneRt, name: &str) -> Vec<(u16, Vec<u16>)> {
         let (mut ports, managed) = {
             let st = lane.st();
-            let Some(rec) = st.units.get(name) else {
+            let Some(rec) = st.units().get(name) else {
                 return Vec::new();
             };
             // A live unit keeps the ports it was spawned with, as the proxy does.
             let mut ports: Vec<u16> = st
-                .view
-                .iter()
+                .view()
+                .into_iter()
                 .flat_map(|view| view.routes.iter())
                 .filter(|route| route.unit == name)
                 .map(|route| {
@@ -1018,7 +1015,7 @@ impl Inner {
         let reference = lane.st().reference(&project.name());
         let live = lane
             .st()
-            .units
+            .units()
             .get(&name)
             .filter(|rec| rec.host.is_alive())
             .map(|rec| rec.launch.clone());
@@ -1103,7 +1100,7 @@ impl Inner {
         let (reference, found) = {
             let st = lane.st();
             let reference = st.reference(&project.name());
-            let service = st.view.as_ref().and_then(|view| {
+            let service = st.view().and_then(|view| {
                 view.services
                     .iter()
                     .find(|s| s.unit == name || s.name == name)
@@ -1126,8 +1123,8 @@ impl Inner {
                     ))
                 }
                 None => st
-                    .view
-                    .iter()
+                    .view()
+                    .into_iter()
                     .flat_map(|view| &view.externals)
                     .find(|external| external.name == name)
                     .map(|external| {
@@ -1251,7 +1248,7 @@ impl Inner {
             .into_iter()
             .filter_map(|(project, lane)| {
                 let st = lane.st();
-                let allocation = st.allocation.as_ref()?;
+                let allocation = st.allocation()?;
                 let block = allocation.block;
                 let ports = allocation
                     .offsets
@@ -1292,12 +1289,12 @@ impl Inner {
         for (project, lane) in self.all_lanes() {
             let name = project.name();
             let st = lane.st();
-            for (unit, rec) in &st.units {
+            for (unit, rec) in st.units() {
                 if rec.kind == crate::model::Kind::Service {
                     note(&name, unit, rec.stop.timeout);
                 }
             }
-            let Some(config) = st.config.loaded() else {
+            let Some(config) = st.config().loaded() else {
                 continue;
             };
             for (service, service_config) in &config.services {

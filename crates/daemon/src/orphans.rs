@@ -65,12 +65,9 @@ impl Inner {
                 self.finish_run(run.id, GONE, None).await;
                 continue;
             }
-            let lane = lanes.iter().find(|(_, lane)| {
-                lane.st()
-                    .record
-                    .as_ref()
-                    .is_some_and(|r| r.id == run.lane_id)
-            });
+            let lane = lanes
+                .iter()
+                .find(|(_, lane)| lane.st().record().is_some_and(|r| r.id == run.lane_id));
             // The previous daemon may have crashed while the lane was frozen;
             // nothing would ever thaw these processes otherwise.
             self.integ
@@ -83,14 +80,17 @@ impl Inner {
                 tracing::warn!(pid = run.process.pid, unit = %run.unit, "orphan of an unknown lane left running");
                 continue;
             };
-            lane.st().orphans.entry(run.unit.clone()).or_insert(Orphan {
-                run_id: run.id,
-                process: run.process,
-                started_at_ms: u64::try_from(run.started_at).unwrap_or_default(),
-                since_ms,
-                actor: proto_actor(&run.actor),
-                members,
-            });
+            lane.st().insert_orphan(
+                run.unit.clone(),
+                Orphan {
+                    run_id: run.id,
+                    process: run.process,
+                    started_at_ms: u64::try_from(run.started_at).unwrap_or_default(),
+                    since_ms,
+                    actor: proto_actor(&run.actor),
+                    members,
+                },
+            );
             tracked += 1;
             self.emit_lane(project, lane);
         }
@@ -117,7 +117,7 @@ impl Inner {
             names
                 .iter()
                 .filter_map(|name| {
-                    let orphan = st.orphans.get(name)?;
+                    let orphan = st.orphans().get(name)?;
                     let summary = orphan_summary(&st, &reference, name, orphan);
                     Some((name.clone(), orphan.clone(), summary))
                 })
@@ -141,11 +141,11 @@ impl Inner {
             {
                 let mut st = lane.st();
                 if st
-                    .orphans
+                    .orphans()
                     .get(&name)
                     .is_some_and(|o| o.run_id == orphan.run_id)
                 {
-                    st.orphans.remove(&name);
+                    st.remove_orphan(&name);
                 }
             }
             tracing::info!(pid = orphan.process.pid, unit = %name, "terminated a previous daemon's unit");
@@ -162,7 +162,7 @@ impl Inner {
         for (project, lane) in self.all_lanes() {
             let orphans: Vec<(String, Orphan)> = lane
                 .st()
-                .orphans
+                .orphans()
                 .iter()
                 .map(|(name, orphan)| (name.clone(), orphan.clone()))
                 .collect();
@@ -176,11 +176,11 @@ impl Inner {
                 }
                 let mut st = lane.st();
                 if st
-                    .orphans
+                    .orphans()
                     .get(&name)
                     .is_some_and(|o| o.run_id == orphan.run_id)
                 {
-                    st.orphans.remove(&name);
+                    st.remove_orphan(&name);
                     changed = true;
                 }
             }
@@ -202,7 +202,7 @@ impl Inner {
             let any = self
                 .all_lanes()
                 .iter()
-                .any(|(_, lane)| !lane.st().orphans.is_empty());
+                .any(|(_, lane)| !lane.st().orphans().is_empty());
             if any {
                 self.check_orphans().await;
             }
@@ -261,7 +261,7 @@ impl Inner {
             .iter()
             .flat_map(|(_, lane)| {
                 lane.st()
-                    .units
+                    .units()
                     .values()
                     .filter(|rec| !rec.host.is_alive())
                     .filter_map(|rec| {

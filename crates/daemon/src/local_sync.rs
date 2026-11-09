@@ -66,8 +66,7 @@ pub(crate) fn start(lane: Arc<LaneRt>, unit: String, host: UnitHost, specs: Vec<
         let left = {
             let mut st = lane.st();
             match st
-                .units
-                .get_mut(&unit)
+                .unit_mut(&unit)
                 .filter(|rec| rec.host.same_run(&host) && host.is_alive())
             {
                 Some(rec) => {
@@ -98,7 +97,7 @@ async fn start_one(spec: &SyncSpec) -> Result<SyncHandle, devlanes_sync::SyncErr
 pub(crate) async fn stop(lane: &LaneRt, unit: &str, host: &UnitHost) {
     let syncs = {
         let mut st = lane.st();
-        match st.units.get_mut(unit).filter(|rec| rec.host.same_run(host)) {
+        match st.unit_mut(unit).filter(|rec| rec.host.same_run(host)) {
             Some(rec) => std::mem::take(&mut rec.syncs),
             None => Vec::new(),
         }
@@ -119,7 +118,7 @@ async fn stop_all(syncs: Vec<LocalSync>) {
 /// sync runs or after it failed to start.
 pub(crate) fn status(lane: &LaneRt, unit: &str, index: usize) -> Option<Value> {
     let st = lane.st();
-    st.units
+    st.units()
         .get(unit)?
         .syncs
         .iter()
