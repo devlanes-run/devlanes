@@ -3089,11 +3089,36 @@ fn remote_use_says_where_the_lane_comes_from() {
         human(replacing),
         "acme@0 now comes from this machine. fork-a's lane is no longer mirrored.\nThe choice of fork-a's shop@0 is deleted, since it clashes.\n"
     );
+    // A daemon from before `waits_for` sends none: only a box that is not
+    // connected made a choice pending then.
     let mut offline = reply(json!("fork-b"), json!("fork-a"), false);
     offline["pending"] = json!(true);
     assert_eq!(
         human(offline),
         "acme@0 will come from fork-b once it connects.\n"
+    );
+    let mut tasks = reply(json!("fork-b"), json!("fork-a"), false);
+    tasks["nothing_to_mirror"] = json!(true);
+    assert_eq!(
+        human(tasks),
+        "fork-b's acme@0 is chosen, but it has nothing this machine mirrors: no service, container or external port.\n"
+    );
+    // Connected, but the box's lane is not mirrored here yet.
+    let mut unmirrored = reply(json!("fork-b"), json!("fork-a"), false);
+    unmirrored["pending"] = json!(true);
+    unmirrored["waits_for"] = json!("mirror");
+    assert_eq!(
+        human(unmirrored.clone()),
+        "acme@0 will come from fork-b once this machine mirrors it.\n"
+    );
+    let agent = runtime(OutputMode::Agent)
+        .reporter()
+        .result(&Report::new(Method::RemoteUse, &unmirrored))
+        .expect("render")
+        .stdout;
+    assert_eq!(
+        agent,
+        "remote use lane=acme@0 from=fork-b previous=fork-a mirrored=false pending=true waits_for=mirror\n"
     );
     let data = reply(json!("fork-b"), json!("fork-a"), true);
     let agent = runtime(OutputMode::Agent)

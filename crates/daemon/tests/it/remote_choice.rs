@@ -448,8 +448,8 @@ async fn closes(stream: &mut BufReader<TcpStream>, wait: Duration) -> bool {
 /// lane's port is never unbound, a raw TCP connection, an idle pooled
 /// connection and a WebSocket to the old box close, and nothing warns about
 /// the switch, which one `lane_switched` notice announces. Each refusal has
-/// its code, a disconnected box's choice waits until it connects, and
-/// `remote disconnect` deletes the choice.
+/// its code, a disconnected box's choice waits until it connects and is
+/// announced then, and `remote disconnect` deletes the choice.
 async fn remote_use_switches_a_lane_between_boxes() {
     if !ipv6_loopback().await {
         eprintln!("skipping remote_use_switches_a_lane_between_boxes: no IPv6 loopback");
@@ -535,7 +535,8 @@ async fn remote_use_switches_a_lane_between_boxes() {
             reply,
             Ok(
                 json!({"lane": "forkapp@0", "host": "beta", "previous": "alpha",
-                      "mirrored": true, "pending": false, "replaced": []})
+                      "mirrored": true, "pending": false, "waits_for": null,
+                      "nothing_to_mirror": false, "replaced": []})
             )
         );
         // The pooled connection to alpha is not reused for the next request.
@@ -659,7 +660,9 @@ async fn remote_use_switches_a_lane_between_boxes() {
             reply,
             Ok(
                 json!({"lane": "forkapp@0", "host": "beta", "previous": "alpha",
-                      "mirrored": false, "pending": true, "replaced": []})
+                      "mirrored": false, "pending": true, "waits_for": "connect",
+                      "nothing_to_mirror": false,
+                      "replaced": []})
             )
         );
         assert!(answers(&client, FORK_HOSTS[0], "web-from-alpha").await);
@@ -674,6 +677,13 @@ async fn remote_use_switches_a_lane_between_boxes() {
         assert!(
             taken.is_some(),
             "the chosen box takes the lane once it connects"
+        );
+        let seen = warnings_until_code(&mut frames, "lane_switched", "forkapp@0").await;
+        let notice = seen.last().expect("lane_switched");
+        assert_eq!(
+            (&notice["from"], &notice["to"]),
+            (&json!("alpha"), &json!("beta")),
+            "the pending choice is announced when it applies: {notice}"
         );
         // Beta only wins once its routes are built, so alpha's stay until
         // then and the hostnames never lead nowhere.
@@ -889,6 +899,47 @@ async fn a_lane_without_hostnames_switches_by_its_port() {
         let seen = warnings_until_code(&mut frames, "lane_switched", "dbapp@0").await;
         none_of(&seen, &["port_in_use", "lane_skipped"]);
 
+        // A box lane with only a task has nothing this machine mirrors, and
+        // the reply says so rather than leaving `remote ls` to explain. The
+        // choice applies, with its notice, once the lane gains a service.
+        let tasks = repo(
+            &tmp.path,
+            "taskrepo",
+            "project: taskapp\ntasks:\n  hello: { run: \"echo hi\" }\n",
+        );
+        beta.h
+            .call(Method::LaneList, json!({}), cx(&tasks))
+            .await
+            .expect("box lane list");
+        let listed = eventually(SOON, || async {
+            (client.host_named("beta").await["lanes"] == 2).then_some(())
+        })
+        .await;
+        assert!(listed.is_some(), "{}", client.host_named("beta").await);
+        assert_eq!(
+            use_lane(&client, "taskapp@0", Some("beta")).await,
+            Ok(json!({"lane": "taskapp@0", "host": "beta", "previous": null,
+                      "mirrored": false, "pending": false, "waits_for": null,
+                      "nothing_to_mirror": true, "replaced": []}))
+        );
+        tokio::fs::write(
+            tasks.join("devlanes.yaml"),
+            "project: taskapp\ntasks:\n  hello: { run: \"echo hi\" }\nservices:\n  web:\n    run: sleep\n",
+        )
+        .await
+        .expect("task lane config");
+        beta.h
+            .call(Method::Start, json!({}), cx(&tasks))
+            .await
+            .expect("box service start");
+        let seen = warnings_until_code(&mut frames, "lane_switched", "taskapp@0").await;
+        let notice = seen.last().expect("lane_switched");
+        assert_eq!(
+            (&notice["to"], &notice["from"]),
+            (&json!("beta"), &Value::Null),
+            "{notice}"
+        );
+
         session.close();
         let _ = events.await;
         client.stop().await;
@@ -949,7 +1000,8 @@ async fn a_choice_and_this_machines_own_lane() {
         assert_eq!(
             reply,
             Ok(json!({"lane": "boxapp@0", "host": "box", "previous": null,
-                      "mirrored": true, "pending": false, "replaced": []}))
+                      "mirrored": true, "pending": false, "waits_for": null,
+                      "nothing_to_mirror": false, "replaced": []}))
         );
         assert!(answers(&client, "web.boxapp.localhost", "hello-from-box").await);
         let list = client
@@ -967,7 +1019,8 @@ async fn a_choice_and_this_machines_own_lane() {
         assert_eq!(
             reply,
             Ok(json!({"lane": "boxapp@0", "host": null, "previous": "box",
-                      "mirrored": true, "pending": false, "replaced": []}))
+                      "mirrored": true, "pending": false, "waits_for": null,
+                      "nothing_to_mirror": false, "replaced": []}))
         );
         assert!(!answers(&client, "web.boxapp.localhost", "hello-from-box").await);
         assert_eq!(client.host().await["chosen_lanes"], json!([]));
@@ -1294,7 +1347,8 @@ async fn local_takes_its_hostnames_back_from_another_projects_choice() {
         assert_eq!(
             reply,
             Ok(json!({"lane": "shop@0", "host": null, "previous": "box",
-                      "mirrored": true, "pending": false,
+                      "mirrored": true, "pending": false, "waits_for": null,
+                      "nothing_to_mirror": false,
                       "replaced": [{"lane": "boxapp@0", "host": "box"}]}))
         );
         assert_eq!(client.host().await["chosen_lanes"], json!([]));

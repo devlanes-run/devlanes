@@ -12,6 +12,7 @@ use devlanes_client::restart::{self, Steps};
 use devlanes_proto::{
     ActorKind, AttachResult, Event, LaneSummary, LogLine, LogQuery, Method, ORPHANED, Page,
     RpcError, RunParams, Selection, UnitSummary, events,
+    remote::{UseOutcome, WaitsFor},
 };
 use devlanes_term::{Progress, StartTracker};
 
@@ -5008,17 +5009,30 @@ impl App {
         let from = host.unwrap_or("this machine");
         match result {
             Ok(reply) => {
-                let flag = |key: &str| reply.get(key).and_then(Value::as_bool);
                 let previous = reply.get("previous").and_then(Value::as_str);
-                // A box that is not connected gets the choice when it connects.
-                if flag("pending") == Some(true) {
-                    self.set_notice(format!("{lane} will come from {from} once it connects"));
-                } else if flag("mirrored") == Some(false) {
-                    let notice = format!("{} is chosen but not mirrored yet", lane_of(host, lane));
-                    self.set_notice(notice);
-                } else if previous == host {
+                let notice = match UseOutcome::of_reply(&reply) {
+                    UseOutcome::Pending(WaitsFor::Connect) => {
+                        Some(format!("{lane} will come from {from} once it connects"))
+                    }
+                    UseOutcome::Pending(WaitsFor::Mirror) => Some(format!(
+                        "{lane} will come from {from} once this machine mirrors it"
+                    )),
+                    UseOutcome::NothingToMirror => Some(format!(
+                        "{} is chosen, but it has nothing this machine mirrors: no service, container or external port",
+                        lane_of(host, lane)
+                    )),
+                    UseOutcome::NotMirrored => Some(format!(
+                        "{} is chosen but not mirrored yet",
+                        lane_of(host, lane)
+                    )),
                     // Nothing switched, so no `lane_switched` follows.
-                    self.set_notice(format!("{} is already in use", lane_of(host, lane)));
+                    UseOutcome::Mirrored if previous == host => {
+                        Some(format!("{} is already in use", lane_of(host, lane)))
+                    }
+                    UseOutcome::Mirrored => None,
+                };
+                if let Some(notice) = notice {
+                    self.set_notice(notice);
                 }
             }
             // A local lane started meanwhile: offer the same stop and switch

@@ -317,14 +317,27 @@ pub enum Method {
     /// choice wins: choices of other lanes it clashes with are deleted.
     ///
     /// Replies once the routes and listeners lead to the chosen lane:
-    /// `{lane, host, previous, mirrored, pending, replaced}`, where
-    /// `previous` is the box that served the hostnames before (null for this
-    /// machine), `mirrored` whether the chosen lane serves them now and
-    /// `replaced` the deleted choices as `[{lane, host}]`. For `host: null`
-    /// these are the choices that took the lane's hostnames. A box known here
-    /// but not connected keeps the choice until it connects: the reply then
-    /// has `mirrored: false` and `pending: true`. A switch emits one
-    /// `remote.warning` notice with code `lane_switched`. Errors, each with a
+    /// `{lane, host, previous, mirrored, pending, waits_for,
+    /// nothing_to_mirror, replaced}`, where `previous` is the box that served
+    /// the hostnames before (null for this machine), `mirrored` whether the
+    /// chosen lane serves them now and `replaced` the deleted choices as
+    /// `[{lane, host}]`. For `host: null` these are the choices that took the
+    /// lane's hostnames. Clients read the reply with
+    /// [`remote::UseOutcome::of_reply`].
+    ///
+    /// A box known here but not connected keeps the choice until it
+    /// connects, and a connected box whose lane this machine has not mirrored
+    /// yet, such as right after `connect`, until it is: the reply then has
+    /// `mirrored: false`, `pending: true`, `waits_for` `connect` or `mirror`
+    /// ([`remote::WaitsFor`], null when not pending) and as `previous` the
+    /// box that serves the hostnames meanwhile. A daemon from before
+    /// `waits_for` leaves it out, and only a box that is not connected made
+    /// its choices pending. `nothing_to_mirror` is true when the chosen box
+    /// lane has nothing this machine mirrors (no service, container or
+    /// external port). The choice is kept, and applies once the lane has
+    /// such a unit. A switch emits one `remote.warning` notice with code
+    /// `lane_switched`, also a choice that applies later (unless the daemon
+    /// restarted meanwhile). Errors, each with a
     /// `message`: `box_unknown`, `lane_not_on_box` (the connected box has no
     /// such lane), `local_lane_running` (a running local lane, named by
     /// `local_lane`, keeps the hostnames or has the same reference. Its
@@ -1470,6 +1483,56 @@ pub mod remote {
         pub host: Option<String>,
     }
 
+    /// What a pending `remote.use` choice waits for, as its reply's
+    /// `waits_for`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum WaitsFor {
+        /// The chosen box to connect.
+        Connect,
+        /// This machine to mirror the lane of the connected box.
+        Mirror,
+    }
+
+    /// What a `remote.use` reply says about the chosen lane, read the same
+    /// way by every client.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum UseOutcome {
+        /// The chosen lane serves the hostnames now.
+        Mirrored,
+        /// The choice applies once what it waits for happened.
+        Pending(WaitsFor),
+        /// The chosen box lane has nothing this machine mirrors: no service,
+        /// container or external port.
+        NothingToMirror,
+        /// Chosen, but not serving the hostnames for a reason `remote ls`
+        /// shows.
+        NotMirrored,
+    }
+
+    impl UseOutcome {
+        /// Reads a `remote.use` reply. A daemon from before `waits_for` made
+        /// only a disconnected box's choice pending, so a pending reply
+        /// without it waits for the box to connect. A reply without
+        /// `mirrored` counts as mirrored.
+        pub fn of_reply(reply: &serde_json::Value) -> Self {
+            let flag = |key: &str| reply.get(key).and_then(serde_json::Value::as_bool);
+            if flag("pending") == Some(true) {
+                let waits_for = reply
+                    .get("waits_for")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or(WaitsFor::Connect);
+                return Self::Pending(waits_for);
+            }
+            match (flag("mirrored"), flag("nothing_to_mirror")) {
+                (Some(false), Some(true)) => Self::NothingToMirror,
+                (Some(false), _) => Self::NotMirrored,
+                _ => Self::Mirrored,
+            }
+        }
+    }
+
     /// Reads a field that must be present but may be `null`. Serde lets an
     /// `Option` field be left out unless it has a `deserialize_with`.
     fn nullable<'de, D: serde::Deserializer<'de>>(
@@ -1492,7 +1555,8 @@ pub mod remote {
     /// `holds`, `containers` when only that lane's containers run, such as
     /// ones that came back after a reboot. `lane_switched` is a notice, not a
     /// problem: `lane`, `to` and `from` (boxes, null for this machine) and
-    /// `message`, after `remote.use` moved a lane.
+    /// `message`, after `remote.use` moved a lane or a pending choice of it
+    /// applied.
     pub const WARNING_EVENT: &str = "remote.warning";
     /// `{host}` on a client daemon, at most a few times a second, when what
     /// `host.list` says about the box changed apart from its link state (which

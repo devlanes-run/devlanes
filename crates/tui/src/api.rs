@@ -611,9 +611,10 @@ pub trait DaemonApi: Send + Sync {
     }
     /// `remote.use`: makes box `host`'s lane `lane` (`acme@0`) the one this
     /// machine mirrors, or this machine's own lane when `host` is `None`.
-    /// Answers `{lane, host, previous, mirrored, pending}` once the mirrors
-    /// applied it. `pending` is true for a box that is not connected, which
-    /// gets the choice when it connects.
+    /// Answers `{lane, host, previous, mirrored, pending, waits_for}` once the
+    /// mirrors applied it. `pending` is true for a box that is not connected,
+    /// which gets the choice when it connects (`waits_for: connect`), and for
+    /// a connected box whose lane is not mirrored here yet (`mirror`).
     async fn use_lane(&self, _lane: String, _host: Option<String>) -> Result<Value, ApiError> {
         Err(ApiError::Rpc(RpcError::new(
             "unknown_method",
