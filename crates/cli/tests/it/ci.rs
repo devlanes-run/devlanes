@@ -512,8 +512,8 @@ struct FakeDriver {
     missing_command: bool,
     /// The daemon's start result, `null` for a driver without one.
     result: Value,
-    /// Tasks the start runs, each with a log.
-    tasks: Vec<&'static str>,
+    /// Tasks and setup entries the start ran (`ran`), each with a log.
+    ran: Vec<&'static str>,
 }
 
 impl Default for FakeDriver {
@@ -530,7 +530,7 @@ impl Default for FakeDriver {
             start_failure: None,
             missing_command: false,
             result: Value::Null,
-            tasks: Vec::new(),
+            ran: Vec::new(),
         }
     }
 }
@@ -545,13 +545,6 @@ impl WithDriver for FakeDriver {
     ) -> Result<WithStart, RpcError> {
         self.calls.push("start".into());
         assert_eq!(request.method, Method::Start);
-        for task in &self.tasks {
-            sink(Event {
-                seq: 1,
-                event: events::TASK.into(),
-                data: json!({"lane": "acme@0", "task": task, "state": "done"}),
-            });
-        }
         sink(Event {
             seq: 1,
             event: events::PHASE.into(),
@@ -588,6 +581,11 @@ impl WithDriver for FakeDriver {
         WithOwnership {
             lane: "acme@0".into(),
             units: vec!["acme@0:api".into()],
+            ran: self
+                .ran
+                .iter()
+                .map(|unit| format!("acme@0:{unit}"))
+                .collect(),
             whole_lane: self.whole_lane,
             daemon_spawned: self.spawned,
         }
@@ -636,7 +634,7 @@ impl WithDriver for FakeDriver {
             unit("worker", "waiting for queue"),
             unit("db", "ready to accept connections"),
         ];
-        logs.extend(self.tasks.iter().map(|task| unit(task, "migrated")));
+        logs.extend(self.ran.iter().map(|ran| unit(ran, "migrated")));
         Ok(logs)
     }
     /// Peak fixtures differ from instantaneous resource usage by contract. A
@@ -843,14 +841,14 @@ async fn with_replaces_its_phase_lines() {
     }
 }
 
-/// Tasks the start ran are part of the run, so their logs land in --logs-dir;
-/// units that ran before `with` still do not.
+/// The tasks and setup entries the start ran are part of the run, so their
+/// logs land in --logs-dir; units that ran before `with` still do not.
 #[tokio::test]
 async fn with_writes_the_logs_of_its_start_tasks() {
     let temp = tempfile::tempdir().expect("tempdir");
     let (plan, runtime) = plan(temp.path(), false);
     let mut driver = FakeDriver {
-        tasks: vec!["migrate"],
+        ran: vec!["setup.vhost", "migrate"],
         ..FakeDriver::default()
     };
     let outcome = run_with(&plan, &runtime, &mut driver, &mut |_| {}).await;
@@ -865,7 +863,10 @@ async fn with_writes_the_logs_of_its_start_tasks() {
         })
         .collect();
     names.sort();
-    assert_eq!(names, ["unit-api.log", "unit-migrate.log"]);
+    assert_eq!(
+        names,
+        ["unit-api.log", "unit-migrate.log", "unit-setup_2evhost.log"]
+    );
 }
 
 #[tokio::test]
