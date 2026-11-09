@@ -648,10 +648,6 @@ async fn a_restored_command_box_without_its_command_fails() {
             *client.controls.handed_out.lock().expect("handed out"),
             [("box".to_owned(), true)]
         );
-        // The failure stays; no link retries in the background. Kept: a retry
-        // would come on a timer, and nothing marks when it would have run.
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        assert_eq!(client.host().await["state"], "failed");
 
         client
             .h

@@ -367,6 +367,107 @@ struct Controls {
     /// machine already listen, as a client does where a program holds a box
     /// port on one family only.
     both_loopbacks: AtomicBool,
+    /// What the client writes on its newest link.
+    writes: WriteMeter,
+}
+
+/// Counts the bytes a client writes on its newest link, and can hold them at
+/// a count, like a box that stopped reading, until the test severs the link.
+struct WriteMeter {
+    written: AtomicU64,
+    /// No write on a link goes past this many bytes; `u64::MAX` holds nothing.
+    limit: AtomicU64,
+}
+
+impl Default for WriteMeter {
+    /// Counts from zero and holds nothing.
+    fn default() -> Self {
+        Self {
+            written: AtomicU64::new(0),
+            limit: AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+impl WriteMeter {
+    /// Bytes the client wrote on its newest link so far.
+    fn written(&self) -> u64 {
+        self.written.load(Ordering::SeqCst)
+    }
+
+    /// Holds the writes of the next links once `limit` bytes went out on one.
+    fn hold_at(&self, limit: u64) {
+        self.limit.store(limit, Ordering::SeqCst);
+    }
+
+    /// Holds nothing on the next links.
+    fn release(&self) {
+        self.limit.store(u64::MAX, Ordering::SeqCst);
+    }
+}
+
+/// A client's end of a memory link, counted and held by [`Controls::writes`].
+struct Metered {
+    inner: BoxDuplex,
+    controls: Arc<Controls>,
+}
+
+impl tokio::io::AsyncRead for Metered {
+    /// Reads from the link as it is.
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for Metered {
+    /// Writes up to the limit, counting what went out, and then nothing.
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        use std::task::Poll;
+        let this = self.get_mut();
+        let meter = &this.controls.writes;
+        let room = meter
+            .limit
+            .load(Ordering::SeqCst)
+            .saturating_sub(meter.written());
+        if room == 0 {
+            // A memory link wakes the writer it parked when the test severs
+            // it, and a flush then fails like the write would.
+            return match std::pin::Pin::new(&mut this.inner).poll_flush(cx) {
+                Poll::Ready(Ok(())) | Poll::Pending => Poll::Pending,
+                Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            };
+        }
+        let allowed = buf.len().min(usize::try_from(room).unwrap_or(usize::MAX));
+        let poll = std::pin::Pin::new(&mut this.inner).poll_write(cx, &buf[..allowed]);
+        if let Poll::Ready(Ok(sent)) = poll {
+            meter.written.fetch_add(sent as u64, Ordering::SeqCst);
+        }
+        poll
+    }
+
+    /// Flushes the link.
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    /// Shuts the link down.
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
 }
 
 /// A connector handing out each test box's memory transport by box name.
@@ -440,7 +541,8 @@ impl RemoteConnector for MemoryConnector {
 
 /// A box's memory transport that, while [`Controls::sign_in`] is set, asks for
 /// [`PASSWORD`] the way ssh asks through askpass, and fails like ssh rejecting
-/// the first login when the answer is missing or wrong.
+/// the first login when the answer is missing or wrong. Its links go through
+/// [`Controls::writes`].
 struct SignIn {
     host: String,
     inner: MemoryTransport,
@@ -450,7 +552,8 @@ struct SignIn {
 
 #[async_trait::async_trait]
 impl Transport for SignIn {
-    /// Asks first when a sign-in is required, then connects.
+    /// Asks first when a sign-in is required, then connects, counting the
+    /// new link's writes from zero.
     async fn connect(&self) -> Result<BoxDuplex, devlanes_transport::TransportError> {
         if self.controls.sign_in.load(Ordering::SeqCst) {
             let answer = self
@@ -470,7 +573,12 @@ impl Transport for SignIn {
                 ));
             }
         }
-        self.inner.connect().await
+        let inner = self.inner.connect().await?;
+        self.controls.writes.written.store(0, Ordering::SeqCst);
+        Ok(Box::new(Metered {
+            inner,
+            controls: self.controls.clone(),
+        }))
     }
 }
 
@@ -1412,18 +1520,6 @@ async fn colliding_lane_is_skipped() {
             .expect("local stop");
         let host = skipped_for("local_stopped").await;
         assert_eq!(host["ports"], json!([]), "{host}");
-        // A mirror that gave the lane up in between warns again when it skips
-        // the lane once more.
-        let again: Vec<Value> = held_events(&mut bus)
-            .into_iter()
-            .filter(|event| {
-                event.event == "remote.warning"
-                    && event.data["code"] == "lane_skipped"
-                    && event.data["lane"] == "boxapp@0"
-            })
-            .map(|event| event.data)
-            .collect();
-        assert!(again.is_empty(), "the lane stayed skipped: {again:?}");
 
         // Cleaning the local lane releases its hostnames: the box lane is mirrored.
         let yes = Context {
@@ -1448,6 +1544,19 @@ async fn colliding_lane_is_skipped() {
             mirrored.is_some(),
             "box lane mirrored after the local clean"
         );
+        // The clean's reconcile comes after every reconcile the start and the
+        // stop triggered and skips nothing. A mirror that gave the lane up
+        // before it warns again when it skips the lane once more.
+        let again: Vec<Value> = held_events(&mut bus)
+            .into_iter()
+            .filter(|event| {
+                event.event == "remote.warning"
+                    && event.data["code"] == "lane_skipped"
+                    && event.data["lane"] == "boxapp@0"
+            })
+            .map(|event| event.data)
+            .collect();
+        assert!(again.is_empty(), "the lane stayed skipped: {again:?}");
         client.stop().await;
         side.stop().await;
     })
