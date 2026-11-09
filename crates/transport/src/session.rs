@@ -728,7 +728,12 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    /// The clock is paused so a descheduled runner cannot stretch a gap between
+    /// two frames past the ping timeout. It moves only when every task waits,
+    /// to the earliest timer, which is the box's next frame while it streams.
+    /// The pipe is in memory, so a hang leaves every task waiting and the outer
+    /// timeout fires at once.
+    #[tokio::test(start_paused = true)]
     async fn data_keeps_a_session_alive_without_pongs() -> Result<(), Box<dyn std::error::Error>> {
         timeout(Duration::from_secs(10), async {
             let (client_io, box_io) = tokio::io::duplex(1024 * 1024);
