@@ -45,7 +45,7 @@ use devlanes_daemon::{
 use devlanes_ipc::Frame;
 use devlanes_pki::CertificateAuthority;
 use devlanes_proto::{
-    Context, Control, LaneSummary, Method, Page, Request, RpcError,
+    Context, Control, Event, LaneSummary, Method, Page, Request, RpcError,
     remote::{PROMPT_EVENT, RemoteClient},
 };
 use devlanes_state::Store;
@@ -60,6 +60,7 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
+    sync::broadcast,
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -366,6 +367,107 @@ struct Controls {
     /// machine already listen, as a client does where a program holds a box
     /// port on one family only.
     both_loopbacks: AtomicBool,
+    /// What the client writes on its newest link.
+    writes: WriteMeter,
+}
+
+/// Counts the bytes a client writes on its newest link, and can hold them at
+/// a count, like a box that stopped reading, until the test severs the link.
+struct WriteMeter {
+    written: AtomicU64,
+    /// No write on a link goes past this many bytes; `u64::MAX` holds nothing.
+    limit: AtomicU64,
+}
+
+impl Default for WriteMeter {
+    /// Counts from zero and holds nothing.
+    fn default() -> Self {
+        Self {
+            written: AtomicU64::new(0),
+            limit: AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+impl WriteMeter {
+    /// Bytes the client wrote on its newest link so far.
+    fn written(&self) -> u64 {
+        self.written.load(Ordering::SeqCst)
+    }
+
+    /// Holds the writes of the next links once `limit` bytes went out on one.
+    fn hold_at(&self, limit: u64) {
+        self.limit.store(limit, Ordering::SeqCst);
+    }
+
+    /// Holds nothing on the next links.
+    fn release(&self) {
+        self.limit.store(u64::MAX, Ordering::SeqCst);
+    }
+}
+
+/// A client's end of a memory link, counted and held by [`Controls::writes`].
+struct Metered {
+    inner: BoxDuplex,
+    controls: Arc<Controls>,
+}
+
+impl tokio::io::AsyncRead for Metered {
+    /// Reads from the link as it is.
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for Metered {
+    /// Writes up to the limit, counting what went out, and then nothing.
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        use std::task::Poll;
+        let this = self.get_mut();
+        let meter = &this.controls.writes;
+        let room = meter
+            .limit
+            .load(Ordering::SeqCst)
+            .saturating_sub(meter.written());
+        if room == 0 {
+            // A memory link wakes the writer it parked when the test severs
+            // it, and a flush then fails like the write would.
+            return match std::pin::Pin::new(&mut this.inner).poll_flush(cx) {
+                Poll::Ready(Ok(())) | Poll::Pending => Poll::Pending,
+                Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            };
+        }
+        let allowed = buf.len().min(usize::try_from(room).unwrap_or(usize::MAX));
+        let poll = std::pin::Pin::new(&mut this.inner).poll_write(cx, &buf[..allowed]);
+        if let Poll::Ready(Ok(sent)) = poll {
+            meter.written.fetch_add(sent as u64, Ordering::SeqCst);
+        }
+        poll
+    }
+
+    /// Flushes the link.
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    /// Shuts the link down.
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
 }
 
 /// A connector handing out each test box's memory transport by box name.
@@ -439,7 +541,8 @@ impl RemoteConnector for MemoryConnector {
 
 /// A box's memory transport that, while [`Controls::sign_in`] is set, asks for
 /// [`PASSWORD`] the way ssh asks through askpass, and fails like ssh rejecting
-/// the first login when the answer is missing or wrong.
+/// the first login when the answer is missing or wrong. Its links go through
+/// [`Controls::writes`].
 struct SignIn {
     host: String,
     inner: MemoryTransport,
@@ -449,7 +552,8 @@ struct SignIn {
 
 #[async_trait::async_trait]
 impl Transport for SignIn {
-    /// Asks first when a sign-in is required, then connects.
+    /// Asks first when a sign-in is required, then connects, counting the
+    /// new link's writes from zero.
     async fn connect(&self) -> Result<BoxDuplex, devlanes_transport::TransportError> {
         if self.controls.sign_in.load(Ordering::SeqCst) {
             let answer = self
@@ -469,7 +573,12 @@ impl Transport for SignIn {
                 ));
             }
         }
-        self.inner.connect().await
+        let inner = self.inner.connect().await?;
+        self.controls.writes.written.store(0, Ordering::SeqCst);
+        Ok(Box::new(Metered {
+            inner,
+            controls: self.controls.clone(),
+        }))
     }
 }
 
@@ -1338,16 +1447,7 @@ async fn colliding_lane_is_skipped() {
             .call(Method::LaneList, json!({}), cx(&local_repo))
             .await
             .expect("local lane list");
-        let (session, mut frames) = Session::local(9_001);
-        let request = Request {
-            id: 1,
-            method: Method::Subscribe,
-            params: json!({"follow": true}),
-            context: Context::default(),
-        };
-        let engine = client.h.engine.clone();
-        let watching = session.clone();
-        let events = tokio::spawn(async move { engine.handle(request, watching).await });
+        let mut bus = client.h.engine.subscribe();
         client
             .h
             .call(
@@ -1367,47 +1467,59 @@ async fn colliding_lane_is_skipped() {
         .await
         .expect("lane skipped");
         assert_eq!(skipped["ports"], json!([]), "no ports of the skipped lane");
-        let warned = tokio::time::timeout(Duration::from_secs(5), async {
-            while let Some(frame) = frames.recv().await {
-                if let Frame::Control(Control::Event(event)) = frame
-                    && event.event == "remote.warning"
-                    && event.data["code"] == "lane_skipped"
-                {
-                    return true;
+        let warned = tokio::time::timeout(SOON, async {
+            loop {
+                match bus.recv().await {
+                    Ok(event)
+                        if event.event == "remote.warning"
+                            && event.data["code"] == "lane_skipped" =>
+                    {
+                        return true;
+                    }
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => return false,
                 }
             }
-            false
         })
         .await
         .unwrap_or(false);
         assert!(warned, "skip is announced");
-        session.close();
-        let _ = events.await;
 
         // A stopped local lane keeps its view and routes, so the box lane stays
-        // skipped through the reconciles the start and the stop trigger.
+        // skipped through the reconciles the start and the stop trigger. The
+        // mirror shows each by the cause it lists for the skip.
+        let skipped_for = |cause: &'static str| {
+            let client = &client;
+            async move {
+                let host = eventually(SOON, || async {
+                    let host = client.host().await;
+                    host["skipped_lanes"]
+                        .as_array()?
+                        .iter()
+                        .any(|l| l["lane"] == "boxapp@0" && l["cause"] == cause)
+                        .then_some(host)
+                })
+                .await;
+                match host {
+                    Some(host) => host,
+                    None => panic!("skipped for {cause}: {}", client.host().await),
+                }
+            }
+        };
+        held_events(&mut bus);
         client
             .h
             .call(Method::Start, json!({"units": ["web"]}), cx(&local_repo))
             .await
             .expect("local start");
+        skipped_for("local_running").await;
         client
             .h
             .call(Method::Stop, json!({}), cx(&local_repo))
             .await
             .expect("local stop");
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-        while tokio::time::Instant::now() < deadline {
-            let host = client.host().await;
-            assert!(
-                host["skipped_lanes"]
-                    .as_array()
-                    .is_some_and(|lanes| lanes.iter().any(|l| l["lane"] == "boxapp@0")),
-                "a stopped local lane still holds its hostnames: {host}"
-            );
-            assert_eq!(host["ports"], json!([]), "{host}");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        let host = skipped_for("local_stopped").await;
+        assert_eq!(host["ports"], json!([]), "{host}");
 
         // Cleaning the local lane releases its hostnames: the box lane is mirrored.
         let yes = Context {
@@ -1432,6 +1544,19 @@ async fn colliding_lane_is_skipped() {
             mirrored.is_some(),
             "box lane mirrored after the local clean"
         );
+        // The clean's reconcile comes after every reconcile the start and the
+        // stop triggered and skips nothing. A mirror that gave the lane up
+        // before it warns again when it skips the lane once more.
+        let again: Vec<Value> = held_events(&mut bus)
+            .into_iter()
+            .filter(|event| {
+                event.event == "remote.warning"
+                    && event.data["code"] == "lane_skipped"
+                    && event.data["lane"] == "boxapp@0"
+            })
+            .map(|event| event.data)
+            .collect();
+        assert!(again.is_empty(), "the lane stayed skipped: {again:?}");
         client.stop().await;
         side.stop().await;
     })
@@ -1458,14 +1583,30 @@ impl Dialer for SwitchDialer {
     }
 }
 
-/// Connects to `[::1]:<port>` and waits until the mirror closes the connection.
-async fn knock(port: u16) {
+/// Connects to `[::1]:<port>` and waits until the mirror closes the connection;
+/// false when it did not within [`SOON`].
+async fn knock(port: u16) -> bool {
     let attempt = async {
         let mut stream = TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await.ok()?;
         let mut rest = Vec::new();
         stream.read_to_end(&mut rest).await.ok()
     };
-    let _ = tokio::time::timeout(Duration::from_secs(5), attempt).await;
+    matches!(tokio::time::timeout(SOON, attempt).await, Ok(Some(_)))
+}
+
+/// The events `bus` holds now. Fails when it fell behind and dropped some,
+/// since what is left then cannot show that an event never came.
+fn held_events(bus: &mut broadcast::Receiver<Event>) -> Vec<Event> {
+    let mut events = Vec::new();
+    loop {
+        match bus.try_recv() {
+            Ok(event) => events.push(event),
+            Err(broadcast::error::TryRecvError::Lagged(missed)) => {
+                panic!("the test's bus subscription dropped {missed} events")
+            }
+            Err(_) => return events,
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1490,16 +1631,7 @@ async fn refused_opens_are_reported() {
             .expect("box start");
         let echo_port = box_port(&side.h, 0, "echo").await;
         let client = ClientSide::start(&tmp, "client", "25500-25999", &side).await;
-        let (session, mut frames) = Session::local(9_002);
-        let request = Request {
-            id: 1,
-            method: Method::Subscribe,
-            params: json!({"follow": true}),
-            context: Context::default(),
-        };
-        let engine = client.h.engine.clone();
-        let watching = session.clone();
-        let events = tokio::spawn(async move { engine.handle(request, watching).await });
+        let mut bus = client.h.engine.subscribe();
         client
             .h
             .call(
@@ -1517,7 +1649,10 @@ async fn refused_opens_are_reported() {
 
         dialer.refuse.store(true, Ordering::SeqCst);
         for _ in 0..3 {
-            knock(echo_port).await;
+            assert!(
+                knock(echo_port).await,
+                "the mirror closes a refused connection"
+            );
         }
         let port_entry = || async {
             client.host().await["ports"]
@@ -1535,18 +1670,13 @@ async fn refused_opens_are_reported() {
         assert!(message.contains("refused by the test"), "{failed}");
         assert!(failed["last_error"]["at_ms"].as_u64().is_some(), "{failed}");
 
-        let mut warnings = Vec::new();
-        let _ = tokio::time::timeout(Duration::from_secs(2), async {
-            while let Some(frame) = frames.recv().await {
-                if let Frame::Control(Control::Event(event)) = frame
-                    && event.event == "remote.warning"
-                    && event.data["code"] == "open_failed"
-                {
-                    warnings.push(event.data);
-                }
-            }
-        })
-        .await;
+        // The mirror closes a refused connection only after it recorded and
+        // warned about the failed open, so every knock's warning is on the bus.
+        let warnings: Vec<Value> = held_events(&mut bus)
+            .into_iter()
+            .filter(|event| event.event == "remote.warning" && event.data["code"] == "open_failed")
+            .map(|event| event.data)
+            .collect();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(warnings[0]["host"], "box");
         assert_eq!(warnings[0]["port"], echo_port);
@@ -1563,8 +1693,6 @@ async fn refused_opens_are_reported() {
         .await;
         assert!(cleared.is_some(), "a working open clears last_error");
 
-        session.close();
-        let _ = events.await;
         client.stop().await;
         side.stop().await;
     })

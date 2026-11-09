@@ -63,10 +63,11 @@ pub struct PhaseLines {
 
 /// The phase line [`PhaseLines`] may still replace.
 struct OpenLine {
-    /// `lane phase start_id`, the same for every event of one phase run.
+    /// `lane phase start_id`, the same for every event of one phase run and
+    /// for the `task` events of the tasks it runs.
     key: String,
-    lane: String,
-    phase: String,
+    /// The task or setup entry the line says runs (`… tasks: seed`).
+    step: Option<String>,
 }
 
 /// What happens to `started` and `progress` phase lines.
@@ -103,16 +104,12 @@ impl PhaseLines {
         }
         let data = &event.data;
         let field = |key: &str| data.get(key).and_then(Value::as_str).unwrap_or_default();
-        let phase = (event.event == devlanes_proto::events::PHASE).then(|| {
-            let text = |key: &str| data.get(key).map(Value::to_string).unwrap_or_default();
-            (
-                format!("{} {} {}", text("lane"), text("phase"), text("start_id")),
-                field("state"),
-            )
-        });
+        let text = |key: &str| data.get(key).map(Value::to_string).unwrap_or_default();
+        let key = format!("{} {} {}", text("lane"), text("phase"), text("start_id"));
+        let phase = (event.event == devlanes_proto::events::PHASE).then(|| field("state"));
         let open_key = self.open.as_ref().map(|open| open.key.as_str());
         match phase {
-            Some((key, state @ ("started" | "progress"))) => {
+            Some(state @ ("started" | "progress")) => {
                 if self.mode == PhaseMode::Hide {
                     stdout.clear();
                     return;
@@ -128,22 +125,28 @@ impl PhaseLines {
                 if state == "progress" && open_key == Some(key.as_str()) {
                     stdout.insert_str(0, ERASE_LINE);
                 }
-                self.open = Some(OpenLine {
-                    key,
-                    lane: field("lane").to_owned(),
-                    phase: field("phase").to_owned(),
-                });
+                let step = data
+                    .get("step")
+                    .and_then(|step| step.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                self.open = Some(OpenLine { key, step });
             }
-            Some((key, _)) if open_key == Some(key.as_str()) => {
+            Some(_) if open_key == Some(key.as_str()) => {
                 stdout.insert_str(0, ERASE_LINE);
                 self.open = None;
             }
-            // Only finished tasks render a line; it says what `… tasks: seed`
-            // said was running. Another lane's task leaves the line alone.
+            // Only finished or skipped tasks render a line. It replaces the
+            // open line of its phase when that line names this task, or no
+            // task yet (`… after-services` before its tasks were skipped). The
+            // daemon sends the phase and `start_id` on a start phase's tasks.
             None if event.event == devlanes_proto::events::TASK && !stdout.is_empty() => {
                 if self.open.as_ref().is_some_and(|open| {
-                    open.lane == field("lane")
-                        && matches!(open.phase.as_str(), "tasks" | "after-services")
+                    open.key == key
+                        && open
+                            .step
+                            .as_deref()
+                            .is_none_or(|step| step == field("task"))
                 }) {
                     stdout.insert_str(0, ERASE_LINE);
                 }

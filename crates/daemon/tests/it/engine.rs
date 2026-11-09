@@ -959,6 +959,33 @@ services:
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A task that fails, or whose command cannot start, is in the result's `ran`
+/// as well as its `failures`, so `devlanes with --logs-dir` writes the log
+/// that says why.
+async fn a_failed_task_is_among_what_the_start_ran() {
+    tokio::time::timeout(LIMIT, async {
+        for run in ["fail", "nospawn"] {
+            let tmp = temp();
+            let config = format!(
+                "project: ran\ntasks:\n  migrate: {{ run: {run}, when: lane.start }}\n\
+                 services:\n  web: {{ run: sleep }}\n"
+            );
+            let main = repo(&tmp.path, "r", &config);
+            let h = harness(&tmp.path.join("home"), Setup::default()).await;
+            let result = start(&h, cx(&main), json!({})).await;
+            assert_eq!(result.ran, ["ran@0:migrate"], "{run}: {result:?}");
+            assert!(
+                result.failures.iter().any(|f| f.unit == "migrate"),
+                "{run}: {result:?}"
+            );
+            h.close().await;
+        }
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// StartResult says what this request started, so `devlanes with` stops only that.
 async fn start_result_ownership_stop_and_restart() {
     tokio::time::timeout(LIMIT, async {
@@ -1969,6 +1996,139 @@ async fn logs_since_lane_start() {
     })
     .await
     .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `logs --follow --grep` applies the filter, and `context_lines` its
+/// context, to lines that arrive while following, as to the first page. A
+/// unit cut from a merged `head` page still gets the context it is owed.
+async fn logs_follow_keeps_the_filter() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(
+            &tmp.path,
+            "r",
+            "project: demo\nservices:\n  chatty:\n    \
+             run: \"echo match one; hold; echo other one; echo other two; echo other three; \
+             echo match two; sleep\"\n  second:\n    run: \"echo match b; sleep\"\n",
+        );
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        start(&h, cx(&main), json!({"units": ["chatty"]})).await;
+        let (plain, mut plain_frames) = h.session();
+        let (context, mut context_frames) = h.session();
+        let (second, mut second_frames) = h.session();
+        let (merged, mut merged_frames) = h.session();
+        let follow = |params: Value, session| {
+            let mut params = params;
+            params["grep"] = json!("match");
+            params["follow"] = json!(true);
+            h.call_on(Method::Logs, params, cx(&main), session)
+        };
+        let chatty =
+            |context_lines: usize| json!({"units": ["chatty"], "context_lines": context_lines});
+        let read = async {
+            let mut plain_texts = vec![next_log_text(&mut plain_frames).await];
+            let mut context_texts = vec![next_log_text(&mut context_frames).await];
+            // `match b` is logged after `match one` and before `other one`.
+            start(&h, cx(&main), json!({"units": ["second"]})).await;
+            let (followed, _) =
+                tokio::join!(follow(json!({"units": ["second"]}), &second), async {
+                    next_log_text(&mut second_frames).await;
+                    second.close();
+                });
+            followed.expect("follow second");
+            // The rest is written only now, so it reaches the followers as new
+            // lines, after a read that ended on the match.
+            h.runner.release();
+            plain_texts.push(next_log_text(&mut plain_frames).await);
+            for _ in 0..3 {
+                context_texts.push(next_log_text(&mut context_frames).await);
+            }
+            plain.close();
+            context.close();
+            (plain_texts, context_texts)
+        };
+        let (plain_followed, context_followed, (plain_texts, context_texts)) =
+            tokio::join!(follow(chatty(0), &plain), follow(chatty(1), &context), read);
+        plain_followed.expect("follow");
+        context_followed.expect("follow with context");
+        assert_eq!(plain_texts, ["match one", "match two"]);
+        assert_eq!(
+            context_texts,
+            ["match one", "other one", "other three", "match two"]
+        );
+        // chatty's page is `match one`, `other one` and second's `match b`.
+        // The merged head keeps `match one` and `match b` and cuts `other one`,
+        // which the follower then still owes `match one` as context.
+        let both = json!({"units": ["chatty", "second"], "context_lines": 1, "head": 2});
+        let (merged_followed, merged_texts) = tokio::join!(follow(both, &merged), async {
+            let mut texts = Vec::new();
+            for _ in 0..4 {
+                texts.push(next_log_text(&mut merged_frames).await);
+            }
+            merged.close();
+            texts
+        });
+        merged_followed.expect("follow both");
+        assert_eq!(
+            merged_texts,
+            ["match one", "match b", "other one", "other three"]
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A follower reads the next run of a unit that stopped and started again.
+/// The follower reads only when woken, so a missed wake hangs this test.
+async fn logs_follow_reads_the_next_run() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BASIC);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let run = |value: &str| json!({"units": ["worker"], "env": {"RUN": value}});
+        start(&h, cx(&main), run("one")).await;
+        let (session, mut frames) = h.session();
+        let follow = h.call_on(
+            Method::Logs,
+            json!({"units": ["worker"], "follow": true}),
+            cx(&main),
+            &session,
+        );
+        let read = async {
+            let first = next_log_text(&mut frames).await;
+            h.call(Method::Stop, json!({}), cx(&main))
+                .await
+                .expect("stop");
+            start(&h, cx(&main), run("two")).await;
+            let second = next_log_text(&mut frames).await;
+            session.close();
+            [first, second]
+        };
+        let (followed, texts) = tokio::join!(follow, read);
+        followed.expect("follow");
+        assert_eq!(texts, ["one", "two"]);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// The text of the next `log` event sent to a session.
+async fn next_log_text(frames: &mut tokio::sync::mpsc::Receiver<Frame>) -> String {
+    loop {
+        let frame = frames.recv().await.expect("session open");
+        if let Frame::Control(devlanes_proto::Control::Event(event)) = frame
+            && event.event == events::LOG
+        {
+            return event.data["line"]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

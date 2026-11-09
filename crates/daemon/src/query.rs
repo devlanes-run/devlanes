@@ -4,11 +4,16 @@
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use devlanes_core::env::EnvLayer;
-use devlanes_proto::{Context, LaneSummary, LogLine, LogQuery, Method, Page, RpcError, events};
+use devlanes_logs::{Resumable, Resume};
+use devlanes_proto::{Context, LaneSummary, LogQuery, Method, Page, RpcError, events};
 use devlanes_state::EndedBy;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::time::Instant;
+use tokio::{
+    sync::{broadcast, watch},
+    time::Instant,
+};
 
 use crate::{
     Session,
@@ -17,7 +22,7 @@ use crate::{
     registry::internal,
     stream::LaneEvents,
     target::Policy,
-    units::{UnitHost, UnitState, now_ms, query_log_dir},
+    units::{Logged, UnitHost, UnitState, now_ms, query_log_dir},
 };
 
 /// `status` parameters.
@@ -202,6 +207,49 @@ async fn process_name(pid: u32) -> Option<String> {
     .flatten()
 }
 
+/// Resolves once one of `written` reports lines its log thread stored. A
+/// finished log never stores more, so its closed watch is left out.
+async fn any_written(written: &mut [watch::Receiver<Logged>]) {
+    let mut changes: FuturesUnordered<_> =
+        written.iter_mut().map(|logged| logged.changed()).collect();
+    while let Some(changed) = changes.next().await {
+        if changed.is_ok() {
+            return;
+        }
+    }
+    std::future::pending().await
+}
+
+/// Resolves once a unit of `units` runs another run than `hosts` (the ones
+/// last read, `None` for no run), checked at each `unit.changed` of the bus.
+/// Missed events count as a change.
+async fn run_replaced(
+    changes: &mut broadcast::Receiver<devlanes_proto::Event>,
+    lane: &crate::model::LaneRt,
+    units: &[String],
+    hosts: &[Option<UnitHost>],
+) {
+    loop {
+        match changes.recv().await {
+            Ok(event) if event.event == events::UNIT_CHANGED => {
+                let st = lane.st();
+                let replaced = units.iter().zip(hosts).any(|(unit, read)| {
+                    match (st.units().get(unit).map(|rec| &rec.host), read) {
+                        (Some(now), Some(read)) => !now.same_run(read),
+                        (now, read) => now.is_some() != read.is_some(),
+                    }
+                });
+                if replaced {
+                    return;
+                }
+            }
+            Ok(_) => {}
+            Err(broadcast::error::RecvError::Lagged(_)) => return,
+            Err(broadcast::error::RecvError::Closed) => std::future::pending().await,
+        }
+    }
+}
+
 impl Inner {
     /// Lane summaries with the sampler's latest CPU and memory.
     pub(crate) fn summaries(
@@ -303,22 +351,26 @@ impl Inner {
             .map_err(|e| internal("encode", e))
     }
 
-    /// Lines of one unit from its live host or, without one, its log directory.
+    /// Lines of one unit from its live host or, without one, its log directory,
+    /// with where a follower continues.
     async fn unit_logs(
         &self,
         pair: &LanePair,
         unit: &str,
         query: LogQuery,
-    ) -> Result<Page<LogLine>, RpcError> {
+    ) -> Result<Resumable, RpcError> {
         let (project, lane) = pair;
         let host = lane.st().units().get(unit).map(|rec| rec.host.clone());
         match host {
             // A closed run's snapshot misses notes written after it, such as a
             // failed respawn's `[devlanes]` line; the directory has them.
-            Some(host) if !host.log_closed() => host.logs(query).await,
+            Some(host) if !host.log_closed() => host.logs_resumable(query, 0).await,
             _ => {
                 let Some(index) = lane.st().index() else {
-                    return Ok(Page::complete(Vec::new()));
+                    return Ok(Resumable {
+                        page: Page::complete(Vec::new()),
+                        resume: Resume::default(),
+                    });
                 };
                 let dir =
                     crate::lifecycle::unit_log_dir(&self.opts.logs, &project.name(), index, unit);
@@ -345,9 +397,15 @@ impl Inner {
         let (project, lane) = &pair;
         Self::refuse_external(project, lane, &selectors)?;
         let reference = lane.st().reference(&project.name());
+        // Absolute once, so every page, re-read and follow read of this
+        // request uses the same window.
         if query.since.as_deref() == Some("start") {
             let started = lane.st().started_at_ms.unwrap_or(0);
             query.since = Some(started.to_string());
+        } else if let Some(since) = &query.since {
+            let since = devlanes_logs::resolve_since(since, now_ms())
+                .map_err(|error| internal("log_query_failed", error))?;
+            query.since = Some(since.to_string());
         }
         let (candidates, selectors) = {
             let st = lane.st();
@@ -400,32 +458,52 @@ impl Inner {
         if args.all {
             let mut groups = Vec::new();
             for unit in &units {
-                let page = self.unit_logs(&pair, unit, each.clone()).await?;
+                let page = self.unit_logs(&pair, unit, each.clone()).await?.page;
                 groups
                     .push(json!({"unit": unit, "lines": page.items, "truncated": page.truncated}));
             }
             return Ok(json!({"lane": reference, "units": groups}));
         }
+        // Per unit, where a follower continues.
+        let mut resumes = Vec::new();
         let page = if let [unit] = units.as_slice() {
-            self.unit_logs(&pair, unit, query.clone()).await?
+            let first = self.unit_logs(&pair, unit, query.clone()).await?;
+            resumes.push(first.resume);
+            first.page
         } else {
             let mut items = Vec::new();
             let mut truncated = false;
-            for unit in &units {
-                let page = self.unit_logs(&pair, unit, each.clone()).await?;
-                truncated |= page.truncated;
-                items.extend(page.items);
+            for (index, unit) in units.iter().enumerate() {
+                let first = self.unit_logs(&pair, unit, each.clone()).await?;
+                truncated |= first.page.truncated;
+                items.extend(first.page.items.into_iter().map(|line| (index, line)));
+                resumes.push(first.resume);
             }
-            items.sort_by_key(|line| (line.timestamp_ms, line.seq));
+            items.sort_by_key(|(_, line)| (line.timestamp_ms, line.seq));
             // `head` is the first N of the merged range, not N per unit.
             if let Some(head) = query.head
                 && items.len() > head
             {
+                let cut: BTreeSet<usize> = items[head..].iter().map(|(index, _)| *index).collect();
                 items.truncate(head);
                 truncated = true;
+                // A unit cut short continues after its lines shown, as a read of
+                // just those lines would; none shown reads from the start.
+                for index in cut.into_iter().filter(|_| follow) {
+                    let shown = items.iter().filter(|(unit, _)| *unit == index).count();
+                    resumes[index] = if shown == 0 {
+                        Resume::default()
+                    } else {
+                        let query = LogQuery {
+                            head: Some(shown),
+                            ..each.clone()
+                        };
+                        self.unit_logs(&pair, &units[index], query).await?.resume
+                    };
+                }
             }
             Page {
-                items,
+                items: items.into_iter().map(|(_, line)| line).collect(),
                 truncated,
                 next_cursor: None,
             }
@@ -443,39 +521,54 @@ impl Inner {
                 return Ok(json!({"items": [], "truncated": false, "next_cursor": null}));
             }
         }
-        self.follow_logs(lane.clone(), units, page.items, session)
+        self.follow_logs(lane.clone(), units, query, resumes, session)
             .await;
         Ok(json!({"items": [], "truncated": false, "next_cursor": null}))
     }
 
-    /// Streams new lines of `units` until the client disconnects, following restarts.
+    /// Streams new lines of `units` that `filter` (the first page's query)
+    /// selects until the client disconnects, following restarts. Each unit's
+    /// reads continue from its entry in `resumes`. It reads again when a
+    /// unit's log thread stores lines or a unit's run is replaced.
     async fn follow_logs(
         &self,
         lane: Arc<crate::model::LaneRt>,
         units: Vec<String>,
-        seen: Vec<LogLine>,
+        filter: LogQuery,
+        mut resumes: Vec<Resume>,
         session: &Session,
     ) {
-        let mut cursors: std::collections::BTreeMap<String, String> =
-            std::collections::BTreeMap::new();
-        for line in seen {
-            cursors.insert(line.unit.clone(), format!("{}#{}", line.unit, line.seq));
-        }
         let disconnected = session.disconnected();
+        // Subscribed before the first read, so no replaced run goes unnoticed.
+        let mut changes = self.bus.subscribe();
         loop {
-            for unit in &units {
+            let mut hosts = Vec::with_capacity(units.len());
+            let mut written = Vec::with_capacity(units.len());
+            let mut more = false;
+            for (unit, resume) in units.iter().zip(&mut resumes) {
                 let host = lane.st().units().get(unit).map(|rec| rec.host.clone());
+                hosts.push(host.clone());
                 let Some(host) = host else { continue };
+                // Taken before the read: lines stored after it mark the watch
+                // changed, and every line stored before it is in the read.
+                let mut logged = host.watch_logged();
+                logged.borrow_and_update();
+                written.push(logged);
                 let query = LogQuery {
-                    cursor: cursors.get(unit).cloned(),
+                    cursor: resume.cursor.clone(),
                     max_bytes: Some(256 * 1024),
-                    ..LogQuery::default()
+                    tail: None,
+                    head: None,
+                    around: None,
+                    ..filter.clone()
                 };
-                let Ok(page) = host.logs(query).await else {
+                let Ok(read) = host.logs_resumable(query, resume.trailing).await else {
                     continue;
                 };
-                for line in page.items {
-                    cursors.insert(unit.clone(), format!("{}#{}", line.unit, line.seq));
+                *resume = read.resume;
+                // A full page leaves stored lines unread, which no watch reports again.
+                more |= read.page.truncated;
+                for line in read.page.items {
                     let event = devlanes_proto::Event {
                         seq: 0,
                         event: events::LOG.into(),
@@ -486,9 +579,13 @@ impl Inner {
                     }
                 }
             }
+            if more {
+                continue;
+            }
             tokio::select! {
                 () = disconnected.cancelled() => return,
-                () = tokio::time::sleep(Duration::from_millis(250)) => {}
+                () = any_written(&mut written) => {}
+                () = run_replaced(&mut changes, &lane, &units, &hosts) => {}
             }
         }
     }
