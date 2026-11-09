@@ -1,5 +1,11 @@
 # devlanes-client
 
+## 0.13.0 — 2026-11-09
+
+### Patch changes
+
+- [40afbabe](https://github.com/devlanes-run/devlanes/commit/40afbabe21bbc5431a65a080085d9e023dfbe5ce) Fixed the unit picker and the TUI choosing a `lane new` lane instead of the folder's own lane.
+
 ## 0.12.0 — 2026-11-07
 
 ### Patch changes

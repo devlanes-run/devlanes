@@ -1,5 +1,28 @@
 # devlanes-tui
 
+## 0.13.0 — 2026-11-09
+
+### Patch changes
+
+- [8b189bf9](https://github.com/devlanes-run/devlanes/commit/8b189bf9d017fcee53ad9215c26123b2270d210e) Fixed the TUI not notifying a crashed service while other services of its lane were still starting.
+- [94511d28](https://github.com/devlanes-run/devlanes/commit/94511d280c3a565085c90e60b3bbfbffe938d359) Fixed `devlanes remote use` right after `devlanes remote connect` saying the lane is chosen but not mirrored yet.
+  
+  A choice that applies later, once its box connects or its lane is mirrored, now sends the same `lane_switched` notice as one that applies at once, and `remote use` and the TUI say which of the two it waits for. Choosing a box lane with nothing to mirror now says so, instead of pointing to `remote ls`.
+- [36cbe7b4](https://github.com/devlanes-run/devlanes/commit/36cbe7b497f773aac89902cb65a42ecfc8ec28fe) Changed `devlanes status` to report a running exec command, task or infra command as `running`, JSON included.
+  
+  Scripts and MCP consumers that matched `ready` for exec units or `starting` for running tasks should match `running`. A task stopped by its own `timeout:` now reads `failed` with reason `task_timeout` everywhere. `run` answers, `task` events and the last run in `run --list` use the same words as `status`: `exited`, `failed` or `stopped` (they said `done`, a stopped task `failed` in events and `interrupted` in the list).
+- [40afbabe](https://github.com/devlanes-run/devlanes/commit/40afbabe21bbc5431a65a080085d9e023dfbe5ce) Fixed the unit picker and the TUI choosing a `lane new` lane instead of the folder's own lane.
+- [a3adedfa](https://github.com/devlanes-run/devlanes/commit/a3adedfab7e0226e781dbfbd0d96cd5d3fd4421a) Changed the error for a config value with no value in the lane, such as an unset `${{ env.X }}`, to stop calling `devlanes.yaml` invalid.
+  
+  Its JSON code is `unresolved_value` instead of `config_error` or `lane_env_unresolved`, for services, tasks, `exec` and `env show` alike. Older clients show the code and message without the variable's name.
+- [4158a194](https://github.com/devlanes-run/devlanes/commit/4158a1943384987241920e909beed7bb111b584d) Fixed `devlanes restart <unit>` through `devlanes mcp` keeping an `--env` value from an earlier command.
+- [e4cf749b](https://github.com/devlanes-run/devlanes/commit/e4cf749b66c80f3ce28a67fb338ad73e1698a03d) Fixed `devlanes with` leaving units running when Ctrl-C interrupted its start.
+  
+  `with` needs a daemon of this release: run `devlanes daemon restart` when it says the daemon is outdated.
+- [a4108390](https://github.com/devlanes-run/devlanes/commit/a4108390ab5093951c1075317bc93a2000030196) Fixed Windows units ended by a stop showing exit codes such as -1073741510, 255 or 1 instead of a signal, as on macOS and Linux.
+  
+  just recipes and Git's `bin\bash.exe` now show the code they return, `512` when their shell ended on Ctrl-C.
+
 ## 0.12.0 — 2026-11-07
 
 ### Patch changes

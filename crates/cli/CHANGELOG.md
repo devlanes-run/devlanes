@@ -1,5 +1,68 @@
 # devlanes-cli
 
+## 0.13.0 — 2026-11-09
+
+### Minor changes
+
+- [0e2e4a8f](https://github.com/devlanes-run/devlanes/commit/0e2e4a8f551687caa5a86985cf7d1db333962cd6) Changed `devlanes lane new --start --output json` to print the new lane, then the start as `devlanes start --json` does.
+  
+  Read the start's result from the last line instead of the `start` key. `--timeout` now applies to that start. A devlanes 0.12 client gets an error for `lane new --start` from this daemon; run `devlanes lane new`, then `devlanes start --lane <name>`.
+- [174ed796](https://github.com/devlanes-run/devlanes/commit/174ed79624c5188c6c4a94924d050d9e31641234) Changed `devlanes env show` in agent output and the MCP `env_show` tool to hide secret-looking values.
+  
+  `devlanes mcp` no longer runs `env export`. In a shell, `env show --output plain` and `eval "$(devlanes env export)"` still print real values, and `exec` or `with` pass them to a command. A `--read-only` MCP server can no longer read secret values.
+- [087f74bb](https://github.com/devlanes-run/devlanes/commit/087f74bb4a2cfd4da7f7333eb7434172531a61dd) Changed `devlanes with --profile` to refuse a running lane whose profiles give its services other settings, before starting anything.
+  
+  Stop the lane, run `with` in another worktree, or name the services instead of the profile. A profile that only picks services works on a running lane whose profiles set no `env`, `run_scripts` or `infra`.
+
+### Patch changes
+
+- [a09fef90](https://github.com/devlanes-run/devlanes/commit/a09fef900b3f5e765ca47cb4420d932124c6a221) Fixed `devlanes with --logs-dir` leaving out the logs of `infra.setup` entries and failed tasks the start ran.
+  
+  `ran` in the `start --json` result now also lists the tasks and setup entries that failed.
+- [5ed93a92](https://github.com/devlanes-run/devlanes/commit/5ed93a9209ff9afe7e2c283d346eb8e8bec49fc7) Fixed `devlanes mcp` reporting another lane's start as the progress of a start call.
+  
+  Calls of `with` and `lane new --start` now report the phases of the lane they start too.
+- [4158a194](https://github.com/devlanes-run/devlanes/commit/4158a1943384987241920e909beed7bb111b584d) Fixed `devlanes with` clearing the `--env` values of the lane's running services.
+- [ed0c90d3](https://github.com/devlanes-run/devlanes/commit/ed0c90d3b5d7034af9ff0e5b01655a361a879d27) Fixed `devlanes start --json` leaving out the `lane.phase` events of phases as they start and progress.
+- [94511d28](https://github.com/devlanes-run/devlanes/commit/94511d280c3a565085c90e60b3bbfbffe938d359) Fixed `devlanes remote use` right after `devlanes remote connect` saying the lane is chosen but not mirrored yet.
+  
+  A choice that applies later, once its box connects or its lane is mirrored, now sends the same `lane_switched` notice as one that applies at once, and `remote use` and the TUI say which of the two it waits for. Choosing a box lane with nothing to mirror now says so, instead of pointing to `remote ls`.
+- [dd50a481](https://github.com/devlanes-run/devlanes/commit/dd50a48127f7f59693f9e66eae32c53c86b26f40) Fixed errors and `devlanes lane ls` showing a lane that waits for a free index as `unknown` or `–`.
+- [a09fef90](https://github.com/devlanes-run/devlanes/commit/a09fef900b3f5e765ca47cb4420d932124c6a221) Fixed `devlanes start` on a terminal replacing a running task's line with the line of one of its finished steps.
+- [4e8e5636](https://github.com/devlanes-run/devlanes/commit/4e8e56369ab3a49b4bbd993b7af345a10abcbcad) Changed `devlanes lane clean` so a lane that comes back starts empty, without the old `--env` or history.
+  
+  The primary and worktree lanes get a new data folder path, and `lane clean --dry-run` lists the run history. The daemon migrates its database on the next start and deletes the history of lanes cleaned before. `devlanes lane gc` deletes lane data folders a clean could not delete.
+- [4e8e5636](https://github.com/devlanes-run/devlanes/commit/4e8e56369ab3a49b4bbd993b7af345a10abcbcad) Changed `devlanes lane clean` of a project's last lane to stop its shared containers, keeping their data.
+  
+  The next `devlanes start` in the project brings them up again.
+- [36cbe7b4](https://github.com/devlanes-run/devlanes/commit/36cbe7b497f773aac89902cb65a42ecfc8ec28fe) Changed `devlanes status` to report a running exec command, task or infra command as `running`, JSON included.
+  
+  Scripts and MCP consumers that matched `ready` for exec units or `starting` for running tasks should match `running`. A task stopped by its own `timeout:` now reads `failed` with reason `task_timeout` everywhere. `run` answers, `task` events and the last run in `run --list` use the same words as `status`: `exited`, `failed` or `stopped` (they said `done`, a stopped task `failed` in events and `interrupted` in the list).
+- [40afbabe](https://github.com/devlanes-run/devlanes/commit/40afbabe21bbc5431a65a080085d9e023dfbe5ce) Fixed the unit picker and the TUI choosing a `lane new` lane instead of the folder's own lane.
+- [a3adedfa](https://github.com/devlanes-run/devlanes/commit/a3adedfab7e0226e781dbfbd0d96cd5d3fd4421a) Changed the error for a config value with no value in the lane, such as an unset `${{ env.X }}`, to stop calling `devlanes.yaml` invalid.
+  
+  Its JSON code is `unresolved_value` instead of `config_error` or `lane_env_unresolved`, for services, tasks, `exec` and `env show` alike. Older clients show the code and message without the variable's name.
+- [4158a194](https://github.com/devlanes-run/devlanes/commit/4158a1943384987241920e909beed7bb111b584d) Fixed `devlanes lane new --start` and `daemon restart` through `devlanes mcp` starting lanes without the login shell's environment.
+- [4a4678ec](https://github.com/devlanes-run/devlanes/commit/4a4678ec5ac2014623f664c14b2ac83db7bd96c1) Changed `devlanes exec` and `env show` to fail on a misspelled `infra.<name>`, which `config check` now reports too.
+  
+  `exec` and `env show` leave out a value only while its container is stopped or Docker is not running, and say which. They refuse when Docker does not answer in time, and with compose files on a machine without the Docker CLI; pass the value with `--env KEY=...` or start Docker. `env export` and `env shell` now include `NODE_EXTRA_CA_CERTS`, `DENO_CERT`, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` unless the shell sets them.
+- [ed0c90d3](https://github.com/devlanes-run/devlanes/commit/ed0c90d3b5d7034af9ff0e5b01655a361a879d27) Fixed `after: services` tasks running when `devlanes start` timed out.
+  
+  `devlanes start` prints `services ready` once every service it started is ready, and `--json` gets a `lane.phase` event with `state: ready` before `services` `done`, which now comes after the wait. A `devlanes stop` of the lane during that wait ends the start with `start_cancelled`.
+- [679d435c](https://github.com/devlanes-run/devlanes/commit/679d435cefcd5ea90bbf431c141aa315dcb9ec2f) Changed `url ls`, `debug top`, `logs` and other reads to leave a project removed by `lane clean` removed.
+  
+  Only `start`, `restart`, `reload`, `run`, `exec`, `lane new`, `infra`, `env`, `url`, `status` and `lane ls` add the folder's project. Other reads in a project nobody started say so; `stop` and `lane gc` do nothing there. A `devlanes.yaml` that does not load now shows its error in `status` and `url ls`. `config check` warns about hostnames before the first start. A main checkout off the primary branch gets its lane on its first `status` or `start`, as other worktrees do.
+- [4158a194](https://github.com/devlanes-run/devlanes/commit/4158a1943384987241920e909beed7bb111b584d) Fixed `devlanes restart <unit>` through `devlanes mcp` keeping an `--env` value from an earlier command.
+- [e4cf749b](https://github.com/devlanes-run/devlanes/commit/e4cf749b66c80f3ce28a67fb338ad73e1698a03d) Fixed `devlanes with` leaving units running when Ctrl-C interrupted its start.
+  
+  `with` needs a daemon of this release: run `devlanes daemon restart` when it says the daemon is outdated.
+- [a4108390](https://github.com/devlanes-run/devlanes/commit/a4108390ab5093951c1075317bc93a2000030196) Fixed Windows units ended by a stop showing exit codes such as -1073741510, 255 or 1 instead of a signal, as on macOS and Linux.
+  
+  just recipes and Git's `bin\bash.exe` now show the code they return, `512` when their shell ended on Ctrl-C.
+- [f322ca79](https://github.com/devlanes-run/devlanes/commit/f322ca79aee9a20312c079c4a40709ce871fd32f) Changed `ready.log` to match the lines `devlanes logs` shows, so a line drawn over a spinner or progress text now matches.
+  
+  Text a program draws only on the alternate screen (full-screen terminal apps) no longer matches, and a prompt or a line still being redrawn matches once the program moves past it or pauses. Match a line the program prints before it switches to full screen, or use a `tcp` or `http` check. Trailing spaces are not part of a logged line, so end a pattern before them: `^password>` or `^password>$` instead of `"^password> "`.
+
 ## 0.12.0 — 2026-11-07
 
 ### Minor changes

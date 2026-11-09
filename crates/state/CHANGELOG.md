@@ -1,5 +1,19 @@
 # devlanes-state
 
+## 0.11.0 — 2026-11-09
+
+### Minor changes
+
+- [4e8e5636](https://github.com/devlanes-run/devlanes/commit/4e8e56369ab3a49b4bbd993b7af345a10abcbcad) Changed `devlanes lane clean` so a lane that comes back starts empty, without the old `--env` or history.
+  
+  The primary and worktree lanes get a new data folder path, and `lane clean --dry-run` lists the run history. The daemon migrates its database on the next start and deletes the history of lanes cleaned before. `devlanes lane gc` deletes lane data folders a clean could not delete.
+- [36cbe7b4](https://github.com/devlanes-run/devlanes/commit/36cbe7b497f773aac89902cb65a42ecfc8ec28fe) Changed `devlanes status` to report a running exec command, task or infra command as `running`, JSON included.
+  
+  Scripts and MCP consumers that matched `ready` for exec units or `starting` for running tasks should match `running`. A task stopped by its own `timeout:` now reads `failed` with reason `task_timeout` everywhere. `run` answers, `task` events and the last run in `run --list` use the same words as `status`: `exited`, `failed` or `stopped` (they said `done`, a stopped task `failed` in events and `interrupted` in the list).
+- [2ec16a0a](https://github.com/devlanes-run/devlanes/commit/2ec16a0a221370a4d826dd9b32a835c15e46a6cf) Changed `devlanes debug errors` to never count a requested stop as a crash, and to count deaths by signal and task timeouts.
+  
+  The state database gains a column, so an older devlanes cannot open it. Runs recorded before the upgrade are not counted.
+
 ## 0.10.0 — 2026-11-07
 
 Version bump only, to follow other packages.

@@ -1,5 +1,13 @@
 # devlanes-logs
 
+## 0.13.0 — 2026-11-09
+
+### Patch changes
+
+- [c69d9e36](https://github.com/devlanes-run/devlanes/commit/c69d9e36d60f3d73326f2d1a7d0fac3214461188) Fixed `devlanes logs -f --grep` and `--level` showing lines that arrive while following without filtering them.
+  
+  Lines that arrive while following also keep their colors and get the `--context` lines around matches, as the first page does.
+
 ## 0.7.1 ... 0.12.0 — 2026-11-07
 
 Version bump only, to follow other packages.
