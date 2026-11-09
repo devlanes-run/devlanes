@@ -535,7 +535,8 @@ async fn remote_use_switches_a_lane_between_boxes() {
             reply,
             Ok(
                 json!({"lane": "forkapp@0", "host": "beta", "previous": "alpha",
-                      "mirrored": true, "pending": false, "waits_for": null, "replaced": []})
+                      "mirrored": true, "pending": false, "waits_for": null,
+                      "nothing_to_mirror": false, "replaced": []})
             )
         );
         // The pooled connection to alpha is not reused for the next request.
@@ -660,6 +661,7 @@ async fn remote_use_switches_a_lane_between_boxes() {
             Ok(
                 json!({"lane": "forkapp@0", "host": "beta", "previous": "alpha",
                       "mirrored": false, "pending": true, "waits_for": "connect",
+                      "nothing_to_mirror": false,
                       "replaced": []})
             )
         );
@@ -897,6 +899,29 @@ async fn a_lane_without_hostnames_switches_by_its_port() {
         let seen = warnings_until_code(&mut frames, "lane_switched", "dbapp@0").await;
         none_of(&seen, &["port_in_use", "lane_skipped"]);
 
+        // A box lane with only a task has nothing this machine mirrors, and
+        // the reply says so rather than leaving `remote ls` to explain.
+        let tasks = repo(
+            &tmp.path,
+            "taskrepo",
+            "project: taskapp\ntasks:\n  hello: { run: \"echo hi\" }\n",
+        );
+        beta.h
+            .call(Method::LaneList, json!({}), cx(&tasks))
+            .await
+            .expect("box lane list");
+        let listed = eventually(SOON, || async {
+            (client.host_named("beta").await["lanes"] == 2).then_some(())
+        })
+        .await;
+        assert!(listed.is_some(), "{}", client.host_named("beta").await);
+        assert_eq!(
+            use_lane(&client, "taskapp@0", Some("beta")).await,
+            Ok(json!({"lane": "taskapp@0", "host": "beta", "previous": null,
+                      "mirrored": false, "pending": false, "waits_for": null,
+                      "nothing_to_mirror": true, "replaced": []}))
+        );
+
         session.close();
         let _ = events.await;
         client.stop().await;
@@ -957,7 +982,8 @@ async fn a_choice_and_this_machines_own_lane() {
         assert_eq!(
             reply,
             Ok(json!({"lane": "boxapp@0", "host": "box", "previous": null,
-                      "mirrored": true, "pending": false, "waits_for": null, "replaced": []}))
+                      "mirrored": true, "pending": false, "waits_for": null,
+                      "nothing_to_mirror": false, "replaced": []}))
         );
         assert!(answers(&client, "web.boxapp.localhost", "hello-from-box").await);
         let list = client
@@ -975,7 +1001,8 @@ async fn a_choice_and_this_machines_own_lane() {
         assert_eq!(
             reply,
             Ok(json!({"lane": "boxapp@0", "host": null, "previous": "box",
-                      "mirrored": true, "pending": false, "waits_for": null, "replaced": []}))
+                      "mirrored": true, "pending": false, "waits_for": null,
+                      "nothing_to_mirror": false, "replaced": []}))
         );
         assert!(!answers(&client, "web.boxapp.localhost", "hello-from-box").await);
         assert_eq!(client.host().await["chosen_lanes"], json!([]));
@@ -1303,6 +1330,7 @@ async fn local_takes_its_hostnames_back_from_another_projects_choice() {
             reply,
             Ok(json!({"lane": "shop@0", "host": null, "previous": "box",
                       "mirrored": true, "pending": false, "waits_for": null,
+                      "nothing_to_mirror": false,
                       "replaced": [{"lane": "boxapp@0", "host": "box"}]}))
         );
         assert_eq!(client.host().await["chosen_lanes"], json!([]));

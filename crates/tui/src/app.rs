@@ -11,7 +11,8 @@ use std::sync::Arc;
 use devlanes_client::restart::{self, Steps};
 use devlanes_proto::{
     ActorKind, AttachResult, Event, LaneSummary, LogLine, LogQuery, Method, ORPHANED, Page,
-    RpcError, RunParams, Selection, UnitSummary, events, remote::WaitsFor,
+    RpcError, RunParams, Selection, UnitSummary, events,
+    remote::{UseOutcome, WaitsFor},
 };
 use devlanes_term::{Progress, StartTracker};
 
@@ -4935,30 +4936,30 @@ impl App {
         let from = host.unwrap_or("this machine");
         match result {
             Ok(reply) => {
-                let flag = |key: &str| reply.get(key).and_then(Value::as_bool);
                 let previous = reply.get("previous").and_then(Value::as_str);
-                if flag("pending") == Some(true) {
-                    // A daemon from before `waits_for` made only a
-                    // disconnected box's choice pending.
-                    let waits_for = reply
-                        .get("waits_for")
-                        .cloned()
-                        .and_then(|value| serde_json::from_value::<WaitsFor>(value).ok())
-                        .unwrap_or(WaitsFor::Connect);
-                    self.set_notice(match waits_for {
-                        WaitsFor::Connect => {
-                            format!("{lane} will come from {from} once it connects")
-                        }
-                        WaitsFor::Mirror => {
-                            format!("{lane} will come from {from} once this machine mirrors it")
-                        }
-                    });
-                } else if flag("mirrored") == Some(false) {
-                    let notice = format!("{} is chosen but not mirrored yet", lane_of(host, lane));
-                    self.set_notice(notice);
-                } else if previous == host {
+                let notice = match UseOutcome::of_reply(&reply) {
+                    UseOutcome::Pending(WaitsFor::Connect) => {
+                        Some(format!("{lane} will come from {from} once it connects"))
+                    }
+                    UseOutcome::Pending(WaitsFor::Mirror) => Some(format!(
+                        "{lane} will come from {from} once this machine mirrors it"
+                    )),
+                    UseOutcome::NothingToMirror => Some(format!(
+                        "{} is chosen, but it only has tasks, which this machine does not mirror",
+                        lane_of(host, lane)
+                    )),
+                    UseOutcome::NotMirrored => Some(format!(
+                        "{} is chosen but not mirrored yet",
+                        lane_of(host, lane)
+                    )),
                     // Nothing switched, so no `lane_switched` follows.
-                    self.set_notice(format!("{} is already in use", lane_of(host, lane)));
+                    UseOutcome::Mirrored if previous == host => {
+                        Some(format!("{} is already in use", lane_of(host, lane)))
+                    }
+                    UseOutcome::Mirrored => None,
+                };
+                if let Some(notice) = notice {
+                    self.set_notice(notice);
                 }
             }
             // A local lane started meanwhile: offer the same stop and switch

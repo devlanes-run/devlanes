@@ -524,6 +524,18 @@ pub(crate) struct HostConn {
     code: pairing::GivenCode,
 }
 
+/// What [`HostConn::lane_built`] found about a box lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LaneBuild {
+    /// The mirror built it, or the link ended, so nothing is left to wait for.
+    Done,
+    /// The registry lists no unit of the lane this machine mirrors, such as
+    /// one with only tasks, so the mirror never builds it.
+    NothingToMirror,
+    /// The time ran out first.
+    TimedOut,
+}
+
 /// Shortest time between two [`wire::MIRROR_EVENT`]s for one box: a start on
 /// the box changes many units, and each reconcile would announce it again.
 const MIRROR_EVENT_EVERY: Duration = Duration::from_millis(250);
@@ -698,26 +710,30 @@ impl HostConn {
     /// Waits, at most `limit`, until the mirror built routes for box lane
     /// `lane`. The registry holds a new session's lanes before the link
     /// counts as connected, but the assignment counts a lane only once the
-    /// mirror built it, in its next reconcile. Returns false when the time
-    /// ran out first; true once the lane is built, the registry lists no unit
-    /// of it to mirror, or the link ended, since nothing is left to wait for.
-    pub(super) async fn lane_built(&self, lane: &str, limit: Duration) -> bool {
+    /// mirror built it, in its next reconcile.
+    pub(super) async fn lane_built(&self, lane: &str, limit: Duration) -> LaneBuild {
         // Subscribed before the first look: a reconcile that ends after it wakes the loop.
         let mut applied = self.applied.subscribe();
         let wait = async {
             loop {
-                let listed = mirror::mirrorable_units(&self.registry.current())
+                if self.ended() || lock(&self.view).built.contains(lane) {
+                    return LaneBuild::Done;
+                }
+                let registry = self.registry.current();
+                let listed = mirror::mirrorable_units(&registry)
                     .any(|unit| mirror::lane_ref(&unit.key.lane) == lane);
-                if !listed || self.ended() || lock(&self.view).built.contains(lane) {
-                    return;
+                if !listed {
+                    return LaneBuild::NothingToMirror;
                 }
                 // The sender lives as long as `self`, so this never fails.
                 if applied.changed().await.is_err() {
-                    return;
+                    return LaneBuild::Done;
                 }
             }
         };
-        tokio::time::timeout(limit, wait).await.is_ok()
+        tokio::time::timeout(limit, wait)
+            .await
+            .unwrap_or(LaneBuild::TimedOut)
     }
 
     /// `remote.state` payload for the current state, with the command that

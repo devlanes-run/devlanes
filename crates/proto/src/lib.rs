@@ -306,10 +306,13 @@ pub enum Method {
     /// choice wins: choices of other lanes it clashes with are deleted.
     ///
     /// Replies once the routes and listeners lead to the chosen lane:
-    /// `{lane, host, previous, mirrored, pending, waits_for, replaced}`, where
-    /// `previous` is the box that served the hostnames before (null for this
-    /// machine), `mirrored` whether the chosen lane serves them now and
-    /// `replaced` the deleted choices as `[{lane, host}]`. For `host: null`
+    /// `{lane, host, previous, mirrored, pending, waits_for,
+    /// nothing_to_mirror, replaced}`, where `previous` is the box that served
+    /// the hostnames before (null for this machine), `mirrored` whether the
+    /// chosen lane serves them now, `nothing_to_mirror` true when the chosen
+    /// box lane only has tasks, which are never mirrored, and `replaced` the
+    /// deleted choices as `[{lane, host}]`. Clients read the reply with
+    /// [`remote::UseOutcome::of_reply`]. For `host: null`
     /// these are the choices that took the lane's hostnames. A box known here
     /// but not connected keeps the choice until it connects, and a connected
     /// box whose lane this machine has not mirrored yet, such as right after
@@ -1453,6 +1456,45 @@ pub mod remote {
         Connect,
         /// This machine to mirror the lane of the connected box.
         Mirror,
+    }
+
+    /// What a `remote.use` reply says about the chosen lane, read the same
+    /// way by every client.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum UseOutcome {
+        /// The chosen lane serves the hostnames now.
+        Mirrored,
+        /// The choice applies once what it waits for happened.
+        Pending(WaitsFor),
+        /// The chosen box lane only has tasks, which this machine never
+        /// mirrors.
+        NothingToMirror,
+        /// Chosen, but not serving the hostnames for a reason `remote ls`
+        /// shows.
+        NotMirrored,
+    }
+
+    impl UseOutcome {
+        /// Reads a `remote.use` reply. A daemon from before `waits_for` made
+        /// only a disconnected box's choice pending, so a pending reply
+        /// without it waits for the box to connect. A reply without
+        /// `mirrored` counts as mirrored.
+        pub fn of_reply(reply: &serde_json::Value) -> Self {
+            let flag = |key: &str| reply.get(key).and_then(serde_json::Value::as_bool);
+            if flag("pending") == Some(true) {
+                let waits_for = reply
+                    .get("waits_for")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or(WaitsFor::Connect);
+                return Self::Pending(waits_for);
+            }
+            match (flag("mirrored"), flag("nothing_to_mirror")) {
+                (Some(false), Some(true)) => Self::NothingToMirror,
+                (Some(false), _) => Self::NotMirrored,
+                _ => Self::Mirrored,
+            }
+        }
     }
 
     /// Reads a field that must be present but may be `null`. Serde lets an

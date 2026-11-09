@@ -3089,12 +3089,19 @@ fn remote_use_says_where_the_lane_comes_from() {
         human(replacing),
         "acme@0 now comes from this machine. fork-a's lane is no longer mirrored.\nThe choice of fork-a's shop@0 is deleted, since it clashes.\n"
     );
+    // A daemon from before `waits_for` sends none: only a box that is not
+    // connected made a choice pending then.
     let mut offline = reply(json!("fork-b"), json!("fork-a"), false);
     offline["pending"] = json!(true);
-    offline["waits_for"] = json!("connect");
     assert_eq!(
         human(offline),
         "acme@0 will come from fork-b once it connects.\n"
+    );
+    let mut tasks = reply(json!("fork-b"), json!("fork-a"), false);
+    tasks["nothing_to_mirror"] = json!(true);
+    assert_eq!(
+        human(tasks),
+        "fork-b's acme@0 is chosen, but it only has tasks, which this machine does not mirror.\n"
     );
     // Connected, but the box's lane is not mirrored here yet.
     let mut unmirrored = reply(json!("fork-b"), json!("fork-a"), false);

@@ -942,27 +942,37 @@ async fn a_switch_refused_for_a_running_lane_offers_to_stop_it() -> TestResult {
 }
 
 /// A box that is not connected keeps the choice for when it connects, and a
-/// connected one for when its lane is mirrored here.
+/// connected one for when its lane is mirrored here. A lane with only tasks
+/// has nothing to mirror, and the notice says so.
 #[tokio::test]
-async fn a_pending_choice_says_what_it_waits_for() {
-    for (waits_for, notice) in [
-        ("connect", "acme@1 will come from fork-b once it connects"),
+async fn a_choice_that_does_not_serve_yet_says_why() {
+    for (fields, notice) in [
         (
-            "mirror",
+            json!({"pending": true, "waits_for": "connect"}),
+            "acme@1 will come from fork-b once it connects",
+        ),
+        (
+            json!({"pending": true, "waits_for": "mirror"}),
             "acme@1 will come from fork-b once this machine mirrors it",
+        ),
+        (
+            json!({"pending": false, "nothing_to_mirror": true}),
+            "fork-b's acme@1 is chosen, but it only has tasks, which this machine does not mirror",
         ),
     ] {
         let mut app = with_forks(120, 30).await;
+        let mut reply = json!({"lane": "acme@1", "host": "fork-b", "previous": "fork-a",
+                               "mirrored": false});
+        if let (Some(reply), Some(fields)) = (reply.as_object_mut(), fields.as_object()) {
+            reply.extend(fields.clone());
+        }
         let effects = app.update(Msg::LaneUsed {
             lane: "acme@1".into(),
             host: Some("fork-b".into()),
-            result: Ok(
-                json!({"lane": "acme@1", "host": "fork-b", "previous": "fork-a",
-                       "mirrored": false, "pending": true, "waits_for": waits_for}),
-            ),
+            result: Ok(reply),
         });
         let shown = app.notice.as_ref().map(|n| (n.text.as_str(), n.error));
-        assert_eq!(shown, Some((notice, false)), "{waits_for}");
+        assert_eq!(shown, Some((notice, false)), "{fields}");
         assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
     }
 }

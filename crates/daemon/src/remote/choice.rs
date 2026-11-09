@@ -15,7 +15,7 @@ use devlanes_state::RemoteLaneChoice;
 use serde_json::{Value, json};
 
 use super::{
-    Remotes,
+    LaneBuild, Remotes,
     assign::{Assignment, BoxLanes, Cause, Hold, LocalLane, PortUse, assign, clashing_choices},
     mirror, now_ms,
 };
@@ -439,7 +439,7 @@ impl Inner {
         });
         let built = match chosen {
             Some(conn) => conn.lane_built(&lane, APPLY_WAIT).await,
-            None => true,
+            None => LaneBuild::Done,
         };
         // One at a time, and against `remote disconnect`: the check, the
         // store and memory see the same choices.
@@ -448,12 +448,17 @@ impl Inner {
         let (_, before) = self.reassign_with(&local);
         let (_, boxes) = self.assign_inputs(&local);
         let mut waits_for = None;
+        let mut nothing_to_mirror = false;
         let (previous, replaced) = match &args.host {
             Some(host) => {
                 if !self.check_box_lane(host, &lane, &local).await? {
                     waits_for = Some(wire::WaitsFor::Connect);
-                } else if !built {
-                    waits_for = Some(wire::WaitsFor::Mirror);
+                } else {
+                    match built {
+                        LaneBuild::Done => {}
+                        LaneBuild::TimedOut => waits_for = Some(wire::WaitsFor::Mirror),
+                        LaneBuild::NothingToMirror => nothing_to_mirror = true,
+                    }
                 }
                 let pending = waits_for.is_some();
                 let hosts = boxes
@@ -564,6 +569,7 @@ impl Inner {
             "mirrored": mirrored,
             "pending": waits_for.is_some(),
             "waits_for": waits_for,
+            "nothing_to_mirror": nothing_to_mirror && !mirrored,
             // The lane's own choice, which `--local` deletes, is `previous`.
             "replaced": replaced
                 .iter()
