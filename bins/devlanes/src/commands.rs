@@ -167,11 +167,19 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             let paths = paths()?;
             // Before the request: switching to an installed update restarts the daemon.
             crate::update::startup(runtime, &paths).await;
-            let context = crate::driver::start_context(&request);
-            let code = rpc(cli, runtime, request).await?;
+            let context = request.context.clone();
+            let (code, started) = rpc_start(cli, runtime, request).await?;
             if code != 0 {
                 return Ok(code);
             }
+            // Scoped to the lane the start answered for: a cwd-only first `status`
+            // would register the cwd's project when the start named another one's.
+            let lane = started
+                .as_ref()
+                .and_then(|data| data.get("lane"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let context = devlanes_proto::Context { lane, ..context };
             crate::wiring::open_ui(runtime, &paths, Some(context)).await
         }
         Action::RpcThenOfferStart(request) => {
@@ -483,6 +491,15 @@ fn start_hint(method: Method, data: &Value) -> Option<Hint> {
 
 /// Streams events, renders the final result, and maps Ctrl-C to a detach.
 async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcError> {
+    rpc_start(cli, runtime, request).await.map(|(code, _)| code)
+}
+
+/// [`rpc`], also returning a `start`'s result when it answered with one.
+async fn rpc_start(
+    cli: &Cli,
+    runtime: &Runtime,
+    request: Request,
+) -> Result<(u8, Option<Value>), RpcError> {
     let paths = paths()?;
     let mut client = match request.method {
         // A daemon that cannot open state.db (STATE_LEGACY_SCHEMA) never starts, so
@@ -490,7 +507,9 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
         Method::DaemonResetState => match Client::connect(&paths).await {
             Ok(client) => client,
             Err(error) if error.is_not_running() => {
-                return reset_state_offline(runtime, &paths, request.context.yes).await;
+                return reset_state_offline(runtime, &paths, request.context.yes)
+                    .await
+                    .map(|code| (code, None));
             }
             Err(error) => return Err(rpc_error(error)),
         },
@@ -505,7 +524,7 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                         ..Rendered::default()
                     });
                 }
-                return Ok(0);
+                return Ok((0, None));
             }
             Err(error) => return Err(rpc_error(error)),
         },
@@ -524,7 +543,7 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
             Err(error) if error.is_not_running() => {
                 let rendered = daemon_not_running(runtime, &paths);
                 emit(&rendered);
-                return Ok(rendered.exit_code);
+                return Ok((rendered.exit_code, None));
             }
             Err(error) => return Err(rpc_error(error)),
         },
@@ -536,7 +555,8 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                 crate::notices::annotate_doctor(None, &mut data).await;
                 data["service"] = crate::daemon::service_report().await;
                 crate::local_doctor::add_wsl(&mut data).await;
-                return render_result(runtime, Method::Doctor, &data, None);
+                return render_result(runtime, Method::Doctor, &data, None)
+                    .map(|code| (code, None));
             }
             Err(error) => return Err(rpc_error(error)),
         },
@@ -732,7 +752,9 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
         _ = tokio::signal::ctrl_c() => {
             // Detaching is not a failure: the bar just goes.
             progress.finish(true).await;
-            return interrupted(cli, runtime, &paths, &request).await;
+            return interrupted(cli, runtime, &paths, &request)
+                .await
+                .map(|code| (code, None));
         }
     };
     progress.finish(matches!(result, Ok(0))).await;
@@ -750,7 +772,7 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
         }
         crate::notices::after_command(&mut client, runtime, &paths, method).await;
     }
-    result
+    result.map(|code| (code, started))
 }
 
 /// Ctrl-C during a request, per [`InterruptPolicy`]: services never stop, but a

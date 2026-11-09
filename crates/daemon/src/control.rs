@@ -17,8 +17,8 @@ use devlanes_core::{
     ports::PortName,
 };
 use devlanes_proto::{
-    Context, ExecParams, Method, Page, ResumePlan, RpcError, RunParams, Selection, UnitSummary,
-    events,
+    Context, ExecParams, Method, Page, ResumePlan, RpcError, RunParams, Selection,
+    StartCancelParams, UnitSummary, events,
 };
 use devlanes_resolve::ResolvedLane;
 use devlanes_state::DesiredState;
@@ -209,6 +209,7 @@ impl Inner {
                 start_id: Some(start_id),
                 arrival,
                 restoring: false,
+                accepted: selection.accepted.then(|| session.clone()),
             },
         );
         let mut result = self.with_lane_events(session, stream, start).await?;
@@ -362,6 +363,7 @@ impl Inner {
             start_id: Some(start_id),
             arrival,
             restoring: false,
+            accepted: selection.accepted.then(|| session.clone()),
         };
         let result = if selectors.is_empty() {
             let restart = self.restart_lane(&project, &lane, options);
@@ -371,6 +373,22 @@ impl Inner {
             self.with_lane_events(session, stream, restart).await?
         };
         serde_json::to_value(result).map_err(|e| internal("encode", e))
+    }
+
+    /// `start.cancel`: fires the cancel of the start `start_id`, on whichever
+    /// lane runs it. `{cancelled: false}` when no start has that id any more:
+    /// it already answered its own request.
+    pub(crate) fn start_cancel_method(&self, value: Value) -> Result<Value, RpcError> {
+        let args: StartCancelParams = required(value)?;
+        let start = self
+            .all_lanes()
+            .into_iter()
+            .flat_map(|(_, lane)| lane.running_starts())
+            .find(|start| start.start_id() == args.start_id);
+        if let Some(start) = &start {
+            start.cancel.cancel();
+        }
+        Ok(json!({"cancelled": start.is_some()}))
     }
 
     /// `resume`: starts every lane whose desired state is running, with this shell's env.
@@ -425,6 +443,7 @@ impl Inner {
                             start_id: Some(start_id),
                             arrival,
                             restoring: false,
+                            accepted: None,
                         },
                     )
                 },
@@ -497,6 +516,7 @@ impl Inner {
                             start_id: None,
                             arrival,
                             restoring: true,
+                            accepted: None,
                         },
                     )
                     .await;

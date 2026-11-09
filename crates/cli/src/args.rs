@@ -1284,6 +1284,8 @@ impl Cli {
                     transient: !args.keep,
                     // The command runs under the profiles, with or without `--keep`.
                     needs_profile_settings: true,
+                    // The start's id, so a Ctrl-C can end it in every output mode.
+                    accepted: true,
                     ..Selection::default()
                 })?;
                 return Ok(Action::With(crate::WithPlan {

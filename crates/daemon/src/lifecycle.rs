@@ -15,8 +15,8 @@ use devlanes_core::{
     env::Environment,
 };
 use devlanes_proto::{
-    Actor, Leftovers, LogQuery, RpcError, StartResult, StoppingStep, UnitFailureData, UnitSummary,
-    events,
+    Actor, Event, Leftovers, LogQuery, RpcError, StartResult, StoppingStep, UnitFailureData,
+    UnitSummary, events,
 };
 use devlanes_resolve::{Launch, ReadySpec, ResolvedCommand, ResolvedLane, ResolvedService};
 use devlanes_state::{CleanLane, DesiredState, TaskRunInput};
@@ -2135,6 +2135,9 @@ pub(crate) struct StartOptions {
     /// daemon's resume plan), so names the config no longer has are left out with
     /// a warning instead of failing the start.
     pub restoring: bool,
+    /// The request's session, told [`events::START_ACCEPTED`] once the start is
+    /// installed (`Selection::accepted`).
+    pub accepted: Option<Session>,
 }
 
 type Spawned = (UnitHost, Arc<dyn ManagedUnit>);
@@ -3268,6 +3271,8 @@ impl Inner {
         // whole-lane stop fires its token, a single-unit stop withdraws units
         // through it without waiting.
         let slot = lane.begin_start(&self.shutdown, start_id);
+        self.send_accepted(options.accepted.as_ref(), project, lane, start_id)
+            .await;
         // Before anything that can wait, so the units read `queued` the moment
         // the request arrives.
         self.mark_waiting(project, lane, &options, start_id);
@@ -3276,6 +3281,29 @@ impl Inner {
         self.forget_waiting(project, lane, start_id);
         self.end_start(project, lane, slot);
         result
+    }
+
+    /// Sends `start.accepted` for the start `start_id` to `session`, once its
+    /// control is installed on `lane`, so a `start.cancel` sent after it always
+    /// finds the start. A client that left never fails the start.
+    async fn send_accepted(
+        &self,
+        session: Option<&Session>,
+        project: &ProjectRt,
+        lane: &LaneRt,
+        start_id: u64,
+    ) {
+        let Some(session) = session else {
+            return;
+        };
+        let reference = lane.st().reference(&project.name());
+        let accepted = Event {
+            // Sent on the request only, outside the bus sequence.
+            seq: 0,
+            event: events::START_ACCEPTED.into(),
+            data: json!({"lane": reference, "start_id": start_id}),
+        };
+        let _ = session.event(accepted).await;
     }
 
     /// Ends a start, whatever it returned: uninstalls its control from the
@@ -4201,6 +4229,8 @@ impl Inner {
         }
         let start_id = options.start_id.unwrap_or_else(|| self.new_start_id());
         let slot = lane.begin_start(&self.shutdown, start_id);
+        self.send_accepted(options.accepted.as_ref(), project, lane, start_id)
+            .await;
         let result = self
             .run_restart(project, lane, selectors, options, &slot)
             .await
@@ -4688,6 +4718,7 @@ impl Inner {
                 start_id: None,
                 arrival: None,
                 restoring: false,
+                accepted: None,
             },
         )
         .await
@@ -5238,6 +5269,7 @@ mod tests {
             start_id: None,
             arrival: None,
             restoring: true,
+            accepted: None,
         };
         let (selection, dropped) =
             start_selection(&config, None, &[], &options, true).expect("selection");
