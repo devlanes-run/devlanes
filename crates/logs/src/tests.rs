@@ -1,6 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
-use crate::{Error, Frame, Framer, LogOptions, LogReader, MAX_LINE_BYTES, UnitLog, extract_level};
+use crate::{
+    Error, Frame, Framer, LogOptions, LogReader, MAX_LINE_BYTES, UnitLog, extract_level,
+    resolve_since,
+};
 use devlanes_proto::LogQuery;
 use std::{fs, io::Write, path::Path};
 
@@ -568,20 +571,28 @@ fn open_loads_closed_metadata_without_decoding() {
 #[test]
 /// A follower resuming a filtered tail gets the context a later line owes a
 /// match and the context that leads a later match, as one forward query would.
+/// A relative `since` resolved once at the first read keeps its window.
 fn resumed_queries_select_like_one_query() {
     let (_directory, mut log) = store(LogOptions::default());
+    // Line `i` is logged at `i` ms.
     let write = |log: &mut UnitLog, lines: std::ops::RangeInclusive<u64>| {
         for i in lines {
             let text = if i % 7 == 0 { "match" } else { "other" };
             log.ingest(format!("{text} {i}\n").as_bytes(), i).unwrap();
         }
     };
-    let query = LogQuery {
+    let relative = LogQuery {
         grep: Some("match".into()),
         context_lines: 2,
+        since: Some("2ms".into()),
         ..Default::default()
     };
     write(&mut log, 1..=8);
+    let first_read_at = 8;
+    let query = LogQuery {
+        since: Some(resolve_since("2ms", first_read_at).unwrap().to_string()),
+        ..relative.clone()
+    };
     let first = log
         .reader()
         .query_resumable(
@@ -610,11 +621,15 @@ fn resumed_queries_select_like_one_query() {
         followed.extend(next.page.items.iter().map(|l| l.seq));
         resume = next.resume;
     }
-    assert_eq!(followed, seqs(&mut log, &query));
-    assert_eq!(
-        followed,
-        [5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 19, 20, 21, 22]
-    );
+    let one_query: Vec<u64> = log
+        .query_at(&relative, first_read_at)
+        .unwrap()
+        .items
+        .iter()
+        .map(|l| l.seq)
+        .collect();
+    assert_eq!(followed, one_query);
+    assert_eq!(followed, [6, 7, 8, 9, 12, 13, 14, 15, 16, 19, 20, 21, 22]);
 }
 
 #[test]

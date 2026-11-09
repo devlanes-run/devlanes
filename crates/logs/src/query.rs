@@ -99,7 +99,7 @@ impl LogReader {
         let since = query
             .since
             .as_deref()
-            .map(|s| parse_since(s, now_ms))
+            .map(|s| resolve_since(s, now_ms))
             .transpose()?;
         let min_level = query
             .level
@@ -548,8 +548,11 @@ fn clip(line: &mut LogLine, budget: usize) -> Result<()> {
     Ok(())
 }
 
+/// A `since` value as Unix milliseconds: Unix milliseconds, RFC3339, or an
+/// integer followed by ms/s/m/h/d counted back from `now_ms`. Callers that
+/// read the same range several times resolve it once, so the window stays put.
 /// Duration subtraction saturates so querying beyond the epoch remains meaningful.
-fn parse_since(value: &str, now_ms: u64) -> Result<u64> {
+pub fn resolve_since(value: &str, now_ms: u64) -> Result<u64> {
     if let Ok(timestamp) = value.parse::<u64>() {
         return Ok(timestamp);
     }
