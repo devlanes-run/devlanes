@@ -1,5 +1,15 @@
 # devlanes-infra-docker
 
+## 0.6.0 — 2026-11-09
+
+### Patch changes
+
+- [a5309033](https://github.com/devlanes-run/devlanes/commit/a5309033e8d296987a2dd797dc81c0be182ae5b0) Fixed the proxy on Windows taking 2 seconds per connection to services that listen only on `::1`, such as Vite on `localhost`.
+  
+  Readiness checks of such services, port checks of infra containers that are not listening yet and connections a Windows box makes to its own services no longer wait either.
+- [28a6b933](https://github.com/devlanes-run/devlanes/commit/28a6b933ea008732ffc669eebbb0d3d615a159cb) Fixed container events, states and stats staying unavailable on macOS and Linux when Docker started after the devlanes daemon.
+- [a5113517](https://github.com/devlanes-run/devlanes/commit/a5113517be39affa095fab0364748fb863a080db) Fixed infra containers that restarted while devlanes reconnected to Docker keeping their old ports.
+
 ## 0.5.0 — 2026-11-07
 
 ### Patch changes

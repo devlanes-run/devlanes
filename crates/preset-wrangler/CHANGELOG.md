@@ -1,5 +1,9 @@
 # devlanes-preset-wrangler
 
+## 0.8.0 — 2026-11-09
+
+Version bump only, to follow other packages.
+
 ## 0.7.0 — 2026-11-07
 
 ### Patch changes

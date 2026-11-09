@@ -1,5 +1,9 @@
 # devlanes-update
 
+## 0.4.0 — 2026-11-09
+
+Version bump only, to follow other packages.
+
 ## 0.3.0 — 2026-11-07
 
 ### Patch changes

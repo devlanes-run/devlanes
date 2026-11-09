@@ -1,5 +1,25 @@
 # devlanes-resolve
 
+## 0.13.0 — 2026-11-09
+
+### Minor changes
+
+- [4a4678ec](https://github.com/devlanes-run/devlanes/commit/4a4678ec5ac2014623f664c14b2ac83db7bd96c1) Changed `devlanes exec` and `env show` to fail on a misspelled `infra.<name>`, which `config check` now reports too.
+  
+  `exec` and `env show` leave out a value only while its container is stopped or Docker is not running, and say which. They refuse when Docker does not answer in time, and with compose files on a machine without the Docker CLI; pass the value with `--env KEY=...` or start Docker. `env export` and `env shell` now include `NODE_EXTRA_CA_CERTS`, `DENO_CERT`, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` unless the shell sets them.
+- [087f74bb](https://github.com/devlanes-run/devlanes/commit/087f74bb4a2cfd4da7f7333eb7434172531a61dd) Changed `devlanes with --profile` to refuse a running lane whose profiles give its services other settings, before starting anything.
+  
+  Stop the lane, run `with` in another worktree, or name the services instead of the profile. A profile that only picks services works on a running lane whose profiles set no `env`, `run_scripts` or `infra`.
+
+### Patch changes
+
+- [f1506fb0](https://github.com/devlanes-run/devlanes/commit/f1506fb0b916116d646e079018aceb8850795bba) Fixed a service put back in the project file not showing as added when it had exited on its own.
+  
+  `devlanes wait` and `devlanes reload` answer not found for a service the project file no longer has once it stopped.
+- [d5747169](https://github.com/devlanes-run/devlanes/commit/d5747169e4c7d2f579e00d773f8c00a0105db59a) Changed `run_script` npm scripts on Windows to run without npm, so a stop reports the program's own exit code instead of `exit=1`.
+  
+  Scripts get npm's package and lifecycle variables and `node_modules\.bin` on `PATH`, but not npm's `npm_config_*` settings.
+
 ## 0.12.0 — 2026-11-07
 
 ### Patch changes

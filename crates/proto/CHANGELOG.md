@@ -1,5 +1,25 @@
 # devlanes-proto
 
+## 0.13.0 — 2026-11-09
+
+### Minor changes
+
+- [4158a194](https://github.com/devlanes-run/devlanes/commit/4158a1943384987241920e909beed7bb111b584d) Fixed `devlanes restart <unit>` through `devlanes mcp` keeping an `--env` value from an earlier command.
+
+### Patch changes
+
+- [94511d28](https://github.com/devlanes-run/devlanes/commit/94511d280c3a565085c90e60b3bbfbffe938d359) Fixed `devlanes remote use` right after `devlanes remote connect` saying the lane is chosen but not mirrored yet.
+  
+  A choice that applies later, once its box connects or its lane is mirrored, now sends the same `lane_switched` notice as one that applies at once, and `remote use` and the TUI say which of the two it waits for. Choosing a box lane with nothing to mirror now says so, instead of pointing to `remote ls`.
+- [9cd2bf62](https://github.com/devlanes-run/devlanes/commit/9cd2bf627bfaea87f7f786b6fe86e4507cebeef1) Added a `start.ended` event to `devlanes debug events`, sent once when each start request finishes.
+- [40afbabe](https://github.com/devlanes-run/devlanes/commit/40afbabe21bbc5431a65a080085d9e023dfbe5ce) Fixed the unit picker and the TUI choosing a `lane new` lane instead of the folder's own lane.
+- [087f74bb](https://github.com/devlanes-run/devlanes/commit/087f74bb4a2cfd4da7f7333eb7434172531a61dd) Changed `devlanes with --profile` to refuse a running lane whose profiles give its services other settings, before starting anything.
+  
+  Stop the lane, run `with` in another worktree, or name the services instead of the profile. A profile that only picks services works on a running lane whose profiles set no `env`, `run_scripts` or `infra`.
+- [e4cf749b](https://github.com/devlanes-run/devlanes/commit/e4cf749b66c80f3ce28a67fb338ad73e1698a03d) Fixed `devlanes with` leaving units running when Ctrl-C interrupted its start.
+  
+  `with` needs a daemon of this release: run `devlanes daemon restart` when it says the daemon is outdated.
+
 ## 0.12.0 — 2026-11-07
 
 ### Patch changes

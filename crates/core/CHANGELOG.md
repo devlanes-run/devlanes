@@ -1,5 +1,26 @@
 # devlanes-core
 
+## 0.7.0 — 2026-11-09
+
+### Minor changes
+
+- [e661615a](https://github.com/devlanes-run/devlanes/commit/e661615ab92e5077104877ea646e4be793c0850f) Fixed `devlanes reload 1` not saying that `1` is a lane, as `stop 1` does.
+  
+  `reload` takes globs and `+tag` like `stop`. A service name in `stop` or `reload` also covers a replica the file no longer has, such as `api.3` after `replicas: 2`.
+- [679d435c](https://github.com/devlanes-run/devlanes/commit/679d435cefcd5ea90bbf431c141aa315dcb9ec2f) Changed `url ls`, `debug top`, `logs` and other reads to leave a project removed by `lane clean` removed.
+  
+  Only `start`, `restart`, `reload`, `run`, `exec`, `lane new`, `infra`, `env`, `url`, `status` and `lane ls` add the folder's project. Other reads in a project nobody started say so; `stop` and `lane gc` do nothing there. A `devlanes.yaml` that does not load now shows its error in `status` and `url ls`. `config check` warns about hostnames before the first start. A main checkout off the primary branch gets its lane on its first `status` or `start`, as other worktrees do.
+
+### Patch changes
+
+- [d5747169](https://github.com/devlanes-run/devlanes/commit/d5747169e4c7d2f579e00d773f8c00a0105db59a) Changed `run_script` npm scripts on Windows to run without npm, so a stop reports the program's own exit code instead of `exit=1`.
+  
+  Scripts get npm's package and lifecycle variables and `node_modules\.bin` on `PATH`, but not npm's `npm_config_*` settings.
+- [20b17f7d](https://github.com/devlanes-run/devlanes/commit/20b17f7d42235555652ec632a2aebfa5eff929a8) Fixed `devlanes debug bundle` on Windows leaving the home directory in its files.
+- [96ac235b](https://github.com/devlanes-run/devlanes/commit/96ac235bb12d1e92be5a0d1e526f690e45e0727f) Changed Windows stops to type Ctrl-C into `pty: true` units that run Git's `sh`, so their programs shut down cleanly.
+  
+  A program that reads its terminal raw and ignores Ctrl-C now runs until `stop.timeout`. `run:` strings with `stop.signal: SIGINT` no longer get a launch note.
+
 ## 0.6.0 — 2026-11-07
 
 ### Patch changes

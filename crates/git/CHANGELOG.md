@@ -1,6 +1,6 @@
 # devlanes-git
 
-## 0.8.0 — 2026-11-07
+## 0.8.0 ... 0.9.0 — 2026-11-09
 
 Version bump only, to follow other packages.
 

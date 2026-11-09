@@ -1,5 +1,21 @@
 # devlanes-runner-windows
 
+## 0.9.0 — 2026-11-09
+
+### Patch changes
+
+- [96ac235b](https://github.com/devlanes-run/devlanes/commit/96ac235bb12d1e92be5a0d1e526f690e45e0727f) Fixed Windows stops of `pty: false` units running Git's `sh` or another MSYS program waiting for `stop.timeout`.
+- [96ac235b](https://github.com/devlanes-run/devlanes/commit/96ac235bb12d1e92be5a0d1e526f690e45e0727f) Fixed Windows units left by a previous daemon getting Ctrl-Break on `stop`, which skipped Node's `SIGINT` handlers.
+- [d5747169](https://github.com/devlanes-run/devlanes/commit/d5747169e4c7d2f579e00d773f8c00a0105db59a) Fixed `run:` lists and `devlanes with --` commands of MSYS programs on Windows expanding `*`, `?`, `[...]`, `{a,b}` and `~` in arguments.
+  
+  This covers Git's `usr\bin` shells and tools and MSYS2 and Cygwin programs. Arguments now arrive as written, as on macOS and Linux.
+- [96ac235b](https://github.com/devlanes-run/devlanes/commit/96ac235bb12d1e92be5a0d1e526f690e45e0727f) Changed Windows stops to type Ctrl-C into `pty: true` units that run Git's `sh`, so their programs shut down cleanly.
+  
+  A program that reads its terminal raw and ignores Ctrl-C now runs until `stop.timeout`. `run:` strings with `stop.signal: SIGINT` no longer get a launch note.
+- [a4108390](https://github.com/devlanes-run/devlanes/commit/a4108390ab5093951c1075317bc93a2000030196) Fixed Windows units ended by a stop showing exit codes such as -1073741510, 255 or 1 instead of a signal, as on macOS and Linux.
+  
+  just recipes and Git's `bin\bash.exe` now show the code they return, `512` when their shell ended on Ctrl-C.
+
 ## 0.8.0 — 2026-11-07
 
 ### Patch changes

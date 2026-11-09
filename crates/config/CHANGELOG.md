@@ -1,5 +1,25 @@
 # devlanes-config
 
+## 0.12.0 — 2026-11-09
+
+### Minor changes
+
+- [087f74bb](https://github.com/devlanes-run/devlanes/commit/087f74bb4a2cfd4da7f7333eb7434172531a61dd) Changed `devlanes with --profile` to refuse a running lane whose profiles give its services other settings, before starting anything.
+  
+  Stop the lane, run `with` in another worktree, or name the services instead of the profile. A profile that only picks services works on a running lane whose profiles set no `env`, `run_scripts` or `infra`.
+
+### Patch changes
+
+- [9d77691d](https://github.com/devlanes-run/devlanes/commit/9d77691d7aaefc4a5910d08afa5012da3bd24dd0) Fixed `after: services` tasks running when a service exits within half a second of starting.
+  
+  Every service now reads `starting` until it has run half a second and its `ready` check passed, so `devlanes status` and `devlanes wait` agree with `devlanes start`.
+- [4a4678ec](https://github.com/devlanes-run/devlanes/commit/4a4678ec5ac2014623f664c14b2ac83db7bd96c1) Changed `devlanes exec` and `env show` to fail on a misspelled `infra.<name>`, which `config check` now reports too.
+  
+  `exec` and `env show` leave out a value only while its container is stopped or Docker is not running, and say which. They refuse when Docker does not answer in time, and with compose files on a machine without the Docker CLI; pass the value with `--env KEY=...` or start Docker. `env export` and `env shell` now include `NODE_EXTRA_CA_CERTS`, `DENO_CERT`, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` unless the shell sets them.
+- [f322ca79](https://github.com/devlanes-run/devlanes/commit/f322ca79aee9a20312c079c4a40709ce871fd32f) Changed `ready.log` to match the lines `devlanes logs` shows, so a line drawn over a spinner or progress text now matches.
+  
+  Text a program draws only on the alternate screen (full-screen terminal apps) no longer matches, and a prompt or a line still being redrawn matches once the program moves past it or pauses. Match a line the program prints before it switches to full screen, or use a `tcp` or `http` check. Trailing spaces are not part of a logged line, so end a pattern before them: `^password>` or `^password>$` instead of `"^password> "`.
+
 ## 0.11.0 — 2026-11-07
 
 ### Patch changes
