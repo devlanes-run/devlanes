@@ -97,7 +97,7 @@ fn collisions_and_bad_hosts_are_refused() {
         ),
         (
             "infra:\n  external:\n    a: { address: '127.0.0.1:5050', hosts: 'a-${{ infra.nope.port }}.localhost' }\n",
-            "infra.external.a.hosts: unknown container `nope`",
+            "infra.external.a.hosts: unknown container or Compose service `nope`",
         ),
         (
             "infra:\n  external:\n    a: { address: '127.0.0.1:5050', hosts: 'a-${{ self.port }}.localhost' }\n",

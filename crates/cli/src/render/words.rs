@@ -445,6 +445,19 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             "Docker isn't running or can't be reached".into(),
             Some(Hint::command(["doctor"])),
         ),
+        // `exec` or the lane's `env` with a value that reads a container whose
+        // state Docker did not give in time.
+        "infra_unknown" => (
+            format!(
+                "{}, and Docker did not answer in time",
+                list(data, "keys")
+                    .iter()
+                    .map(|key| format!("{} needs infra {}", text(key, "key"), text(key, "infra")))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Some(Hint::command(["doctor"])),
+        ),
         // `daemon install` inside WSL, before it writes a systemd unit.
         "wsl_systemd_off" => (
             "systemd is not running in this WSL distro, so it cannot start the daemon".into(),
@@ -1751,17 +1764,25 @@ fn memory(data: &Value, key: &str) -> String {
 }
 
 /// The `left_out` entries of an `exec` or `env` answer, one line each:
-/// `DATABASE_URL left out: infra postgres is not up; devlanes infra up`.
+/// `DATABASE_URL left out: infra postgres is not up; devlanes infra up`, or
+/// `DATABASE_URL left out: Docker is not running; devlanes doctor`.
 pub(crate) fn left_out(data: &Value) -> Vec<String> {
     list(data, "left_out")
         .iter()
         .map(|entry| {
-            format!(
-                "{} left out: infra {} is not up; {}",
-                text(entry, "key"),
-                text(entry, "infra"),
-                Hint::command(["infra", "up"]).0
-            )
+            let key = text(entry, "key");
+            if text(entry, "reason") == "engine_not_running" {
+                format!(
+                    "{key} left out: Docker is not running; {}",
+                    Hint::command(["doctor"]).0
+                )
+            } else {
+                format!(
+                    "{key} left out: infra {} is not up; {}",
+                    text(entry, "infra"),
+                    Hint::command(["infra", "up"]).0
+                )
+            }
         })
         .collect()
 }

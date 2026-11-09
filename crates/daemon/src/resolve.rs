@@ -9,15 +9,15 @@ use std::{
 use devlanes_config::{ComposeFiles, ContainerConfig, PreparedContext, ProjectConfig, Run};
 use devlanes_core::ports::{PortBlock, PortName};
 use devlanes_proto::RpcError;
-use devlanes_resolve::{LaneLayers, ResolveError, ResolveInput, ResolvedLane};
-use devlanes_state::BlockOwner;
+use devlanes_resolve::{LaneFacts, ResolveError, ResolveInput, ResolvedLane};
+use devlanes_state::{Allocation, BlockOwner};
 use serde_json::{Value, json};
 
 use crate::{
     engine::Inner,
     integrations::{ContainerDecl, InfraPortNeed, InfraSpec, PortScope, SharedInfraSpec},
     model::{ConfigState, EnvMap, LaneRt, ProjectRt, Unassigned, unassigned},
-    registry::{lane_context, read_dotenv, store_error},
+    registry::{PrimaryWorktree, lane_context, read_dotenv, store_error},
 };
 
 /// Folder under the lane's data folder that holds the generated Compose override.
@@ -78,17 +78,6 @@ pub(crate) fn resolve_error(error: &ResolveError, lane: &str) -> RpcError {
         ),
     };
     RpcError::new(code, data, exit)
-}
-
-/// The `left_out` field of `exec` and lane-level `env` answers: each variable
-/// [`LaneLayers::unset`] names, as `{key, infra}` with the container it waits on.
-pub(crate) fn left_out(unset: &BTreeMap<String, String>) -> Value {
-    unset
-        .iter()
-        .map(|(key, container)| {
-            json!({"key": devlanes_core::env::fold_name(key.clone()), "infra": container})
-        })
-        .collect()
 }
 
 /// Config paths of `task` and everything its `steps` run, recursively (see
@@ -163,50 +152,6 @@ impl Inner {
             .await
     }
 
-    /// Resolves the lane without planning a unit, for its lane-level env
-    /// ([`ResolvedLane::lane_env`] and its [`LaneLayers`]) that `exec`, `with`
-    /// and `env show` use. The stored client env wins over `fallback`. While the
-    /// lane runs something, a project file that does not load leaves the last
-    /// good config in use, as for the lane's view.
-    pub(crate) async fn resolve_lane_env(
-        self: &Arc<Self>,
-        project: &Arc<ProjectRt>,
-        lane: &Arc<LaneRt>,
-        fallback: Arc<EnvMap>,
-    ) -> Result<(Arc<ResolvedLane>, LaneLayers), RpcError> {
-        let reference = lane.st().reference(&project.name());
-        let config = {
-            let st = lane.st();
-            if st.record.is_none() {
-                return Err(st
-                    .unassigned
-                    .clone()
-                    .or_else(|| st.last_error.clone())
-                    .unwrap_or_else(|| unassigned(&reference, Unassigned::NoRecord)));
-            }
-            match &st.config {
-                ConfigState::Loaded(_) => None,
-                _ => st.last_good.clone().filter(|_| st.any_running()),
-            }
-        };
-        let resolved = self
-            .resolve_planned(
-                project,
-                lane,
-                Some(fallback),
-                config,
-                None,
-                Some(&BTreeSet::new()),
-                false,
-            )
-            .await?;
-        let layers = resolved
-            .lane_layers()
-            .map_err(|error| resolve_error(error, &reference))?
-            .clone();
-        Ok((resolved, layers))
-    }
-
     /// Like [`Self::resolve_full`], against `config` instead of the lane's current
     /// one: a start keeps planning what it selected even if the file reloads.
     /// `only` limits the planned units as in [`devlanes_resolve::ResolveInput::only`].
@@ -252,7 +197,7 @@ impl Inner {
         dry: bool,
     ) -> Result<Arc<ResolvedLane>, RpcError> {
         let reference = lane.st().reference(&project.name());
-        let (config, allocation, env, mut overrides, profiles, infra_ns, index) = {
+        let (config, env, infra_ns) = {
             let st = lane.st();
             let config = match (config, &st.config) {
                 (Some(config), _) => config,
@@ -265,71 +210,28 @@ impl Inner {
                     return Err(RpcError::new("no_config", json!({"lane": reference}), 1));
                 }
             };
-            let allocation = st
-                .allocation
-                .clone()
-                .ok_or_else(|| unassigned(&reference, Unassigned::NoPorts))?;
             let env = st
                 .env
                 .clone()
                 .or(fallback)
                 .ok_or_else(|| RpcError::new("needs_env", json!({"lane": reference}), 1))?;
-            (
-                config,
-                allocation,
-                env,
-                st.overrides.clone(),
-                st.profiles.clone(),
-                st.infra().namespace_value(),
-                st.index(),
-            )
+            (config, env, st.infra().namespace_value())
         };
+        let mut inputs = self.lane_inputs(project, lane, &config).await?;
         if let Some(extra) = extra {
-            overrides.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+            inputs
+                .overrides
+                .extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
-        // The lane's profiles were valid when it started; one the config dropped since
-        // is left out, as a plain start leaves it out (with a warning there).
-        let profiles: Vec<String> = profiles
-            .into_iter()
-            .filter(|name| {
-                name == devlanes_proto::DEFAULT_PROFILE || config.profiles.contains_key(name)
-            })
-            .collect();
         use tracing::Instrument as _;
-        let facts = self.facts(project, lane)?;
-        // Every launch (service, task, hook, `exec`) is planned here, and may write to it.
+        // Every launch (service, task, hook) is planned here, and may write to it.
         if !dry {
             self.ensure_lane_data(project, lane)
                 .instrument(tracing::debug_span!("lane data"))
                 .await?;
         }
-        let (lane_dir, primary_dir) = self.config_dirs(project, lane);
-        let dotenv = read_dotenv(lane_dir, primary_dir)
-            .instrument(tracing::debug_span!("dotenv"))
-            .await;
-        let lanes_main = if index == Some(0) {
-            None
-        } else {
-            project.lane_by_index(0).and_then(|main| {
-                main.st()
-                    .view
-                    .as_ref()
-                    .map(|view| view.services_namespace.clone())
-            })
-        };
-        let projects = self.projects_namespace(project, lane);
-        let mut input = ResolveInput::new(&config, &facts, allocation.block, &allocation.offsets);
-        input.client_env = &env;
-        input.dotenv = &dotenv;
-        input.infra = &infra_ns;
-        input.lanes_main = lanes_main.as_ref();
-        input.projects = &projects;
-        input.profiles = &profiles;
-        input.overrides = &overrides;
+        let mut input = inputs.input(self, &config, &env, &infra_ns);
         input.contributors = if dry { &[] } else { &self.integ.contributors };
-        input.script_runners = &self.integ.script_runners;
-        input.ca_env = &self.integ.ca_env;
-        input.public_https_port = self.integ.routes.https_port();
         input.only = only;
         let resolved = devlanes_resolve::resolve_lane(input)
             .instrument(tracing::debug_span!(
@@ -352,6 +254,64 @@ impl Inner {
             return Err(error);
         }
         Ok(Arc::new(resolved))
+    }
+
+    /// What resolving the lane against `config` reads besides the client env
+    /// and infra: facts, ports, the lane's overrides and profiles, `.env`,
+    /// `lanes.main` and `projects`.
+    pub(crate) async fn lane_inputs(
+        &self,
+        project: &ProjectRt,
+        lane: &LaneRt,
+        config: &ProjectConfig,
+    ) -> Result<LaneInputs, RpcError> {
+        let (allocation, overrides, profiles, index) = {
+            let st = lane.st();
+            let allocation = st
+                .allocation
+                .clone()
+                .ok_or_else(|| unassigned(&st.reference(&project.name()), Unassigned::NoPorts))?;
+            (
+                allocation,
+                st.overrides.clone(),
+                st.profiles.clone(),
+                st.index(),
+            )
+        };
+        // The lane's profiles were valid when it started; one the config dropped since
+        // is left out, as a plain start leaves it out (with a warning there).
+        let profiles: Vec<String> = profiles
+            .into_iter()
+            .filter(|name| {
+                name == devlanes_proto::DEFAULT_PROFILE || config.profiles.contains_key(name)
+            })
+            .collect();
+        use tracing::Instrument as _;
+        let facts = self.facts(project, lane)?;
+        let (lane_dir, primary_dir) = self.config_dirs(project, lane);
+        let dotenv = read_dotenv(lane_dir, primary_dir)
+            .instrument(tracing::debug_span!("dotenv"))
+            .await;
+        let lanes_main = if index == Some(0) {
+            None
+        } else {
+            project.lane_by_index(0).and_then(|main| {
+                main.st()
+                    .view
+                    .as_ref()
+                    .map(|view| view.services_namespace.clone())
+            })
+        };
+        let projects = self.projects_namespace(project, lane);
+        Ok(LaneInputs {
+            facts,
+            allocation,
+            overrides,
+            profiles,
+            dotenv,
+            lanes_main,
+            projects,
+        })
     }
 
     /// `projects.<name>.services` for other projects with running lanes: the lane on the
@@ -599,11 +559,31 @@ impl Inner {
                 ));
             }
         };
-        let root = self.primary_path(project);
-        let (config_dir, _) = project.config_path();
-        let branch = branch.or_else(|| Some(project.st().primary_branch.clone()));
-        let facts = self.provisional_facts(&config, &root, branch.as_deref(), &config_dir);
-        let primary_dir = root.join(&config_dir);
+        let primary = PrimaryWorktree {
+            root: self.primary_path(project),
+            branch: branch.or_else(|| Some(project.st().primary_branch.clone())),
+            relative: project.config_path().0,
+        };
+        self.provisional_shared_spec(&config, project.name(), &primary, env)
+            .await
+    }
+
+    /// The shared fields of `config` evaluated as for a provisional lane 0 in
+    /// `primary` with the client env `env`.
+    async fn provisional_shared_spec(
+        &self,
+        config: &ProjectConfig,
+        project: String,
+        primary: &PrimaryWorktree,
+        env: Option<&EnvMap>,
+    ) -> Result<SharedInfraSpec, RpcError> {
+        let facts = self.provisional_facts(
+            config,
+            &primary.root,
+            primary.branch.as_deref(),
+            &primary.relative,
+        );
+        let primary_dir = primary.root.join(&primary.relative);
         let dotenv = read_dotenv(primary_dir.clone(), primary_dir.clone()).await;
         let client = env.cloned().unwrap_or_default();
         let raw = lane_context(
@@ -615,7 +595,93 @@ impl Inner {
             &client,
             &dotenv,
         );
-        shared_fields(&config, project.name(), primary_dir, &raw.prepare())
+        shared_fields(config, project, primary_dir, &raw.prepare())
+    }
+
+    /// The containers and Compose services `config` declares, which `config
+    /// check` holds `infra.<name>` against: [`crate::integrations::InfraProvider::declared`]
+    /// for a provisional lane 0 in `primary`. Runs Compose `config` at most,
+    /// never the engine.
+    pub(crate) async fn declared_names(
+        &self,
+        config: &ProjectConfig,
+        primary: &PrimaryWorktree,
+        env: Option<&EnvMap>,
+    ) -> Result<BTreeSet<String>, RpcError> {
+        let shared = self
+            .provisional_shared_spec(config, config.project.clone(), primary, env)
+            .await?;
+        let state_dir = self
+            .project_data_path(&config.project)
+            .join("provisional")
+            .join(COMPOSE_DIR);
+        let spec = InfraSpec {
+            project: shared.project,
+            lane: 0,
+            lane_dir: shared.primary_dir.clone(),
+            primary_dir: shared.primary_dir,
+            compose_files: shared.compose_files,
+            project_name: shared.project_name,
+            exclude: shared.exclude,
+            per_lane: shared.per_lane,
+            profiles: shared.profiles,
+            env: shared.env,
+            // Names only: validation knows the plain containers from the file.
+            containers: Vec::new(),
+            block: (0, 0),
+            shared_block: None,
+            ports: BTreeMap::new(),
+            state_dir,
+        };
+        self.integ
+            .infra
+            .declared(&spec)
+            .await
+            .map_err(RpcError::from)
+    }
+}
+
+/// What [`Inner::lane_inputs`] gathers.
+pub(crate) struct LaneInputs {
+    facts: LaneFacts,
+    allocation: Allocation,
+    /// The lane's `--env` overrides.
+    pub overrides: EnvMap,
+    /// The lane's profiles that `config` still defines.
+    profiles: Vec<String>,
+    dotenv: EnvMap,
+    lanes_main: Option<Value>,
+    projects: Value,
+}
+
+impl LaneInputs {
+    /// The resolver's input against `config`, with the client env `env` and
+    /// the infra namespace `infra`, the CA env and HTTPS port of `inner`, and
+    /// no contributors.
+    pub(crate) fn input<'a>(
+        &'a self,
+        inner: &'a Inner,
+        config: &'a ProjectConfig,
+        env: &'a EnvMap,
+        infra: &'a Value,
+    ) -> ResolveInput<'a> {
+        let mut input = ResolveInput::new(
+            config,
+            &self.facts,
+            self.allocation.block,
+            &self.allocation.offsets,
+        );
+        input.client_env = env;
+        input.dotenv = &self.dotenv;
+        input.infra = infra;
+        input.lanes_main = self.lanes_main.as_ref();
+        input.projects = &self.projects;
+        input.profiles = &self.profiles;
+        input.overrides = &self.overrides;
+        input.script_runners = &inner.integ.script_runners;
+        input.ca_env = &inner.integ.ca_env;
+        input.public_https_port = inner.integ.routes.https_port();
+        input
     }
 }
 

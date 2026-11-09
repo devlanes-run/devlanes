@@ -171,6 +171,39 @@ pub(crate) struct LaneView {
     pub services_namespace: Value,
 }
 
+/// What a unit run was launched with. Memory only, never state.db: it holds
+/// environment values.
+#[derive(Default)]
+pub(crate) struct LaunchRecord {
+    /// Effective environment with provenance, for `env --explain`.
+    pub env: Environment,
+    /// Launch notes, for `env --explain`.
+    pub notes: Vec<String>,
+    /// An exec run's lane variables left out because the container they read
+    /// was down, for `env show` to name.
+    pub left_out: BTreeMap<String, LeftOut>,
+}
+
+/// A variable a command outside a unit runs without.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LeftOut {
+    /// The declared container it reads.
+    pub infra: String,
+    /// Why that container does not run.
+    pub reason: devlanes_resolve::DownReason,
+}
+
+impl LaunchRecord {
+    /// The record of a service, task or infra command run from its plan.
+    pub(crate) fn planned(launch: &devlanes_resolve::Launch) -> Self {
+        Self {
+            env: crate::lifecycle::copy_env(&launch.env),
+            notes: launch.notes.clone(),
+            left_out: BTreeMap::new(),
+        }
+    }
+}
+
 /// A spawned unit and its static facts.
 pub(crate) struct UnitRec {
     pub host: UnitHost,
@@ -183,13 +216,8 @@ pub(crate) struct UnitRec {
     pub autostart: bool,
     pub stop: StopPolicy,
     pub literal_port: Option<u16>,
-    /// Effective environment with provenance for `env --explain`.
-    pub env: Arc<Environment>,
-    /// Launch notes of this run, for `env --explain`.
-    pub notes: Vec<String>,
-    /// An exec run's lane variables left out because the infra container they
-    /// read was not up (variable to container), for `env show` to name.
-    pub left_out: BTreeMap<String, String>,
+    /// What this run was launched with, for `env show <unit>`.
+    pub launch: Arc<LaunchRecord>,
     /// Last log lines captured when the unit failed, for proxy pages and errors.
     pub failure_tail: Vec<String>,
     /// `failure_tail` with colors; empty when it had none.
@@ -674,6 +702,26 @@ impl LaneSt {
     /// True while a supervised unit or a previous daemon's orphan runs here.
     pub(crate) fn any_running(&self) -> bool {
         self.any_alive() || !self.orphans.is_empty()
+    }
+
+    /// The config the lane's layout and commands outside a unit use: the loaded
+    /// one, else, while something runs, the last good one, so running units keep
+    /// what they started with while the file is broken. `reference` names the
+    /// lane in an `elsewhere` error.
+    pub(crate) fn effective_config(
+        &self,
+        reference: Option<&str>,
+    ) -> Result<Arc<ProjectConfig>, RpcError> {
+        let kept = self.last_good.clone().filter(|_| self.any_running());
+        match (&self.config, kept) {
+            (ConfigState::Loaded(config), _) => Ok(config.clone()),
+            (_, Some(config)) => Ok(config),
+            (ConfigState::Invalid(error), None) => Err(error.clone()),
+            (ConfigState::Missing, None) => {
+                Err(RpcError::new("no_config", json!({"path": self.path}), 1))
+            }
+            (ConfigState::Elsewhere(other), None) => Err(elsewhere_error(other, reference)),
+        }
     }
 
     /// The lane's live infra.

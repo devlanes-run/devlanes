@@ -18,8 +18,8 @@ use devlanes_core::{
     ports::{PortBlock, PortName},
 };
 use devlanes_resolve::{
-    ReadySpec, ResolveError, ResolveInput, detect_platform, lane_layout, port_needs,
-    profile_summaries, resolve_lane, retain_autostart, select, select_profiles,
+    ReadySpec, ResolveError, ResolveInput, detect_platform, lane_command_env, lane_layout,
+    port_needs, profile_summaries, resolve_lane, retain_autostart, select, select_profiles,
 };
 use serde_json::json;
 use support::*;
@@ -535,7 +535,7 @@ async fn multi_profile_env_and_infra() {
 /// The lane-level env (`exec`, `with`, `env show`) leaves out entries that read
 /// `self` or `replica`, applies profile env, keeps values out of `Debug`, and
 /// fails with the entry's path when one does not evaluate.
-async fn lane_layers_leave_out_per_unit_entries() {
+async fn command_env_leaves_out_per_unit_entries() {
     let yaml = r#"project: demo
 global_env:
   A: secret-a
@@ -548,21 +548,18 @@ profiles:
   p:
     env: { P: "${{ lane.index }}", Q: "${{ self.name }}" }
 "#;
-    let resolve = |yaml: String| async move {
+    let resolve = |yaml: String| {
         let config = parse(&yaml);
         let facts = facts("demo", 1, Some("x"));
         let (block, offsets) = allocation(&config, 21_000, &[]);
         let client = client_env();
         let profiles = vec!["p".to_owned()];
-        let only = BTreeSet::new();
         let mut input = ResolveInput::new(&config, &facts, block, &offsets);
         input.client_env = &client;
         input.profiles = &profiles;
-        input.only = Some(&only);
-        resolve_lane(input).await.expect("resolves")
+        lane_command_env(&input, &BTreeMap::new())
     };
-    let lane = resolve(yaml.to_owned()).await;
-    let layers = lane.lane_layers().expect("evaluates");
+    let layers = resolve(yaml.to_owned()).expect("evaluates");
     assert_eq!(
         layers.global,
         BTreeMap::from([
@@ -571,11 +568,10 @@ profiles:
         ])
     );
     assert_eq!(layers.profile, BTreeMap::from([("P".into(), "1".into())]));
-    assert!(lane.services.is_empty());
-    assert!(!format!("{lane:?}").contains("secret-a"));
+    assert!(!format!("{layers:?}").contains("secret-a"));
 
-    let broken = resolve(yaml.replace("A: secret-a", "A: \"${{ env.MISSING }}\"")).await;
-    match broken.lane_layers() {
+    let broken = resolve(yaml.replace("A: secret-a", "A: \"${{ env.MISSING }}\""));
+    match broken {
         Err(ResolveError::Expression { path, .. }) => assert_eq!(path, "global_env.A"),
         other => panic!("expected an expression error, got {other:?}"),
     }
@@ -649,8 +645,8 @@ async fn public_https_port() {
             lane.services["web"].launch.env.values["VITE_API_URL"],
             api_url
         );
-        assert_eq!(lane.lane_env()["DEVLANES_PUBLIC_URL_API"], api_url);
-        assert_eq!(lane.lane_env()["DEVLANES_PUBLIC_URL_WEB"], web_url);
+        assert_eq!(layout.lane_env()["DEVLANES_PUBLIC_URL_API"], api_url);
+        assert_eq!(layout.lane_env()["DEVLANES_PUBLIC_URL_WEB"], web_url);
         assert_eq!(
             lane.services_namespace()["api"]["public_url"],
             json!(api_url.as_str())
@@ -964,8 +960,16 @@ async fn run_scripts_remap() {
 #[tokio::test]
 /// `lane_env` carries one public URL per service, falling back to the internal URL.
 async fn public_url_variables() {
-    let lane = plain(FULL, 2).await;
-    let env = lane.lane_env();
+    let config = parse(FULL);
+    let facts = facts(&config.project, 2, Some("main"));
+    let (block, offsets) = allocation(&config, 21_000, &[]);
+    let infra = infra();
+    let client = client_env();
+    let mut input = ResolveInput::new(&config, &facts, block, &offsets);
+    input.infra = &infra;
+    input.client_env = &client;
+    let layout = lane_layout(&input).expect("layout");
+    let env = layout.lane_env();
     assert_eq!(
         env["DEVLANES_PUBLIC_URL_CRM_API"],
         "https://crm.acme2.localhost"
@@ -976,7 +980,7 @@ async fn public_url_variables() {
     );
     assert_eq!(
         env["DEVLANES_PUBLIC_URL_PAGES_SERVER"],
-        lane.services["pages-server"].url
+        layout.services["pages-server"].url
     );
     assert_eq!(env["DEVLANES_LANE"], "2");
     assert!(!env.contains_key("PORT"));
@@ -1457,7 +1461,6 @@ async fn only_plans_the_named_units() {
         format!("{:?}", full.teardown.get("database"))
     );
     assert_eq!(part.services_namespace(), full.services_namespace());
-    assert_eq!(part.lane_env(), full.lane_env());
     assert_eq!(scripts, ["db-deploy", "start"], "only migrate and seed");
 }
 

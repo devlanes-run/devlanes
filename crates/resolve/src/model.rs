@@ -129,7 +129,7 @@ impl LaneLayout {
     /// `devlanes with`, `devlanes env show`): `DEVLANES`, `DEVLANES_LANE_PROJECT`,
     /// `DEVLANES_LANE`, `DEVLANES_LANE_NAME`, `DEVLANES_LANE_DATA`,
     /// `DEVLANES_PUBLIC_URL_<SERVICE>` for every service and the CA variables.
-    /// `global_env` and profile `env` are not here: see [`ResolvedLane::lane_layers`].
+    /// [`crate::lane_command_env`] adds `global_env` and profile `env`.
     pub fn lane_env(&self) -> &BTreeMap<String, String> {
         &self.lane_env
     }
@@ -435,8 +435,6 @@ pub struct ResolvedLane {
     /// unit, so an unrelated broken service does not block a start.
     pub errors: IndexMap<String, ResolveError>,
     pub warnings: Vec<String>,
-    pub(crate) lane_env: BTreeMap<String, String>,
-    pub(crate) lane_layers: Result<LaneLayers, ResolveError>,
     pub(crate) services_namespace: Value,
 }
 
@@ -461,44 +459,7 @@ pub enum DownReason {
     EngineNotRunning,
 }
 
-/// The `global_env` and profile `env` values of a lane outside any unit. `Debug`
-/// prints keys only, since values can carry secrets.
-#[derive(Clone)]
-pub struct LaneLayers {
-    pub global: BTreeMap<String, String>,
-    pub profile: BTreeMap<String, String>,
-    /// Entries left out because they read an `infra.<container>` value and the
-    /// lane's infra is not up, keyed by variable, with that container's name.
-    pub unset: BTreeMap<String, String>,
-}
-
-impl fmt::Debug for LaneLayers {
-    /// Prints only the keys.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LaneLayers")
-            .field("global", &self.global.keys().collect::<Vec<_>>())
-            .field("profile", &self.profile.keys().collect::<Vec<_>>())
-            .field("unset", &self.unset)
-            .finish()
-    }
-}
-
 impl ResolvedLane {
-    /// See [`LaneLayout::lane_env`].
-    pub fn lane_env(&self) -> &BTreeMap<String, String> {
-        &self.lane_env
-    }
-
-    /// The `global_env` and profile `env` entries that read neither `self` nor
-    /// `replica`, evaluated once for the lane, for commands outside a unit. Entries
-    /// that read them have no value without a unit and are left out, as are those
-    /// that read infra the lane has not started ([`LaneLayers::unset`]). Profiles
-    /// apply in order, later ones winning. Otherwise the first failing entry in
-    /// declaration order is the error, the same one every unit of the lane fails with.
-    pub fn lane_layers(&self) -> Result<&LaneLayers, &ResolveError> {
-        self.lane_layers.as_ref()
-    }
-
     /// See [`LaneLayout::services_namespace`].
     pub fn services_namespace(&self) -> &Value {
         &self.services_namespace

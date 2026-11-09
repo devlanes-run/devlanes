@@ -10,12 +10,7 @@ use std::{
 };
 
 use devlanes_config::OpaqueExtensions;
-use devlanes_core::{
-    LaunchSpec, TerminalSize,
-    contrib::runtime_ca_env,
-    env::{EnvLayer, assemble},
-    ports::PortName,
-};
+use devlanes_core::{LaunchSpec, TerminalSize, ports::PortName};
 use devlanes_proto::{
     Context, ExecParams, Method, Page, ResumePlan, RpcError, RunParams, Selection, UnitSummary,
     events,
@@ -28,9 +23,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     Session,
+    command_env::CommandEnvRequest,
     engine::{Inner, LanePair, carries_env, confirmation, params, required},
     lifecycle::{Cleaned, SpawnRequest, StartOptions, TaskOutcome},
-    model::{EnvMap, Kind, LaneRt, LaneView, ProjectRt, is_mine, lane_summary, lock, unit_summary},
+    model::{
+        EnvMap, Kind, LaneRt, LaneView, LaunchRecord, ProjectRt, is_mine, lane_summary, lock,
+        unit_summary,
+    },
     registry::{PrimaryWorktree, internal, store_error},
     stream::LaneEvents,
     target::{Found, LaneOrFile, Policy},
@@ -958,39 +957,31 @@ impl Inner {
         }
         // A client that sends no env (`devlanes mcp` first tries without) gets the
         // lane's, or `needs_env` instead of a process without PATH.
-        if lane.st().env.is_none() {
-            let reference = lane.st().reference(&project.name());
-            return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
-        }
-        let (resolved, layers) = self
-            .resolve_lane_env(&project, &lane, Arc::default())
-            .await?;
-        let mut left_out = layers.unset.clone();
-        left_out.retain(|key, _| !args.env.contains_key(key));
-        let (client, reference) = {
+        let (shell, reference) = {
             let st = lane.st();
-            (
-                st.env.as_deref().cloned().unwrap_or_default(),
-                st.reference(&project.name()),
-            )
+            (st.env.clone(), st.reference(&project.name()))
         };
-        let lane_env = resolved.lane_env();
-        let runtime_ca = runtime_ca_env(lane_env, |name| {
-            client.contains_key(name) || args.env.contains_key(name)
-        });
+        let Some(shell) = shell else {
+            return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
+        };
+        // What the command runs may write to the lane's data folder.
+        self.ensure_lane_data(&project, &lane).await?;
+        let command = self
+            .command_env(
+                &project,
+                &lane,
+                CommandEnvRequest {
+                    shell: Some(&shell),
+                    overrides: &args.env,
+                },
+            )
+            .await?;
         let cwd = if context.cwd.as_os_str().is_empty() {
             lane.st().path.clone()
         } else {
             context.cwd.clone()
         };
-        let environment = assemble([
-            (EnvLayer::Client, client),
-            (EnvLayer::Contributor, runtime_ca),
-            (EnvLayer::Devlanes, lane_env.clone()),
-            (EnvLayer::Global, layers.global),
-            (EnvLayer::Profile, layers.profile),
-            (EnvLayer::Override, args.env.clone()),
-        ]);
+        let launch = Arc::new(LaunchRecord::from(command));
         let request = SpawnRequest {
             name: args.name.clone(),
             kind: Kind::Exec,
@@ -998,11 +989,11 @@ impl Inner {
                 program: program.clone(),
                 args: rest.to_vec(),
                 cwd,
-                env: environment.values.clone(),
+                env: launch.env.values.clone(),
                 pty: args.pty,
                 size: TerminalSize::default(),
             },
-            env: Arc::new(environment),
+            launch: launch.clone(),
             files: Vec::new(),
             actor: context.actor.clone(),
             ports: BTreeMap::new(),
@@ -1020,25 +1011,19 @@ impl Inner {
             role: "exec",
             keep_awake: false,
             fingerprint: None,
-            notes: Vec::new(),
         };
         // Held until the unit is recorded, so a clean or reset that begins meanwhile
         // waits and then stops it, or refuses it once the lane is released.
         let (adhoc, _) = lane.enter_adhoc(&self.shutdown).await;
         self.spawn_unit(&project, &lane, request).await?;
         drop(adhoc);
-        let mut st = lane.st();
-        let summary = match st.units.get_mut(&args.name) {
-            Some(rec) => {
-                rec.left_out = left_out.clone();
-                unit_summary(&reference, &args.name, rec)
-            }
+        let summary = match lane.st().units.get(&args.name) {
+            Some(rec) => unit_summary(&reference, &args.name, rec),
             None => UnitSummary::default(),
         };
-        drop(st);
         let mut result = serde_json::to_value(summary).map_err(|e| internal("encode", e))?;
-        if !left_out.is_empty() {
-            result["left_out"] = crate::resolve::left_out(&left_out);
+        if !launch.left_out.is_empty() {
+            result["left_out"] = crate::command_env::left_out(&launch.left_out);
         }
         Ok(result)
     }
@@ -1653,6 +1638,30 @@ impl Inner {
             Err(error) => return Err(internal("encode", error)),
         };
         warnings.extend(unknown);
+        // Compose service names come from the Compose model, which validation
+        // cannot read; without them `infra.<name>` is checked against nothing.
+        if config.infra.compose.is_some() {
+            let env = match &target {
+                LaneOrFile::Lane((_, lane)) => lane.st().env.clone(),
+                LaneOrFile::File { .. } => None,
+            }
+            .or_else(|| carries_env(context));
+            match self.declared_names(&config, &primary, env.as_deref()).await {
+                Ok(declared) => {
+                    let names = declared.into_iter().collect();
+                    devlanes_config::validate_with_compose_services(&config, &names).map_err(
+                        |error| crate::model::config_error(&config.sources.locate(error)),
+                    )?;
+                }
+                Err(error) => warnings.push(json!({
+                    "path": "infra.compose",
+                    "message": format!(
+                        "Compose service names were not checked: {}",
+                        error.data["message"].as_str().unwrap_or(&error.code)
+                    ),
+                })),
+            }
+        }
         let mut result = json!({"project": report.project, "path": file});
         let laid_out = match &target {
             LaneOrFile::Lane((project, lane)) if lane.st().view.is_some() => {
