@@ -42,6 +42,16 @@ The daemon owns managed resources and SQLite. Clients own rendering and actor de
 - Preserve the author's voice. Don't force collective language ("we"), unnecessary enthusiasm, artificial humility, or exaggerated certainty.
 - Treat these as patterns to avoid overusing, not absolute bans. Favor context and natural writing over rigid rules.
 
+## Documentation
+
+`docs/` is the public documentation, published at devlanes.run/docs from the latest release tag. `skills/devlanes/` is the skill people install into their coding agents. Load the `devlanes-docs` skill (`.agents/skills/devlanes-docs/SKILL.md`) before changing either, and before finishing any change a devlanes user could notice.
+
+- Every pull request description has a `Docs:` line: the pages it changed, or `none` with the reason.
+- The command and config reference pages are generated. Change the help text in `crates/cli` or the doc comments in `crates/config`, not the pages.
+- The docs describe devlanes as it is: no history, no removed features, no plans.
+- One page owns the details of a fact, and other pages link to it. Do not add to the end of the nearest page.
+- Contributor material goes in `CONTRIBUTING.md`, not in `docs/`.
+
 ## Crate READMEs
 
 Every crate (and `bins/devlanes`) has a `README.md`. It is for a person deciding what the crate is for, not a replacement for the code or a changelog. Keep it short and in this order:
