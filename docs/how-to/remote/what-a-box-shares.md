@@ -4,7 +4,7 @@ description: Keep a service or container on the box, and make a server devlanes 
 kind: how-to
 ---
 
-A connected machine mirrors each service and container that the box's lanes run, with its ports and hostnames. You can keep some of them on the box, and add a server you run there yourself.
+A connected machine mirrors each service and container that the box's lanes run, with its ports and hostnames. You can keep some of them on the box, and add a server you run there yourself. Environments, secrets and logs stay on the box whatever you share, and [Remote mirroring](../../concepts/remote-mirroring.md) lists what crosses.
 
 ::example{slug="remote-docker-box"}
 
@@ -18,25 +18,27 @@ Mark the service as hidden. The machines that connect never learn its name, port
 # devlanes.local.yaml on the box
 services:
   admin:
-    run_script:
-      file: package.json
-      name: dev
-    hosts: "admin.${{ lane.domain }}"
     hidden: true
 ```
 
-On the box itself nothing changes: the service runs, `devlanes status` lists it and the box's proxy routes its hostname. Put [`services.<name>.hidden`](/docs/reference/config/project/services/) in the project file instead when the whole team keeps that service on their boxes.
+On the box itself the service runs as before, and the box's proxy routes its hostname. Put [`services.<name>.hidden`](/docs/reference/config/project/services/) in the project file instead when the whole team keeps that service on their boxes.
+
+A service that already runs keeps what it started with, and a reload leaves it alone, since the flag does not change how it runs. Restart it on the box to apply the change.
+
+```console title="~/dev/myapp on the box"
+$ devlanes restart admin
+```
 
 ## Keep a container on the box
 
-Containers are hidden by name, in one list for the project.
+Containers are hidden by name, in one list for the project. The names are those of [`infra.hidden`](/docs/reference/config/project/infra/): Compose services or plain containers.
 
 ```yaml devlanes
 infra:
   hidden: [postgres]
 ```
 
-A tool on your machine that used the container's port, such as a database client, then has nothing to reach, while services on the box keep using it. The names are those of [`infra.hidden`](/docs/reference/config/project/infra/): Compose services or plain containers.
+A tool on your machine that used the container's port, such as a database client, then has nothing to reach, while services on the box keep using it.
 
 ## Mirror a server devlanes does not run
 
@@ -51,11 +53,11 @@ infra:
       hosts: "files.${{ lane.domain }}"
 ```
 
-Your machine mirrors the port and routes the hostname while a lane of the project runs something on the box, a service, a task, a command or its containers. The box connects to exactly the declared address, so the server has to listen there. [Give a server you run yourself a hostname](../services/external.md) covers the address and the port to pick, which work as on one machine.
+Your machine mirrors the port and routes the hostname while a lane of the project on the box runs a service, a task or a command, or has its containers up. The box connects to exactly the declared address, so the server has to listen there. Pick a port outside the box's port range, since a port that devlanes or a lane already uses is refused. [Give a server you run yourself a hostname](../services/external.md) covers the address.
 
 ## Keep a declared server on the box
 
-An [`infra.external`](/docs/reference/config/project/infra/) entry can be hidden on its own. The box's proxy still routes its hostname on the box.
+An entry can be hidden on its own with [`infra.external.<name>.hidden`](/docs/reference/config/project/infra/). The box's proxy still routes its hostname on the box.
 
 ```yaml devlanes
 infra:
@@ -64,10 +66,6 @@ infra:
       address: 127.0.0.1:5050
       hidden: true
 ```
-
-## Data that never leaves the box
-
-Environments, values from env files, secrets, logs and terminal output never cross the connection, and your machine cannot start, stop or run anything on the box through it. Task runs appear with their state only. [Remote mirroring](../../concepts/remote-mirroring.md) lists what crosses.
 
 ## Related
 
