@@ -15,16 +15,24 @@ $ devlanes doctor
 release
   ✓ devlanes 0.13.0 (release build v0.13.0), installed with install.ps1
   ✓ runs from C:\Users\you\AppData\Local\Programs\devlanes\devlanes.exe
-  ✓ no release check yet
+  ✓ latest release 0.13.0, read from github, updates.mode: notify, checked 1h ago
 ```
 
 When a service is the problem, `devlanes debug why` with its name gives the reasons it is not running or not ready, and `devlanes debug errors` lists what failed, how often it crashed and its recent error lines. Put their output in the report too.
 
 ## Make a debug bundle
 
-`devlanes debug bundle` writes an archive for the report and prints where it is. It holds the client and daemon versions, the doctor checks, a check of the project file, the lanes' status and the end of the daemon's log. Add the command that goes wrong after two dashes, as in `devlanes debug bundle -- start api`, and the archive also holds a run of it with the most detailed diagnostics.
+The bundle writes an archive for the report and prints where it is. Add the command that goes wrong after two dashes, and the bundle runs it again, with the most detailed diagnostics, and adds what it printed. That command really runs: a start starts the service, and a clean with `--yes` cleans the lane.
 
-Before anything is written, devlanes replaces the values of secret-looking variables, passwords in URLs and your home directory. It cannot know every secret your project has, so read the files before you attach the archive. The bundle reads from a running daemon and never starts one, so it also works when the daemon does not come up.
+```console
+$ devlanes debug bundle -- start api
+```
+
+The archive holds the client and daemon versions, the doctor checks, a check of the project file, the status of the lanes, the end of the daemon's log and the output of the command you added. Without a command after the two dashes, the bundle only reads from a running daemon and never starts one, so it also works when the daemon does not come up.
+
+## Read the archive before you attach it
+
+Before anything is written, devlanes replaces the values of variables whose names look secret, such as names with token, key or password in them, along with passwords in URLs and your home directory. Project, branch and host names stay. A secret in a variable whose name does not say so, or in a command's arguments, stays as well, so open the files and remove what should not be public.
 
 ## Turn up the daemon's log
 
@@ -49,7 +57,7 @@ For a single command, `-v` prints what the client and the daemon did, step by st
 
 Open an issue at [github.com/devlanes-run/devlanes/issues](https://github.com/devlanes-run/devlanes/issues) with:
 
-- your OS and its version, and the release lines of the doctor
+- your OS and its version, and the release lines of the doctor, with your user name replaced
 - the command you ran, what you expected and what you got, with its output
 - the lines of the project file the problem touches, with secrets removed
 - the debug bundle

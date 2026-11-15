@@ -4,10 +4,10 @@ description: Install the devlanes skill so a coding agent starts, tests and stop
 kind: how-to
 ---
 
-Set this up when a coding agent works in a repository that runs on devlanes, so the agent hands its dev servers to the daemon instead of leaving them in the background of a shell that is gone a moment later. Your agent can install the skill and check the result itself.
+Set this up when a coding agent works in a repository that runs on devlanes, so the agent hands its dev servers to the daemon instead of leaving them in the background of a shell that is gone a moment later. Your agent can do the first steps itself.
 
 ```prompt
-Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then run `devlanes doctor` and tell me whether your shell can reach the devlanes daemon.
+Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then check that your shell can run devlanes in this repository. If it cannot, register the devlanes MCP server with this agent, and tell me which steps I have to do myself, such as restarting you.
 ```
 
 ## Install the skill
@@ -18,9 +18,7 @@ The skill is a set of instructions your agent reads when a task touches a reposi
 $ npx skills add devlanes-run/devlanes --skill devlanes
 ```
 
-The command asks which of your agents to install it for, and installs it into the current project; `-g` installs it for every project. It needs Node.js 22.20 or later.
-
-With the skill, the agent starts the project's services through the daemon and runs its other long-running commands, such as a watcher, the same way, so they keep running and keep their logs after its shell command returns. It reads logs and failures, runs tests against the lane, stops only what its own session started, and can write or fix a project file. devlanes recognizes the agent from the variables its host sets and answers it in a shorter format, which [States and exit codes](../../reference/states-and-exit-codes.md) describes. [A coding agent runs the lane](../../learn/coding-agents.md) shows such a session.
+The command asks which of your agents to install it for, and installs it into the current project; `-g` installs it for every project. It needs Node.js 22.20 or later. With the skill, the agent runs dev servers and watchers through the daemon, so they outlive its shell commands. [A coding agent runs the lane](../../learn/coding-agents.md) shows such a session.
 
 ## Register the MCP server
 
@@ -32,40 +30,44 @@ With the skill, the agent starts the project's services through the daemon and r
 $ claude mcp add devlanes -- devlanes mcp
 ```
 
-This registers it for the current project. `claude mcp add --scope user devlanes -- devlanes mcp` registers it for every project.
+This registers it for the current project. For every project:
+
+```console
+$ claude mcp add --scope user devlanes -- devlanes mcp
+```
 :::
 :::tab[Codex]
 ```console
 $ codex mcp add devlanes -- devlanes mcp
 ```
 
-Codex starts MCP servers outside its sandbox, so the tools reach the daemon where the shell cannot. [Use devlanes from an agent sandbox](sandboxes.md) covers that case.
+Codex keeps it in `~/.codex/config.toml`, so it applies to every project. When the Codex sandbox keeps the shell away from the daemon, [Use devlanes from an agent sandbox](sandboxes.md) says what the MCP server changes.
 :::
 :::tab[OpenCode]
-```json title="opencode.json"
-{
-  "mcp": {
-    "devlanes": { "type": "local", "command": ["devlanes", "mcp"] }
-  }
-}
+```console
+$ opencode mcp add devlanes -- devlanes mcp
 ```
 
-Put it in the project's `opencode.json`, or in `~/.config/opencode/opencode.json` for every project.
+This writes it to the project's configuration. For every project:
+
+```console
+$ opencode mcp add devlanes --global -- devlanes mcp
+```
 :::
 :::tab[Cursor]
 ```json title=".cursor/mcp.json"
 {
   "mcpServers": {
-    "devlanes": { "command": "devlanes", "args": ["mcp"] }
+    "devlanes": { "type": "stdio", "command": "devlanes", "args": ["mcp"] }
   }
 }
 ```
 
-Put it in the project's `.cursor/mcp.json`, or in `~/.cursor/mcp.json` for every project.
+Put it in the project's `.cursor/mcp.json`, or in `~/.cursor/mcp.json` for every project. Cursor shows MCP Apps.
 :::
 ::::
 
-The server connects to nothing until the agent calls a tool, and each call runs one devlanes command, which starts the daemon when it is not running. `devlanes mcp --help` prints the lines for other hosts, among them VS Code, Claude Desktop and Goose. [MCP tools](../../reference/mcp-tools.md) lists the tools and what each host's time limit does to long calls.
+The server connects to nothing until the agent calls a tool. Each call runs one devlanes command, which starts the daemon as the same command would in a terminal. `devlanes mcp --help` prints the lines for other hosts, among them VS Code, Claude Desktop and Goose, and [MCP tools](../../reference/mcp-tools.md) lists the tools.
 
 ## If the agent should only read
 
@@ -77,16 +79,45 @@ $ claude mcp add devlanes -- devlanes mcp --read-only
 
 ## If calls land in the wrong project
 
-A tool call runs in the directory the agent passes, else in the project directory the host reports, else where the host started the server. Hosts with no project directory, such as Claude Desktop, need `--path` with an absolute path to the worktree.
+A tool call runs in the directory the agent passes, else in the one `--path` names, else in Claude Code's project directory, else where the host started the server. For a host with no project directory, such as Claude Desktop, add `--path` with the worktree's absolute path. Claude Desktop also needs the full path of the command, since it does not read your shell's path:
 
-## If services started through MCP cannot find your tools
+```json title="claude_desktop_config.json"
+{
+  "mcpServers": {
+    "devlanes": {
+      "command": "/Users/you/.local/bin/devlanes",
+      "args": ["mcp", "--path", "/Users/you/dev/myapp"]
+    }
+  }
+}
+```
 
-A lane that no shell started gets its environment from the server. On macOS and Linux the server reads your login shell for it. On Windows it reads a PowerShell profile only when the server's environment sets `DEVLANES_SHELL_ENV`:
+## If services started through MCP cannot find your tools on Windows
 
+A lane that no shell started gets its environment from the server. On Windows that is the server's own environment, which lacks what your PowerShell profile adds, such as a Node version manager. Set `DEVLANES_SHELL_ENV` to `pwsh` in the server's environment, and the server reads your profile:
+
+::::tabs{sync="agent"}
+:::tab[Claude Code]
+```console
+PS> claude mcp add --env DEVLANES_SHELL_ENV=pwsh --transport stdio devlanes -- devlanes mcp
+```
+:::
+:::tab[Codex]
+```console
+PS> codex mcp add devlanes --env DEVLANES_SHELL_ENV=pwsh -- devlanes mcp
+```
+:::
+:::tab[OpenCode]
+```console
+PS> opencode mcp add devlanes --env DEVLANES_SHELL_ENV=pwsh -- devlanes mcp
+```
+:::
+:::tab[Cursor]
 ```json title=".cursor/mcp.json"
 {
   "mcpServers": {
     "devlanes": {
+      "type": "stdio",
       "command": "devlanes",
       "args": ["mcp"],
       "env": { "DEVLANES_SHELL_ENV": "pwsh" }
@@ -94,8 +125,10 @@ A lane that no shell started gets its environment from the server. On macOS and 
   }
 }
 ```
+:::
+::::
 
-Use `powershell` instead of `pwsh` for Windows PowerShell 5.1.
+For Windows PowerShell 5.1, use `powershell` instead. On macOS and Linux the server reads your login shell by itself. [MCP tools](../../reference/mcp-tools.md#environment-of-a-lane-started-through-mcp) has the details of both.
 
 ## If you use Claude Code's status line
 
