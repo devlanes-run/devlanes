@@ -8,7 +8,7 @@ Use this after a reboot or a stop of the daemon, when the lanes you had running 
 
 ## Check what the lanes show
 
-A new daemon knows which services each lane ran and with which profiles, but not the environment of the shell that started them, which devlanes never writes to disk ([Environment and expressions](../../concepts/environment.md) has the reasons). So each lane waits, in the `idle` state, with the command that brings it back.
+Each lane waits in the `idle` state with the command that brings it back, because the new daemon does not have the environment its services were started with ([The daemon](../../concepts/daemon.md) explains why).
 
 ```console title="~/dev/myapp"
 $ devlanes status
@@ -20,7 +20,7 @@ myapp
 nothing is running
 ```
 
-The lanes keep their numbers, ports and hostnames while they wait, so nothing in the project changes when they come back.
+The lanes keep their numbers, ports and hostnames while they wait, and come back on the same ones.
 
 ## Start the lane you work in
 
@@ -35,25 +35,41 @@ myapp@0 · main
 ! myapp@1 also ran before the daemon stopped; devlanes lane resume starts it and 1 lane of other projects
 ```
 
-The last line names the other lanes of myapp and counts those of other projects, since one daemon runs them all. `devlanes lane resume` starts each of them with the environment of the shell you run it in, so run it from a shell that has the variables your services need. A lane you stopped by hand before the daemon went away stays stopped.
+The last line names the other lanes of myapp and counts those of other projects, since one daemon runs them all.
+
+## Resume the other lanes
+
+Run this from a shell that has the variables your services need, since every lane it starts gets that shell's environment. A lane you stopped by hand before the daemon went away stays stopped.
+
+```console title="~/dev/myapp"
+$ devlanes lane resume --no-ui
+```
 
 ## Start the daemon at login
 
-A login service starts the daemon when you log in and keeps it running while nothing runs. A daemon started that way belongs to no terminal, so closing one cannot end it and its services.
+A login service starts the daemon when you log in and keeps it running while nothing runs.
 
 ```console
 $ devlanes daemon install
 ```
 
-On macOS and Linux this starts the daemon at once, under launchd or as a systemd user unit. On Windows it adds a Run entry for the next logon and leaves a running daemon alone. A daemon started this way still has no shell to start the lanes from, so they wait as above until a start or `devlanes lane resume`. `devlanes daemon uninstall` removes the login service and leaves a running daemon running.
+On macOS and Linux this starts the daemon at once, under launchd or as a systemd user unit. On Windows it adds a Run entry, and the daemon starts from it at the next logon; until then a running daemon is left alone. A daemon started from the login service belongs to no terminal, so closing one does not end it. It still has no shell to start the lanes from, so they wait as above until a start or a resume.
+
+On macOS, running the install again when the definition it writes has changed, as for a devlanes binary at another path, reloads the agent. That restarts the daemon and stops your services, so resume them afterwards. `devlanes daemon uninstall` removes the login service and leaves a running daemon running.
 
 ## If the daemon is still running
 
-When the daemon is up but its services need a changed variable, such as a new `PATH` or a token, `devlanes daemon restart` from a shell that has it starts a new daemon, hands it that shell's environment, and starts the services that ran. It asks first when processes are running. [The daemon](../../concepts/daemon.md) explains why this takes one step and a reboot takes two.
+When the daemon is up but your services need a changed variable, such as a new `PATH` or a token, restart it from a shell that has the variable. The new daemon gets that shell's environment and starts the services every lane ran, after asking when processes are running.
+
+```console title="~/dev/myapp"
+$ devlanes daemon restart
+```
+
+[The daemon](../../concepts/daemon.md) explains why this takes one step and a reboot takes two.
 
 ## If a plain start should begin from scratch
 
-Set [`start.restore`](/docs/reference/config/user/start/) to false in the user config, and a plain start runs the lane's default profile instead of what ran before. `devlanes lane resume` and a daemon restart bring back what ran either way.
+Set [`start.restore`](/docs/reference/config/user/start/) to false in the user config, and a plain start runs the lane's default profile instead of what ran before. A resume and a daemon restart bring back what ran either way.
 
 ## Related
 

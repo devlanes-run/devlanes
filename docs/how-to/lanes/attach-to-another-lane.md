@@ -10,7 +10,7 @@ Use this when a branch changes only the frontend and you would rather reuse the 
 
 ## Add a profile that reads lane 0
 
-The web service of myapp normally reads the API of its own lane. A profile can start the web service alone and hand it lane 0's API instead, through the `lanes.main` namespace of expressions.
+The web service of myapp normally reads the API of its own lane. A profile, a named set of services and settings that a start can pick, can start the web service alone and hand it lane 0's API instead, through the `lanes.main` namespace of expressions.
 
 ```yaml devlanes
 services:
@@ -32,11 +32,31 @@ No other lane has a namespace like this one: an expression cannot read lane 2, o
 
 ## Start the API in lane 0
 
-Lane 0 holds its ports whether it runs or not, so the value resolves even while it is stopped, and the calls fail until its API is up. `devlanes start 0:api` starts it from any worktree of the project, since a unit reference can carry its lane.
+The value resolves even while lane 0 is stopped, and the calls fail until its API is up. A unit reference can carry its lane, so this works from any worktree of the project.
+
+```console title="~/dev/myapp-checkout"
+$ devlanes start 0:api --no-ui
+```
+
+Values that read the containers, such as myapp's database URL, still need the shared containers running, and lane 0's start brings them up.
+
+## Stop the feature lane
+
+A start into a lane that already runs does not give its running services the profile's variables, so the web service would keep calling lane 1's API. Stop the lane first if it runs.
+
+```console title="~/dev/myapp-checkout"
+$ devlanes stop
+```
 
 ## Start the frontend alone
 
-In the feature worktree, `devlanes start --profile attach` starts the profile in place of the lane's usual services. Only the web service of lane 1 starts. Its page at `https://myapp1.localhost` calls `https://api.myapp.localhost`, and the API of lane 1 stays stopped. A later plain start in this worktree brings back the same profile; after a whole-lane stop, a plain start returns to the lane's default services.
+Start the profile in place of the lane's usual services. Only the web service of lane 1 starts, its page calls the API of lane 0, and the API of lane 1 stays stopped.
+
+```console title="~/dev/myapp-checkout"
+$ devlanes start --profile attach --no-ui
+```
+
+A later plain start in this worktree brings back the same profile. After a whole-lane stop, a plain start returns to the lane's default services.
 
 ## If the API checks the origin
 

@@ -18,7 +18,15 @@ lanes:
   freeze_after: 1h
 ```
 
-The throttle time has to be the shorter one when both are on. On Linux, lanes are not throttled, so only the freeze time applies. The daemon reads these settings when it starts, so run `devlanes daemon restart` after a change. [`lanes.freeze_after`](/docs/reference/config/user/lanes/) has the defaults.
+The throttle time has to be the shorter one when both are on. On Linux, lanes are not throttled, so only the freeze time applies. [`lanes.throttle_after`](/docs/reference/config/user/lanes/) and [`lanes.freeze_after`](/docs/reference/config/user/lanes/) have the defaults.
+
+## Restart the daemon
+
+The daemon reads the user config when it starts, so a change to the freeze times, the start gate or the log limits on this page applies after a restart. Run it from a shell that has the variables your services need, since the services that ran start again with its environment.
+
+```console
+$ devlanes daemon restart
+```
 
 ## Keep a lane awake
 
@@ -35,11 +43,17 @@ The value can be an expression, such as one that keeps only lane 0 awake, and a 
 
 ## Check a lane after a freeze
 
-`devlanes debug freeze` freezes the current lane at once, whatever the timers say, and `devlanes debug thaw` thaws it. Freeze the lane, use the app, and look for connections a service does not open again or timers that misfire after the thaw.
+Freeze the lane now, whatever the timers say, use the app, and look for connections a service does not open again or timers that misfire once it thaws.
+
+```console title="~/dev/myapp"
+$ devlanes debug freeze
+```
+
+Any request to the lane thaws it, and `devlanes debug thaw` thaws it without one.
 
 ## Pace large starts
 
-A start of many lanes at once, such as `devlanes lane resume` after a reboot, goes through a start gate that lets a few services start at a time across every lane and project. Services waiting for their turn show as queued. The gate is set in the user config, and like the freeze times it takes effect after a daemon restart.
+Every start goes through a start gate shared by all lanes and projects, which limits how many services start at once. A start of many lanes, such as a resume after a reboot, is where you see it: services waiting for their turn show as queued.
 
 ```yaml devlanes-user
 startup:
@@ -47,15 +61,21 @@ startup:
   max: 4
 ```
 
-A fixed window keeps the number constant; the default adapts it to CPU and memory. For one start that should skip the gate, add `--all-at-once` to it. [`startup.mode`](/docs/reference/config/user/startup/) lists the other settings.
+A fixed window keeps the number constant, and the default adapts it to CPU and memory. For one start that should skip the gate, add `--all-at-once` to it. [`startup.mode`](/docs/reference/config/user/startup/) lists the other settings.
 
 ## Free the memory of a lane
 
-A frozen lane keeps all its memory, and devlanes does not trim it. To give memory back, stop the lane with `devlanes stop` in its worktree. It keeps its number, ports and data folder, and the next plain start begins from its default services.
+A frozen lane keeps all its memory, and devlanes does not trim it. To give the memory of its processes back, stop the lane in its worktree.
+
+```console title="~/dev/myapp-checkout"
+$ devlanes stop
+```
+
+The lane keeps its number, ports and data folder, and the next plain start begins from its default services. Its own containers keep running and keep their memory until the lane is cleaned, as [Remove lanes](clean-up.md) describes.
 
 ## Keep disk use in check
 
-The logs of every lane share one size and age limit, and the oldest output is deleted first. Data folders grow with what services write to them and are deleted only when a lane is cleaned.
+The logs of every lane share one size and age limit, and the oldest output is deleted first. Data folders grow with what services write to them, and like the volumes of a lane's own containers they stay until the lane is cleaned.
 
 ```yaml devlanes-user
 logs:
@@ -64,13 +84,11 @@ logs:
     max_size: 2GiB
 ```
 
-A dry run of a clean shows how much a lane's data takes before you remove it, as [Remove lanes](clean-up.md) describes.
-
-[`lanes.data_dir`](/docs/reference/config/user/lanes/) moves the data folders to another disk, and lanes then start with empty ones there unless you move the old folders by hand.
+A dry run of a clean shows how much a lane's data takes before you remove it. [`lanes.data_dir`](/docs/reference/config/user/lanes/) moves the data folders to another disk, and lanes then start with empty ones there unless you move the old folders by hand.
 
 ## If a lane never freezes
 
-Something still counts as use. Most often it is a browser tab whose dev client pings over a WebSocket, or a watcher that keeps the lane's CPU busy. Close the tab, or check the other kinds of use in [Throttling and freezing](../../concepts/freezing.md).
+Something still counts as use. A browser tab whose dev client sends messages over a WebSocket through the proxy counts, and so does a watcher that keeps the lane's CPU busy. CPU use keeps a lane from freezing and brings a throttled lane back to full speed, but it never thaws a frozen lane, whose processes use none. Close the tab, or check the other kinds of use in [Throttling and freezing](../../concepts/freezing.md).
 
 ## If a project should hold fewer lanes
 

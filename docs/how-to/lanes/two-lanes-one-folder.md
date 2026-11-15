@@ -4,25 +4,33 @@ description: Add a second lane to a worktree, with its own ports, hostnames and 
 kind: how-to
 ---
 
-Use this when you want the same checkout running twice, for example with another profile or against empty data, and a second worktree would only repeat the same files.
+Use this when you want the same worktree running twice, for example against empty data or with other services, and a second worktree would only repeat the same files.
 
 ## Add the lane
 
-Run `devlanes lane new --name review` in the folder, here the worktree of the main branch. The new lane takes the lowest free lane number, so with lanes 0 and 1 in use it becomes lane 2 and its hostnames end in `myapp2.localhost`. On a terminal the command asks whether to start the lane right away.
+Run the command in the folder, here the worktree of the main branch. On a terminal it asks whether to start the new lane right away.
 
-A lane added this way never becomes lane 0, even in the folder of the primary branch. The folder's first lane keeps its number and keeps running.
+```console title="~/dev/myapp"
+$ devlanes lane new --name review
+```
+
+The lane takes the lowest free lane number, so with lanes 0 and 1 in use it becomes lane 2 and its hostnames end in `myapp2.localhost`. A lane added this way never becomes lane 0, even in the folder of the primary branch.
 
 ## Name it
 
-The name is how commands reach the lane. Without one, the lane is called after the folder: myapp-2, then myapp-3. A name uses letters, digits, hyphens, underscores and dots. It cannot be a number, main, or lane followed by a number, since those already name lanes.
+The name is how commands reach the lane. Without one, the lane is called after the folder: myapp-2, then myapp-3. A name uses letters, digits, hyphens, underscores and dots. It cannot be a number, main, lane followed by a number, or the name or branch of another lane of the project.
 
 Inside the lane the name does not show. Its `lane.name` and `DEVLANES_LANE_NAME` are lane2, after the number, as for any other lane, so values built from them stay apart ([Lanes and projects](../../concepts/lanes-and-projects.md) explains lane names).
 
-## Start it and reach its units
+## Start it
 
-Commands typed in the folder keep acting on its first lane. The second one needs its name, given with the global `--lane` flag or as a prefix on a unit, such as review:web for its web service. Pass the name to a start, and add one of your profiles with `--profile` to run the lane with other services or settings than the first one.
+Commands typed in the folder keep acting on its first lane, so the start names the second one with the global `--lane` flag. To run it with other services or settings than the first lane, add `--profile` with one of the profiles in your project file, the named sets of services and settings a start can pick.
 
-The start uses the environment of the shell you typed it in, as any start does. [Lane and unit references](../../reference/lane-and-unit-references.md) lists the other forms a reference can take.
+```console title="~/dev/myapp"
+$ devlanes start --lane review --no-ui
+```
+
+The start uses the environment of the shell you type it in, as any start does. The name also works as a prefix on a unit, such as review:web for the lane's web service; [Lane and unit references](../../reference/lane-and-unit-references.md) lists the other forms.
 
 ## Keep the lanes' files apart
 
@@ -39,7 +47,13 @@ Each lane then has an uploads folder of its own. [Files and folders](../../refer
 
 ## Remove it
 
-`devlanes lane clean review --yes` stops the lane, runs its clean tasks and teardown, deletes its data folder and logs, and frees its number and ports. A lane added with `devlanes lane new` does not come back after that. Adding one under the same name again gives a new lane with an empty data folder. [Remove lanes](clean-up.md) covers cleaning in full.
+Cleaning the lane deletes its data folder, its logs and its own containers with their volumes, and frees its number.
+
+```console title="~/dev/myapp"
+$ devlanes lane clean review --yes
+```
+
+A lane added with `devlanes lane new` does not come back after a clean. Adding one under the same name again gives a new, empty lane. [Remove lanes](clean-up.md) says what a clean deletes and when its clean tasks run.
 
 ## If you need another branch
 
