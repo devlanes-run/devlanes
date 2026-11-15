@@ -1,34 +1,34 @@
 ---
 title: Config files and reload
-description: A lane's config is merged from the project file, its local file and the files it extends; an edit changes nothing that runs until a reload applies it.
+description: A lane's config is merged from the project file, its local file and the files it extends; an edit leaves running processes alone until a reload applies it.
 kind: concept
 ---
 
-A lane reads its config from the project file, from the local file next to it and from any files the project file builds on. devlanes merges them into one config, and watches them while the lane runs. An edit changes what the next start would do, but leaves running processes as they are until you apply it.
+A lane reads its config from the project file, from the local file next to it and from any files the project file builds on. devlanes merges them into one config and watches them while the lane runs. When you edit one, your running processes keep what they started with, status shows what differs, and you choose when to apply it.
 
 ## Files merge in a fixed order
 
-A project file can name other project files to build on. Each of those comes first, followed by its own local file, then the project file and its local file, so the file you load last has the final say. The project name always comes from the file you load, which lets a production file extend the development one under a project name of its own.
+Unless you name a file with `--file`, devlanes loads the nearest `devlanes.yaml` in the folder you are in or above it, up to the repository root. That loaded file can name other project files to build on, and each of those comes first, followed by its own local file, then the loaded file and its local file, so the local file of the file you load has the final say.
 
-![devlanes.yaml, devlanes.local.yaml, devlanes.prod.yaml and devlanes.prod.local.yaml merge in that order into one config, and a later file wins](config-and-reload.svg)
+![The files merge in order into one config: the extended file, its local file, the loaded file and its local file. Drift compares what runs with what the config says, and a reload restarts a changed unit, stops a removed one and starts an added one](config-and-reload.svg)
 
-Mappings merge by key at each level, so a local file that sets one variable of a service keeps the others. Lists and single values replace, and a later file that switches a service from a plain command to a script drops the command. A later file cannot delete what an earlier one set; it turns a service off or empties a list instead. Templates expand after the merge, so a template from the base file sees the overrides that came after it.
+Mappings merge by key at each level, so a local file that sets one variable of a service keeps the others. Lists and single values replace, and a later file that gives a service a script drops the plain command an earlier file gave it. A later file cannot delete what an earlier one set; it can keep a service from starting by default, or empty a list. Templates, blocks of service settings that services reuse by naming them, expand after the merge, so a template from the base file sees the overrides that came after it.
 
 ## The local file belongs to one developer
 
-The local file holds what one person wants on their machine and stays out of Git. It cannot rename the project or change which files the project extends. A different name on one machine would give its lanes other domains and container names than everyone else's, and other projects would no longer find it under the name they use.
+The local file holds what you want on your machine only, and you keep it out of Git yourself by adding it to `.gitignore`. It cannot rename the project or change which files the project extends. A different name on one machine would give its lanes other domains and container names than everyone else's, and other projects would no longer find it under the name they use.
 
-A new worktree has no local file of its own, so its lanes read the one in the primary worktree. One developer's overrides then reach each lane of the project without a copy per worktree. [Keep personal changes out of Git](../how-to/projects/local-overrides.md) shows what such a file usually holds.
+A worktree without a local file of its own reads the one in the primary worktree, so your overrides reach each lane of the project without a copy per worktree. [Keep personal changes out of Git](../how-to/projects/local-overrides.md) shows what such a file usually holds.
 
-## An edit changes nothing that runs
+## An edit leaves running processes alone
 
-The daemon checks each file the last load read, the `.env` that expressions read included, and loads the config again when one changes. It does not stop or restart a unit because of that. Each running unit keeps the command and environment it was started with, and the next start, restart or reload is when new values take effect.
+The daemon checks each file the last load read, the `.env` that expressions read included, and loads the config again when one changes. It does not stop or restart a unit because of that: each running unit keeps the command and environment it was started with until you apply the change.
 
-Hostnames, external ports and what a box may share are the exception. They change only the proxy's routes and what is mirrored, not a process, so they apply as soon as the file loads.
+Hostnames are the exception, because they change the proxy and not a process. An edited hostname of a service, of a container or of a server you run yourself is routed as soon as the file loads, and so is a change to what a box may share. A unit whose environment carries one of those URLs still has the old value until it restarts.
 
 ## Drift is the difference status shows
 
-devlanes keeps in memory what each running unit was started with, and compares it with what the current config would start. The result is drift, and status reports it on the lane and on each unit it touches.
+devlanes keeps in memory what each running unit was started with and compares it with what the current config would start. That difference is drift, and status reports it on the lane and on each unit it touches.
 
 ```console title="~/dev/myapp"
 $ devlanes status 0
@@ -43,11 +43,17 @@ myapp
   worker: env API_URL changed since it started
 ```
 
-A unit can be changed, with the fields that differ, removed from the file while it still runs, or added to the file and not yet started. A variable is named without its value. The record stays in memory because it holds environment values, and devlanes does not write those to disk. A value read from your shell counts too, so a start from a shell where it differs shows as drift.
+A unit drifts in one of three ways:
+
+- changed: it runs, and the config would start it differently; status names the fields, and a variable by its name without its value
+- removed: it runs, and the config no longer has it
+- added: the config would run it, and it has not started yet
+
+Values read from the shell that started the lane count too, so a unit started from a shell with a different value shows as changed. The record stays in memory because it holds environment values, which [Environment and expressions](environment.md) explains.
 
 ## Reload applies the difference
 
-A reload stops the units the file removed, restarts the ones it changed and starts the ones it added. Here only the worker restarts, and the API and the web app keep their processes.
+A reload stops the removed units, restarts the changed ones and starts the added ones, and leaves the rest running. Here it restarts the worker alone, which is why it counts one service out of the lane's three.
 
 ```console title="~/dev/myapp"
 $ devlanes reload --no-ui
@@ -57,13 +63,20 @@ myapp@0 · main
   ✓  worker  http://127.0.0.1:20062
 ```
 
-A reload restarts the whole lane in two cases: the container settings changed since the lane's last whole start, or the edit needs more ports than the lane's block holds. Containers come up before services, and a lane's port block can only move while nothing in the lane runs, so neither change can be applied to one unit. A reload keeps the environment the lane's last start brought, so it does not matter which shell runs it. Restarting a single unit also picks up the current config, without a reload.
+A reload restarts the whole lane when the container settings changed since the lane was last brought up, or when the edit needs more ports than the lane's block holds, since a lane's port block can only move while nothing in it runs. A reload keeps the environment the lane's last start brought, so it does not apply drift that comes from your shell. `devlanes restart` does: it starts the units again with the environment of the shell you run it in. A plain start also starts added units, without touching the rest.
 
 ## A file that does not load leaves the lane as it was
 
-A typo, a rebase conflict or a deleted file stops the config from loading. While units run, the lane keeps its hostnames and routes on the last config that loaded, so a half-finished edit does not take running services off the proxy. A project file that suddenly names another project counts the same way.
+A typo, a rebase conflict or a deleted file stops the config from loading. While units run, the lane keeps its hostnames and routes on the last config that loaded, so a half-finished edit does not take running services off the proxy.
 
-Status shows the error on the lane's row, with the file, the line and the key, and the lane goes on running. Starts, restarts and reloads refuse with that error until the file loads again, since devlanes has no valid config to start from.
+```console title="~/dev/myapp"
+$ devlanes status 0
+myapp
+  LANE  BRANCH  STATE    SERVICES  CPU   MEM       URL
+  0     main    running  3/3       1.9%  92.8 MiB  https://myapp.localhost  (config changed; C:\Users\you\dev\myapp\devlanes.yaml is invalid at line 14, column 11: services.api.host: unknown key `host`; did you mean `hosts`?)
+```
+
+The lane goes on running and carries the error with the file and the line. Starts, restarts and reloads of the lane refuse with that error until the file loads again. When the file names another project, as after a branch switch, the worktree moves to that project as [Lanes and projects](lanes-and-projects.md) describes, and the old lane keeps running on its last config until you stop it.
 
 ## Related
 

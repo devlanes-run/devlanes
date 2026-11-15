@@ -1,28 +1,54 @@
 ---
 title: Start order and readiness
-description: A start brings a lane up in fixed phases, waits until each service it started is ready or has failed, and takes turns with other starts on the machine.
+description: A start brings a lane up in fixed phases, from containers to services, waits until each service is ready or has failed, and takes turns with other starts on the machine.
 kind: concept
 ---
 
-A lane is made of containers, setup commands, tasks and services, and a start brings them up in that order. It returns once each service it started has passed its ready check or failed. The order comes from the kind of each unit, so services do not wait for one another, and a unit that fails stays failed until you act.
+When you start a lane, devlanes brings up its parts in a fixed order: the containers, then setup, then tasks, then the services, then the tasks that wait for services. The start returns once each service it started has passed its ready check or failed. Services do not wait for one another, so whatever has to be up first belongs in an earlier phase.
 
 ## A start runs in phases
 
-Each phase begins once the one before it has ended. Containers come first because the rest of the lane may need them: setup creates a database inside one, and a service's variables can name a port the container only publishes once it runs. That is why devlanes works out every service's command and environment after the containers are up and before setup begins.
+Each phase begins once the one before it has ended. devlanes works out each service's command and environment only after the containers are up, because a service's variables can name a port that a container publishes once it runs.
 
-![A start runs containers, setup, tasks, services, then tasks after services, each phase once the one before it ended](start-order.svg)
+![A start runs containers, setup, tasks, services, then tasks after services, each phase once the one before it ended; each service waits at the start gate before it spawns](start-order.svg)
 
-Setup runs the first time a lane starts, with its entries side by side, and again for an entry that you edit or whose container restarted. Tasks bound to a lane event run one at a time, in the order the project file lists them: a `lane.create` task until it has succeeded once for the lane, a `lane.start` task on each whole start. A task that fails ends the start before any service is spawned. A start that only adds a service to a lane already running skips the tasks.
+These phases run when a start brings the lane up from nothing running. A start in a lane that already runs only adds the services the lane is missing, such as one you just added to the project file, and runs no tasks.
+
+## Setup prepares containers, tasks prepare the worktree
+
+Setup entries are commands the project file lists for the lane's containers, such as creating the lane's own database in a shared Postgres. devlanes records each entry that succeeded and runs it again only after you edit it or after its container restarted, since a restarted container may have lost what the entry made. The entries of a lane run in parallel.
+
+Tasks are one-off commands bound to a moment in the lane's life, and they run one at a time in the order the project file lists them. A `lane.create` task runs once for the lane, and again after you edit it: installing dependencies in a new worktree is the usual one. A `lane.start` task runs each time a start brings the lane up, which suits migrations that skip what is already applied.
+
+```yaml devlanes
+tasks:
+  install:
+    run: [npm, install]
+    when: lane.create
+  migrate:
+    run_script:
+      file: package.json
+      name: db:migrate
+    when: lane.start
+  seed:
+    run_script:
+      file: package.json
+      name: db:seed
+    when: lane.create
+    after: services
+```
+
+A task marked to run after services, such as a seed that goes through the API, waits until every service of the start is ready, and is skipped when one failed or the start ran out of time. A task that fails ends the start; one that runs before services ends it before any service is spawned. [Run installs, migrations and seeds](../how-to/services/tasks.md) sets these up.
 
 ## Ready means the ready check passed
 
-The services phase starts the selected services together, each as soon as the machine's start gate gives it a slot, and then waits. A service with a ready check is ready when that check passes: a port that accepts connections, a route that answers, a line in the log or a command that succeeds. A service without one counts as ready once its process is up. [Wait until a service is ready](../how-to/services/ready-checks.md) shows how to choose a check, and [`ready`](/docs/reference/config/project/services/) in the reference lists the kinds with their timeouts.
+A service with a ready check is ready when that check passes: a port that accepts connections, a route that answers, a line in the log or a command that succeeds. A service without one waits for its port to accept connections when it has a hostname, and otherwise counts as ready once its process has run half a second. [Wait until a service is ready](../how-to/services/ready-checks.md) shows how to choose a check, and [`services.<name>.ready`](/docs/reference/config/project/services/) lists the kinds and their timeouts.
 
-The check runs during the start and not after it. devlanes does not keep probing a service that passed, so a service that stops answering later still shows as ready until its process exits. Tasks marked to run after services wait for the end of this phase, and are skipped when a service failed or the start ran out of time.
+The check runs during the start and not after it. A service that stops answering later still shows as ready until its process exits.
 
 ## A check that never passes leaves the process running
 
-When the timeout passes, the service becomes failed with the reason the check last saw. devlanes does not stop the process or start it again. In this lane the API's ready check asked for a path the API does not serve, so it answered 404 until the timeout.
+When the timeout passes, the service becomes failed with the reason the check last saw, and devlanes neither stops its process nor starts it again. In this lane the API's ready check asked for a path the API does not serve, so the API answered 404 until the timeout.
 
 ```console title="~/dev/myapp"
 $ devlanes status 0
@@ -37,29 +63,27 @@ myapp
   api: wasn't ready in time; GET /health (Host: 127.0.0.1:20060) answered 404
 ```
 
-The API still has memory in use because its process still runs and still holds port 20060. The proxy answers its hostname with an error page instead of passing requests to a service that never proved it works. The other services of the start went on starting, since one failure does not cancel the rest. Leaving the process up means its logs and its port are there to inspect, and a restart, a stop or a new start is your decision.
+The API still uses memory because its process still runs and still holds port 20060, while the proxy answers its hostname with an error page. The other services went on starting, since one failure does not cancel the rest. With the process left up, its logs and its port are there for you to inspect, and you decide whether to restart or stop it.
 
-## Starts across the machine take turns
+## The start gate lets starts take turns
 
-Unless pacing is turned off, each service start on the machine, from any lane or project, replicas and restarts included, asks a shared gate for a slot before it spawns. A service that waits for one shows as `queued`. It keeps its slot until its ready check passes or fails, or until a slot timeout passes; a service without a check keeps it until its CPU use settles. The timeout exists so that services waiting on each other cannot hold up the queue.
+Each service start on the machine waits at the start gate, a queue shared by every lane and project, before it spawns. Replicas and restarts wait there too, and a service that waits shows as `queued`. It holds its turn until its ready check passes or fails, or until a timeout passes, so a service whose own code waits for another service cannot hold up the queue.
 
-The default gate allows as many starts at once as the machine has CPU cores, and halves that under CPU or memory pressure. The point is a machine that stays usable when many lanes start together, as after a reboot. The gate only delays spawns: a process that runs is not slowed or capped. The [`startup`](/docs/reference/config/user/startup/) settings change the pacing, and `--all-at-once` skips the gate for one start.
+By default the start gate lets as many services start at once as the machine has CPU cores, and lets fewer through while the machine is short of CPU or memory, as when many lanes start after a reboot. It only delays spawns: a process that runs is not slowed. The [`startup`](/docs/reference/config/user/startup/) settings change it, and `--all-at-once` skips it for one start.
 
 ## Services do not wait for each other
 
-A service cannot name another service it depends on. The ordering devlanes offers is by kind: containers, setup and tasks come before services, and tasks after services come after them. Within the services phase, services start together, held back only by the start gate.
+A service cannot name another service it depends on. Ports are given out before any service spawns, so each service can receive the URL of another service in its lane through an expression, a value the project file computes per lane, even though that service is not listening yet; [Environment and expressions](environment.md) explains how.
 
-What makes that workable is that ports are given out before any service spawns. Each service can receive the URL of another service in its lane through an expression, even though that service is not listening yet; [Environment and expressions](environment.md) explains how. The cost falls on a service whose code calls another at startup: it has to wait or retry until the other answers, as it would once deployed.
+This matters most when the database is itself a service. It starts together with the API, so the API's code has to retry its first connection until the database answers. Run the database as a container instead and it is up before any service starts.
 
 ## A failed service stays failed
 
-A service that exits, or whose ready check fails, stays failed with its reason until a start, a restart or a stop. devlanes does not restart it. The rule exists so the failure and its error stay in front of you, instead of a process that comes back and hides what broke. [When a service fails](../learn/failures.md) follows one such failure to its cause.
-
-A dev server can still restart its own code, as a file watcher does after an edit. devlanes does not count that as a start, so the state it shows is the one the last start decided. Bringing a lane's saved services back after a reboot is a start you ask for, and [The daemon](daemon.md) covers it.
+A service that fails stays failed until you start, restart or stop it, as [The daemon](daemon.md) explains. A dev server that restarts its own code after an edit, as a file watcher does, is not a start to devlanes, so the state it shows is the one the last start decided.
 
 ## Related
 
-- [Wait until a service is ready](../how-to/services/ready-checks.md)
 - [Run installs, migrations and seeds](../how-to/services/tasks.md)
+- [Wait until a service is ready](../how-to/services/ready-checks.md)
 - [Run many lanes on one machine](../how-to/lanes/many-lanes.md)
 - [`startup`](/docs/reference/config/user/startup/)

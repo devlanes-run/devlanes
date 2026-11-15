@@ -1,37 +1,49 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 230" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
-  <title>The port pool from 20000 to 32767 holds a block of ten ports for each lane of myapp; api and web have the same place in lane 0 and lane 1</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 266" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>The port pool from 20000 to 32767: other lanes hold the first blocks, then a block for each lane of myapp, where api and web have the same place and the rest of the block is spare</title>
   <style>
     .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
     .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
-    .path { stroke: var(--dl-diagram-accent, currentColor); fill: none; stroke-width: 2.5; }
     .label { fill: currentColor; }
     .dim { fill: currentColor; opacity: 0.65; }
   </style>
 
-  <text class="label" x="20" y="26">port pool</text>
+  <text class="label" x="20" y="26">port pool (default range)</text>
   <rect class="line" x="20" y="38" width="560" height="30" rx="4" />
-  <rect class="path" x="70" y="38" width="26" height="30" />
-  <rect class="path" x="96" y="38" width="26" height="30" />
+  <rect class="fill" x="20" y="38" width="60" height="30" />
+  <text class="dim" x="26" y="58">other</text>
+  <rect class="fill" x="80" y="38" width="26" height="30" />
+  <rect class="fill" x="106" y="38" width="26" height="30" />
   <text class="dim" x="20" y="86">20000</text>
   <text class="dim" x="580" y="86" text-anchor="end">32767</text>
+  <text class="dim" x="20" y="104">other lanes hold the first blocks</text>
 
-  <!-- each block, drawn larger -->
-  <path class="line" d="M 83 68 L 165 120" />
-  <path class="line" d="M 109 68 L 435 120" />
+  <!-- each myapp block, drawn larger -->
+  <path class="line" d="M 93 68 L 165 128" />
+  <path class="line" d="M 119 68 L 435 128" />
 
-  <rect class="fill" x="40" y="120" width="250" height="94" rx="6" />
-  <text class="label" x="54" y="142">myapp lane 0</text>
-  <text class="dim" x="54" y="162">block 20060-20069</text>
-  <rect class="line" x="54" y="174" width="106" height="28" rx="5" />
-  <text class="label" x="64" y="193">api 20060</text>
-  <rect class="line" x="170" y="174" width="106" height="28" rx="5" />
-  <text class="label" x="180" y="193">web 20061</text>
+  <rect class="fill" x="40" y="128" width="250" height="108" rx="6" />
+  <text class="label" x="54" y="150">myapp lane 0</text>
+  <text class="dim" x="54" y="170">block 20060-20069</text>
+  <rect class="line" x="54" y="182" width="72" height="40" rx="5" />
+  <text class="label" x="62" y="200">api</text>
+  <text class="dim" x="62" y="216">20060</text>
+  <rect class="line" x="132" y="182" width="72" height="40" rx="5" />
+  <text class="label" x="140" y="200">web</text>
+  <text class="dim" x="140" y="216">20061</text>
+  <rect class="line" x="210" y="182" width="66" height="40" rx="5" stroke-dasharray="4 3" />
+  <text class="dim" x="218" y="207">spare</text>
 
-  <rect class="fill" x="310" y="120" width="250" height="94" rx="6" />
-  <text class="label" x="324" y="142">myapp lane 1</text>
-  <text class="dim" x="324" y="162">block 20070-20079</text>
-  <rect class="line" x="324" y="174" width="106" height="28" rx="5" />
-  <text class="label" x="334" y="193">api 20070</text>
-  <rect class="line" x="440" y="174" width="106" height="28" rx="5" />
-  <text class="label" x="450" y="193">web 20071</text>
+  <rect class="fill" x="310" y="128" width="250" height="108" rx="6" />
+  <text class="label" x="324" y="150">myapp lane 1</text>
+  <text class="dim" x="324" y="170">block 20070-20079</text>
+  <rect class="line" x="324" y="182" width="72" height="40" rx="5" />
+  <text class="label" x="332" y="200">api</text>
+  <text class="dim" x="332" y="216">20070</text>
+  <rect class="line" x="402" y="182" width="72" height="40" rx="5" />
+  <text class="label" x="410" y="200">web</text>
+  <text class="dim" x="410" y="216">20071</text>
+  <rect class="line" x="480" y="182" width="66" height="40" rx="5" stroke-dasharray="4 3" />
+  <text class="dim" x="488" y="207">spare</text>
+
+  <text class="dim" x="300" y="258" text-anchor="middle">api and web have the same place in each block</text>
 </svg>

@@ -1,28 +1,38 @@
 ---
 title: The daemon
-description: One background process per user runs every lane, outlives the terminal that started it, and exits by itself when nothing needs it.
+description: One background process per user runs the lanes, outlives the terminal that started it, exits when unused, and waits for a shell after a reboot.
 kind: concept
 ---
 
-One background process per user, the daemon, runs the lanes of every project on the machine. The command line, the TUI and the MCP server are its clients: they send it requests and show what it reports back. Because the processes belong to the daemon and not to a terminal, closing a terminal or quitting the TUI leaves the lanes running.
+One background process per user, the daemon, runs the lanes of all your projects. The command line, the TUI and the MCP server only send it requests and show what it reports. Because the processes belong to the daemon and not to a terminal, closing a terminal or quitting the TUI leaves your lanes running.
 
-## The daemon owns what runs
+## The daemon holds the lanes
 
-The daemon starts and stops each unit, hands out the ports, holds the proxy routes and the hostnames, keeps the connections to boxes and writes the logs. It also keeps the state database, which records the lanes, their port blocks and which services each one ran. A client holds none of this, so a terminal and an agent that look at the same lane see the same thing.
+The daemon starts and stops each unit, hands out the ports, runs the proxy that answers the hostnames, keeps the state database and writes the logs. It also holds the connections to boxes, the machines whose lanes are mirrored to yours. A client holds none of this, so a terminal and an agent looking at the same lane see the same thing. The MCP server is a client too: each tool call runs one devlanes command.
 
-The MCP server is a client of the same kind. It does not connect to the daemon itself: each tool call runs one devlanes command, which talks to the daemon and ends, so an agent host that keeps the server registered costs one idle process. [Set up a coding agent](../how-to/agents/set-up.md) registers it.
+![The CLI, the TUI and the MCP server send requests to the daemon, which holds the processes of each lane, the proxy, the state and the logs](daemon.svg)
 
-## It starts on first use and exits when idle
+When you stop the daemon with `devlanes daemon stop`, it runs each lane's stop tasks and then stops every process it manages. Containers keep running, but their hostnames answer only while a daemon runs.
 
-A command that needs the daemon and finds none starts it. A few commands only report and never start one, such as the doctor and the daemon's own status. Inside an agent sandbox the start is refused; [Use devlanes from an agent sandbox](../how-to/agents/sandboxes.md) covers that case.
+## It starts on first use and exits when unused
 
-A daemon a command started exits about 15 seconds after the last TUI, or command that shows progress, closes, once nothing runs, no box is connected or reconnecting and no pairing code is waiting. The 15 seconds are enough to quit and reopen the TUI, or to type the next command, without waiting for a new daemon. When no TUI or progress view ever watched it, as when only scripts or agents used it, it waits about 5 minutes instead, since no closing TUI marks the end of their work.
+A command that needs the daemon and finds none starts it. A few commands only report and never start one, such as `devlanes doctor` and the daemon's own status. Inside an agent sandbox the start is refused ([Use devlanes from an agent sandbox](../how-to/agents/sandboxes.md)).
 
-A daemon installed as a login service with `devlanes daemon install` does not exit when idle, because the login service would not bring it back. Containers keep running when the daemon exits, but their hostnames answer only while it runs. [`daemon.exit_when_idle`](/docs/reference/config/user/daemon/) turns the idle exit off.
+A daemon that a command started exits by itself once it has nothing to do, which means all of these hold:
 
-## A new daemon has no shell to start from
+- no unit runs or is starting, in any lane;
+- no box is connected or reconnecting, and no machine is connected to this one as a box;
+- no pairing code is waiting to be used.
 
-The daemon saves which services each lane ran and with which profiles. It does not save the environment of the shell that started them, which holds tokens and other secrets ([Environment and expressions](environment.md) has the reasons). After a reboot or a stop of the daemon, the next daemon knows what ran but not with what, so it waits. Processes that outlived a crashed daemon are different: they keep running, and the next daemon finds them.
+It then waits about 15 seconds after the last TUI, or command showing progress, has closed, so you can quit and reopen the TUI without waiting for a new daemon. A daemon that no TUI or progress view ever watched, as when only scripts or agents used it, waits about 5 minutes instead, since no closing TUI marks the end of their work. One installed as a login service with `devlanes daemon install` does not exit, because the login service would not bring it back. [`daemon.exit_when_idle`](/docs/reference/config/user/daemon/) turns the exit off.
+
+## Sleep pauses the lanes with the machine
+
+When you close the lid, the operating system suspends the daemon and every lane together, and they carry on where they were when the machine wakes. Nothing is restarted. A connection to a box drops while the machine sleeps, and the daemon connects it again after waking ([Remote mirroring](remote-mirroring.md)).
+
+## A reboot leaves the lanes waiting for a shell
+
+The daemon saves which services each lane ran and with which profiles. It does not save the environment of the shell that started them, which [Environment and expressions](environment.md) explains. So after a reboot, or after you stop the daemon, the next daemon knows what ran but not with which variables, and it waits.
 
 ```console title="~/dev/myapp"
 $ devlanes status
@@ -34,43 +44,29 @@ myapp
 nothing is running
 ```
 
-Both lanes keep their numbers, ports and hostnames while they wait. What they lack is an environment, and only a start from a shell supplies one.
+Idle here means a lane that ran before and waits for an environment. Both lanes keep their numbers, ports and hostnames. A daemon installed as a login service starts again at login but waits the same way, since it has no shell either. Containers come back with the lane's next start, which brings them up first, unless Docker's own restart setting started them earlier.
 
-## One start from a shell brings a lane back
+On macOS and Linux, processes that outlive a daemon that crashed keep running, and the next daemon finds them. On Windows a unit run in a terminal of its own, the default there, stops with the daemon ([Windows](../reference/windows.md)).
 
-A plain start in a worktree starts the services its lane ran before, with the environment of the shell it was typed in. It also names the other lanes that ran, and a resume of all lanes starts those.
+## A start from a shell brings the lanes back
 
-```console title="~/dev/myapp"
-$ devlanes start --no-ui
-✓ services ready
-myapp@0 · main
-✓ services  1 of 1 ready
-  ✓  api  https://api.myapp.localhost
-! myapp@1 also ran before the daemon stopped; devlanes lane resume starts it and 1 lane of other projects
-```
+A plain `devlanes start` in a worktree starts the services its lane ran before, with the environment of the shell you typed it in, and names the other lanes that ran. `devlanes lane resume` starts all of them at once: every lane you did not stop by hand gets the services it ran and this shell's environment, even lanes you first started from different shells. [Bring lanes back after a reboot](../how-to/lanes/after-a-reboot.md) walks through both.
 
-A `devlanes daemon restart` goes the other way round. It starts the new daemon first and hands it the restarting shell's environment in memory, so the lanes come back without a second step. [Bring lanes back after a reboot](../how-to/lanes/after-a-reboot.md) has both paths.
+`devlanes daemon restart` needs no second step. It starts the new daemon before the old one stops, hands it the restarting shell's environment in memory, and starts again what ran. That one shell's environment goes to every lane.
 
-## A failed process stays failed
+## A failed service stays failed
 
-When a service exits or cannot start, it shows as failed with its error and the end of its output, and stays that way until someone starts, restarts or stops it. Restarting it by itself would hide the failure behind a service that looks up, so devlanes does not. The cost is a service that stays down until you act; [When a service fails](../learn/failures.md) shows what that looks like.
+When a service exits or cannot start, it shows as failed with its error and the end of its output. It stays that way until you start, restart or stop it, because devlanes does not restart a failed unit by itself: the failure stays in view so you see what broke. [When a service fails](../learn/failures.md) shows what that looks like.
 
-A dev server that restarts itself on a file change is a different case. Its process keeps running, and the proxy retries a refused connection for a few seconds while it comes back.
+A dev server that restarts itself after a file change keeps its process, so it does not count as failed. While it comes back, the proxy retries refused connections for a few seconds.
 
-The daemon measures the CPU and memory of each lane and does not limit them. The one thing it does to a lane on its own is slow down and suspend one that nobody uses, which keeps its processes, ports and memory ([Throttling and freezing](freezing.md)).
+## Resources are measured, not capped
 
-## Some terminals end the daemon with them
+The daemon measures the CPU and memory of each lane and shows them in status, and it does not limit them. On its own, it slows down and then suspends a lane nobody uses, which keeps the lane's processes and memory ([Throttling and freezing](freezing.md)). It also stops a lane when you delete its worktree ([Lanes and projects](lanes-and-projects.md)).
 
-On Windows, a daemon started from a terminal leaves that terminal's group of processes so that closing the terminal does not reach it. Some terminals do not allow that and end every process they started when they close, an SSH session among them. A daemon started from one of those stops when it closes, and its services stop with it. The doctor warns about such a terminal.
+## Some sessions end the daemon with them
 
-```console title="on Windows 11"
-$ devlanes doctor
-terminal
-  ! this terminal ends the processes it started when it closes, so a daemon started here stops with it
-    fix: start the daemon from another terminal
-```
-
-The next command then starts a new daemon, which finds its lanes waiting for a start from a shell, as above. A daemon started from Windows Terminal, or installed as a login service, outlives the terminal. [Windows](../reference/windows.md) lists the other differences.
+On Windows, some terminals and SSH servers end every process they started when they close, a daemon started there included; [Windows](../reference/windows.md) says which and what to do. On Linux, logging out when linger is off for your user lets systemd stop your processes, the daemon among them, which matters on a box you reach over SSH ([Prepare a box](../how-to/remote/prepare-a-box.md)).
 
 ## Related
 

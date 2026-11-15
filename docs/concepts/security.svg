@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 350" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>Who is checked where: the socket or pipe admits only your account, a sandbox edge decides whether a sandboxed process reaches it, SSH or a command decides who reaches a box, and the pairing check decides which machines see the box daemon's lanes</title>
+  <style>
+    .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
+    .dash { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
+    .path { stroke: var(--dl-diagram-accent, currentColor); fill: none; stroke-width: 2.5; }
+    .label { fill: currentColor; }
+    .dim { fill: currentColor; opacity: 0.65; }
+  </style>
+
+  <!-- your machine -->
+  <rect class="line" x="10" y="30" width="262" height="306" rx="10" />
+  <text class="label" x="26" y="22">your machine</text>
+
+  <rect class="line" x="26" y="44" width="230" height="44" rx="5" />
+  <text class="label" x="40" y="62">other accounts</text>
+  <text class="dim" x="40" y="79">refused at the socket</text>
+
+  <rect class="fill" x="26" y="100" width="230" height="222" rx="8" />
+  <text class="label" x="40" y="120">your account</text>
+
+  <rect class="line" x="40" y="130" width="202" height="30" rx="5" />
+  <text class="label" x="50" y="150" font-size="12">processes running as you</text>
+
+  <rect class="dash" x="40" y="168" width="202" height="44" rx="5" />
+  <text class="label" x="50" y="186">sandbox</text>
+  <text class="dim" x="50" y="203">sandboxed process</text>
+
+  <rect class="line" x="40" y="222" width="202" height="88" rx="5" />
+  <text class="label" x="50" y="242">daemon</text>
+  <rect class="line" x="50" y="252" width="182" height="28" rx="4" />
+  <text class="label" x="60" y="271">socket or pipe</text>
+  <text class="dim" x="50" y="300">admits your account only</text>
+
+  <!-- box -->
+  <rect class="line" x="290" y="30" width="260" height="306" rx="10" />
+  <text class="label" x="306" y="22">box</text>
+
+  <rect class="line" x="306" y="44" width="228" height="44" rx="5" />
+  <text class="label" x="318" y="62">SSH or a command</text>
+  <text class="dim" x="318" y="79">who reaches the box</text>
+
+  <rect class="line" x="306" y="106" width="228" height="30" rx="5" />
+  <text class="label" x="318" y="126">devlanes tunnel</text>
+
+  <rect class="line" x="306" y="154" width="228" height="44" rx="5" />
+  <text class="label" x="318" y="172">pairing check</text>
+  <text class="dim" x="318" y="189">which machines see lanes</text>
+
+  <rect class="fill" x="306" y="216" width="228" height="94" rx="6" />
+  <text class="label" x="318" y="236">box daemon</text>
+  <rect class="line" x="318" y="250" width="204" height="30" rx="4" />
+  <text class="label" x="330" y="270">lanes</text>
+
+  <path class="line" d="M 420 88 L 420 104" />
+  <path class="line" d="M 414 96 L 420 106 L 426 96" />
+  <path class="line" d="M 420 136 L 420 152" />
+  <path class="line" d="M 414 144 L 420 154 L 426 144" />
+  <path class="line" d="M 420 198 L 420 214" />
+  <path class="line" d="M 414 206 L 420 216 L 426 206" />
+
+  <!-- your daemon connects to the box -->
+  <path class="path" d="M 242 266 L 281 266 L 281 66 L 302 66" />
+  <path class="path" d="M 294 60 L 304 66 L 294 72" />
+</svg>

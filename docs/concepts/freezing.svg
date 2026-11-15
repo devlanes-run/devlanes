@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 230" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
-  <title>A lane goes from running to throttled after 5m idle and to frozen after 15m idle; activity brings it back to running</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 250" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>An unused lane goes from running to throttled after the throttle time and to frozen once the freeze time has passed since its last activity; activity thaws it back to running</title>
   <style>
     .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
     .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
@@ -8,32 +8,34 @@
     .dim { fill: currentColor; opacity: 0.65; }
   </style>
 
-  <rect class="fill" x="20" y="60" width="120" height="54" rx="6" />
-  <text class="label" x="32" y="83">running</text>
-  <text class="dim" x="32" y="103">normal</text>
+  <rect class="fill" x="20" y="70" width="120" height="54" rx="6" />
+  <text class="label" x="32" y="93">running</text>
+  <text class="dim" x="32" y="113">in use</text>
 
-  <rect class="line" x="220" y="60" width="120" height="54" rx="6" />
-  <text class="label" x="232" y="83">throttled</text>
-  <text class="dim" x="232" y="103">low priority</text>
+  <rect class="line" x="220" y="70" width="120" height="54" rx="6" />
+  <text class="label" x="232" y="93">throttled</text>
+  <text class="dim" x="232" y="113">low priority</text>
 
-  <rect class="line" x="420" y="60" width="120" height="54" rx="6" />
-  <text class="label" x="432" y="83">frozen</text>
-  <text class="dim" x="432" y="103">suspended</text>
+  <rect class="line" x="420" y="70" width="120" height="54" rx="6" />
+  <text class="label" x="432" y="93">frozen</text>
+  <text class="dim" x="432" y="113">suspended</text>
 
-  <!-- idle time moves the lane right -->
-  <text class="dim" x="130" y="44">after 5m idle</text>
-  <path class="line" d="M 140 87 L 216 87" />
-  <path class="line" d="M 208 81 L 218 87 L 208 93" />
+  <!-- time without activity moves the lane right -->
+  <text class="dim" x="128" y="40">throttle time</text>
+  <text class="dim" x="128" y="56">unused</text>
+  <path class="line" d="M 140 97 L 216 97" />
+  <path class="line" d="M 208 91 L 218 97 L 208 103" />
 
-  <text class="dim" x="325" y="44">after 15m idle</text>
-  <path class="line" d="M 340 87 L 416 87" />
-  <path class="line" d="M 408 81 L 418 87 L 408 93" />
+  <text class="dim" x="318" y="40">freeze time since</text>
+  <text class="dim" x="318" y="56">last activity</text>
+  <path class="line" d="M 340 97 L 416 97" />
+  <path class="line" d="M 408 91 L 418 97 L 408 103" />
 
-  <!-- activity brings it back -->
-  <path class="path" d="M 480 114 L 480 160 L 80 160 L 80 118" />
-  <path class="path" d="M 280 114 L 280 160" />
-  <path class="path" d="M 74 127 L 80 116 L 86 127" />
-  <text class="label" x="246" y="182">activity</text>
+  <!-- activity thaws it -->
+  <path class="path" d="M 480 124 L 480 170 L 80 170 L 80 128" />
+  <path class="path" d="M 280 124 L 280 170" />
+  <path class="path" d="M 74 137 L 80 126 L 86 137" />
+  <text class="label" x="216" y="192">activity thaws it</text>
 
-  <text class="dim" x="20" y="216">On Linux a lane goes from running straight to frozen.</text>
+  <text class="dim" x="20" y="240">On Linux a lane goes from running straight to frozen.</text>
 </svg>

@@ -1,35 +1,58 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 300" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
-  <title>devlanes.yaml, devlanes.local.yaml, devlanes.prod.yaml and devlanes.prod.local.yaml merge in that order into one config, and a later file wins</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 420" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>The files merge in order into one config: the extended file, its local file, the loaded file and its local file. Drift compares what runs with what the config says, and a reload restarts a changed unit, stops a removed one and starts an added one</title>
   <style>
     .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
     .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
-    .path { stroke: var(--dl-diagram-accent, currentColor); fill: none; stroke-width: 2.5; }
     .label { fill: currentColor; }
     .dim { fill: currentColor; opacity: 0.65; }
   </style>
 
-  <text class="dim" x="20" y="22">merge order</text>
+  <text class="dim" x="20" y="18">merge order, a later file wins</text>
 
-  <rect class="line" x="20" y="34" width="330" height="36" rx="6" />
-  <text class="label" x="36" y="57">1  devlanes.yaml</text>
-  <text class="dim" x="366" y="57">extended file</text>
+  <rect class="line" x="20" y="28" width="300" height="32" rx="6" />
+  <text class="label" x="34" y="49">1  devlanes.yaml</text>
+  <text class="dim" x="336" y="49">extended file</text>
 
-  <rect class="line" x="20" y="82" width="330" height="36" rx="6" />
-  <text class="label" x="36" y="105">2  devlanes.local.yaml</text>
-  <text class="dim" x="366" y="105">its local file</text>
+  <rect class="line" x="20" y="66" width="300" height="32" rx="6" />
+  <text class="label" x="34" y="87">2  devlanes.local.yaml</text>
+  <text class="dim" x="336" y="87">its local file</text>
 
-  <rect class="line" x="20" y="130" width="330" height="36" rx="6" />
-  <text class="label" x="36" y="153">3  devlanes.prod.yaml</text>
-  <text class="dim" x="366" y="153">the project file</text>
+  <rect class="line" x="20" y="104" width="300" height="32" rx="6" />
+  <text class="label" x="34" y="125">3  devlanes.prod.yaml</text>
+  <text class="dim" x="336" y="125">loaded file</text>
 
-  <rect class="line" x="20" y="178" width="330" height="36" rx="6" />
-  <text class="label" x="36" y="201">4  devlanes.prod.local.yaml</text>
-  <text class="dim" x="366" y="201">its local file</text>
+  <rect class="line" x="20" y="142" width="300" height="32" rx="6" />
+  <text class="label" x="34" y="163">4  devlanes.prod.local.yaml</text>
+  <text class="dim" x="336" y="163">its local file</text>
 
-  <path class="path" d="M 185 214 L 185 240" />
-  <path class="path" d="M 178 231 L 185 242 L 192 231" />
+  <path class="line" d="M 170 174 L 170 192" />
+  <path class="line" d="M 164 185 L 170 194 L 176 185" />
 
-  <rect class="fill" x="20" y="244" width="330" height="40" rx="6" />
-  <text class="label" x="36" y="269">one config</text>
-  <text class="dim" x="366" y="269">a later file wins</text>
+  <rect class="fill" x="20" y="194" width="300" height="34" rx="6" />
+  <text class="label" x="34" y="216">one config</text>
+
+  <!-- drift -->
+  <text class="dim" x="20" y="262">drift: what runs against what the config says</text>
+
+  <rect class="line" x="20" y="272" width="520" height="132" rx="6" />
+  <text class="dim" x="36" y="294">unit</text>
+  <text class="dim" x="196" y="294">runs</text>
+  <text class="dim" x="276" y="294">config says</text>
+  <text class="dim" x="416" y="294">reload</text>
+  <path class="line" d="M 36 304 L 524 304" />
+
+  <text class="label" x="36" y="328">changed</text>
+  <text class="label" x="196" y="328">yes</text>
+  <text class="label" x="276" y="328">differently</text>
+  <text class="label" x="416" y="328">restarts it</text>
+
+  <text class="label" x="36" y="356">removed</text>
+  <text class="label" x="196" y="356">yes</text>
+  <text class="label" x="276" y="356">not at all</text>
+  <text class="label" x="416" y="356">stops it</text>
+
+  <text class="label" x="36" y="384">added</text>
+  <text class="label" x="196" y="384">no</text>
+  <text class="label" x="276" y="384">run it</text>
+  <text class="label" x="416" y="384">starts it</text>
 </svg>
