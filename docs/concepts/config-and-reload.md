@@ -8,11 +8,13 @@ A lane reads its config from the project file, from the local file next to it an
 
 ## Files merge in a fixed order
 
-Unless you name a file with `--file`, devlanes loads the nearest `devlanes.yaml` in the folder you are in or above it, up to the repository root. That loaded file can name other project files to build on, and each of those comes first, followed by its own local file, then the loaded file and its local file, so the local file of the file you load has the final say.
+Unless you name a file with `--file`, devlanes loads the nearest `devlanes.yaml` in the folder you are in or one above it. The search stops at the repository root, since a file above it belongs to another project.
 
-![The files merge in order into one config: the extended file, its local file, the loaded file and its local file. Drift compares what runs with what the config says, and a reload restarts a changed unit, stops a removed one and starts an added one](config-and-reload.svg)
+In most projects two files take part: `devlanes.yaml` and the local file next to it, `devlanes.local.yaml`, which wins where both set the same thing. A project file can also build on other project files. Each of those comes first, each followed by its own local file, and the file you loaded comes last with its local file, so that local file has the final say.
 
-Mappings merge by key at each level, so a local file that sets one variable of a service keeps the others. Lists and single values replace, and a later file that gives a service a script drops the plain command an earlier file gave it. A later file cannot delete what an earlier one set; it can keep a service from starting by default, or empty a list. Templates, blocks of service settings that services reuse by naming them, expand after the merge, so a template from the base file sees the overrides that came after it.
+![In the usual case devlanes.yaml and devlanes.local.yaml merge into one config; with extends, devlanes.yaml, devlanes.local.yaml, devlanes.prod.yaml and devlanes.prod.local.yaml merge in that order, a later file winning. Drift is the difference between what runs and what the config would start, and a reload applies it](config-and-reload.svg)
+
+Mappings merge by key, so a local file that sets one variable of a service keeps the others; lists and single values replace. A later file cannot delete what an earlier one set, but it can keep a service from starting by default, or empty a list. Templates, blocks of service settings that services reuse by naming them, expand after the merge, so a template from the base file sees the overrides that came after it.
 
 ## The local file belongs to one developer
 
@@ -22,9 +24,11 @@ A worktree without a local file of its own reads the one in the primary worktree
 
 ## An edit leaves running processes alone
 
-The daemon checks each file the last load read, the `.env` that expressions read included, and loads the config again when one changes. It does not stop or restart a unit because of that: each running unit keeps the command and environment it was started with until you apply the change.
+The daemon checks each file the last load read, the `.env` that expressions read included, and loads the config again when one changes. It does not stop or restart a [unit](../reference/glossary.md) because of that: each running service or task keeps the command and environment it was started with until you apply the change.
 
-Hostnames are the exception, because they change the proxy and not a process. An edited hostname of a service, of a container or of a server you run yourself is routed as soon as the file loads, and so is a change to what a box may share. A unit whose environment carries one of those URLs still has the old value until it restarts.
+Hostnames are the exception, because they change the proxy and not a process. An edited hostname of a service, of a container or of a server you run yourself is routed as soon as the file loads, and so is a change to which services a box, a machine whose lanes are mirrored to others, keeps hidden from those machines. A route still goes to the port the running unit was started with, and a unit whose environment carries one of those URLs keeps the old value until it restarts.
+
+The new routes wait while a start runs in the lane, until it ends. When the same edit needs a larger block of ports, the old hostnames stay until the lane restarts.
 
 ## Drift is the difference status shows
 
@@ -49,7 +53,7 @@ A unit drifts in one of three ways:
 - removed: it runs, and the config no longer has it
 - added: the config would run it, and it has not started yet
 
-Values read from the shell that started the lane count too, so a unit started from a shell with a different value shows as changed. The record stays in memory because it holds environment values, which [Environment and expressions](environment.md) explains.
+The comparison uses the environment the lane holds, which the last start, run or exec in it brought. A command from a shell with other values can therefore make units show as changed, and a reload then restarts them with those values. A value you change only in your shell shows nowhere, because a status sends no environment; [Environment and expressions](environment.md) says which commands bring one in.
 
 ## Reload applies the difference
 
@@ -63,7 +67,7 @@ myapp@0 · main
   ✓  worker  http://127.0.0.1:20062
 ```
 
-A reload restarts the whole lane when the container settings changed since the lane was last brought up, or when the edit needs more ports than the lane's block holds, since a lane's port block can only move while nothing in it runs. A reload keeps the environment the lane's last start brought, so it does not apply drift that comes from your shell. `devlanes restart` does: it starts the units again with the environment of the shell you run it in. A plain start also starts added units, without touching the rest.
+A reload restarts the whole lane when the container settings changed since the lane was last brought up, or when the edit needs more ports than the lane's block holds. A lane's block of ports can only move while nothing in the lane runs, so that change cannot be made one unit at a time.
 
 ## A file that does not load leaves the lane as it was
 
@@ -76,7 +80,7 @@ myapp
   0     main    running  3/3       1.9%  92.8 MiB  https://myapp.localhost  (config changed; C:\Users\you\dev\myapp\devlanes.yaml is invalid at line 14, column 11: services.api.host: unknown key `host`; did you mean `hosts`?)
 ```
 
-The lane goes on running and carries the error with the file and the line. Starts, restarts and reloads of the lane refuse with that error until the file loads again. When the file names another project, as after a branch switch, the worktree moves to that project as [Lanes and projects](lanes-and-projects.md) describes, and the old lane keeps running on its last config until you stop it.
+The lane goes on running and carries the error with the file and the line. Starts, restarts and reloads of the lane refuse with that error until the file loads again. A file that names another project after a branch switch moves the worktree to that project, as [Lanes and projects](lanes-and-projects.md) describes, and the old lane keeps running on its last config until you stop it.
 
 ## Related
 

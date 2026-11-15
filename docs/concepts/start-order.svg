@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 380" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
-  <title>A start runs containers, setup, tasks, services, then tasks after services, each phase once the one before it ended; each service waits at the start gate before it spawns</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 400" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>A start of myapp runs postgres in containers, then setup creates the database, then the install and migrate tasks one after the other, then api and web start together through the start gate with no order between them, then the seed task after services</title>
   <style>
     .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
     .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
@@ -7,41 +7,51 @@
     .dim { fill: currentColor; opacity: 0.65; }
   </style>
 
-  <text class="dim" x="20" y="16">each phase once the one before it ended</text>
+  <text class="dim" x="20" y="14">a start of myapp, phase after phase</text>
 
-  <rect class="line" x="20" y="28" width="520" height="40" rx="6" />
-  <text class="label" x="36" y="53">containers</text>
-  <text class="dim" x="196" y="53">shared and per-lane, until ready</text>
+  <rect class="line" x="20" y="24" width="520" height="46" rx="6" />
+  <text class="label" x="36" y="52">containers</text>
+  <rect class="line" x="196" y="32" width="150" height="30" rx="4" />
+  <text class="label" x="208" y="52">postgres</text>
 
-  <path class="line" d="M 280 68 L 280 86" />
-  <path class="line" d="M 274 79 L 280 88 L 286 79" />
+  <path class="line" d="M 100 70 L 100 86" />
+  <path class="line" d="M 94 79 L 100 88 L 106 79" />
 
-  <rect class="line" x="20" y="88" width="520" height="40" rx="6" />
-  <text class="label" x="36" y="113">setup</text>
-  <text class="dim" x="196" y="113">first start or after an edit, in parallel</text>
+  <rect class="line" x="20" y="88" width="520" height="46" rx="6" />
+  <text class="label" x="36" y="116">setup</text>
+  <rect class="line" x="196" y="96" width="150" height="30" rx="4" />
+  <text class="label" x="208" y="116">create database</text>
 
-  <path class="line" d="M 280 128 L 280 146" />
-  <path class="line" d="M 274 139 L 280 148 L 286 139" />
+  <path class="line" d="M 100 134 L 100 150" />
+  <path class="line" d="M 94 143 L 100 152 L 106 143" />
 
-  <rect class="line" x="20" y="148" width="520" height="40" rx="6" />
-  <text class="label" x="36" y="173">tasks</text>
-  <text class="dim" x="196" y="173">one at a time, in file order</text>
+  <rect class="line" x="20" y="152" width="520" height="46" rx="6" />
+  <text class="label" x="36" y="180">tasks</text>
+  <rect class="line" x="196" y="160" width="120" height="30" rx="4" />
+  <text class="label" x="208" y="180">install</text>
+  <path class="line" d="M 316 175 L 336 175" />
+  <path class="line" d="M 330 170 L 338 175 L 330 180" />
+  <rect class="line" x="340" y="160" width="120" height="30" rx="4" />
+  <text class="label" x="352" y="180">migrate</text>
 
-  <path class="line" d="M 280 188 L 280 206" />
-  <path class="line" d="M 274 199 L 280 208 L 286 199" />
+  <path class="line" d="M 100 198 L 100 214" />
+  <path class="line" d="M 94 207 L 100 216 L 106 207" />
 
-  <rect class="fill" x="20" y="208" width="520" height="86" rx="6" />
-  <text class="label" x="36" y="233">services</text>
-  <text class="dim" x="196" y="233">all together, until ready or failed</text>
-  <rect class="line" x="36" y="246" width="488" height="34" rx="5" />
-  <text class="label" x="50" y="268">start gate</text>
-  <text class="dim" x="196" y="268">each waits its turn, machine-wide</text>
+  <rect class="fill" x="20" y="216" width="520" height="110" rx="6" />
+  <text class="label" x="36" y="244">services</text>
+  <rect class="line" x="196" y="226" width="264" height="26" rx="4" />
+  <text class="label" x="208" y="244">start gate</text>
+  <rect class="line" x="196" y="264" width="120" height="30" rx="4" />
+  <text class="label" x="208" y="284">api</text>
+  <rect class="line" x="340" y="264" width="120" height="30" rx="4" />
+  <text class="label" x="352" y="284">web</text>
+  <text class="dim" x="196" y="314">start together, no order between them</text>
 
-  <path class="line" d="M 280 294 L 280 312" />
-  <path class="line" d="M 274 305 L 280 314 L 286 305" />
+  <path class="line" d="M 100 326 L 100 342" />
+  <path class="line" d="M 94 335 L 100 344 L 106 335" />
 
-  <rect class="line" x="20" y="314" width="520" height="56" rx="6" />
-  <text class="label" x="36" y="339">after services</text>
-  <text class="dim" x="196" y="339">tasks, only if every service</text>
-  <text class="dim" x="196" y="357">became ready in time</text>
+  <rect class="line" x="20" y="344" width="520" height="46" rx="6" />
+  <text class="label" x="36" y="372">after services</text>
+  <rect class="line" x="196" y="352" width="120" height="30" rx="4" />
+  <text class="label" x="208" y="372">seed</text>
 </svg>
