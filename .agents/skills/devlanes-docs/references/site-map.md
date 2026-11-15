@@ -52,6 +52,8 @@ Read in order. One project, `myapp`, from one service to lanes on a box.
 | `on-demand.md` | Keep a service stopped until someone asks for it. |
 | `tasks.md` | Run installs, migrations and seeds at the right time. |
 | `external.md` | Give a server devlanes does not run a hostname and HTTPS. |
+| `sync-build-output.md` | Copy a folder a service builds to a fixed path, on this machine or from a box. |
+| `gui-tools.md` | Open a GUI tool that serves HTTP or TCP, such as a simulator or a remote desktop, as a service. |
 
 ### Hostnames and HTTPS (`how-to/hostnames/`)
 
@@ -106,7 +108,7 @@ Read in order. One project, `myapp`, from one service to lanes on a box.
 | `tailscale.md` | Connect over a tailnet. |
 | `cloudflare.md` | Connect through Cloudflare. |
 | `several-boxes.md` | Work with boxes that run the same project. |
-| `ports-and-files.md` | Keep a service on the box, mirror a port devlanes does not run, sync build output. |
+| `what-a-box-shares.md` | Keep a service on the box, and mirror a port devlanes does not run. |
 
 ### Other (`how-to/`)
 

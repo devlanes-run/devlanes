@@ -40,6 +40,8 @@
         - how-to/services/on-demand
         - how-to/services/tasks
         - how-to/services/external
+        - how-to/services/sync-build-output
+        - how-to/services/gui-tools
     - label: Hostnames and HTTPS
       collapsed: true
       items:
@@ -82,7 +84,7 @@
         - how-to/remote/tailscale
         - how-to/remote/cloudflare
         - how-to/remote/several-boxes
-        - how-to/remote/ports-and-files
+        - how-to/remote/what-a-box-shares
     - how-to/wsl
     - how-to/update
     - how-to/report-a-bug
