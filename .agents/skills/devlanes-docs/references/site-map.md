@@ -174,6 +174,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | The shell's environment is never written to disk | `concepts/environment.md` | One sentence in `concepts/daemon.md` |
 | What the CA can sign, where its key is | `concepts/security.md` | One sentence in `concepts/hostnames-and-https.md` |
 | A lane as its own site for cookies | `concepts/hostnames-and-https.md`, once | One sentence in `learn/worktrees.md` |
+| Which worktree's `.env` and local file a lane reads | `reference/files.md` | One sentence in `how-to/projects/local-overrides.md`, `how-to/projects/env-files-and-tools.md` and `concepts/config-and-reload.md` |
 | Variables a new daemon keeps from the shell that started it | `reference/environment-variables.md` | One sentence in `concepts/environment.md` |
 | The daemon and terminals that end their child processes | `reference/windows.md` | One sentence in `concepts/daemon.md`; a row in `troubleshooting.md` |
 | Pairing: the steps | `how-to/remote/connect.md` | `learn/remote.md` shows it once |

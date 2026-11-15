@@ -30,15 +30,24 @@ Human output and the TUI show some `ready` units with another word. JSON keeps `
 
 | Shown | Meaning | In JSON | In agent output |
 |---|---|---|---|
-| `frozen` | The lane had no activity for a while and its processes are suspended. The next request, connection or command resumes it. | `power: "frozen"` | `ready` with `power=frozen` |
-| `throttled` | The lane had no activity for a while and its processes are slowed down. | `power: "throttled"` | `ready` with `power=throttled` |
+| `frozen` | The lane is unused and its processes are paused. The next request, connection or devlanes command thaws it. | `power: "frozen"` | `ready` with `power=frozen` |
+| `throttled` | The lane is unused and its processes run at background priority. | `power: "throttled"` | `ready` with `power=throttled` |
 | `running` | A service whose ready check is only that its process started. | `ready_check: "started"` | `ready` |
 
-[Throttling and freezing](../concepts/freezing.md) explains what counts as activity.
+[Throttling and freezing](../concepts/freezing.md) explains when a lane is unused and what thaws it.
+
+### Activity of throttled and frozen lanes
+
+| Activity | Rule |
+|---|---|
+| CPU | The lane's services together use 25% of one core or more in one metrics sample. It counts for a lane that is not frozen, and does not thaw a frozen lane. |
+| A new connection to a port of the lane | devlanes reads the system's table of TCP connections every 5 seconds, and every 0.5 seconds while some lane on the machine is frozen. Ports of the lane's own containers count; ports of shared containers do not. |
+| A request through the proxy | Thaws a frozen lane at once. The request waits up to 10 seconds for the thaw, then goes through. |
+| A devlanes command on the lane | Counts when the daemon receives it. |
 
 ### Drift
 
-A unit that the project file has changed since it started carries `drift`, which `devlanes reload` applies.
+A unit whose entry in the project file differs from what runs carries `drift`, which `devlanes reload` applies.
 
 | `drift.kind` | Meaning |
 |---|---|
@@ -72,10 +81,11 @@ A lane takes the first state in this table that applies.
 | State | Meaning |
 |---|---|
 | `no-config` | The worktree has no project file, or its file names another project, and the lane has no number. |
-| `unassigned` | The lane has no number or no port block yet. `reason` says why: `lanes_max` (the project has `lanes.max` lanes), `pool_exhausted` (no free block is left in the port pool) or `no_ports`. |
+| `unassigned` | The lane has no number or no port block yet. A lane with a number and no block has a `reason`: `lanes_max` (the project has `lanes.max` lanes), `pool_exhausted` (no free block is left in the port pool) or `no_ports`. A lane without a number yet has none. |
 | `stopping` | A stop of the whole lane is under way. |
-| `starting` | A start is running its steps, or a service is starting or queued. |
+| `starting` | A start is running its steps. |
 | `failed` | A service of the lane has failed. |
+| `starting` | A service is starting, or a unit waits in the start gate. |
 | `running` | A unit of the lane runs, an orphaned one included. |
 | `idle` | Nothing of the lane runs. |
 
@@ -84,7 +94,7 @@ Other fields of a lane:
 | Field | Meaning |
 |---|---|
 | `reference` | The lane reference to paste into commands, such as `myapp@1` ([Lane and unit references](lane-and-unit-references.md)). |
-| `power` | Set while the lane is idle: `level` is `throttled` or `frozen`, `since_ms` when it got there, `last_activity` what it last saw: `proxy`, `connection`, `cpu`, `command` or `stop`. |
+| `power` | Set while the lane is throttled or frozen: `level` is `throttled` or `frozen`, `since_ms` when it got there, `last_activity` what it last saw: `proxy`, `connection`, `cpu`, `command` or `stop`. |
 | `config_changed` | A unit has a `drift`, or the lane's infra settings changed. |
 | `infra_changed` | The lane's infra settings changed, so a reload restarts the whole lane. |
 | `needs_env` | The daemon restarted and the lane needs one start from a shell before its services run. |
@@ -98,9 +108,9 @@ Other fields of a lane:
 | `0` | Success. |
 | `1` | Failure: a unit failed, a check failed, or the daemon refused the request. |
 | `2` | Usage error: an unknown flag, an invalid reference, a missing argument, or a confirmation that needs `--yes`. |
-| `3` | Not found or ambiguous: a lane, unit or project that matches nothing or several things, or no `devlanes.yaml` in the directory or its parents. |
+| `3` | Not found or ambiguous: a lane, unit or project that matches nothing or several things, no `devlanes.yaml` in the directory or its parents, or a project file whose project no command has started. |
 | `4` | The daemon cannot be reached, cannot start, refuses to start in a sandbox, or runs a release with another protocol (`protocol_mismatch`). |
-| `124` | A timeout passed first: `--timeout` of `start`, `restart`, `reload` or `wait`. |
+| `124` | A timeout passed first: `--timeout` of `start`, `restart`, `reload`, `lane new --start`, `lane resume` or `wait`. |
 | `127` | `devlanes with`: the command was not found or could not be started. |
 | `130` | Ctrl-C detached the command and left the units running, a picker was cancelled, or the TUI of a start was closed before the start ended. |
 | `128 + N` | `devlanes with` ended by signal N, after stopping what it started: 130 for SIGINT, 143 for SIGTERM. |
@@ -110,12 +120,12 @@ Per command:
 
 | Command | Exit code |
 |---|---|
-| `start`, `restart`, `reload` | `0` when every started unit is ready, `1` when one failed, `124` on timeout. |
-| `wait` | `0` when ready or, for a task or `exec` command, when it exited with 0; `1` when it failed; `124` on timeout. |
-| `status`, `stop`, `lane ls` | `1` while a lane or unit it shows is `failed`, a task or `exec` command that exited with another code than 0 included. |
-| `with` | `1` without running the command when a unit fails to start; otherwise the command's code. |
-| `run` | The task's exit code. |
 | `doctor` | `1` when a check fails. |
+| `run` | `0` when the task exited with 0, or was handed over (detached or interactive); otherwise the task's exit code, or `1` for a task that was stopped or timed out. |
+| `start`, `restart`, `reload`, `lane new --start`, `lane resume` | `0` when every started unit is ready, `1` when one failed, `124` on timeout. |
+| `status`, `stop`, `lane ls`, `url ls` | `1` while a lane, unit or route it shows is `failed`, a task or `exec` command that exited with another code than 0 included. |
+| `wait` | `0` when ready or, for a task or `exec` command, when it exited with 0; `1` when it failed; `124` on timeout. |
+| `with` | `1` without running the command when a unit fails to start; otherwise the command's code. |
 | A start in the TUI | `0` when the start was ready, `1` when it failed, `130` when the TUI closed before the start ended. |
 
 ## Output modes
@@ -181,7 +191,7 @@ These commands stream and print NDJSON, one JSON object per line:
 - `run TASK`, without `--list` and `--detach`
 - `logs -f`, `infra logs -f`
 - `status --watch`
-- `debug events -f`
+- `debug events`, with or without `-f`
 
 Each event line has the same fields:
 

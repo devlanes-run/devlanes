@@ -8,7 +8,7 @@ Commands name a lane with a lane reference, as in `--lane 2`, and a unit with a 
 
 ## Lane references
 
-A lane reference is `[project@]lane`. Without `project@`, the lane is looked for in the project of the current directory ([How a command picks the project](#how-a-command-picks-the-project)).
+A lane reference is `[project@]lane`. Without `project@`, the lane is looked for in the project of the current directory ([Picking the project](#picking-the-project)).
 
 | Form | Matches | Example |
 |---|---|---|
@@ -34,9 +34,11 @@ A project name is lowercase letters, digits, `.`, `_` and `-`, and starts with a
 | 3 | Two lanes that match at the same step make the reference ambiguous. |
 | 4 | A worktree that is not a lane yet is matched by its folder name, and only when no lane matched. |
 
+Branches, lane names and folder names compare exactly, with case. Paths compare without case on Windows and with case elsewhere.
+
 ## Unit references
 
-A unit reference is `[lane:]unit`, where `lane` is any lane reference. Without `lane:`, the unit is looked for in the lane the command picks ([How a command picks the lane](#how-a-command-picks-the-lane)).
+A unit reference is `[lane:]unit`, where `lane` is any lane reference. Without `lane:`, the unit is looked for in the lane the command picks ([Picking the lane](#picking-the-lane)).
 
 | Form | Matches | Example |
 |---|---|---|
@@ -44,13 +46,13 @@ A unit reference is `[lane:]unit`, where `lane` is any lane reference. Without `
 | `lane:unit` | The unit in that lane. | `1:api`, `feat/checkout:web` |
 | `project@lane:unit` | The unit in that lane of that project. | `myapp@1:api` |
 | `service.N` | Replica N of a service with replicas. | `worker.2` |
-| `service` | Every replica of a service with replicas. | `worker` |
-| Glob | Every unit whose name matches the pattern. | `"api-*"` |
-| `+tag` | Every unit with that tag. | `+backend` |
+| `service` | In commands that take several units: every replica of a service with replicas. | `worker` |
+| Glob | In commands that take several units: every unit whose name matches the pattern. | `"api-*"` |
+| `+tag` | In commands that take several units: every unit with that tag. | `+backend` |
 
-A unit is a service or a replica of one, a task, an `exec` command by its `--name`, an `infra.setup` or `infra.teardown` entry as `setup.<entry>` or `teardown.<entry>`, or an `infra.external` entry.
+A unit is a service or a replica of one, a task, an `exec` command by its `--name`, an `infra.setup` or `infra.teardown` entry as `setup.<entry>` or `teardown.<entry>`, or an `infra.external` entry. Containers are not units.
 
-A glob takes `*`, `?`, `[abc]`, `[a-z]` and `{a,b}`. Quote it, so the shell leaves it alone. A tag is one of the unit's `tags`.
+A glob takes `*`, `?`, `[abc]`, `[a-z]` and `{a,b}`. A shell expands an unquoted glob before devlanes sees it. A tag is one of the unit's `tags`. Unit names and globs compare with case.
 
 On Windows the colon after a drive letter belongs to the path: `C:\src\myapp:web` is the unit `web` of the lane at `C:\src\myapp`.
 
@@ -61,12 +63,12 @@ Commands that take several units, such as `start`, `stop`, `restart` and `logs`,
 | Rule | Result |
 |---|---|
 | Each reference has to match at least one unit. | A reference that matches none fails, and nothing is done. |
-| References that name a lane have to name the same lane. | Two lanes fail with `mixed_lanes`. |
+| References that name a lane have to name it in the same words. | `1:api myapp@1:web` fails with `mixed_lanes`, though both name lane 1. |
 | References without a lane use the lane that the others name. | `start 1:api web` starts `api` and `web` of lane 1. |
 | On `start`, a name, glob or tag may select a service with `autostart: false`. | In a profile's list, a glob skips such services; a name or a tag selects them. |
 | On `start`, `stop`, `restart` and `reload`, a lone reference without a lane that names no unit but is the number or the name of a lane | Fails and names that lane, with `--lane` as the fix. |
 
-## How a command picks the project
+## Picking the project
 
 A command takes the first of these that applies.
 
@@ -86,7 +88,7 @@ When several projects share the folder, `DEVLANES_LANE_PROJECT` picks one of the
 
 A lane reference that starts with `project@` uses that project, whatever the current directory.
 
-## How a command picks the lane
+## Picking the lane
 
 | Step | Lane |
 |---|---|
@@ -94,7 +96,7 @@ A lane reference that starts with `project@` uses that project, whatever the cur
 | 2 | `--lane LANE`. |
 | 3 | The lane of the worktree that holds the current directory. In a folder that also has lanes added with `lane new --name`, its first lane. |
 | 4 | With `--file`, outside the project's repository: the lane whose worktree holds that file. |
-| 5 | With `--project` or `--file`, outside the project's repository: lane 0, else the project's only lane. |
+| 5 | With `--project`, `-p`, `DEVLANES_PROJECT` or `--file`, outside the project's repository: lane 0. Without lane 0, the project's only lane. With several lanes and no lane 0 the command fails with `ambiguous`, and with no lane with `not_found`. |
 
 Step 5 does not apply to `run`, `exec`, `lane new`, `lane clean` and `lane gc`. Outside the repository they fail with `lane_required` and need `--lane`. Inside the repository, a directory in none of the project's worktrees fails with `not_found`.
 
@@ -106,7 +108,8 @@ Commands that list lanes, such as `status`, `lane ls` and `stop --mine`, cover m
 | `--file` or `--project` | The lanes of that project. |
 | A directory of one project | The lanes of that project. |
 | A folder that holds several projects, such as a repository root | The lanes of each of them. |
-| A directory outside every project | Every lane. |
+| A directory outside every project, with `DEVLANES_LANE_PROJECT` set | The lanes of that project. |
+| A directory outside every project, otherwise | Every lane. |
 
 ## A missing reference
 
@@ -131,7 +134,7 @@ Some commands need a unit, a task or a lane and can list the choices: `logs`, `u
 | `project_ambiguous` | 3 | Several projects share the folder. | `path`, `candidates` |
 | `no_config` | 3 | No `devlanes.yaml` in the directory or its parents, up to the repository root. | `path`, `searched_to` |
 | `project_not_started` | 3 | The project file names a project no command has started, and the command only reads. | `project`, `file` |
-| `argument_missing` | 2 or 3 | A command that needs a reference got none and cannot ask ([A missing reference](#a-missing-reference)). | `command`, `argument`, `options`, `total`, `example` |
+| `argument_missing` | 2 or 3 | A command that needs a reference got none and cannot ask ([A missing reference](#a-missing-reference)). | Listed on [States and exit codes](states-and-exit-codes.md#errors). |
 
 `candidates` holds references that can be pasted into the next command: lanes as `project@N`, units as `project@N:unit`. How an error is printed is on [States and exit codes](states-and-exit-codes.md#errors).
 

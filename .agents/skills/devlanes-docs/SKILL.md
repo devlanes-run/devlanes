@@ -119,7 +119,7 @@ These hold for Learn pages, how-to guides and concepts.
 | unit | a service, task, exec command, setup or teardown entry, or external port | process, job |
 | service | a long-running process of a lane | server, app |
 | container | something under `infra`; a lane has containers next to its units | infra (in prose), unit |
-| unused lane | a lane with no activity, which is throttled, then frozen | idle lane: `idle` is the state of a lane that runs nothing |
+| unused lane | a lane with no activity, which is throttled, then frozen | idle lane: `idle` is the state of a lane that runs nothing, and of a service that has not run |
 | thaw | a frozen lane running again | resume, wake: `devlanes lane resume` brings lanes back after the daemon went away |
 | ready check | `ready` | health check, health route, probe |
 | daemon | the background process that owns the lanes | server, agent |
@@ -174,6 +174,8 @@ A wrong page is worse than a missing one.
 - A prompt block asks only for what `skills/devlanes/` teaches an agent to do. Check the skill before you write one.
 - A `yaml devlanes` block that is a whole file passes `devlanes config check`. A block that is a fragment uses only keys the schema has; the website build fails on an unknown key. A fragment does not lean on a variable or an entry the page never shows, such as a `lanes.vars` value from an example.
 - Check a claim about behaviour against the code or a run, not against the old docs or another page.
+- A claim about another tool (Next.js, Vite, Tauri, Wrangler, Tailscale) rests on that tool's own documentation or a run, and names no version ranges. Where the behaviour depends on the version, start the step from the symptom the reader sees.
+- A how-to guide whose goal nobody has reached on the release, with an example that is not `ready`, carries `publish: false` until someone has.
 - Follow every link you add.
 - Read the page once more against "Voice" and "Page shape", and count the code spans in each paragraph.
 

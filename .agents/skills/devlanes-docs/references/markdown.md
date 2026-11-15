@@ -95,7 +95,7 @@ services:
 ::::
 ```
 
-Sync keys: `os` (macOS, Linux, Windows), `install` (the install methods), `shell` (bash, zsh, fish, PowerShell), `agent` (agent hosts). Use tabs only where the content differs by that key. Two systems that share the content share a tab: `:::tab[macOS and Linux]`. Tabs with the same key switch together. Tabs by anything else, such as a framework, a runtime or a datastore, are `::::tabs` with no `sync`, and switch alone.
+Sync keys: `os` (macOS, Linux, Windows), `install` (the install methods), `shell` (bash, zsh, fish, PowerShell), `agent` (agent hosts). Use tabs only where the content differs by that key. Two systems that share the content share a tab: `:::tab[macOS and Linux]`. Tabs with the same key switch together. Tabs by anything else, such as a framework or a datastore, are `::::tabs` with no `sync`, and switch alone. A page with several tab groups by the same thing gives them a key of its own so they switch together: `sync="runtime"` on the runtimes guide.
 
 ## Steps
 
