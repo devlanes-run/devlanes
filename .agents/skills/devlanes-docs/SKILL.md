@@ -75,7 +75,7 @@ A page that mixes kinds is the main way these docs went wrong before. Explanatio
 These hold for Learn pages, how-to guides and concepts.
 
 - The first paragraph gives the situation and what comes out of it, in plain words, with no inline code. It does not talk about the page: no "this page", no "here you will".
-- A section is a heading, one or two short paragraphs and one thing to look at: a terminal block, a config block, a few lines of the app's code or a diagram. On a concept page a section may be prose alone, up to three paragraphs, when there is nothing real to show. On a how-to guide an "If ..." variation may be a short paragraph and a link, and a step with nothing to show joins the step before it.
+- A section is a heading, one or two short paragraphs and one thing to look at: a terminal block, a config block, a few lines of the app's code or a diagram. Two blocks may share a section when they show one idea from both sides: a file and what devlanes did with it, a command and the one that follows from it. On a concept page a section may be prose alone, up to three paragraphs, when there is nothing real to show. On a how-to guide an "If ..." variation may be a short paragraph and a link, and a step with nothing to show joins the step before it.
 - The heading states the point once. The sentence under it does not say it again; it gives the reason, the consequence or what to look for in the block. A section whose only sentence repeats its block is cut.
 - Commands and their output appear only in `console` blocks, never in a table or a sentence. Config appears only in `yaml devlanes` blocks; to talk about one line, show it as a fragment. Prose refers to both in words: "the start prints one line per service".
 - Prose may name a command or a flag in code, without its arguments, when the sentence is about it. A command line the reader is meant to type goes in a `console` block. Naming a command beats talking around it: write `devlanes lane resume`, not "a resume of all lanes". `--no-ui` is explained on `learn/first-service.md` and nowhere else.
@@ -135,7 +135,7 @@ The Not column is about devlanes' own things. A program such as Vite is still a 
 
 Names in examples:
 
-- The project is `myapp`, with services `api`, `web` and `worker`.
+- The project is `myapp`, with services `api` and `web`. A page that needs a third uses `worker`; the Learn pages have none.
 - Lane domains have no hyphen: `myapp.localhost` for lane 0, `myapp1.localhost` for lane 1.
 - Branches are `main`, `feat/checkout`, `fix/login` and `agent/perf`. The box is `my-vps`; a box that is a container is `devbox`; two boxes made from one image are `fork-a` and `fork-b`.
 - Databases are `myapp_main` and `myapp_lane1`. The folders are `~/dev/myapp` and, for the second worktree, `~/dev/myapp-checkout`.

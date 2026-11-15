@@ -17,11 +17,11 @@ Read in order. One project, myapp, from one service to lanes on a box.
 |---|---|---|
 | `learn/first-service.md` | A service, a port and a hostname | One service in a project file; the lines of the app that read its port; what a start does; the daemon keeping it running; logs. |
 | `learn/worktrees.md` | Every worktree gets a lane | A second worktree becomes lane 1 next to lane 0: lane numbers, lane domains, a block of ports each, what a service is told about its lane. |
-| `learn/connecting-services.md` | Services that find each other | A web app that calls the API of its own lane: expressions, the two kinds of URL, presets, a task that installs dependencies in a new lane. |
+| `learn/connecting-services.md` | Services that find each other | A web app that calls the API of its own lane: expressions, the two kinds of URL, a preset, a task that installs dependencies. |
 | `learn/databases.md` | A database for each lane | One Postgres for every lane with a database per lane: containers, per-lane values, setup, tasks at lane events, cleaning a lane. |
 | `learn/failures.md` | When a service fails | A service that fails and a config edit: the failed state, no automatic restart, finding the reason, reload. |
-| `learn/coding-agents.md` | A coding agent runs the lane | The daemon owns the processes, the skill, ad-hoc commands, tests against a lane, stopping what the agent started. |
-| `learn/remote.md` | Lanes on another machine | A box, pairing, the same hostnames and ports on your machine. Carries the diagram of a box and your machine. |
+| `learn/coding-agents.md` | A coding agent runs the lane | An agent in a worktree of its own: what it sees, the skill, a long-running command, the label on what it started, tests against a lane, stopping only its own units. |
+| `learn/remote.md` | Lanes on another machine | A box in a container, pairing, a stopped local lane that keeps its hostnames until the box's lane is chosen, the same hostnames and ports on your machine. Carries the diagram of one request reaching the box. |
 
 ## How-to guides
 
