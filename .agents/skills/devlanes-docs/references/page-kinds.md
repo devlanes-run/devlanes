@@ -158,9 +158,9 @@ Where each fact goes:
 On the Learn page the first fact becomes a section:
 
 ````markdown
-## The lane keeps running after you close the terminal
+## The daemon owns the process, not the terminal
 
-A background daemon owns the processes. The terminal you started from can close, and the page still loads.
+The start handed the service to a background daemon. The terminal it was typed in has no part in keeping it up.
 
 ```console
 $ devlanes status

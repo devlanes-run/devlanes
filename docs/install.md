@@ -1,48 +1,101 @@
 ---
-title: Install
-description: Install devlanes, let it set up HTTPS for your machine and check that everything works.
+title: Install devlanes
+description: Install devlanes, set up HTTPS for your machine and check that it is ready.
 kind: how-to
 ---
 
-This page gets devlanes onto your machine and ready for a first project. You end with the command installed, its certificates trusted by your browser and a check that says so.
+devlanes is a single command. Its background daemon starts by itself the first time you use it, so installing means getting the command and then letting it set up HTTPS on your machine.
 
-Your coding agent can do all of it, and set up a project as well.
+Your coding agent can do this for you, apart from one dialog your operating system shows you.
 
 ```prompt
-Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then install devlanes on this machine and tell me which steps I have to run myself.
+Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then install devlanes on this machine and tell me which steps I have to do myself.
 ```
 
 ## Install the command
 
-devlanes runs on macOS, Linux and Windows 11.
-
 ::::tabs{sync="os"}
-:::tab[macOS]
-```console
-$ curl -fsSL https://devlanes.run/install.sh | sh
-```
-:::
-:::tab[Linux]
+:::tab[macOS and Linux]
 ```console
 $ curl -fsSL https://devlanes.run/install.sh | sh
 ```
 
-The Linux build needs glibc, so Alpine and other musl systems are not supported.
+The command goes into `~/.local/bin`, and the script tells you when that folder is not on your `PATH`. The Linux build needs glibc, so Alpine and other musl systems are not supported.
 :::
 :::tab[Windows]
 ```console
 PS> irm https://devlanes.run/install.ps1 | iex
 ```
 
-Windows needs version 24H2 or later and [Git for Windows](https://gitforwindows.org).
+Open a new terminal afterwards so it finds the command. devlanes needs Windows 11 version 24H2 or later and [Git for Windows](https://gitforwindows.org).
 :::
 ::::
 
-The script installs the latest release and checks the download against the release's checksums.
+Both scripts install the latest release and compare the download with the checksums published for it.
 
-## If you prefer a package manager
+## Set up HTTPS and hostnames
 
-Each of these installs the same release build.
+devlanes serves each hostname over HTTPS with certificates from an authority of its own. The authority is created on your machine and stays in `~/.devlanes/ca`. It can only sign names meant for local development, such as those ending in `.localhost`.
+
+```console
+$ devlanes setup
+```
+
+The command lists what it is about to change and asks once. It adds the authority to your system's trust store. On macOS and Linux it also installs a small helper for the hosts file, when your system does not resolve `.localhost` hostnames by itself. Your operating system then asks for a password or a confirmation, and that part needs you.
+
+`devlanes setup --remove` undoes all of it.
+
+On Linux, browsers keep certificate stores of their own. [Trust the devlanes CA](how-to/hostnames/trust-the-ca.md) covers those, along with command-line tools and language runtimes.
+
+## Check the machine
+
+The doctor command checks what a first start depends on and prints a fix under each line that is off. The proxy, the certificates and hostname lookups are the parts to look at.
+
+```console title="on Windows 11"
+$ devlanes doctor
+proxy
+  ✓ http on port 80
+  ✓ https on port 443
+tls
+  ✓ CA at C:\Users\you\.devlanes\ca\ca.pem
+  ✓ CA trusted by system
+hosts
+  ✓ *.localhost resolves to loopback; no hosts file entries needed
+```
+
+On Linux the proxy uses ports 8443 and 8080 unless the daemon is allowed to bind 443 and 80, and URLs then carry the port. [Choose the proxy's ports](how-to/hostnames/proxy-ports.md) changes that. A project with containers also needs Docker running.
+
+## Turn on shell completions
+
+Completions fill in commands, lanes and units as you type. Add the lines for your shell to its startup file.
+
+::::tabs{sync="shell"}
+:::tab[bash]
+```sh title="~/.bashrc"
+eval "$(devlanes completions bash)"
+```
+:::
+:::tab[zsh]
+```sh title="~/.zshrc"
+autoload -Uz compinit && compinit
+source <(devlanes completions zsh)
+```
+:::
+:::tab[fish]
+```fish title="~/.config/fish/config.fish"
+devlanes completions fish | source
+```
+:::
+:::tab[PowerShell]
+```powershell title="$PROFILE"
+devlanes completions powershell | Out-String | Invoke-Expression
+```
+:::
+::::
+
+## With a package manager
+
+Homebrew, npm and uv install the release build the scripts install.
 
 ::::tabs{sync="install"}
 :::tab[Homebrew]
@@ -50,7 +103,7 @@ Each of these installs the same release build.
 $ brew install devlanes-run/tap/devlanes
 ```
 
-Homebrew has no Windows build.
+Homebrew has builds for macOS and Linux.
 :::
 :::tab[npm]
 ```console
@@ -65,53 +118,15 @@ $ uv tool install devlanes
 :::tab[cargo]
 ```console
 $ cargo binstall --git https://github.com/devlanes-run/devlanes devlanes
+$ cargo binstall --git https://github.com/devlanes-run/devlanes devlanes-hosts-helper
 ```
+
+This needs cargo-binstall. The second line adds the hosts helper, which the other installs bring with them.
 :::
 ::::
 
-## Trust the certificates
+## Related
 
-devlanes serves every hostname over HTTPS with certificates from its own authority, which exists only on your machine. Your browser accepts them once you trust that authority.
-
-```console
-$ devlanes setup
-```
-
-It lists what your machine needs, asks once and then does it. Your operating system may ask for your password or a confirmation, which is why an agent cannot run this step for you.
-
-On Linux, browsers keep their own certificate stores, and [Trust the CA](how-to/hostnames/trust-the-ca.md) covers those.
-
-## Check the machine
-
-`devlanes doctor` looks at everything a first start depends on and prints a fix next to anything that is off.
-
-```console
-$ devlanes doctor
-proxy
-  ✓ http on port 80
-  ✓ https on port 443
-tls
-  ✓ CA at ~/.devlanes/ca/ca.pem
-  ✓ CA trusted by system
-hosts
-  ✓ *.localhost resolves to loopback; no hosts file entries needed
-```
-
-The lines above are part of its output. A project with containers also needs Docker running, and `doctor` says when it is not.
-
-## Turn on shell completions
-
-Completions fill in commands, lanes and unit names. Add one line to your shell's startup file.
-
-| Shell | File | Line |
-|---|---|---|
-| bash | `~/.bashrc` | `source <(devlanes completions bash)` |
-| zsh | `~/.zshrc`, after `compinit` | `source <(devlanes completions zsh)` |
-| fish | `~/.config/fish/config.fish` | `devlanes completions fish \| source` |
-| PowerShell | `$PROFILE` | `devlanes completions powershell \| Out-String \| Invoke-Expression` |
-
-## Next
-
-- [A service, a port and a hostname](learn/first-service.md) starts the tour of what devlanes does.
-- [Add devlanes to a project](how-to/projects/add-devlanes.md) puts your own app on it.
-- [Update and uninstall](how-to/update.md) covers new releases and removing devlanes.
+- [A service, a port and a hostname](learn/first-service.md)
+- [Add devlanes to a project](how-to/projects/add-devlanes.md)
+- [Update and uninstall](how-to/update.md)

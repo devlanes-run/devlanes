@@ -1,16 +1,17 @@
 ---
 title: A service, a port and a hostname
-description: One service of myapp starts under devlanes and answers on an HTTPS hostname.
+description: The API of myapp starts under devlanes and answers on an HTTPS hostname.
 kind: learn
 ---
 
-These pages follow one project, `myapp`, from a single service to copies of the whole app running on another machine. This first page takes its API from a command you would type in a terminal to a service with a hostname, a certificate and a place in a status table.
+myapp starts as one API with a dev script. Under devlanes that script becomes a service with a port of its own and an HTTPS hostname, and it stays up when the terminal that started it goes away.
 
 ## One file describes the project
 
-The file sits at the root of the repository and is committed, so every branch has it. It names the project and lists its services. A service is a long-running process, here the API's dev script.
+The file is `devlanes.yaml`. It sits at the root of the repository and is committed like the rest of the code. It names the project and lists its services, the long-running processes the project is made of.
 
 ```yaml devlanes
+# devlanes.yaml
 project: myapp
 
 services:
@@ -24,11 +25,27 @@ services:
         path: /healthz
 ```
 
-The file never mentions a port. It says which script to run, which hostname the service wants and how to tell that it works.
+The file says which script starts the API, which hostname it wants and how to tell that it is ready. That last part is a ready check: a request devlanes repeats until the service answers. No port appears anywhere.
 
-## A start gives the service a port and a hostname
+## The service listens where it is told
 
-A start runs the script, waits until the health route answers and prints the address.
+devlanes picks a port for each service and passes it in the `PORT` variable. Reading it is the one thing the project has to do.
+
+```js
+// api/server.mjs
+const port = Number(process.env.PORT ?? 3000);
+const host = process.env.HOST ?? "127.0.0.1";
+
+server.listen(port, host, () => {
+  console.log(`api listening on http://${host}:${port}`);
+});
+```
+
+A dev server that takes its port as a flag gets it another way, which [Services that find each other](connecting-services.md) shows.
+
+## A start runs the script and waits for it
+
+A start runs the dev script with that port, repeats the ready check until the API answers, then prints where to find it.
 
 ```console title="~/dev/myapp"
 $ devlanes start --no-ui
@@ -38,24 +55,13 @@ myapp@0 · main
   ✓  api  https://api.myapp.localhost
 ```
 
-devlanes chose a free port and passed it to the API in the `PORT` variable. The API listens there, and the proxy puts the hostname in front of it.
+The second line reads as lane 0 of myapp, on the main branch. A lane is one running copy of the project; [Every worktree gets a lane](worktrees.md) adds another.
 
-In a terminal the same start runs inside the TUI, a full-screen view of every lane and its output. The `--no-ui` flag prints it as text.
+On an interactive terminal the start runs inside the TUI, a full-screen view of each lane and its output. The `--no-ui` flag prints the same start as text, which is the form these pages show.
 
-## The hostname answers over HTTPS
+## The daemon owns the process, not the terminal
 
-The address works in a browser and in any tool, with a certificate the machine trusts.
-
-```console
-$ curl -s https://api.myapp.localhost/
-{"lane":0,"lane_name":"main","service":"api","port":20060}
-```
-
-The API reports what devlanes told it. This copy of `myapp` is lane 0, the one that belongs to the `main` branch, and it listens on port 20060. The next page adds a second lane.
-
-## The service keeps running after the terminal closes
-
-A background daemon owns the process. You can close the terminal, open another and find the service where you left it.
+The start handed the API to a background daemon and returned. The terminal it was typed in has no part in keeping the API up.
 
 ```console title="~/dev/myapp"
 $ devlanes status
@@ -67,20 +73,23 @@ myapp
   api   ready  20060  0.0%  38.0 MiB  https://api.myapp.localhost
 ```
 
-Starting again while it runs changes nothing, so a start is always safe to repeat.
+The first table is the lane, shown with its domain. The second lists what runs in it: the API is ready on port 20060, behind the hostname the project file asked for. A stop ends the process and keeps both the port and the hostname for the next start.
 
-## A stopped lane keeps its place
+## The output is kept
 
-Stopping ends the process and nothing else. The lane keeps its port and its hostname for the next start.
+What a service prints goes to the daemon, which keeps it. A terminal opened later can read it back.
 
 ```console title="~/dev/myapp"
-$ devlanes stop
-stopped myapp@0:api
+$ devlanes logs api --tail 10
+api#1 api listening on http://127.0.0.1:20060
 ```
+
+The prefix on the line is a cursor, a position in the log that a later read can continue from.
 
 ## On your own project
 
 - [Add devlanes to a project](../how-to/projects/add-devlanes.md)
 - [Run scripts from project files](../how-to/projects/run-scripts.md)
 - [Wait until a service is ready](../how-to/services/ready-checks.md)
-- [The daemon](../concepts/daemon.md) and [Hostnames and HTTPS](../concepts/hostnames-and-https.md)
+- [The daemon](../concepts/daemon.md)
+- [Hostnames and HTTPS](../concepts/hostnames-and-https.md)

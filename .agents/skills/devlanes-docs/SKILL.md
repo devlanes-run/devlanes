@@ -54,9 +54,11 @@ When no page fits, add a page; do not stretch one. New content never goes at the
 
 Every page has one kind, set in its frontmatter as `kind`.
 
-**Learn** (`docs/learn/`). A short sequence read in order, with previous and next links. It tells how one project, `myapp`, comes to run under devlanes: a service on a hostname, a second worktree, services that find each other, a database per lane, a failure, an agent, another machine. The reader reads and looks; they do not type along. No "open your terminal", no "now run", no "create a branch". Each page shows what the config says, what devlanes does with it and what comes back, and names each new idea once, in a sentence. A page ends by linking the how-to guides that do the same on the reader's own project.
+**Overview** (`docs/README.md` only). One paragraph saying what devlanes does, the prompt to paste into an agent, one `devlanes status` block, one diagram with a short caption, and a list of ways in by goal. It names only the words a first-time reader needs at once: project, lane, daemon, proxy.
 
-**How-to guide** (`docs/how-to/`). One goal a person has, named in the title with an imperative verb: "Share one Postgres between lanes". It assumes the reader knows devlanes from Learn. It opens with one line saying when the guide applies, gives the steps, then the variations as "If ..., ...". It does not teach and does not describe keys one by one; it links the reference for those. It stops when the goal is reached.
+**Learn** (`docs/learn/`). A short sequence read in order, with previous and next links. It tells how one project, `myapp`, comes to run under devlanes: a service on a hostname, a second worktree, services that find each other, a database per lane, a failure, an agent, another machine. The reader reads and looks; they do not type along. No "open your terminal", no "now run", no "create a branch". Each page shows what the config says, what devlanes does with it and what comes back, and names each new idea once, in a sentence. Where the app itself has to do something, such as listen on the port it is given, the page shows those lines of the app. A page ends by linking the how-to guides that do the same on the reader's own project.
+
+**How-to guide** (`docs/how-to/`). One goal a person has, named in the title with an imperative verb: "Share one Postgres between lanes". It assumes the reader knows devlanes from Learn. It opens with one line saying when the guide applies, gives the steps, then the variations as "If ..., ...". It does not teach and does not describe keys one by one; it links the reference for those. It stops when the goal is reached, and may end with a "Related" section of at most four links.
 
 **Concept** (`docs/concepts/`). One topic explained: how it works, the reasons behind it, what was traded for what. Prose and diagrams, no steps. A reader could take it in away from the keyboard.
 
@@ -70,15 +72,20 @@ A page that mixes kinds is the main way these docs went wrong before. Explanatio
 
 These hold for Learn pages, how-to guides and concepts.
 
-- The first paragraph says what the reader gets from the page, in plain words, with no inline code.
-- A section is a heading, one or two short paragraphs and one thing to look at: a terminal block, a config block or a diagram.
-- Commands and their output appear only in `console` blocks. Config appears only in `yaml devlanes` blocks. Prose refers to them in words: "the start prints one line per service", not a list of flags.
+- The first paragraph gives the situation and what comes out of it, in plain words, with no inline code. It does not talk about the page: no "this page", no "here you will".
+- A section is a heading, one or two short paragraphs and one thing to look at: a terminal block, a config block, a few lines of the app's code or a diagram.
+- The heading states the point once. The sentence under it does not say it again; it gives the reason, the consequence or what to look for in the block. A section whose only sentence repeats its block is cut.
+- Commands and their output appear only in `console` blocks, never in a table or a sentence. Config appears only in `yaml devlanes` blocks; to talk about one line, show it as a fragment. Prose refers to both in words: "the start prints one line per service".
+- A command or a flag may be named in prose once, in code, when the sentence is about it. `--no-ui` is explained on `learn/first-service.md` and nowhere else.
 - At most two inline code spans in a paragraph. A paragraph that needs more belongs in reference.
+- Code spans are for what a person types or reads on screen: a command, a key, a hostname, a file name. The names of the project, its services and its branches are plain words: myapp, the API, the main branch.
 - A paragraph has at most four sentences, and a sentence carries one idea. No parentheses that list alternatives.
-- Lists are for parallel items. No nested lists, and no bullet that opens with a bold phrase.
+- Lists are for parallel items. No nested lists and no bold inside a list item. Definitions belong in the glossary.
 - Headings are sentence case. On Learn and concept pages a heading states the point of its section ("Each lane gets its own ports"). On how-to guides it names the step or the case ("On Linux"). No heading starts with What, Why, Where or How.
 - Size: a Learn page about 800 words, a how-to guide about 600, a concept about 1,000. A page over its size usually has a second goal.
 - Limits, formats, timings and edge cases do not sit in prose. One sentence may name that a limit exists, with a link.
+- A one-sentence summary of a fact another page owns has to stay true. Check it against that page, and leave the fact out before you blur it.
+- Link text is the title of the page it opens, as the site map lists it.
 
 ## Voice
 
@@ -90,6 +97,8 @@ These hold for Learn pages, how-to guides and concepts.
 - No filler: "note that", "it's worth noting", "simply", "just", "of course", "as mentioned".
 - No selling: seamless, powerful, effortless, robust, magic, instantly, zero-config, "spin up", leverage, unlock, ecosystem.
 - Do not count before a list ("three ways", "two reasons").
+- No "any", "every", "always", "never" or "nothing" unless it is true without exception. Most such sentences are wrong on one OS or in one case.
+- Vary the sentences. A run of short flat statements of the same shape reads as generated, and so does a list of three in every opening.
 - State what devlanes does. Say what it does not do on the limits page, not as a caveat on every page.
 
 ## Words and names
@@ -97,19 +106,19 @@ These hold for Learn pages, how-to guides and concepts.
 | Use | For | Not |
 |---|---|---|
 | worktree | a Git worktree | checkout, working copy |
-| lane | a running copy of the project for one worktree | environment, instance, slot |
-| project | what one `devlanes.yaml` describes | app, repo, workspace |
+| lane | a running copy of the project for one worktree | environment, instance, slot, and "copy" once the word lane is introduced |
+| project | what one `devlanes.yaml` describes | repo, workspace, and "app" for what devlanes runs |
 | project file | `devlanes.yaml` | config, manifest |
 | user config | `~/.devlanes/config.yaml` | settings file, global config |
 | local file | `devlanes.local.yaml` | override file |
 | unit | a service, task, exec command, container or external port | process, job |
 | service | a long-running process of a lane | server, app |
 | container | something under `infra` | infra (in prose) |
-| ready check | `ready` | health check, probe |
+| ready check | `ready` | health check, health route, probe |
 | daemon | the background process that owns the lanes | server, agent |
 | box | a machine whose lanes are mirrored to another | remote, host, server |
 | your machine | where the browser runs when a box is involved | client, laptop |
-| hostname | `api.myapp1.localhost` | domain, URL (for the name) |
+| hostname | `api.myapp1.localhost` | domain, address, name, URL (for the name) |
 | start, stop | bringing a lane up or down | spin up, boot, launch, kill |
 
 Say "worktree" for the folder and "lane" for what runs from it.
@@ -119,7 +128,7 @@ Names in examples:
 - The project is `myapp`, with services `api`, `web` and `worker`.
 - Lane domains have no hyphen: `myapp.localhost` for lane 0, `myapp1.localhost` for lane 1.
 - Branches are `main`, `feat/checkout`, `fix/login` and `agent/perf`. The box is `my-vps`.
-- Databases are `myapp_main` and `myapp_lane1`. The folder is `~/dev/myapp`.
+- Databases are `myapp_main` and `myapp_lane1`. The folders are `~/dev/myapp` and, for the second worktree, `~/dev/myapp-checkout`.
 - Outside hosts end in `example.invalid`. No real names, credentials or private paths.
 
 ## Left out of the docs
@@ -145,13 +154,16 @@ Write the page the way it should read first. If no example fits, add one to the 
 A wrong page is worse than a missing one.
 
 - Run every command a page shows, on the release the page is for. Read `devlanes <command> --help` before naming a flag.
-- Output in a `console` block comes from a real run. Shorten it by dropping whole lines. Change nothing else except names, to the ones above, and private paths, to `~/...`. Never write output from memory.
+- Output in a `console` block comes from a real run of the command the block shows. Shorten it by dropping whole lines. Change nothing else except names, to the ones above, and the user name in a path, to `you`. Never write output from memory, and never fill a block with lines from another command or another run.
+- The command in a block is the one that was run. Do not rewrite it into the form another OS would use. A command that differs by OS is a tab per OS, each with its own capture.
+- Note the OS of every capture. Output that differs by OS (ports, paths, resolvers, trust stores) goes in OS tabs, or carries the OS in the block's title, such as `title="on Windows 11"`. Prefer artefacts that read the same everywhere: devlanes' own commands over `curl`.
 - Show the command a person types and the output a person sees. A start on a terminal runs inside the TUI, so show starts with `--no-ui`. When an agent captures output, devlanes switches to its terse agent format; capture with `--output human` and `NO_COLOR=1`, and leave those two out of the block.
 - When you have no real output for something, show the config or a diagram instead. A page without an output block is fine; a page with invented output is not.
+- A prompt block asks only for what `skills/devlanes/` teaches an agent to do. Check the skill before you write one.
 - A `yaml devlanes` block that is a whole file passes `devlanes config check`. A block that is a fragment uses only keys the schema has; the website build fails on an unknown key.
 - Check a claim about behaviour against the code or a run, not against the old docs or another page.
 - Follow every link you add.
-- Run the checks in the root `AGENTS.md`, and read the page once more against "Voice" and "Page shape".
+- Read the page once more against "Voice" and "Page shape", and count the code spans in each paragraph.
 
 ## Generated pages
 

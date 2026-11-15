@@ -14,7 +14,7 @@ kind: how-to
 
 - `title`: sentence case. The page has no `#` heading; the website renders the title.
 - `description`: one sentence, shown in search results and in `llms.txt`. Plain words, no inline code.
-- `kind`: `learn`, `how-to`, `concept` or `reference`.
+- `kind`: `overview` (the docs home only), `learn`, `how-to`, `concept` or `reference`.
 - `publish: false` keeps a file off the website. `docs/AGENTS.md` has it.
 
 ## Sidebar
@@ -40,7 +40,7 @@ it works once and expires in 10 minutes
 
 - A line that starts with `$ ` is a command. Every other line is output. The copy button takes the commands only.
 - `PS> ` starts a PowerShell command.
-- `title` names where the command runs when that matters: a folder, "on the box", "on your machine".
+- `title` names where the command runs when that matters: a folder, "on the box", "on your machine", or the OS when the output differs by OS.
 - One command with its output per block where possible. A block of several commands with no output is a script.
 - Output is real ("Accuracy" in `SKILL.md`).
 
@@ -89,7 +89,7 @@ services:
 ::::
 ```
 
-Sync keys: `os` (macOS, Linux, Windows), `install` (the install methods), `agent` (agent hosts). Use tabs only where the content differs by that key. Tabs with the same key switch together.
+Sync keys: `os` (macOS, Linux, Windows), `install` (the install methods), `shell` (bash, zsh, fish, PowerShell), `agent` (agent hosts). Use tabs only where the content differs by that key. Two systems that share the content share a tab: `:::tab[macOS and Linux]`. Tabs with the same key switch together.
 
 ## Steps
 
@@ -117,7 +117,7 @@ The slug is a `slug` from `catalog.json` in the examples repository whose `statu
 ![A box and your machine, joined by one SSH session](remote-mirroring.svg)
 ```
 
-An SVG file next to the page. It uses `currentColor` and the variables `--dl-diagram-line`, `--dl-diagram-fill` and `--dl-diagram-accent`, so it follows the theme. Alt text says what the diagram shows.
+An SVG file next to the page. The website puts it inline, so it can follow the theme: use `currentColor` and the variables `--dl-diagram-line`, `--dl-diagram-fill` and `--dl-diagram-accent`, with `currentColor` or `transparent` as the fallback and no colour written as a hex value. Give it a `<title>` that matches the alt text. The alt text says what the diagram shows, and the diagram contains every word the alt text names.
 
 ## Asides
 

@@ -4,17 +4,13 @@ description: A second worktree of myapp starts next to the first, on its own por
 kind: learn
 ---
 
-The API of `myapp` runs from the `main` branch. Work on a checkout flow starts on a branch, and both versions have to be up at once: one to compare against, one to change. This page adds a second worktree and starts it next to the first.
+The API of myapp runs from the main branch. Work on a checkout flow happens on a branch of its own, and both have to be up together: the old one to compare against, the new one to change.
 
 ## A second worktree starts as lane 1
 
-Git puts the branch in a folder of its own. The project file is committed, so the new folder has it, and a start there needs nothing else.
+Git's worktree command checks the branch out into a second folder next to the first. The project file is committed, so the new folder has it, and a start there is the same command as before.
 
-```console title="~/dev/myapp"
-$ git worktree add ../myapp-checkout -b feat/checkout
-Preparing worktree (new branch 'feat/checkout')
-HEAD is now at 712903a Add api service
-$ cd ../myapp-checkout
+```console title="~/dev/myapp-checkout"
 $ devlanes start --no-ui
 ✓ services ready
 myapp@1 · feat/checkout
@@ -22,25 +18,25 @@ myapp@1 · feat/checkout
   ✓  api  https://api.myapp1.localhost
 ```
 
-A lane is one running copy of the project. The first worktree is lane 0, and this one became lane 1 the moment devlanes ran in it.
+The worktree of the main branch is lane 0. This one became lane 1 when the start ran in it. The API has no dependencies to install, so the folder runs as it is; a project that has them installs them with a task, as [Services that find each other](connecting-services.md) does.
 
 ## Both lanes run at once
 
-Neither lane knows about the other. Each has its own process, and each shows up as a row.
+The two lanes share no process and no folder. Each runs its own API from its own worktree.
 
 ```console title="~/dev/myapp-checkout"
 $ devlanes status
 myapp
   LANE  BRANCH         STATE    SERVICES  CPU   MEM       URL
-  0     main           running  1/1       0.0%  37.2 MiB  https://myapp.localhost
-  1     feat/checkout  running  1/1       0.0%  38.2 MiB  https://myapp1.localhost
+  0     main           running  1/1       0.0%  38.2 MiB  https://myapp.localhost
+  1     feat/checkout  running  1/1       0.0%  38.6 MiB  https://myapp1.localhost
 ```
 
-A lane that sits unused for a while is suspended and wakes on the next request, so leaving several up costs little. [Idle lanes](../concepts/idle-lanes.md) has the details.
+A lane nobody uses is suspended after a while and resumes on the next request, keeping its memory, ports and processes. [Idle lanes](../concepts/idle-lanes.md) says what counts as use.
 
-## Each lane has its own ports and its own name
+## The lane number is in the hostname
 
-The lane number is part of the hostname, and each lane has ports that no other lane uses.
+The project file asks for one hostname, the API under the lane's domain. That domain is `myapp.localhost` in lane 0 and `myapp1.localhost` in lane 1, so the same line gives each lane a hostname of its own.
 
 ```console title="~/dev/myapp-checkout"
 $ devlanes url ls
@@ -50,23 +46,27 @@ api.myapp1.localhost  ->  myapp@1:api  20070  ready
 proxy: http :80, https :443
 ```
 
-The names come from the one line in the project file that says `api.${{ lane.domain }}`. In lane 0 the lane's domain is `myapp.localhost`, and in lane 1 it is `myapp1.localhost`. A browser treats the two as separate sites, so a cookie set in one lane never reaches the other.
+A browser treats the two domains as separate sites, so a cookie set in lane 1 is not sent to lane 0. The ports differ as well. Each lane takes a block of ports from a pool the whole machine shares, and the API has the same place in each block.
 
-The ports come from a pool the whole machine shares. Every lane gets a block of them, ten here, and a service sits at the same place in each block: the API is first in both.
+## A service is told which lane it runs in
 
-## The same request, two answers
+Besides the port, devlanes sets a few variables for each service. They let the code tell lanes apart, for a log line or the name of a database.
 
-Each copy knows which lane it is.
-
-```console
-$ curl -s https://api.myapp.localhost/
-{"lane":0,"lane_name":"main","service":"api","port":20060}
-$ curl -s https://api.myapp1.localhost/
-{"lane":1,"lane_name":"lane1","service":"api","port":20070}
+```console title="~/dev/myapp-checkout"
+$ devlanes env show api
+DEVLANES_LANE=1
+DEVLANES_LANE_NAME=lane1
+DEVLANES_SERVICE=api
+HOST=127.0.0.1
+PORT=20070
 ```
+
+Lane 0 is named main and each other lane is named after its number, which is why this one reads lane1 and not its branch. [Environment variables](../reference/environment-variables.md) lists the rest.
 
 ## On your own project
 
-- [Run a folder twice](../how-to/lanes/two-lanes-one-folder.md)
+- [Add devlanes to a project](../how-to/projects/add-devlanes.md)
+- [Run a folder as two lanes](../how-to/lanes/two-lanes-one-folder.md)
 - [Remove lanes](../how-to/lanes/clean-up.md)
-- [Lanes and projects](../concepts/lanes-and-projects.md) and [Ports](../concepts/ports.md)
+- [Lanes and projects](../concepts/lanes-and-projects.md)
+- [Ports](../concepts/ports.md)
