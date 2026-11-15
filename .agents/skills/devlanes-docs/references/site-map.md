@@ -172,6 +172,8 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | Freezing: the CPU threshold, how fast activity is noticed, how long a request waits for a thaw | `reference/states-and-exit-codes.md`, under the throttled and frozen states | Not on a prose page |
 | A failed service stays failed | `concepts/daemon.md` | One sentence in `concepts/start-order.md` and `learn/failures.md` |
 | The shell's environment is never written to disk | `concepts/environment.md` | One sentence in `concepts/daemon.md` |
+| Whose environment a lane has after a start, run, exec, reload, restart, `lane resume` and `daemon restart` | `concepts/environment.md` | One sentence in `concepts/daemon.md` and `concepts/config-and-reload.md` |
+| Which project file loads when none is named | `concepts/config-and-reload.md` | One sentence in `concepts/lanes-and-projects.md` |
 | What the CA can sign, where its key is | `concepts/security.md` | One sentence in `concepts/hostnames-and-https.md` |
 | A lane as its own site for cookies | `concepts/hostnames-and-https.md`, once | One sentence in `learn/worktrees.md` |
 | What a clean deletes, and when clean tasks and teardown run or are skipped | `how-to/lanes/clean-up.md` | One sentence in `how-to/infra/shared-database.md` and `learn/databases.md` |

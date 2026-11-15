@@ -78,15 +78,15 @@ These hold for Learn pages, how-to guides and concepts.
 - A section is a heading, one or two short paragraphs and one thing to look at: a terminal block, a config block, a few lines of the app's code or a diagram. On a concept page a section may be prose alone, up to three paragraphs, when there is nothing real to show. On a how-to guide an "If ..." variation may be a short paragraph and a link, and a step with nothing to show joins the step before it.
 - The heading states the point once. The sentence under it does not say it again; it gives the reason, the consequence or what to look for in the block. A section whose only sentence repeats its block is cut.
 - Commands and their output appear only in `console` blocks, never in a table or a sentence. Config appears only in `yaml devlanes` blocks; to talk about one line, show it as a fragment. Prose refers to both in words: "the start prints one line per service".
-- A command or a flag may be named in prose once, in code, when the sentence is about it. Naming it beats talking around it: write `devlanes lane resume`, not "a resume of all lanes". `--no-ui` is explained on `learn/first-service.md` and nowhere else.
-- A term is defined before it is used, in one clause, or the page links the glossary at its first use. Unit, task, setup, profile, box and data folder are the ones writers forget.
+- Prose may name a command or a flag in code, without its arguments, when the sentence is about it. A command line the reader is meant to type goes in a `console` block. Naming a command beats talking around it: write `devlanes lane resume`, not "a resume of all lanes". `--no-ui` is explained on `learn/first-service.md` and nowhere else.
+- A term is defined before it is used, in one clause, or linked at its first use, on every page that uses it and not only on the first page of a section. Unit, task, setup, profile, box and data folder are the ones writers forget.
 - At most two inline code spans in a paragraph. A paragraph that needs more belongs in reference.
 - Code spans are for what a person types or reads on screen: a command, a key, a hostname, a file name. The names of the project, its services and its branches are plain words: myapp, the API, the main branch.
 - A paragraph has at most four sentences, and a sentence carries one idea. No parentheses that list alternatives.
 - Lists are for parallel items. No nested lists and no bold inside a list item. Definitions belong in the glossary.
 - Headings are sentence case. On Learn and concept pages a heading states the point of its section ("Each lane gets its own ports"). On how-to guides it names the step or the case ("On Linux"). No heading starts with What, Why, Where or How.
 - Size: a Learn page about 800 words, a how-to guide about 600, a concept about 1,000. A page over its size usually has a second goal.
-- Limits, formats, timings and edge cases do not sit in prose. One sentence may name that a limit exists, with a link. A concept page may give the scale of a timing it owns, once ("frozen after 15 minutes by default"), so the reader knows whether it is seconds or hours. The exact values, thresholds and counts go to reference.
+- Limits, formats, timings and edge cases do not sit in prose. One sentence may name that a limit exists, with a link. A concept page may give the scale of the one timing it owns, once ("frozen after 15 minutes by default"), so the reader knows whether it is seconds or hours. The exact values, thresholds and counts go to reference.
 - A fact has one owner. Every other page gets one sentence and a link, and a page does not state the same point in two of its own sections.
 - A one-sentence summary of a fact another page owns has to stay true. Check it against that page, and leave the fact out before you blur it.
 - Link text is the title of the page it opens, as the site map lists it.
@@ -119,7 +119,7 @@ These hold for Learn pages, how-to guides and concepts.
 | unit | a service, task, exec command, setup or teardown entry, or external port | process, job |
 | service | a long-running process of a lane | server, app |
 | container | something under `infra`; a lane has containers next to its units | infra (in prose), unit |
-| unused lane | a lane with no activity, which is throttled, then frozen | idle lane: `idle` is the state of a lane that runs nothing, and of a service that has not run |
+| unused lane | a lane with no activity, which is throttled, then frozen. "Unused" is for lanes only: the daemon "exits when nothing runs" | idle lane: `idle` is the state of a lane that runs nothing, and of a service that has not run |
 | thaw | a frozen lane running again | resume, wake: `devlanes lane resume` brings lanes back after the daemon went away |
 | ready check | `ready` | health check, health route, probe |
 | daemon | the background process that owns the lanes | server, agent |
@@ -167,6 +167,8 @@ A wrong page is worse than a missing one.
 - Output in a `console` block comes from a real run of the command the block shows. Shorten it by dropping whole lines. Change nothing else except names, to the ones above, and paths: the user name becomes `you` and the project's folder becomes the one above, in the form the capture's OS prints (`C:\Users\you\dev\myapp` on Windows). Never write output from memory, and never fill a block with lines from another command or another run.
 - Capture under the docs' names, so nothing has to be renamed. Where a rename or dropped rows leave a column the command aligned wider or narrower than its values, re-align it with spaces and change nothing else.
 - Output in an example's README counts as a capture only when it was run on the release the page is for. Otherwise run the example again.
+- Capture into a file and copy from the file. An agent's shell tool may change what it shows you: one capitalises the first character of the output, which turned `error:` into `Error:` on a draft.
+- A stand-in for an environment you do not have, such as a variable set by hand in place of a real sandbox, is allowed only when the code shows the real one prints the same lines, and the block's title says what was run.
 - On a Learn page and a concept page a `console` block always has output. In a how-to guide a command the reader has to type is always in a `console` block, so it can be copied: with its output when a capture exists, alone when the output is beside the point or no capture exists yet. Ask for the missing capture in the page's notes. Never describe output you have not seen.
 - An output block appears on one page. A second page that needs the same point links the first or shows another capture.
 - The command in a block is the one that was run. Do not rewrite it into the form another OS would use. A command that differs by OS is a tab per OS, each with its own capture.

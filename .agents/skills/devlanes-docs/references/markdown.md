@@ -58,7 +58,7 @@ Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill de
 ```
 ````
 
-Text for the reader to paste into a coding agent. It renders as a card with a copy button. Write it as one instruction a person would give, in plain sentences. Use it on the overview and the install page, and on a how-to guide only when the whole guide is something an agent does.
+Text for the reader to paste into a coding agent. It renders as a card with a copy button. Write it as one instruction a person would give, in plain sentences. Use it on the overview and the install page, and on a how-to guide when the guide, or its first step, is something an agent does.
 
 ## Config blocks
 

@@ -24,7 +24,11 @@ infra:
       volumes: ["./infra/oidc.json:/config/oidc.json:ro"]
 ```
 
-The next start creates the container before setup, tasks and services. [Start order and readiness](../../concepts/start-order.md) has the order.
+When the lane starts, devlanes creates the container before setup, tasks and services ([Start order and readiness](../../concepts/start-order.md)). A start into a lane that already runs creates nothing, so in a running lane bring the new container up yourself:
+
+```console
+$ devlanes infra up
+```
 
 ## Run one per lane
 
@@ -75,11 +79,17 @@ infra:
 
 ## If you change the container
 
-A running container with the same image, command, variables, mounts and ports is kept as it is. After you change any of these, the next start of the lane or `devlanes infra up` replaces it.
+A running container with the same image, command, variables, mounts and ports is kept as it is. After you change any of these, the next start of a stopped lane replaces it, and in a running lane this does:
+
+```console
+$ devlanes infra up
+```
+
+A shared container follows the project file of the lane that last brought it up. A branch that changes its image replaces it for every lane when that branch's lane comes up, and a lane of another branch puts the old one back the next time it comes up. Change a shared container on the main branch.
 
 ## If it keeps data
 
-A bare name as the source of a volume makes a named volume, kept per project for a shared container and per lane for a per-lane one. `devlanes lane clean` removes a lane's per-lane containers and their volumes. Shared containers stop when you clean the project's last lane, and their volumes stay.
+A bare name as the source of a volume makes a named volume, kept per project for a shared container and per lane for a per-lane one. Cleaning a lane removes its per-lane containers and their volumes. Shared containers stop when you clean the project's last lane, and their volumes stay. [Remove lanes](../lanes/clean-up.md) covers the clean.
 
 ## If containers need to find each other
 
