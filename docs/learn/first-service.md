@@ -25,7 +25,7 @@ services:
         path: /healthz
 ```
 
-The file says which script starts the API, which hostname it wants and how to tell that it is ready. That last part is a ready check: a request devlanes repeats until the service answers. No port appears anywhere.
+The file says which script starts the API, which hostname it wants and how to tell that it is ready. That last part is a ready check: a request devlanes repeats until the service answers. In the hostname, `${{ lane.domain }}` is an expression that devlanes replaces with the lane's domain, `myapp.localhost` here. No port appears anywhere.
 
 ## The service listens where it is told
 
@@ -55,7 +55,7 @@ myapp@0 · main
   ✓  api  https://api.myapp.localhost
 ```
 
-The second line reads as lane 0 of myapp, on the main branch. A lane is one running copy of the project; [Every worktree gets a lane](worktrees.md) adds another.
+The second line reads as lane 0 of myapp, on the main branch. A lane is one worktree's place to run the project, with a number, ports and hostnames of its own; [Every worktree gets a lane](worktrees.md) adds another.
 
 On an interactive terminal the start runs inside the TUI, a full-screen view of each lane and its output. The `--no-ui` flag prints the same start as text, which is the form these pages show.
 
@@ -67,13 +67,13 @@ The start handed the API to a background daemon and returned. The terminal it wa
 $ devlanes status
 myapp
   LANE  BRANCH  STATE    SERVICES  CPU   MEM       URL
-  0     main    running  1/1       0.0%  38.0 MiB  https://myapp.localhost
+  0     main    running  1/1       0.0%  38.6 MiB  https://myapp.localhost
 
   UNIT  STATE  PORT   CPU   MEM       URL
-  api   ready  20060  0.0%  38.0 MiB  https://api.myapp.localhost
+  api   ready  20060  0.0%  38.6 MiB  https://api.myapp.localhost
 ```
 
-The first table is the lane, shown with its domain. The second lists what runs in it: the API is ready on port 20060, behind the hostname the project file asked for. A stop ends the process and keeps both the port and the hostname for the next start.
+The first table is the lane. Its URL is the lane's domain, which nothing answers on yet, since the API has a hostname under it. The second table lists the lane's units, which is what devlanes calls each service or command it runs in a lane: here only the API, ready on port 20060 behind the hostname the project file asked for. A stop ends the process and keeps both the port and the hostname for the next start.
 
 ## The output is kept
 
@@ -84,7 +84,9 @@ $ devlanes logs api --tail 10
 api#1 api listening on http://127.0.0.1:20060
 ```
 
-The prefix on the line is a cursor, a position in the log that a later read can continue from.
+The prefix `api#1` marks the first line the API printed, and a later read can pick up after that line with `--cursor api#1`.
+
+When the checkout branch gets a worktree of its own, the same project file starts the API a second time, on other ports and another hostname.
 
 ## On your own project
 

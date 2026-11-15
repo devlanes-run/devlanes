@@ -10,7 +10,11 @@ The API of myapp runs from the main branch. Work on a checkout flow happens on a
 
 Git's worktree command checks the branch out into a second folder next to the first. The project file is committed, so the new folder has it, and a start there is the same command as before.
 
-```console title="~/dev/myapp-checkout"
+```console title="~/dev/myapp"
+$ git worktree add ../myapp-checkout -b feat/checkout
+Preparing worktree (new branch 'feat/checkout')
+HEAD is now at 4e4341c Add api service
+$ cd ../myapp-checkout
 $ devlanes start --no-ui
 ✓ services ready
 myapp@1 · feat/checkout
@@ -18,7 +22,7 @@ myapp@1 · feat/checkout
   ✓  api  https://api.myapp1.localhost
 ```
 
-The worktree of the main branch is lane 0. This one became lane 1 when the start ran in it. The API has no dependencies to install, so the folder runs as it is; a project that has them installs them with a task, as [Services that find each other](connecting-services.md) does.
+The worktree of the main branch is lane 0. This one became lane 1 when the start ran in it. The API has no dependencies to install, so the folder runs as it is; a project that has them can have devlanes install them when a lane starts, as [Services that find each other](connecting-services.md) shows.
 
 ## Both lanes run at once
 
@@ -28,11 +32,11 @@ The two lanes share no process and no folder. Each runs its own API from its own
 $ devlanes status
 myapp
   LANE  BRANCH         STATE    SERVICES  CPU   MEM       URL
-  0     main           running  1/1       0.0%  38.2 MiB  https://myapp.localhost
-  1     feat/checkout  running  1/1       0.0%  38.6 MiB  https://myapp1.localhost
+  0     main           running  1/1       0.0%  37.2 MiB  https://myapp.localhost
+  1     feat/checkout  running  1/1       0.0%  38.5 MiB  https://myapp1.localhost
 ```
 
-A lane nobody uses is suspended after a while and resumes on the next request, keeping its memory, ports and processes. [Throttling and freezing](../concepts/freezing.md) says what counts as use.
+A lane that goes unused for a while, with no requests, connections, devlanes commands or CPU use of its own, is throttled and then frozen. The next request, connection or command thaws it, with its processes, memory and ports as they were. [Throttling and freezing](../concepts/freezing.md) gives the timings and the systems that skip throttling.
 
 ## The lane number is in the hostname
 
@@ -43,7 +47,6 @@ $ devlanes url ls
 HOST                      TARGET       PORT   STATE
 api.myapp.localhost   ->  myapp@0:api  20060  ready
 api.myapp1.localhost  ->  myapp@1:api  20070  ready
-proxy: http :80, https :443
 ```
 
 A browser treats the two domains as separate sites, so a cookie set in lane 1 is not sent to lane 0. The ports differ as well. Each lane takes a block of ports from a pool the whole machine shares, and the API has the same place in each block.
@@ -61,7 +64,9 @@ HOST=127.0.0.1
 PORT=20070
 ```
 
-Lane 0 is named main and each other lane is named after its number, which is why this one reads lane1 and not its branch. [Environment variables](../reference/environment-variables.md) lists the rest.
+Whatever the branch, lane 0 is named main and every other lane is named after its number, so this one is lane1. [Environment variables](../reference/environment-variables.md) lists the rest.
+
+Each lane runs the API alone so far; a web app added next has to call the API of its own lane and not the other.
 
 ## On your own project
 

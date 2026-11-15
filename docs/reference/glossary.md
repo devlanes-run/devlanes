@@ -25,7 +25,7 @@ The words the devlanes docs use, in alphabetical order, each with the page that 
 | Hostname | A name the proxy serves over HTTPS, such as `api.myapp1.localhost`. | [Hostnames and HTTPS](../concepts/hostnames-and-https.md) |
 | Hosts helper | `devlanes-hosts`, a small program that writes the routed hostnames into `/etc/hosts` for programs that cannot resolve `*.localhost`. On macOS and Linux. | [Fix programs that cannot resolve *.localhost](../how-to/hostnames/resolve-localhost.md) |
 | Keep awake | `keep_awake: true` on a service: while it runs, its lane is not throttled or frozen. | [Run many lanes on one machine](../how-to/lanes/many-lanes.md) |
-| Lane | A running copy of the project for one worktree, with its own ports, hostnames and data. | [Lanes and projects](../concepts/lanes-and-projects.md) |
+| Lane | One worktree's place to run the project: a number with ports, hostnames and data of its own, which it keeps whether its services run or not. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Lane 0 | The lane of the primary worktree. In CI, the clone the job made is lane 0, whatever its branch. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Lane data folder | A folder of each lane outside its worktree, for files no other lane may share. | [Files and folders](files.md#lane-data-folder) |
 | Lane domain | The domain the hostnames of a lane end in: `myapp.localhost` in lane 0, `myapp1.localhost` in lane 1. | [Hostnames and HTTPS](../concepts/hostnames-and-https.md) |

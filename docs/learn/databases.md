@@ -4,14 +4,13 @@ description: One Postgres container serves every lane of myapp, and each lane ge
 kind: learn
 ---
 
-The API of myapp starts keeping data in Postgres. Both lanes need a database, and a migration tried on the feature branch must not touch the data of the main branch. One Postgres serves them all, with a database for each lane inside it.
+The API of myapp starts keeping data in Postgres. Both lanes need a database, and a migration tried on the feature branch must leave the data of the main branch alone. One Postgres container serves both lanes, with a database for each lane inside it.
 
 ## One container serves every lane
 
-Postgres runs from a Compose file next to the project file. The project file names it under `infra`, which holds the containers a project depends on. devlanes starts them before anything else in the lane and waits until the healthcheck passes.
+Postgres runs from a Compose file next to the project file. devlanes starts the containers a project lists under `infra` before anything else in a lane, and waits until their healthcheck passes.
 
-```yaml
-# docker-compose.yml
+```yaml title="docker-compose.yml"
 services:
   postgres:
     image: postgres:17.6-alpine
@@ -28,31 +27,33 @@ volumes:
   pgdata:
 ```
 
-The port mapping leaves the host port to Docker, and devlanes reads back the one Docker chose. One container is shared by the lanes of the project, so a stop of a lane leaves it running. Containers need Docker with Compose v2.
+The port mapping leaves the host port to Docker, and devlanes reads back the one Docker chose. The container is the project's, shared by its lanes, so stopping a lane leaves it running, even when every lane is stopped. It stops when the project's last lane is cleaned, and its volume keeps the data.
 
 ## Each lane computes the name of its database
 
-A lane can compute values of its own from expressions, and the rest of the file reads them like the lane's domain. Here the value is the database name. The database URL is built from it and from the port Docker gave the container.
+The project file points at the Compose file and fixes the Compose project's name, so `docker compose -p myapp` reaches the same container from any terminal. A lane can also compute values of its own, which the rest of the file reads like the lane's domain.
 
 ```yaml devlanes
 lanes:
   vars:
     db_name: myapp_${{ lane.name }}
 
+infra:
+  compose: docker-compose.yml
+  project_name: myapp
+
 global_env:
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/${{ lane.db_name }}
 ```
 
-The name is `myapp_main` in lane 0 and `myapp_lane1` in lane 1, after the lane names. A variable under `global_env` reaches every service and task of the lane, so the API and the migration task below both connect to the same database.
+The file reads the value as `lane.db_name`, which comes out as myapp_main in lane 0 and myapp_lane1 in lane 1, after the lane names. The database URL is built from it and from the port Docker gave the container, and as a global variable it reaches every service and task of the lane.
 
 ## Setup creates the database, a task migrates it
 
-Two kinds of step prepare the database, and they run at different times. Setup belongs to the containers and runs once per lane. The migration is a task that runs at every start.
+Setup is a list of commands that prepare a lane's data. It runs once per lane, after the containers are ready, and again when its entry changes. A `lane.create` task, like the install, runs at each start that brings the lane up until it has succeeded once there. A `lane.start` task runs at every start that brings the lane up.
 
 ```yaml devlanes
 infra:
-  compose: docker-compose.yml
-  project_name: ${{ project.name }}
   setup:
     # Postgres has no CREATE DATABASE IF NOT EXISTS; \gexec runs the CREATE only when the SELECT returns a row.
     database: |
@@ -60,45 +61,81 @@ infra:
       SELECT 'CREATE DATABASE ${{ lane.db_name }}'
       WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${{ lane.db_name }}')\gexec
       SQL
+  teardown:
+    database: docker compose exec -T postgres dropdb -U postgres --if-exists --force ${{ lane.db_name }}
 
 tasks:
   migrate:
-    run_script:
-      file: api/package.json
-      name: db:migrate
+    run: docker compose exec -T postgres psql -U postgres -d ${{ lane.db_name }} -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS notes (id serial PRIMARY KEY, body text NOT NULL)"
     when: lane.start
 ```
 
-devlanes records a setup entry as done once it succeeds, and later starts of the lane skip it. devlanes points the setup command's Compose calls at the shared container, and the Postgres client runs inside it, so the machine needs none. The fixed project name lets `docker compose -p myapp` reach the same container from a terminal outside devlanes. A task on the lane start runs again each time, so the migration script has to skip what is already applied.
+Teardown removes what setup made, when the lane is cleaned. devlanes points `docker compose` in these commands at the shared project, and psql runs inside the container, so the machine needs no Postgres client. The migration runs again at each such start, so it is written to skip what already exists.
 
-## A start brings them up in order
+## A start runs them in order
 
-This start ran with plain output, which prints ok where a terminal shows a check mark. Its lines come in the order devlanes ran the steps.
+Containers come first, then setup, then tasks, then services, so the API starts against a database that exists and is migrated. [Start order and readiness](../concepts/start-order.md) has the details.
 
 ```console title="~/dev/myapp"
-$ devlanes start --no-ui --output plain
-ok infra
-ok setup
-ok migrate
+$ devlanes start --no-ui
+✓ infra
+✓ setup
+✓ migrate
+✓ services ready
+$ devlanes stop
+stopped myapp@0:api
+stopped myapp@0:web
+$ devlanes start --no-ui
+✓ infra
+! setup skipped: already done
+✓ migrate
+✓ services ready
+myapp@0 · main
+✓ services  2 of 2 ready
+  ✓  api  https://api.myapp.localhost
+  ✓  web  https://myapp.localhost
 ```
 
-Containers come first, then setup, then tasks, then services, so the API starts against a database that exists and is migrated. A step that fails stops the start before the services. [Start order and readiness](../concepts/start-order.md) has the full order.
+The second start skips setup, since the database of lane 0 exists, and runs the migration again. The install task does not run in either start, because it succeeded in this lane when the web app arrived.
+
+## Each lane connects to its own database
+
+In the checkout worktree the API gets the database of lane 1, on the port Docker chose for the container.
+
+```console title="~/dev/myapp-checkout"
+$ devlanes env show api
+DATABASE_URL=postgres://postgres:postgres@127.0.0.1:50204/myapp_lane1
+DEVLANES_LANE=1
+DEVLANES_LANE_NAME=lane1
+```
+
+The API reads the variable like any other. To stay small, myapp takes only the database's name from it and returns that with the lane number.
+
+```js
+// api/server.mjs
+const database = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL).pathname.slice(1) : null;
+```
 
 ## Cleaning a lane drops its database
 
-A lane outlives a stop. Its database, ports and data folder stay for the next start, until the lane is cleaned with `devlanes lane clean`. Cleaning runs the teardown entries, which remove what setup made.
+A lane outlives a stop: its database, ports and data folder stay for the next start. The data folder is a folder devlanes keeps for each lane in its home and passes to the lane's units as `DEVLANES_LANE_DATA`. A dry run of `devlanes lane clean` lists what a clean would do, and does none of it.
 
-```yaml devlanes
-infra:
-  teardown:
-    database: docker compose exec -T postgres dropdb -U postgres --if-exists --force ${{ lane.db_name }}
+```console title="~/dev/myapp, on Windows 11"
+$ devlanes lane clean 1 --dry-run
+would clean myapp@1 (feat/checkout):
+  stop      myapp@1:api
+  stop      myapp@1:web
+  teardown  database: docker compose exec -T postgres dropdb -U postgres --if-exists --force ${{ lane.db_name }}
+  delete    data C:\Users\you\.devlanes\data\myapp\209 (0 B)
+  delete    logs (3.3 KiB)
+  delete    run and task history
+  free      ports 20070-20079
+next: devlanes lane clean myapp@1 --yes
 ```
 
-Cleaning lane 1 drops `myapp_lane1`, while lane 0 keeps running on its own database in the same container. When the last lane of the project is cleaned, the container stops, and its volume keeps the data.
+The teardown line shows the entry as the file has it; a clean runs it for lane 1 and drops myapp_lane1, while lane 0 keeps its own database in the same container. The data folder is empty because myapp keeps nothing there. [Remove lanes](../how-to/lanes/clean-up.md) has what a clean deletes and when.
 
-:::caution
-Cleaning a lane deletes its data folder and logs as well as its database.
-:::
+Both lanes keep running, each on its own database, so when the API breaks on the feature branch in [When a service fails](failures.md), the main branch goes on as it was.
 
 ## On your own project
 

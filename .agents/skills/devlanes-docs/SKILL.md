@@ -111,7 +111,7 @@ These hold for Learn pages, how-to guides and concepts.
 | Use | For | Not |
 |---|---|---|
 | worktree | a Git worktree | checkout, working copy |
-| lane | a running copy of the project for one worktree | environment, instance, slot, and "copy" once the word lane is introduced |
+| lane | one worktree's place to run the project: a number with ports, hostnames and data of its own, which it keeps whether its services run or not | environment, instance, slot, copy, and "running copy" as its definition, since a stopped lane is still a lane |
 | project | what one `devlanes.yaml` describes | repo, workspace, and "app" for what devlanes runs |
 | project file | `devlanes.yaml` | config, manifest, and "project file" for `package.json` and the like |
 | user config | `~/.devlanes/config.yaml` | settings file, global config |
@@ -192,7 +192,7 @@ A wrong page is worse than a missing one.
 
 `skills/devlanes/SKILL.md` is loaded by an agent on any task in a repository that uses devlanes, so every line costs context on every task.
 
-- `SKILL.md` covers daily use: the words (project, lane, unit, box), running this worktree's copy of the project, what a new worktree needs, getting URLs and ports, logs, tests, ad-hoc long-running commands, stopping what the agent started, what to tell the user to open, states, exit codes and errors.
+- `SKILL.md` covers daily use: the words (project, lane, unit, box), running this worktree's lane, what a new worktree needs, getting URLs and ports, logs, tests, ad-hoc long-running commands, stopping what the agent started, what to tell the user to open, states, exit codes and errors.
 - It does not teach configuration. Setting devlanes up in a repository for the first time, writing or changing `devlanes.yaml`, migrating from another tool, registering the MCP server, setting up a box and fixing hostnames, proxy and lane problems each live in a file under `references/`, named at the top of `SKILL.md` with the situation that calls for it.
 - It is the way most people try devlanes: they paste the prompt from the install page and their agent does the rest. `references/setup.md` has to take an agent from a repository without devlanes to a running lane and a URL for the user, and say which steps only the user can do, such as answering the prompt of `devlanes setup`.
 - It is exact and terse: imperative sentences, tables, real commands. The prose rules above about inline code and page shape do not apply to it. The rules under "Voice", "Words and names", "Left out of the docs" and "Accuracy" do.

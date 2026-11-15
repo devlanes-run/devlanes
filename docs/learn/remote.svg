@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 545" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
-  <title>my-vps and your machine joined by one connection; the browser on your machine opens https://myapp.localhost and reaches web on port 41001 on the box</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 485" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>The browser on your machine opens https://myapp.localhost; your proxy sends the request over one connection to devbox, a container, where web in myapp lane 0 answers as myapp.localhost on port 28001</title>
   <style>
     .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
     .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
@@ -9,50 +9,38 @@
   </style>
 
   <!-- your machine -->
-  <rect class="line" x="10" y="30" width="540" height="230" rx="10" />
+  <rect class="line" x="10" y="30" width="540" height="200" rx="10" />
   <text class="label" x="26" y="22">your machine</text>
 
-  <text class="dim" x="296" y="60">browser</text>
-  <text class="label" x="296" y="80">https://myapp.localhost</text>
+  <rect class="fill" x="150" y="48" width="260" height="50" rx="6" />
+  <text class="dim" x="164" y="68">browser</text>
+  <text class="label" x="164" y="88">https://myapp.localhost</text>
 
   <!-- request: browser to proxy -->
-  <path class="path" d="M 410 90 L 410 150" />
-  <path class="path" d="M 403 141 L 410 152 L 417 141" />
+  <path class="path" d="M 280 98 L 280 128" />
+  <path class="path" d="M 273 119 L 280 130 L 287 119" />
 
-  <rect class="fill" x="26" y="120" width="508" height="126" rx="8" />
-  <text class="label" x="42" y="144">daemon</text>
-  <text class="dim" x="42" y="176">your CA signs</text>
-  <text class="dim" x="42" y="196">the box's hostnames</text>
+  <rect class="fill" x="150" y="130" width="260" height="70" rx="6" />
+  <text class="label" x="164" y="152">proxy</text>
+  <text class="dim" x="164" y="172">myapp.localhost</text>
+  <text class="dim" x="164" y="190">to port 28001</text>
 
-  <rect class="line" x="288" y="154" width="230" height="34" rx="6" />
-  <text class="label" x="302" y="176">proxy</text>
-
-  <!-- request: proxy to the mirrored port -->
-  <path class="path" d="M 410 188 L 410 198" />
-
-  <rect class="line" x="288" y="198" width="230" height="34" rx="6" />
-  <text class="label" x="302" y="220">port 41001</text>
-  <text class="dim" x="404" y="220">mirrored</text>
-
-  <!-- the connection between the machines -->
-  <path class="path" d="M 410 232 L 410 450" />
-  <path class="path" d="M 403 441 L 410 452 L 417 441" />
-  <text class="label" x="424" y="288">one connection</text>
-  <text class="dim" x="424" y="306">SSH or a command</text>
+  <!-- the one connection, from your proxy to the box's web service -->
+  <path class="path" d="M 280 200 L 280 370" />
+  <path class="path" d="M 273 361 L 280 372 L 287 361" />
+  <text class="label" x="296" y="256">one connection</text>
+  <text class="dim" x="296" y="274">docker exec or SSH</text>
 
   <!-- the box -->
-  <rect class="line" x="10" y="330" width="540" height="200" rx="10" />
-  <text class="label" x="26" y="322">my-vps, the box</text>
+  <rect class="line" x="10" y="300" width="540" height="170" rx="10" />
+  <text class="label" x="26" y="292">devbox, a container</text>
 
-  <rect class="fill" x="26" y="350" width="508" height="164" rx="8" />
-  <text class="label" x="42" y="374">daemon</text>
-  <text class="dim" x="42" y="394">start and stop</text>
-  <text class="dim" x="42" y="414">run here</text>
+  <rect class="line" x="130" y="318" width="300" height="136" rx="8" />
+  <text class="label" x="146" y="340">myapp lane 0</text>
+  <text class="dim" x="146" y="358">main</text>
 
-  <rect class="line" x="288" y="364" width="230" height="136" rx="6" />
-  <text class="label" x="302" y="386">myapp lane 0</text>
-  <text class="dim" x="302" y="406">main</text>
-  <rect class="line" x="302" y="452" width="202" height="34" rx="5" />
-  <text class="label" x="314" y="474">web</text>
-  <text class="dim" x="364" y="474">port 41001</text>
+  <rect class="fill" x="150" y="372" width="260" height="66" rx="6" />
+  <text class="label" x="164" y="396">web</text>
+  <text class="dim" x="164" y="418">myapp.localhost</text>
+  <text class="dim" x="164" y="434">port 28001</text>
 </svg>

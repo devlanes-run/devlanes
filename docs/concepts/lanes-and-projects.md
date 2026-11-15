@@ -4,7 +4,7 @@ description: Each Git worktree of a project runs as a numbered lane with its own
 kind: concept
 ---
 
-You work on two branches at once, each in a Git worktree of its own. devlanes runs a lane for each worktree: a running copy of the project with a number, hostnames, a block of ports and a data folder of its own. The project is what one project file describes, and its name together with the lane number gives each lane its hostnames.
+You work on two branches at once, each in a Git worktree of its own. devlanes gives each worktree a lane: a place to run the project, with a number, hostnames, a block of ports and a data folder of its own, which it keeps whether its services run or not. The project is what one project file describes, and its name together with the lane number gives each lane its hostnames.
 
 ## Each worktree runs its own lane
 

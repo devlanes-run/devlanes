@@ -1,86 +1,107 @@
 ---
 title: A coding agent runs the lane
-description: A coding agent starts, tests and stops a lane of myapp on its own, and devlanes answers it in a shorter format.
+description: A coding agent works on a branch of myapp in its own worktree, runs a lane there next to the lanes a person started, and stops only what it started.
 kind: learn
 ---
 
-myapp has an API, a web app and a worker, and both of its lanes are up. A coding agent takes over the main worktree and runs lane 0 by itself: it starts the services, adds a process of its own, runs a test and stops what it started, while lane 1 keeps serving the checkout branch.
+A person started lanes 0 and 1 of myapp. A coding agent now works on a branch of its own, agent/perf, in a third worktree. It runs its lane through the same daemon and the same commands, and devlanes keeps track of which units are the agent's.
 
-## The agent starts the lane through the daemon
+## The agent's start becomes lane 2
 
-An agent runs each command in a shell that may be gone a moment later, so a dev server it starts in the background of that shell tends to die with it or be forgotten. The devlanes skill, installed with `npx skills add devlanes-run/devlanes --skill devlanes`, teaches the agent to hand its services to the daemon instead, with the same commands a person uses. [Set up a coding agent](../how-to/agents/set-up.md) also covers the MCP server, for agents whose shell cannot reach the daemon.
+An agent runs each command in a shell that may be gone a moment later, so a dev server it starts in that shell's background tends to die with it. A start hands the services to the daemon instead. devlanes sees from the variables the agent's host sets that an agent is running it, and answers in a terser format, with one line per service.
 
-```console title="~/dev/myapp"
+```console title="~/dev/myapp-perf, as the agent sees it"
 $ devlanes start
-myapp@0 (main): 3/3 ready, already running (nothing started)
-ready api http://127.0.0.1:20060 https://api.myapp.localhost
-ready web http://127.0.0.1:20061 https://myapp.localhost
-ready worker http://127.0.0.1:20062
+myapp@2 (agent/perf): 2/2 ready
+ready api http://127.0.0.1:20080 https://api.myapp2.localhost
+ready web http://127.0.0.1:20082 https://myapp2.localhost
 ```
 
-The lane was already up, so the start left it alone and said so. This is the format devlanes prints when it recognizes an agent by the variables its host sets: a line per service with its local port and its hostname, and no prompts. When something fails, the failure comes first with the end of its log and the command that shows more, and the output stays under a size limit that [States and exit codes](../reference/states-and-exit-codes.md) gives.
+Each line holds the service's local URL and its hostname. The agent learns these commands from the devlanes skill, which [Set up a coding agent](../how-to/agents/set-up.md) installs.
 
 ## A command of its own becomes a unit
 
-Some processes the agent needs are not in the project file, such as a watcher or a server for one experiment. Run through `devlanes exec`, such a process belongs to the daemon like a service, gets the lane's environment and keeps its output.
+The agent wants the API's tests to run again on every change, and no service in the project file does that. `devlanes exec` runs the watcher as a unit of the lane, so its process and its log belong to the daemon and not to the agent's shell.
 
-```console title="~/dev/myapp"
-$ devlanes exec --name ticker -- node -e "setInterval(() => console.log('tick'), 2000)"
-running myapp@0:ticker actor=opencode pid=8592
-  logs: devlanes logs myapp@0:ticker --tail 100
-  stop: devlanes stop myapp@0:ticker
+```console title="~/dev/myapp-perf, as the agent sees it"
+$ devlanes exec --name watch-tests -- node --test --watch "api/*.test.mjs"
+running myapp@2:watch-tests actor=opencode pid=53356
+  logs: devlanes logs myapp@2:watch-tests --tail 100
+  stop: devlanes stop myapp@2:watch-tests
 ```
 
-The name is what later commands use to find it, and the answer spells out the two the agent will want next. A unit made this way gets no port or hostname of its own.
+The answer gives the two commands the agent needs next. The unit gets the lane's environment, like a service. Whoever starts it, a unit runs as you, outside any sandbox the agent's shell is in; [Security](../concepts/security.md) covers what that means.
 
-## Each unit records who started it
+## The person's units carry no label
 
-Every request names who sent it, a person or an agent session, and the daemon writes that on each unit it starts. In the lane's status, the label sits at the end of each line.
+The label at the end of the exec line is the daemon's record of who started the unit. In lane 2 every unit has it. In lane 0, where a person typed the start, none does.
 
-```console title="~/dev/myapp"
+```console title="~/dev/myapp-perf, as the agent sees it"
+$ devlanes status 2
+running myapp@2 agent/perf 2/2
+ready myapp@2:api http://127.0.0.1:20080 https://api.myapp2.localhost default=20080 actor=opencode
+ready myapp@2:web http://127.0.0.1:20082 https://myapp2.localhost default=20082 actor=opencode
+exited myapp@2:install exit=0 actor=opencode
+exited myapp@2:migrate exit=0 actor=opencode
+exited myapp@2:setup.database exit=0 actor=opencode
+running myapp@2:watch-tests actor=opencode
 $ devlanes status 0
-running myapp@0 main 3/3
-ready myapp@0:api http://127.0.0.1:20060 https://api.myapp.localhost default=20060 actor=opencode
-ready myapp@0:web http://127.0.0.1:20061 https://myapp.localhost default=20061 actor=opencode
-ready myapp@0:worker http://127.0.0.1:20062 default=20062 actor=opencode
-running myapp@0:ticker actor=opencode
+running myapp@0 main 2/2
+ready myapp@0:api http://127.0.0.1:20060 https://api.myapp.localhost default=20060
+ready myapp@0:web http://127.0.0.1:20062 https://myapp.localhost default=20062
+exited myapp@0:install exit=0
+exited myapp@0:migrate exit=0
+exited myapp@0:setup.database exit=0
 ```
 
-This agent's session started every unit of lane 0, ticker included. The default entry is the service's port under its name. The client sets the label itself and the daemon does not check it, so it tells sessions apart without guarding anything.
+Lane 2 ran its install task, its setup and its migration like any new lane, and its setup created a database of its own. The field marked `default` is the service's main port. The label names the agent, so two sessions of one agent show the same one; the daemon also keeps the session that started each unit, and that is what the agent's stop matches below.
 
-A lane is not a sandbox. Every process in it runs as you, with your files and your network, whether a person or an agent started it. [Security](../concepts/security.md) covers what that means.
+## Tests run against the lane that is up
 
-## The agent stops only what it started
+The smoke test reads the API's URL from a variable devlanes sets for each service, so it names no port and passes in any lane.
 
-Before handing the work back, the agent stops ticker by name, then everything else it started in this lane.
-
-```console title="~/dev/myapp"
-$ devlanes stop --mine "*"
-stopped myapp@0:api
-stopped myapp@0:web
-stopped myapp@0:worker
+```js
+// api/smoke.test.mjs
+test("api answers /healthz", async () => {
+  const base = process.env.DEVLANES_PUBLIC_URL_API;
+  const res = await fetch(new URL("/healthz", base));
+  assert.equal(res.status, 200);
+});
 ```
 
-The star covers the units of the current lane, and the flag keeps the ones this session started. Units a person started would have kept running, and so did lane 1, although the same session had started it. Without a unit, the flag covers every lane of the project.
+`devlanes with` runs a command with the lane's environment and exits with the command's exit code.
 
-## A test gets the lane for as long as it runs
-
-The API has a smoke test that reads the API's URL from `DEVLANES_PUBLIC_URL_API`, so it names no port. `devlanes with` sets that variable for each service while it runs a command against the lane.
-
-```console title="~/dev/myapp"
+```console title="~/dev/myapp-perf, as the agent sees it"
 $ devlanes with -- node --test "api/*.test.mjs"
-myapp@0 (main): 3/3 ready
-ready api http://127.0.0.1:20060 https://api.myapp.localhost
-ready web http://127.0.0.1:20061 https://myapp.localhost
-ready worker http://127.0.0.1:20062
-✔ api answers /healthz (40.82ms)
+myapp@2 (agent/perf): 2/2 ready, already running (nothing started)
+ready api http://127.0.0.1:20080 https://api.myapp2.localhost
+ready web http://127.0.0.1:20082 https://myapp2.localhost
+✔ api answers /healthz (40.9015ms)
 ℹ tests 1
 ℹ pass 1
 ℹ fail 0
-devlanes with · myapp@0 · exit 0
 ```
 
-Lane 0 was stopped when the run began. It started the lane, waited until each service was ready, ran the test, then stopped the lane again and exited with the test's exit code.
+The lane was running, so `with` started nothing and had nothing to stop when the test ended. On a stopped lane it starts what the command needs and stops it again afterwards, which [Run tests against a lane](../how-to/ci/tests.md) shows.
+
+## The agent stops only what it started
+
+Before it hands the branch back, the agent stops its own units. With no unit named, `devlanes stop --mine` covers the units of this project that the agent's session started.
+
+```console title="~/dev/myapp-perf, as the agent sees it"
+$ devlanes stop --mine
+stopped myapp@2:api
+stopped myapp@2:watch-tests
+stopped myapp@2:web
+$ devlanes status
+running myapp@0 main 2/2
+running myapp@1 feat/checkout 2/2
+idle myapp@2 agent/perf
+```
+
+Only lane 2's units are on the list, and the shared Postgres container is not. The person's lanes 0 and 1 keep running, and lane 2 is idle: it runs nothing and keeps its ports and its database for the next start.
+
+Every lane so far runs on this machine. Next, myapp moves to another one.
 
 ## On your own project
 

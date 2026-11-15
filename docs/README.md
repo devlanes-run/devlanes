@@ -1,10 +1,10 @@
 ---
 title: devlanes
-description: devlanes runs a copy of your project for each Git worktree, on its own ports and HTTPS hostnames.
+description: devlanes runs your project once per Git worktree, each on its own ports and HTTPS hostnames.
 kind: overview
 ---
 
-devlanes runs your dev stack once per Git worktree, so two branches of the same project can be up at the same time. Each running copy is called a lane. A lane has ports and HTTPS hostnames of its own, and a setup step can give it a database of its own as well. Your project needs one small file, and each service has to listen on the port devlanes hands it.
+devlanes runs your dev stack once per Git worktree, so two branches of the same project can be up at the same time. Each worktree gets a lane: a numbered place with ports, HTTPS hostnames and data of its own, which it keeps whether its services run or not. A setup step can give a lane a database of its own as well. Your project needs one small file, and each service has to listen on the port devlanes hands it.
 
 The quickest way to try it is to hand it to your coding agent.
 
@@ -22,11 +22,11 @@ Here the main branch and a feature branch of myapp run side by side, each from i
 $ devlanes status
 myapp
   LANE  BRANCH         STATE    SERVICES  CPU   MEM       URL
-  0     main           running  1/1       0.0%  38.2 MiB  https://myapp.localhost
-  1     feat/checkout  running  1/1       0.0%  38.6 MiB  https://myapp1.localhost
+  0     main           running  1/1       0.0%  37.2 MiB  https://myapp.localhost
+  1     feat/checkout  running  1/1       0.0%  38.5 MiB  https://myapp1.localhost
 ```
 
-Each row is a lane. devlanes picked its ports and built its hostname from the lane's number, so the project itself names neither.
+Each row is a lane, and its URL is the lane's domain. Each service gets a hostname under that domain, such as `api.myapp1.localhost` for the API of lane 1 in the diagram below. devlanes picked the ports and built the hostnames from the lane's number, so the project itself names neither.
 
 ## A daemon and a proxy do the work
 

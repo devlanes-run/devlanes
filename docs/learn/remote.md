@@ -1,76 +1,126 @@
 ---
 title: Lanes on another machine
-description: The lanes of myapp run on a box, and the browser on your machine opens them under the same hostnames and port numbers.
+description: myapp moves onto a box, and the browser on your machine opens its lanes under the same hostnames and port numbers.
 kind: learn
 ---
 
-myapp does not have to run on the machine in front of you. Its lanes can run on a VPS or in a container, and the browser on your machine still opens them under the hostnames and port numbers they have there, with no port forwarded by hand.
+myapp moves off your machine onto a box, a machine that runs lanes of its own which another machine mirrors. Here the box is a container named devbox, with a Docker engine inside it, reached with Docker's exec command. A VPS reached over SSH works the same way. The lanes run on the box, and the browser on your machine opens them under the hostnames they had before.
 
-## A box runs its own lanes
+## The lanes on your machine are cleaned first
 
-A box is a machine with devlanes installed whose lanes another machine mirrors. For myapp it is my-vps, a container that your machine reaches with Docker's exec command. The first devlanes command inside it starts a daemon there, and that daemon runs myapp as a daemon on a laptop would.
+A clean stops a lane, runs its teardown and deletes its data. In myapp the teardown drops the lane's database, so each clean takes one database out of the shared Postgres.
 
-```console title="on your machine"
-$ docker exec my-vps devlanes start --no-ui
-ok install
-myapp@0 · main
-ok services  2 of 2 ready
-  ok  web    https://myapp.localhost
-  ok  admin  https://admin.myapp.localhost
+```console title="~/dev/myapp"
+$ devlanes lane clean 2 --yes
+cleaned myapp@2: stopped 0 units, teardown database
+$ devlanes lane clean 1 --yes
+cleaned myapp@1: stopped 2 units, teardown database
+$ devlanes lane clean 0 --yes
+cleaned myapp@0: stopped 2 units, teardown database
+  stopped shared containers (data kept)
 ```
 
-The install task ran first, as it does in any new lane, then both services became ready. The box runs the same devlanes release as your machine. A box whose release speaks another protocol cannot connect, and [Prepare a box](../how-to/remote/prepare-a-box.md) covers installing the right one.
+Lane 2 had nothing left to stop after the agent's stop. With lane 0 gone, no lane of myapp uses the shared container, so the last clean stops it and keeps its volume. [Remove lanes](../how-to/lanes/clean-up.md) lists what a clean deletes.
 
-## One connection joins the two machines
+## The box runs the same start
 
-Your machine's daemon opens the connection and keeps it. It goes over SSH, or, for a box without SSH, through a command such as Docker's exec that runs devlanes inside the box. The box sends its lanes, ports, hostnames and states over it, and opens no port of its own for it.
+The box holds the repository on the main branch. Its start is the one your machine ran before: the shared container, setup, the install task, the migration, then the services. Postgres runs on the box's own Docker engine.
 
-![my-vps and your machine joined by one connection; the browser on your machine opens https://myapp.localhost and reaches web on port 41001 on the box](remote.svg)
+```console title="on the box"
+$ devlanes start --no-ui
+✓ infra
+✓ setup
+✓ install
+✓ migrate
+✓ services ready
+myapp@0 · main
+✓ services  2 of 2 ready
+  ✓  api  https://api.myapp.localhost
+  ✓  web  https://myapp.localhost
+```
 
-Nothing on the connection starts or stops a unit. Starting, stopping and reading logs happen on the box, in a shell there, and when web is stopped on my-vps your browser gets an error page naming the command to run on the box. Environments and secrets stay on the box as well; [Remote mirroring](../concepts/remote-mirroring.md) lists what crosses.
+The box's user config gives its lanes ports from a range of their own, outside the blocks your machine hands out. A port number the box uses is then free on your machine as well.
+
+```yaml devlanes-user
+ports:
+  range: 28000-32767
+```
 
 ## Your machine pairs with the box once
 
-One entry in your user config tells your machine how to reach my-vps, here the Docker command that runs the box's end of the connection. The box serves only machines it has paired with, so the first connection carries a one-time code that the box hands out.
+The box serves only machines it has paired with. On the box, `devlanes daemon pair` prints a code that works once.
 
-```console title="on your machine"
-$ devlanes config set remote.boxes.my-vps.command '[docker, exec, -i, my-vps, devlanes, tunnel, --stdio]'
-$ docker exec my-vps devlanes daemon pair
-$ devlanes remote connect my-vps --background --code BQGA-0RH8
+```console title="on the box"
+$ devlanes daemon pair
+pairing code: V7G3-AFH2
+it works once and expires in 10 minutes
+on your other machine, run: devlanes remote connect <box> --code V7G3-AFH2
 ```
 
-The second command printed the code, and the third traded it for a token that your machine keeps. Later connections use the token, also after your daemon restarts, so the code is needed once. [Connect to a box](../how-to/remote/connect.md) has the steps, and [Security](../concepts/security.md) what pairing protects.
+Your machine gets one entry in its user config: the command that runs the box's end of the connection. The first connect carries the code and trades it for a token that your machine keeps, so later connections need no code.
 
-## Your machine shows the box's hostnames and ports
+```console title="~/dev/myapp, on Windows 11"
+$ devlanes config set remote.boxes.devbox.command '[docker, exec, -i, devbox, devlanes, tunnel, --stdio]'
+set remote.boxes.devbox.command to ["docker","exec","-i","devbox","devlanes","tunnel","--stdio"] in C:\Users\you\.devlanes\config.yaml; takes effect with the next devlanes command
+$ devlanes remote connect devbox --background --code V7G3-AFH2
+state: connected
+server: devlanes 0.13.0
+host: devbox
+transport: command
+lanes: 1
+ports: -
+routes: -
+```
 
-Once connected, `https://myapp.localhost` opens in the browser on your machine and reaches web inside my-vps. Your daemon listens on the box's port numbers on its own loopback, and it adds the box's hostnames to its proxy with certificates from your own CA, so the box needs no certificate setup of its own.
+The connection belongs to your machine's daemon, which keeps it open after the command returns, and devlanes opens no port on the box for it. Both machines run the same release; [Prepare a box](../how-to/remote/prepare-a-box.md) says how closely releases have to match.
 
-```console title="on your machine"
+## This machine's lane 0 kept its hostnames
+
+The connection came up with no ports and no routes. `devlanes remote ls` lists each box your machine knows, and its entry for devbox says why.
+
+```console title="~/dev/myapp"
 $ devlanes remote ls
 items:
   state: connected
-  server: devlanes 0.11.3
-  host: my-vps
-  transport: command
-  https_port: 443
+  host: devbox
   lanes: 1
-  ports:
-    port: 41001
+  skipped_lanes:
     lane: myapp@0
-    unit: web
-    kind: service
-    state: bound
-    addresses: 127.0.0.1, ::1
+    hosts: api.myapp.localhost, myapp.localhost
+    note: not mirrored because this machine's myapp@0 is in use. devlanes remote use devbox myapp@0 switches.
 ```
 
-Port 41001 is the port web has on the box. The box's user config gives its lanes ports from 41000 to 41999, outside the pool your machine uses, so the same number is free on your machine. The admin service is missing from the list because the box's local file marks it hidden, which keeps a service on the box.
+The clean did not remove lane 0 for good. The main worktree's lane comes back, stopped, the next time a command acts on the project's lanes. A stopped lane on your machine keeps its hostnames over a box's lane, until the note's command hands them over.
 
-A lane on your own machine with the same hostnames keeps them while it runs. A stopped one keeps them too, unless you choose the box's lane, which [Work with several boxes](../how-to/remote/several-boxes.md) covers.
+```console title="~/dev/myapp"
+$ devlanes remote use devbox myapp@0
+myapp@0 now comes from devbox. This machine's lane gets the hostnames back when it starts.
+```
+
+`devlanes remote use --local myapp@0` gives them back without a start.
+
+## Your machine serves the box's hostnames on the box's ports
+
+The hostnames now lead to the box's lane, on the port numbers its services have there. Your daemon listens on those numbers on its own loopback, and your proxy serves the hostnames with certificates from your own CA, so the box needs no certificate of its own.
+
+```console title="~/dev/myapp"
+$ devlanes url ls
+HOST                     TARGET       PORT   STATE
+api.myapp.localhost  ->  myapp@0:api  28000  ready
+myapp.localhost      ->  myapp@0:web  28001  ready
+```
+
+Opened in the browser on your machine, `https://myapp.localhost` makes one request through your proxy and the connection to the web app on devbox.
+
+![The browser on your machine opens https://myapp.localhost; your proxy sends the request over one connection to devbox, a container, where web in myapp lane 0 answers as myapp.localhost on port 28001](remote.svg)
+
+Nothing on the connection starts or stops a unit. Starting and stopping happen on the box, in a shell there, and environments and secrets stay on the box too. [Remote mirroring](../concepts/remote-mirroring.md) lists what crosses the connection.
 
 ## On your own project
 
 - [Prepare a box](../how-to/remote/prepare-a-box.md)
 - [Connect to a box](../how-to/remote/connect.md)
 - [Connect to a box without SSH](../how-to/remote/connect-by-command.md)
+- [Work with several boxes](../how-to/remote/several-boxes.md)
 - [Choose what a box shares](../how-to/remote/what-a-box-shares.md)
 - [Remote mirroring](../concepts/remote-mirroring.md)
