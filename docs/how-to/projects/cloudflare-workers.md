@@ -27,6 +27,12 @@ services:
       file: apps/gateway/package.json
       name: dev
     hosts: "${{ lane.domain }}"
+  catalog:
+    extends: worker
+    run_script:
+      file: apps/catalog/package.json
+      name: dev
+    hosts: "catalog.${{ lane.domain }}"
 ```
 
 The script stays a plain `wrangler dev`. A script that passes its own port or inspector port is refused at start, since the preset sets both for each lane. A default you want outside devlanes goes into the Wrangler config, where the preset's flags override it.
@@ -55,6 +61,8 @@ templates:
       args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"]
 ```
 
+A service that sets its own `args` replaces this list, so repeat `--persist-to` there.
+
 ## Route the inspector
 
 The inspector port is a named port called `inspector`, allocated for each Worker in each lane. A hostname reaches it when the route names that port. The inspector refuses a Host header other than its own address, so the route sends the local address instead:
@@ -71,18 +79,39 @@ services:
 
 [Give a service several ports and hostnames](../services/ports-and-hostnames.md) covers named ports and routes.
 
-## Let Workers call each other
+## Bind the Workers to each other
 
-Service bindings need no setting. Each lane has its own Wrangler dev registry in its data folder, and devlanes points every unit of the lane at it, so a binding reaches the Worker of the same lane. devlanes sets the registry variables itself, so leave them out of the project file.
+A service binding names the other Worker, and needs nothing from devlanes:
 
-A Worker that calls another by hostname with `fetch` is different: workerd sends `*.localhost` names to DNS. On macOS and Linux, have devlanes write the lane's hostnames to the hosts file:
+```jsonc title="apps/gateway/wrangler.jsonc"
+{
+  "services": [{ "binding": "CATALOG", "service": "catalog" }]
+}
+```
+
+Each lane has its own Wrangler dev registry in its data folder, and devlanes points every unit of the lane at it, so the binding reaches the catalog of the same lane. Setting `WRANGLER_REGISTRY_PATH` or a variable like it in the project file overrides the lane's registry, so leave them out.
+
+## If a Worker fetches another by hostname
+
+workerd looks the name up itself, and the request goes over HTTPS, so workerd has to resolve the lane hostname and accept the devlanes certificate.
+
+::::tabs{sync="os"}
+:::tab[macOS and Linux]
+workerd sends `*.localhost` names to DNS. Have devlanes write the lane's hostnames to the hosts file:
 
 ```yaml devlanes
 lanes:
   hosts_file: always
 ```
 
-This needs the hosts helper that `devlanes setup` installs. [Fix programs that cannot resolve *.localhost](../hostnames/resolve-localhost.md) has the details per OS.
+This needs the hosts helper that `devlanes setup` installs. Wildcard hostnames cannot go in the hosts file.
+:::
+:::tab[Windows]
+Nothing to set. Windows 11 answers `*.localhost` names with loopback, and devlanes does not write the hosts file on Windows, so the setting changes nothing there.
+:::
+::::
+
+When the fetch fails on the certificate, [Trust the devlanes CA](../hostnames/trust-the-ca.md) covers the stores to add it to. A Worker that only needs to reach the other one can take `services.catalog.url` instead, the catalog's own port over plain http, which needs neither the name nor the certificate.
 
 ## If you use the Cloudflare Vite plugin
 
@@ -100,12 +129,19 @@ services:
 ```
 
 ```ts title="vite.config.ts"
+import { cloudflare } from "@cloudflare/vite-plugin";
+import { defineConfig } from "vite";
+
 const env = process.env;
 const statePath = env.DEVLANES_LANE_DATA && `${env.DEVLANES_LANE_DATA}/cloudflare-state`;
 
-cloudflare({
-  inspectorPort: env.INSPECTOR_PORT ? Number(env.INSPECTOR_PORT) : undefined,
-  persistState: statePath ? { path: statePath } : true,
+export default defineConfig({
+  plugins: [
+    cloudflare({
+      inspectorPort: env.INSPECTOR_PORT ? Number(env.INSPECTOR_PORT) : undefined,
+      persistState: statePath ? { path: statePath } : true,
+    }),
+  ],
 });
 ```
 

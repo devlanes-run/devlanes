@@ -24,16 +24,17 @@ services:
 
 Here a plain start leaves the web service out unless the lane ran it before or a profile names it, and the API gets one more variable while keeping the rest. A list or a single value replaces the project file's instead of adding to it. [Config files and reload](../../concepts/config-and-reload.md#files-merge-in-a-fixed-order) has the merge rules.
 
+The local file cannot set `project` or a file-level `extends`, and devlanes names the line when it does. It cannot delete what the project file declares either: turn a service off with autostart as above, and empty a list by setting it to an empty one.
+
 ## Keep it out of Git
 
 devlanes does not touch your `.gitignore`, so add the file to it yourself:
 
 ```text title=".gitignore"
-devlanes.local.yaml
-*.local.yaml
+devlanes*.local.yaml
 ```
 
-The second line also covers the local files of other project files, such as `devlanes.prod.local.yaml` for `devlanes.prod.yaml`.
+The pattern covers `devlanes.prod.local.yaml` as well.
 
 ## Add what only you run
 
@@ -56,21 +57,17 @@ infra:
 
 [Give a server you run yourself a hostname](../services/external.md) covers the second entry.
 
-## Leave the project's name and files alone
-
-The local file cannot set `project` or a file-level `extends`, and devlanes reports the line when it does. The name has to be the same on every machine, so every developer's lanes get the same domains and container names.
-
-Nothing in the local file can delete what the project file declares. To turn a service off, set its autostart to false as above. To empty a list, such as a service's tags, set it to an empty list.
-
 ## Apply the change
 
-Each lane reads the local file in its own worktree. A new worktree has none, since Git does not copy ignored files, so its lanes read the one in the primary worktree, the worktree of lane 0. One file there reaches each lane of the project whose worktree has none.
+A lane whose worktree has no local file, such as a new one, reads the primary worktree's, as [Files and folders](../../reference/files.md#files-of-a-project) describes. One file there reaches each such lane of the project.
 
-An edit to the local file changes nothing that already runs. `devlanes status` shows the lanes whose config changed, and `devlanes reload` applies the change to them. An error in the file is reported with the local file's name and line.
+An edit to the local file leaves running processes alone, though new hostnames are routed at once. `devlanes status` shows the lanes whose config changed, and `devlanes reload` applies the change to them. An error in the file is reported with the local file's name and line.
 
 ## If one worktree needs other changes
 
 Create a local file in that worktree. Its lanes then read that file instead of the primary worktree's, and the two are not merged, so copy over what you want to keep.
+
+Some settings apply to the whole project, and devlanes warns when a worktree's file sets them differently. For `lanes.max` and `lanes.primary` the primary worktree's value applies. Shared containers are started by every lane, so a lane whose file defines them differently changes them for all lanes when it starts.
 
 ## If you use a second project file
 

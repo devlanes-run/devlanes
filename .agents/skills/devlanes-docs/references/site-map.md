@@ -103,7 +103,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | Page | Title | Goal |
 |---|---|---|
 | `prepare-a-box.md` (skill) | Prepare a box | Get a machine ready to be a box. |
-| `connect.md` (skill) | Connect to a box | Connect, pair, reconnect without a terminal, revoke a machine. |
+| `connect.md` (skill) | Connect to a box | Connect, pair, reconnect without a terminal, revoke a machine, turn every machine away. |
 | `connect-by-command.md` | Connect to a box without SSH | A container, pod, WSL distribution or codespace. |
 | `tailscale.md` | Connect over Tailscale | A box on a tailnet. |
 | `cloudflare.md` | Connect through Cloudflare | A box behind Cloudflare. |
@@ -174,10 +174,13 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | The shell's environment is never written to disk | `concepts/environment.md` | One sentence in `concepts/daemon.md` |
 | What the CA can sign, where its key is | `concepts/security.md` | One sentence in `concepts/hostnames-and-https.md` |
 | A lane as its own site for cookies | `concepts/hostnames-and-https.md`, once | One sentence in `learn/worktrees.md` |
+| What a clean deletes, and when clean tasks and teardown run or are skipped | `how-to/lanes/clean-up.md` | One sentence in `how-to/infra/shared-database.md` and `learn/databases.md` |
 | Which worktree's `.env` and local file a lane reads | `reference/files.md` | One sentence in `how-to/projects/local-overrides.md`, `how-to/projects/env-files-and-tools.md` and `concepts/config-and-reload.md` |
 | Variables a new daemon keeps from the shell that started it | `reference/environment-variables.md` | One sentence in `concepts/environment.md` |
 | The daemon and terminals that end their child processes | `reference/windows.md` | One sentence in `concepts/daemon.md`; a row in `troubleshooting.md` |
 | Pairing: the steps | `how-to/remote/connect.md` | `learn/remote.md` shows it once |
+| Which machine serves a lane that several run | `how-to/remote/several-boxes.md` | One sentence in `learn/remote.md` and `concepts/remote-mirroring.md` |
+| Installing devlanes on a box and keeping its daemon up | `how-to/remote/prepare-a-box.md` | The other remote guides link it |
 | Pairing: what it protects and what it does not | `concepts/security.md` | Nowhere else |
 | Pairing: code length and lifetime, wrong-code limits, pairings per machine | `reference/remote-states.md` | `concepts/security.md` gives the behaviour without the numbers |
 | What crosses a remote connection | `concepts/remote-mirroring.md` | `concepts/security.md` links it; the full list in `reference/remote-states.md` |

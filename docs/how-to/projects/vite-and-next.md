@@ -1,6 +1,6 @@
 ---
 title: Run Vite and Next.js
-description: Put a Vite or Next.js dev server on its lane's port and hostname, with hot reload through the HTTPS proxy.
+description: Put a Vite or Next.js dev server on its lane's port and hostname.
 kind: how-to
 ---
 
@@ -8,23 +8,9 @@ Use this guide when a web app runs on a Vite or Next.js dev server and each lane
 
 ::example{slug="web-next-app"}
 
-## Keep the dev script plain
-
-devlanes starts the dev server from a script in `package.json` and adds the port flags after the script name, in the form your package manager expects. They reach the last command of the script, so that command has to be the dev server itself.
-
-```json title="web/package.json"
-{
-  "scripts": {
-    "dev": "vite"
-  }
-}
-```
-
-A script such as `vite && echo done` would hand the flags to `echo`. [Run scripts your project already has](run-scripts.md) covers the other runners.
-
 ## Add the preset
 
-A preset is the part of devlanes that knows a framework's flags. You name it on the service, next to the script:
+A preset is the part of devlanes that knows a framework's flags. You name it on the service, next to the script that starts the dev server:
 
 ::::tabs
 :::tab[Vite]
@@ -38,7 +24,7 @@ services:
     hosts: "${{ lane.domain }}"
 ```
 
-The preset passes the lane's port, binds the server to 127.0.0.1 and adds `--strictPort`. With that flag Vite exits when its port is taken, where it would otherwise move to the next free port and leave the proxy pointing at nothing.
+The preset passes the lane's port, binds the server to 127.0.0.1 and adds `--strictPort`. With that flag Vite exits when its port is taken, where it would otherwise move to the next free port and leave the proxy pointing at a port the server no longer uses.
 :::
 :::tab[Next.js]
 ```yaml devlanes
@@ -59,11 +45,25 @@ Next reads `PORT` by itself, so it finds its port even without the preset. The p
 :::
 ::::
 
-`devlanes config check` refuses a preset on a service that uses `run` instead of a script. The last section shows the flags to write yourself in that case.
+`devlanes config check` refuses a preset on a service that uses `run` instead of a script. [If the command cannot be a script](#if-the-command-cannot-be-a-script) has the flags to write yourself.
+
+## Keep the dev script plain
+
+The preset adds its flags after the script name, in the form your package manager expects. They reach the last command of the script, so that command has to be the dev server itself.
+
+```json title="web/package.json"
+{
+  "scripts": {
+    "dev": "vite"
+  }
+}
+```
+
+A script such as `vite && echo done` would hand the flags to `echo`. [Run scripts your project already has](run-scripts.md) covers the other runners.
 
 ## Allow the lane hostnames
 
-The proxy passes the hostname the browser asked for, such as `myapp1.localhost`, on to the dev server, and both frameworks check it.
+The proxy passes the hostname the browser asked for, such as `myapp1.localhost`, on to the dev server, and both frameworks refuse names they do not know.
 
 ::::tabs
 :::tab[Vite]
@@ -74,17 +74,17 @@ export default defineConfig({
   server: { allowedHosts: [".test"] },
 });
 ```
+
+Open the app on its hostname and hot reload works through the proxy. Vite's update client connects back to the host the page came from, and the proxy carries that WebSocket like any other request.
 :::
 :::tab[Next.js]
-Recent Next releases accept `localhost` and its subdomains. Some earlier ones warn about or block a hostname with several labels, such as `web.myapp1.localhost`. On those, and with another top-level domain on every release, list the domain:
+Next.js checks where requests for its dev assets come from, and allows `localhost` and its subdomains without a setting. When lane domains use another top-level domain, or when next dev warns about or blocks a cross-origin request from a lane hostname, list the domain:
 
 ```js title="web/next.config.js"
-module.exports = { allowedDevOrigins: ["**.localhost"] };
+module.exports = { allowedDevOrigins: ["**.test"] };
 ```
 :::
 ::::
-
-Open the app on its hostname and hot reload works as it does on `localhost`. The page's update client connects back to the host it was loaded from, and the proxy carries that WebSocket like any other request.
 
 ## If the dev server proxies API calls
 
@@ -92,14 +92,24 @@ Point the dev server's proxy at the API's port, which `services.api.url` gives, 
 
 ```yaml devlanes
 services:
+  api:
+    hosts: "api.${{ lane.domain }}"
   web:
     env:
       API_PROXY_TARGET: "${{ services.api.url }}"
 ```
 
+The Vite config reads the variable when the dev server starts:
+
+```ts title="web/vite.config.ts"
+export default defineConfig({
+  server: { proxy: { "/api": process.env.API_PROXY_TARGET } },
+});
+```
+
 ## If two lanes of Next.js run from one folder
 
-Lanes of one folder share the `.next` build folder, and a second next dev exits while the first holds it. Give each lane its own build folder, which has to stay inside the app:
+Lanes of one folder share the `.next` build folder. When the second lane's next dev exits with "Another next dev server is already running.", give each lane a build folder of its own, next to `.next` inside the app:
 
 ```js title="web/next.config.js"
 module.exports = { distDir: process.env.NEXT_DIST_DIR || ".next" };
@@ -109,23 +119,33 @@ module.exports = { distDir: process.env.NEXT_DIST_DIR || ".next" };
 services:
   web:
     env:
-      NEXT_DIST_DIR: ".next/lane${{ lane.index }}"
+      NEXT_DIST_DIR: ".next-lane${{ lane.index }}"
 ```
 
-[Run a folder as two lanes](../lanes/two-lanes-one-folder.md) sets up such lanes.
+Git does not ignore the new folders yet, so add `.next-lane*` to your `.gitignore`. [Run a folder as two lanes](../lanes/two-lanes-one-folder.md) sets up such lanes.
 
 ## If the command cannot be a script
 
 Drop the preset and write its flags into `run` with the lane's port:
 
+::::tabs
+:::tab[Vite]
 ```yaml devlanes
 services:
   web:
     run: npx vite --port ${{ self.port }} --strictPort --host 127.0.0.1
     hosts: "${{ lane.domain }}"
 ```
-
-For Next.js the flags are `--port` and `--hostname 127.0.0.1` after `next dev`.
+:::
+:::tab[Next.js]
+```yaml devlanes
+services:
+  web:
+    run: npx next dev --port ${{ self.port }} --hostname 127.0.0.1
+    hosts: "${{ lane.domain }}"
+```
+:::
+::::
 
 ## Related
 

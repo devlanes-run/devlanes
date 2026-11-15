@@ -35,13 +35,13 @@ Both scripts install the latest release and compare the download with the checks
 
 ## Set up HTTPS and hostnames
 
-devlanes serves each hostname over HTTPS with certificates from an authority of its own. The authority is created on your machine and stays in `~/.devlanes/ca`. It can only sign names meant for local development, such as those ending in `.localhost`.
+devlanes serves each hostname over HTTPS with certificates signed by the devlanes CA, a certificate authority it creates on your machine in `~/.devlanes/ca`. The CA can only sign names meant for local development, such as those ending in `.localhost`.
 
 ```console
 $ devlanes setup
 ```
 
-The command lists what it is about to change and asks once. It adds the authority to your system's trust store. On macOS and Linux it also installs a small helper for the hosts file, when your system does not resolve `.localhost` hostnames by itself. Your operating system then asks for a password or a confirmation, and that part needs you.
+The command lists what it is about to change and asks once. It adds the CA to your system's trust store. On macOS and Linux it also installs a small helper for the hosts file, when your system does not resolve `.localhost` hostnames by itself. Your operating system then asks for a password or a confirmation, and that part needs you.
 
 `devlanes setup --remove` undoes all of it.
 
@@ -63,7 +63,7 @@ hosts
   ✓ *.localhost resolves to loopback; no hosts file entries needed
 ```
 
-On Linux the proxy uses ports 8443 and 8080 unless the daemon is allowed to bind 443 and 80, and URLs then carry the port. [Choose the proxy's ports](how-to/hostnames/proxy-ports.md) changes that. A project with containers also needs Docker running.
+When the proxy cannot bind port 443 or 80, because another program holds it or because Linux keeps ports below 1024 for root, it uses 8443 and 8080 instead, and URLs carry the port. [Choose the proxy's ports](how-to/hostnames/proxy-ports.md) changes that. A project with containers also needs Docker running.
 
 ## Turn on shell completions
 

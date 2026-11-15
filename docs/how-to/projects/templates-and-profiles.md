@@ -37,11 +37,14 @@ A tag is a label on a service, and `+` with its name selects every service that 
 tags:
   api: { color: cyan }
   web: { color: green }
+  worker: { color: magenta }
 services:
   accounts-api:
     tags: [api, essential, auth]
   shop-web:
     tags: [web, essential, shop]
+  mailer:
+    tags: [worker, essential, email]
 ```
 
 A service takes the colour of the first of its tags that has one, so list the kind of service first and the tags you select by after it. A tag works on the command line as well, as in `devlanes start +api`.
@@ -59,15 +62,15 @@ profiles:
     exclude: [+worker]
 ```
 
-A glob leaves out services whose autostart is off, while a name or a tag includes them. [Start a service only on demand](../services/on-demand.md) uses that.
+A selector that matches no service makes the file invalid, and `devlanes config check` names the profile. A glob leaves out services whose autostart is off, while a name or a tag includes them, which [Start a service only on demand](../services/on-demand.md) uses.
 
-The profile named `default` is what a plain `devlanes start` runs when the lane has nothing to bring back, on its first start and after the whole lane was stopped. A project without one starts every service whose autostart is on.
+The profile named `default` is what a plain start runs when the lane has nothing to bring back, on its first start and after the whole lane was stopped. With [`start.restore`](/docs/reference/config/user/start/) set to false, every plain start runs it. A project without one starts every service whose autostart is on.
 
 ## Start with a profile
 
 Name the profile with `--profile` on the start, and repeat the flag to combine several; where two set the same variable, the later one wins. The lane remembers its profiles, so a plain start after a reboot brings back the same selection. Stopping the whole lane makes it forget them, and its next plain start runs the default profile again.
 
-On a lane that already runs, the start adds the profile's services that the lane lacks. Services that already run keep the settings they started with. `devlanes status` lists those the profile would change, and `devlanes reload` restarts them with it.
+On a lane that already runs, the start adds the profile's services that the lane lacks. Services that already run keep the settings they started with, and the start warns about those the profile would change. `devlanes status` lists them, and `devlanes reload` restarts them with the profile.
 
 ## If a profile needs its own variables
 
@@ -81,7 +84,7 @@ profiles:
       DATA_FILE: "${{ lane.data_path }}/test/${{ self.name }}.json"
 ```
 
-A variable that some task must not get, such as a production mode next to an install task, belongs in `global_env` instead.
+Put a variable that some task needs to change, such as a production mode next to an install task, in `global_env` instead, where the task's own `env` can override it.
 
 ## If a profile should skip the containers
 

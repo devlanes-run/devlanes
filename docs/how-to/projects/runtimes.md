@@ -1,6 +1,6 @@
 ---
 title: Run Node, Bun, Deno, Python and Rust services
-description: The lines a Node, Bun, Deno, Python or Rust service needs to listen where devlanes tells it, trust the devlanes CA and reload when you edit it.
+description: The lines a Node, Bun, Deno, Python or Rust service needs to listen where devlanes tells it, reload when you edit it and trust the devlanes CA.
 kind: how-to
 ---
 
@@ -10,14 +10,14 @@ Use this guide when you put a Node, Bun, Deno, Python or Rust service on devlane
 
 Each service gets its port in `PORT` and the loopback address in `HOST`. Read both where the server starts listening, with fallbacks for when you run it without devlanes.
 
-::::tabs
+::::tabs{sync="runtime"}
 :::tab[Node]
 ```js
 const port = Number(process.env.PORT ?? 3000);
 server.listen(port, process.env.HOST ?? "127.0.0.1");
 ```
 
-Express, Fastify, Hono and Koa take the same two values in their listen call.
+Express and Koa take the same two arguments. Fastify takes them as `{ port, host }`.
 :::
 :::tab[Bun]
 ```ts
@@ -51,7 +51,7 @@ services:
     run: uv run uvicorn acme.main:app --host 127.0.0.1 --port ${{ self.port }} --proxy-headers
 ```
 
-The last flag makes request URLs read as HTTPS behind the proxy. Django and Flask need settings of their own for that, which [Set CORS and cookies for each lane](../hostnames/cors-and-cookies.md) shows.
+Django and Flask need settings of their own to read the proxy's forwarded headers, which [Set CORS and cookies for each lane](../hostnames/cors-and-cookies.md) shows.
 :::
 :::tab[Rust]
 ```rust
@@ -62,35 +62,11 @@ let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
 :::
 ::::
 
-## Trust the devlanes CA
-
-A service that calls another lane hostname over HTTPS needs to trust the devlanes CA. devlanes points each runtime at it through the variable that runtime reads, so you can delete any setting that turns certificate checks off.
-
-::::tabs
-:::tab[Node]
-Node reads `NODE_EXTRA_CA_CERTS` once at startup. A script that sets this variable itself replaces the devlanes CA, so remove that line.
-:::
-:::tab[Bun]
-Bun reads `NODE_EXTRA_CA_CERTS`, as Node does.
-:::
-:::tab[Deno]
-Deno adds the file in `DENO_CERT` to its own roots.
-:::
-:::tab[Python]
-`SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` name a bundle of the system roots and the devlanes CA. The standard library, requests, httpx and aiohttp each read one of them.
-:::
-:::tab[Rust]
-`SSL_CERT_FILE` names a bundle of the system roots and the devlanes CA. OpenSSL and rustls-native-certs read it, while a client built only on webpki-roots cannot trust the CA at all.
-:::
-::::
-
-[Trust the devlanes CA](../hostnames/trust-the-ca.md) covers the other TLS stacks and the tools outside a lane.
-
 ## Reload on change
 
 devlanes runs the command you give it and leaves watching files to the runtime, so put the runtime's watch flag in the script.
 
-::::tabs
+::::tabs{sync="runtime"}
 :::tab[Node]
 Use `node --watch`, tsx watch or nodemon in the dev script.
 :::
@@ -114,7 +90,7 @@ A watcher keeps running after the program under it crashes. Give the service a r
 
 ## If devlanes picks the wrong runtime
 
-A folder with a `package.json` counts as Node even when it also holds a Python or Rust project file. Set the runtime on the service:
+A folder with a `package.json` counts as Node even when it also holds a Python or Rust manifest. Set the runtime on the service:
 
 ```yaml devlanes
 services:
@@ -124,11 +100,11 @@ services:
     run: uv run uvicorn acme.main:app --host 127.0.0.1 --port ${{ self.port }}
 ```
 
-A Bun project that has a `bunfig.toml` but no Bun lockfile runs as Bun, while its scripts go to npm. Name Bun in the `packageManager` field of its package.json, which settles both.
+A Bun project with a `bunfig.toml` and no lockfile runs under Bun while its scripts run with npm. Name Bun in the project's `packageManager` field, which settles both.
 
-## If your runtime is not one of these
+## If a service calls another hostname over HTTPS
 
-Units of any runtime get the CA in `DEVLANES_CA_CERT` and the bundle of system roots and CA in `DEVLANES_CA_BUNDLE`. Point the runtime's own setting at one of them. [Environment variables](../../reference/environment-variables.md) lists both.
+Node, Bun, Deno, Python and Rust services get the variable their runtime reads for the devlanes CA, so delete any setting that turns certificate checks off. A script that sets `NODE_EXTRA_CA_CERTS` itself replaces the devlanes CA, so remove that line. A Rust client built only on webpki-roots reads no variable; add the file in `DEVLANES_CA_CERT` to its roots in code. [Trust the devlanes CA](../hostnames/trust-the-ca.md) covers other runtimes and TLS stacks.
 
 ## Related
 

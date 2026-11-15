@@ -18,10 +18,11 @@ The agent follows the same rules for every tool, and you can check its file agai
 
 - A process that keeps running becomes a service.
 - A command that ends by itself, such as an install, a migration or a seed, becomes a task that runs at a lane event or on demand.
-- A container stays in its Compose file, which the project file runs under `infra`.
+- A container, or a process that runs one, becomes infra: its Compose file under `infra`, or a container declared in the project file.
 - A fixed port becomes the port devlanes gives the service in each lane, so two lanes do not ask for the same one.
+- Each service gets a ready check that fails when the app is broken.
 
-The old files stay where they are, so people who do not use devlanes keep their setup. The tabs show one entry of each tool next to what it becomes.
+The old files stay where they are, so people who do not use devlanes keep their setup.
 
 ::::tabs
 :::tab[mprocs]
@@ -44,6 +45,9 @@ services:
       file: api/package.json
       name: dev
     hosts: "api.${{ lane.domain }}"
+    ready:
+      http:
+        path: /healthz
 tasks:
   migrate:
     run_script:
@@ -52,7 +56,7 @@ tasks:
     when: lane.start
 ```
 
-A proc that runs once and that you started by hand becomes a task the lane runs before its services on every start.
+A migration becomes a task that runs before the services on every start. A proc you started by hand now and then, such as a reset, becomes a task without `when`, which you run with `devlanes run`.
 :::
 :::tab[Procfile]
 ```text
@@ -66,6 +70,9 @@ services:
   web:
     run: bin/rails server -p $PORT -b 127.0.0.1
     hosts: "${{ lane.domain }}"
+    ready:
+      http:
+        path: /up
   worker:
     run: bundle exec sidekiq
 ```
@@ -126,6 +133,9 @@ services:
   server:
     run: bundle exec rails s -p ${{ self.port }} -b 127.0.0.1
     hosts: "${{ lane.domain }}"
+    ready:
+      http:
+        path: /up
 tasks:
   setup:
     run: bin/setup
@@ -168,11 +178,11 @@ The containers keep their Compose file, and the lanes share them unless a servic
 
 The agent drops these and lists the ones your setup had:
 
-- Restart policies and watch-and-restart, because a failed service stays failed with its error ([The daemon](../../concepts/daemon.md)).
+- Restart policies and the process manager's own file watching, because a failed service stays failed with its error ([The daemon](../../concepts/daemon.md)). A watch flag in the command itself, such as `node --watch`, keeps working.
 - Dependencies between services, because services do not wait for each other ([Start order and readiness](../../concepts/start-order.md)).
-- Stop commands and key sequences, because devlanes stops a service itself and lets you choose only the signal ([`services.<name>.stop`](/docs/reference/config/project/services/)).
+- Stop commands and key sequences other than Ctrl-C, because devlanes stops a service with a signal and a grace time you choose ([`services.<name>.stop`](/docs/reference/config/project/services/)).
 - Loading `.env` into every process, because devlanes reads it only where the project file names a value ([Read .env values and pin tool versions](env-files-and-tools.md)).
-- Workarounds that turn off certificate checks, because devlanes hands each runtime its CA ([Run Node, Bun, Deno, Python and Rust services](runtimes.md)).
+- Workarounds that turn off certificate checks in Node, Bun, Deno, Python and Rust services, because devlanes points those runtimes at its CA ([Run Node, Bun, Deno, Python and Rust services](runtimes.md)).
 - Log files, scrollback and layouts, because the daemon keeps each service's output ([`devlanes logs`](../../reference/cli/logs.md)).
 
 ## If the repository has several of these files

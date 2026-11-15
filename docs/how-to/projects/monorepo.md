@@ -50,7 +50,7 @@ services:
         path: /healthz
 ```
 
-Its hostnames are `billing.localhost` in lane 0 and `billing1.localhost` in lane 1. A worktree of the repository can run a lane of each project side by side, and each runs its own tasks when the lane is new, as [Run installs, migrations and seeds](../services/tasks.md) shows.
+Its services get hostnames under a lane domain built from billing, apart from myapp's. A worktree of the repository can run a lane of each project side by side, and each runs its own tasks when the lane is new, as [Run installs, migrations and seeds](../services/tasks.md) shows.
 
 ## Run commands in the right project
 
@@ -58,11 +58,9 @@ A command uses the nearest project file at or above the folder you run it in, up
 
 From another folder, name the project with `-p`, such as `devlanes -p billing status`. That works once a start or a status has run in the project's own folder.
 
-A repository root without a project file of its own can hold several projects below it. There, a command that acts on one project fails and tells you to name one with `-p`.
-
 ## Read another project's URLs
 
-A service reaches another project's services through an expression with that project's name, written with underscores in place of dashes. Give it a default, because the expression has no value while no lane of that project runs a service.
+In billing's project file, a service reaches myapp's services through an expression with that project's name, written with underscores in place of dashes. Give it a default for when myapp has no lane to read.
 
 ```yaml devlanes
 services:
@@ -71,11 +69,15 @@ services:
       MYAPP_API_URL: ${{ projects.myapp.services.api.public_url | default('') }}
 ```
 
-The lane it reads is the one on the same branch, else the one with the same lane name, else lane 0. The value is set when the service starts, so restart it after the other project's lane comes up.
+devlanes looks among that project's lanes that run a service for the one on the same branch, else the same lane name, else lane 0, and the default applies when none matches. The value is set when the service starts, so restart it after the other project's lane comes up.
+
+## If the repository root has no project file
+
+A repository root without a project file of its own can hold several projects below it. There, a command that acts on one project fails and tells you to name one with `-p`.
 
 ## If one project per app is too many lanes to start
 
-Keep one project and choose which apps a start brings up with profiles, as [Share settings and choose which services start](templates-and-profiles.md) shows.
+Keep one project and choose which apps a start brings up with profiles, named choices of services for a start, as [Share settings and choose which services start](templates-and-profiles.md) shows.
 
 ## Related
 

@@ -18,17 +18,15 @@ services:
       name: dev
 ```
 
-A start looks the name up in the file first, and a misspelt name fails with the list of names the file has. A Makefile or justfile that includes other files is not checked. Tasks take the same two keys.
+A start looks the name up in the file first, and a misspelt name fails with the list of names the file has. A Makefile or justfile the check cannot read through, such as one that includes others, is left to make or just at run time. Tasks take the same two keys.
 
 ## Match the file kind
 
-The file name picks the tool. Each tab shows what devlanes runs and what to look out for.
+The file name picks the tool, and a file of another name fails the start.
 
 ::::tabs
 :::tab[package.json]
 devlanes runs `<manager> run <name>` with the package manager the project declares, read from its `packageManager` field and otherwise from its lockfile. Without either it falls back to npm, so add the field when you use pnpm, yarn or bun.
-
-On Windows devlanes runs an npm script without starting npm; [Windows](../../reference/windows.md) says how.
 :::
 :::tab[Makefile]
 devlanes runs `make <target>` in the Makefile's folder, and picks the file with a flag when make would read another one.
@@ -53,7 +51,7 @@ There is no way to add `--release` or features here. Use a plain command for tho
 :::tab[pyproject.toml]
 The name is an entry under `[project.scripts]` or Poetry's scripts table. devlanes runs it with uv when the project has a uv lockfile or uv settings, and with Poetry when it has a Poetry lockfile.
 
-uv installs these entries only for a packaged project, one with a build system. A dev server started by a tool, such as uvicorn, is a plain command.
+With neither, the start fails and suggests `uv lock` or `poetry lock`. uv installs these entries only for a packaged project, one with a build system. A dev server started by a tool, such as uvicorn, is a plain command.
 :::
 :::tab[deno.json]
 devlanes runs `deno task <name>`, and `deno.jsonc` works the same way. Comments and trailing commas are fine in both.
@@ -72,11 +70,11 @@ services:
     run: uv run uvicorn acme.main:app --host 127.0.0.1 --port ${{ self.port }} --reload
 ```
 
-devlanes runs that text exactly as written, so it cannot add a preset's flags to it; write them out yourself. [Run Vite and Next.js](vite-and-next.md) lists the flags each preset adds.
+devlanes runs that text as written and refuses a preset next to it, so write the preset's flags into the command yourself. [Run Vite and Next.js](vite-and-next.md) lists the flags each preset adds.
 
 ## If a profile should run another script
 
-A profile can swap the script name for every service that uses it, such as the build's start script in place of the dev server. [Share settings and choose which services start](templates-and-profiles.md) shows it, and [Run dev servers and a production build side by side](dev-and-prod.md) uses it for a second project.
+A profile, a named choice of services for a start, can swap the script name for every service that uses it, such as the build's start script in place of the dev server. [Share settings and choose which services start](templates-and-profiles.md) shows it, and [Run dev servers and a production build side by side](dev-and-prod.md) uses it for a second project.
 
 ## If only you need a different script
 

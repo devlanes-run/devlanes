@@ -1,10 +1,24 @@
 ---
 title: Run a Tauri app
-description: Open a Tauri 2 desktop app for each lane, or several windows in one lane, each with its own app data and its own lane's frontend.
+description: Run a Tauri 2 desktop app for each lane, or several copies in one lane, each with its own app data and its own lane's frontend.
 kind: how-to
+publish: false
 ---
 
 Use this guide when a project has a Tauri 2 desktop app and you want one running per lane, or several copies in one lane, without them sharing data or loading each other's frontend.
+
+## Keep the scripts plain
+
+The frontend and the app each start from a script. devlanes adds its flags at the end of the script, so each script has to end with the command that takes them:
+
+```json title="apps/desktop/package.json"
+{
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:web": "vite"
+  }
+}
+```
 
 ## Run the frontend as its own service
 
@@ -40,11 +54,11 @@ services:
 
 The dev URL points each lane's app at the frontend of the same lane; the service name is written with an underscore in the expression. The empty command stops Tauri from starting a frontend of its own on the fixed port from `tauri.conf.json`.
 
-The app listens on no port devlanes routes, so the start counts it as ready shortly after the process runs, well before the first Rust build opens a window. [Wait until a service is ready](../services/ready-checks.md) shows how to make the start wait.
+Neither service has a hostname, so the start counts each one as ready once its process has run for a moment. The start returns long before the first Rust build opens a window, and without waiting for Vite either.
 
 ## Give each copy its own identifier
 
-Tauri keys the app data, the webview data and keychain entries by the bundle identifier. Two copies with one identifier would read and write the same data, so the identifier has to change with the lane and the replica. devlanes refuses to start a copy whose identifier another copy already uses, in any lane of the project.
+Tauri keeps the app's data and its webview data under the bundle identifier, so two copies with one identifier would share them. The identifier has to change with the lane and the replica. A start fails when two copies would share an identifier, counting the copies that run in other lanes of the project. `devlanes config check` does not see this, because the values depend on the lane.
 
 The identifier may hold letters, digits, dots and hyphens, with no empty part between dots. To keep lane 0 on the identifier your team already uses, make the lane part conditional:
 
@@ -55,9 +69,9 @@ services:
       identifier: "com.example.myapp${{ '' if lane.index == 0 else '.lane' ~ lane.index }}.client${{ replica.index }}"
 ```
 
-## Open several windows in one lane
+## Run several copies in one lane
 
-Replicas run more than one copy of a service in the same lane, which for a desktop app means several windows, for example two users of a chat app side by side. The replica number in the identifier keeps their data apart:
+Replicas run more than one copy of a service in the same lane, which for a desktop app means several copies of the app, for example two users of a chat app side by side. The replica number in the identifier keeps their data apart:
 
 ```yaml devlanes
 services:
@@ -67,7 +81,7 @@ services:
       product_name: "myapp ${{ lane.index }}-${{ replica.index }}"
 ```
 
-The product name replaces the one from `tauri.conf.json` for that copy, so the copies carry different names. [Run workers and replicas](../services/workers.md) has more on replicas.
+The product name replaces the one from `tauri.conf.json` for that copy, so each copy carries its own name. [Run workers and replicas](../services/workers.md) has more on replicas.
 
 ## If a wrapper script starts tauri dev
 
@@ -75,7 +89,7 @@ A script that calls `tauri dev` through a wrapper may not pass extra arguments o
 
 ## If the lane runs on a box
 
-The app opens on the machine that runs the lane, and a box does not send windows to your machine. [Limits](../../reference/limits.md) lists this.
+The app opens on the machine that runs the lane, and a box does not send windows to your machine. [Limits](../../reference/limits.md#remote-boxes) lists this.
 
 ## Related
 

@@ -125,6 +125,7 @@ These hold for Learn pages, how-to guides and concepts.
 | daemon | the background process that owns the lanes | server, agent |
 | box | a machine whose lanes are mirrored to another | remote, host, server |
 | your machine | where the browser runs when a box is involved | client, laptop |
+| CA | the certificate authority devlanes creates on your machine; a page introduces it once as "the devlanes CA, a certificate authority devlanes creates on your machine" | authority or root after that; "roots" only for what a certificate bundle holds |
 | hostname | `api.myapp1.localhost` | domain, address, name, URL (for the name) |
 | start, stop | bringing a lane up or down | spin up, boot, launch, kill |
 
@@ -136,9 +137,9 @@ Names in examples:
 
 - The project is `myapp`, with services `api`, `web` and `worker`.
 - Lane domains have no hyphen: `myapp.localhost` for lane 0, `myapp1.localhost` for lane 1.
-- Branches are `main`, `feat/checkout`, `fix/login` and `agent/perf`. The box is `my-vps`.
+- Branches are `main`, `feat/checkout`, `fix/login` and `agent/perf`. The box is `my-vps`; a box that is a container is `devbox`; two boxes made from one image are `fork-a` and `fork-b`.
 - Databases are `myapp_main` and `myapp_lane1`. The folders are `~/dev/myapp` and, for the second worktree, `~/dev/myapp-checkout`.
-- Outside hosts end in `example.invalid`. No real names, credentials or private paths.
+- Outside hosts end in `example.invalid`. A hostname keeps a real suffix only where the reader has to type that form, such as `my-vps.example.ts.net` on a tailnet. No real names, credentials or private paths.
 
 ## Left out of the docs
 
@@ -166,17 +167,18 @@ A wrong page is worse than a missing one.
 - Output in a `console` block comes from a real run of the command the block shows. Shorten it by dropping whole lines. Change nothing else except names, to the ones above, and paths: the user name becomes `you` and the project's folder becomes the one above, in the form the capture's OS prints (`C:\Users\you\dev\myapp` on Windows). Never write output from memory, and never fill a block with lines from another command or another run.
 - Capture under the docs' names, so nothing has to be renamed. Where a rename or dropped rows leave a column the command aligned wider or narrower than its values, re-align it with spaces and change nothing else.
 - Output in an example's README counts as a capture only when it was run on the release the page is for. Otherwise run the example again.
-- A command whose effect the reader has to see is shown with its output. A command may stand alone in a block when its output is beside the point, as with an installer. A command you have no capture for and whose output matters waits for one.
+- On a Learn page and a concept page a `console` block always has output. In a how-to guide a command the reader has to type is always in a `console` block, so it can be copied: with its output when a capture exists, alone when the output is beside the point or no capture exists yet. Ask for the missing capture in the page's notes. Never describe output you have not seen.
+- An output block appears on one page. A second page that needs the same point links the first or shows another capture.
 - The command in a block is the one that was run. Do not rewrite it into the form another OS would use. A command that differs by OS is a tab per OS, each with its own capture.
-- Note the OS of every capture. Output that differs by OS (ports, paths, resolvers, trust stores) goes in OS tabs, or carries the OS in the block's title, such as `title="on Windows 11"`. Prefer artefacts that read the same everywhere: devlanes' own commands over `curl`.
-- Show the command a person types and the output a person sees. A start on a terminal runs inside the TUI, so show starts with `--no-ui`. When an agent captures output, devlanes switches to its terse agent format; capture with `--output human` and `NO_COLOR=1`, and leave those two out of the block. Any other flag that was passed stays in the block, `--output plain` included.
+- Note the OS of every capture. Output that differs by OS (ports, paths, resolvers, trust stores) goes in OS tabs, or carries the OS in the block's title, such as `title="on Windows 11"`. Prefer artefacts that read the same everywhere: devlanes' own commands over `curl`. A block titled for one OS fits only a section that reads the same on every OS. A section about Linux or macOS waits for a capture from that OS; `devlanes doctor` prints different lines per OS in its `hosts`, `proxy` and `tls` groups.
+- Show the command a person types and the output a person sees. A start on a terminal runs inside the TUI, so show starts with `--no-ui`. When an agent captures output, devlanes switches to its terse agent format; capture with `--output human`, `NO_COLOR=1` and `DEVLANES_AGENT=0`, and leave those three out of the block. Any other flag that was passed stays in the block, `--output plain` included.
 - When you have no real output for something, show the config or a diagram instead. A page without an output block is fine; a page with invented output is not.
 - A prompt block asks only for what `skills/devlanes/` teaches an agent to do. Check the skill before you write one.
 - A `yaml devlanes` block that is a whole file passes `devlanes config check`. A block that is a fragment uses only keys the schema has; the website build fails on an unknown key. A fragment does not lean on a variable or an entry the page never shows, such as a `lanes.vars` value from an example.
 - Check a claim about behaviour against the code or a run, not against the old docs or another page.
 - A claim about another tool (Next.js, Vite, Tauri, Wrangler, Tailscale) rests on that tool's own documentation or a run, and names no version ranges. Where the behaviour depends on the version, start the step from the symptom the reader sees.
 - A how-to guide whose goal nobody has reached on the release, with an example that is not `ready`, carries `publish: false` until someone has.
-- Follow every link you add.
+- Follow every link you add, and check a `#` slug against the heading as it reads today.
 - Read the page once more against "Voice" and "Page shape", and count the code spans in each paragraph.
 
 ## Generated pages

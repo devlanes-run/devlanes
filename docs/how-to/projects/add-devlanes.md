@@ -12,7 +12,7 @@ Use this guide when your project starts today with a dev script or a few termina
 
 ## Name the project
 
-Create `devlanes.yaml` at the root of the repository and give the project a name. The name goes into every hostname and is shared by every worktree, so choose one you will keep: renaming it later makes a new project with new lanes, as [Lanes and projects](../../concepts/lanes-and-projects.md) explains.
+Create `devlanes.yaml` at the root of the repository and give the project a name. The name goes into the lane's domain and is shared by every worktree, so choose one you will keep: renaming it later makes a new project with new lanes, as [Lanes and projects](../../concepts/lanes-and-projects.md) explains.
 
 ```yaml devlanes
 project: myapp
@@ -20,7 +20,7 @@ project: myapp
 
 ## List each long-running command as a service
 
-Each command you keep running in a terminal becomes a service. When the command is a script in `package.json` or another project file, point `run_script` at it, and devlanes runs it with the project's tool from that file's folder.
+Each command you keep running in a terminal becomes a service. When the command is a script in `package.json`, a Makefile or a similar file, point `run_script` at it, and devlanes runs it with the project's tool from that file's folder.
 
 ```yaml devlanes
 services:
@@ -34,7 +34,7 @@ services:
 
 ## Make each service listen on its port
 
-devlanes picks a port for each service in each lane and passes it in the `PORT` variable, with `HOST` set to the loopback address. A server that reads both needs no other change, and the fallbacks keep it working when you start it without devlanes.
+devlanes picks a port for each service in each lane and passes it in the `PORT` variable, with `HOST` set to the loopback address. A server that reads both needs no other change, and the fallbacks keep it working when you start it without devlanes. [Run Node, Bun, Deno, Python and Rust services](runtimes.md) has the same lines for other runtimes.
 
 ```js
 // api/server.mjs
@@ -44,11 +44,11 @@ const host = process.env.HOST ?? "127.0.0.1";
 server.listen(port, host);
 ```
 
-A port written into the code or the script makes the second lane fail, because both lanes try to take it.
+A server that listens on a port of its own never passes its ready check, because devlanes checks and routes the port it handed out. The start then fails in the first lane already.
 
 ## Give a hostname to what a browser opens
 
-The lane's domain is `myapp.localhost` in lane 0 and `myapp1.localhost` in lane 1, so one line gives the service a hostname in every lane. A service nobody opens in a browser, such as a queue worker, can do without one.
+Give each service a browser opens a hostname under the lane's domain. The expression `${{ lane.domain }}` is a different domain in each lane, so one line gives the service a hostname in every lane. A queue worker can do without one.
 
 ```yaml devlanes
 services:
@@ -58,7 +58,7 @@ services:
 
 ## Add a ready check
 
-Without a ready check, a service with a hostname counts as ready once its port accepts a connection, which can happen before the app works. A route that answers only when the app is up makes the start wait for the real thing. [Wait until a service is ready](../services/ready-checks.md) shows the other kinds of check.
+Without a ready check, a service with a hostname counts as ready once its port accepts a connection, which can happen before the app works. Use a route your app already answers with a 2xx status only when it works, such as a health route or `/`; any other status keeps the start waiting. [Wait until a service is ready](../services/ready-checks.md) shows the other kinds of check.
 
 ```yaml devlanes
 services:
@@ -70,7 +70,7 @@ services:
 
 ## Check the file
 
-Put together, the steps above give this file. Commit it, so every worktree of the repository has it.
+Put together, the steps above give this file.
 
 ```yaml devlanes
 # devlanes.yaml
@@ -93,6 +93,8 @@ The check reads the file without starting anything. A mistake comes back with it
 $ devlanes config check
 ok myapp (C:\Users\you\dev\myapp\devlanes.yaml)
 ```
+
+The check does not open the scripts the file names, so a misspelt script name passes it and shows up at the start. Once the file checks, commit it, so every worktree of the repository has it.
 
 ## Start the lane
 

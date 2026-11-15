@@ -76,7 +76,7 @@ services:
 - `yaml devlanes` is a project file or a fragment of one. `yaml devlanes-user` is the user config.
 - A first-line comment with a file name sets the tab title: `# devlanes.local.yaml`.
 - Each key shows its description on hover and links to the reference. An unknown key fails the website build.
-- Plain `yaml` is for other files: Compose files, CI workflows.
+- Plain `yaml` is for other files: Compose files, CI workflows. Other files take their own language: `js`, `json`, `toml`, `sh`, `powershell`, `ssh-config`, and `text` when nothing fits. A `title` names the file.
 - Comments in a config block say why a line is there. They do not repeat the hover.
 
 ## Tabs
