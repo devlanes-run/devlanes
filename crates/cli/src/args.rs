@@ -498,7 +498,7 @@ calls that name no cwd.
 
 A lane no shell started gets your login shell's environment on macOS and Linux;
 on Windows set DEVLANES_SHELL_ENV=pwsh (or powershell) in the server's env to
-read your PowerShell profile. docs/guides/mcp.md has the details.";
+read your PowerShell profile. https://devlanes.run/docs/how-to/agents/set-up/ has the details.";
 
 const MCP_AFTER: &str = "\
 Register it with your agent:
