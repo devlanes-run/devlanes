@@ -10,7 +10,7 @@ Follow these steps when a web app and its API run on two hostnames of one lane a
 
 ## Allow the lane's own origins
 
-devlanes gives every service a variable listing the origins of its lane: the HTTPS hostname of each service, and the local address of each one. Build the API's CORS allow-list from it instead of writing hostnames down, so each lane allows its own pages and no other lane's.
+devlanes gives every service a variable with its lane's origins: the HTTPS origin of each hostname in the lane, wildcards left out, and the localhost and 127.0.0.1 address of each service's port. Build the API's CORS allow-list from it instead of writing hostnames down, so each lane allows its own pages and no other lane's.
 
 ```ts
 import { cors } from "hono/cors";
@@ -23,21 +23,48 @@ export const laneCors = () =>
 
 The credentials option lets the browser send the session cookie with these requests. The variable belongs to the process, so read it in code; an expression in the project file cannot read it.
 
-## Check what a lane allows
+## Check that another lane gets no CORS headers
 
-The environment of a service shows the list it gets. In lane 1 of myapp it names only lane 1's hostnames:
+Send the lane 1 API a request with the origin of lane 1's web app, then one with lane 0's. Only the first gets an allow-origin header back, so a page of lane 0 cannot read the answer.
 
-```console title="~/dev/myapp-checkout"
-$ devlanes env show web | grep -E '^(PORT|HOST|VITE_[A-Z_]*|DEVLANES_ORIGINS|DEVLANES_LANE|DEVLANES_SERVICE)='
-DEVLANES_ORIGINS=https://api.myapp1.localhost,http://localhost:20070,http://127.0.0.1:20070,https://myapp1.localhost,http://localhost:20071,http://127.0.0.1:20071
-VITE_API_URL=https://api.myapp1.localhost
+::::tabs{sync="os"}
+:::tab[macOS and Linux]
+When your lane URLs carry a port, such as 8443, add it to the URL and to both origins.
+
+```console
+$ curl -s -i -H "Origin: https://myapp1.localhost" https://api.myapp1.localhost/
 ```
+
+```console
+$ curl -s -i -H "Origin: https://myapp.localhost" https://api.myapp1.localhost/
+```
+:::
+:::tab[Windows]
+```console
+$ curl.exe -s -i -H "Origin: https://myapp1.localhost" --ssl-revoke-best-effort https://api.myapp1.localhost/
+HTTP/1.1 200 OK
+access-control-allow-origin: https://myapp1.localhost
+vary: origin
+content-type: application/json
+
+{"lane":1,"lane_name":"lane1","service":"api","port":20070}
+```
+
+```console
+$ curl.exe -s -i -H "Origin: https://myapp.localhost" --ssl-revoke-best-effort https://api.myapp1.localhost/
+HTTP/1.1 200 OK
+content-type: application/json
+
+{"lane":1,"lane_name":"lane1","service":"api","port":20070}
+```
+:::
+::::
 
 When the proxy runs on its fallback port, the HTTPS origins carry that port, the way a browser sends them. [Environment variables](../../reference/environment-variables.md) describes the variable in full.
 
 ## Share a cookie between the app and its API
 
-The app at myapp1.localhost and the API at api.myapp1.localhost are one site, so a cookie set for the lane's domain reaches both. Pass the domain to the service that sets the cookie:
+A cookie set for the lane's domain reaches every hostname under it, so in lane 1 it reaches both the app at myapp1.localhost and the API at api.myapp1.localhost. Pass the domain to the service that sets the cookie:
 
 ```yaml devlanes
 services:
@@ -61,13 +88,11 @@ setCookie(c, "session", token, {
 });
 ```
 
-Lane 0 is a different site, so the cookie never reaches it. [Hostnames and HTTPS](../../concepts/hostnames-and-https.md#each-lane-is-its-own-site) explains why.
+Lane 0's hostnames are outside that domain, so the cookie never reaches them, and signing in on one lane leaves you signed out on the other. [Hostnames and HTTPS](../../concepts/hostnames-and-https.md#each-lane-is-a-site-of-its-own) explains how a browser groups names into sites.
 
-## Sign in to each lane
+## Give each lane its own login callback
 
-Because each lane is its own site, signing in on lane 0 does not sign you in on lane 1, and signing out of one leaves the other alone. That lets you test two users side by side, one per lane.
-
-A login through an outside provider sends the browser back to a callback URL, and each lane needs its own. Build it from the service's public URL and register each lane's URL with the provider:
+A login through an outside provider sends the browser back to a callback URL, and each lane needs its own. Build it from the service's public URL, and register each lane's URL with the provider, port included when lane URLs carry one:
 
 ```yaml devlanes
 services:
@@ -92,7 +117,18 @@ The cookie then belongs to the app's own hostname and needs no domain.
 
 ## If tenant subdomains call the API
 
-The variable leaves out wildcard hostnames. An API called from tenant pages checks the origin against the tenant domain itself, as [Serve wildcard and tenant subdomains](wildcards.md) sets it up.
+The variable leaves out wildcard hostnames, and tenant pages on a domain of their own, as [Serve wildcard and tenant subdomains](wildcards.md) sets them up, are another site. Their calls to the API are cross-site, so the session cookie does not go with them. The API checks their origin against the tenant domain itself, which it needs in its own environment:
+
+```yaml devlanes
+lanes:
+  vars:
+    sites_domain: ${{ domain('myapp-sites') }}
+
+services:
+  api:
+    env:
+      SITES_DOMAIN: ${{ lane.sites_domain }}
+```
 
 ## Related
 
