@@ -23,7 +23,7 @@ services:
       ADMIN_PORT: ${{ self.ports.admin }}
 ```
 
-The main port stays in `PORT`. Another service reads a named port as `${{ services.web.ports.ws }}`, but only the service that owns the port allocates it.
+Your program has to read those variables and listen on each port, as it does with `PORT` for the main one. Another service reads a named port as `${{ services.web.ports.ws }}`, but only the service that owns the port allocates it.
 
 ## Route a hostname to it
 
@@ -42,7 +42,13 @@ services:
 
 In lane 0 the main port answers on `myapp.localhost` and the ws port on `ws.myapp.localhost`, and the admin port follows the same pattern.
 
-`devlanes url ls` lists each hostname of the project with the port it reaches. WebSockets and server-sent events pass through the proxy on any of these hostnames without a setting.
+To check the routes, list them and look for each hostname next to the port it reaches:
+
+```console title="~/dev/myapp"
+$ devlanes url ls
+```
+
+WebSockets and server-sent events pass through the proxy on any of these hostnames without a setting.
 
 ## Wait for the right port
 

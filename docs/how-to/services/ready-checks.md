@@ -41,7 +41,11 @@ services:
       timeout: 5m
 ```
 
-The start also stops waiting after a while of its own, shorter than this check. Give it a longer wait too, as in `devlanes start --timeout 5m`, or it returns while the service goes on starting.
+The start also stops waiting after a while of its own, shorter than this check. Give it a longer wait too, or it returns while the service goes on starting:
+
+```console title="~/dev/myapp"
+$ devlanes start --timeout 5m --no-ui
+```
 
 ## When the check never passes
 

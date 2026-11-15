@@ -52,11 +52,19 @@ tasks:
       API_URL: ${{ services.api.url }}
 ```
 
-When a service fails, or the start stops waiting before every service is ready, these tasks are skipped.
+When a service fails, or the start stops waiting before every service is ready, these tasks are skipped. The first start of a new lane runs the install, the migration, the services and the seed, in that order:
+
+```console title="~/dev/myapp"
+$ devlanes start --no-ui
+```
 
 ## Run a task by hand
 
-A task without an event runs only when you name it with `devlanes run`, and every other task can be run that way too. The task's output streams to your terminal, and the command exits with the task's exit code.
+A task without an event runs only when you name it, and every other task can be run that way too. The task's output streams to your terminal, and the command exits with the task's exit code:
+
+```console title="~/dev/myapp"
+$ devlanes run migrate
+```
 
 A task can also be a list of steps: other tasks and setup or teardown entries, run in order until one fails. Give a destructive one a question to ask first:
 
@@ -83,7 +91,7 @@ tasks:
 ```
 
 :::caution
-A logout or a shutdown of the machine ends the daemon without running the stop tasks, so a dump that has to happen goes in a task you run yourself.
+Anything else that ends the daemon, such as a logout, a shutdown of the machine or the service manager stopping it, skips the stop tasks, so a dump that has to happen goes in a task you run yourself.
 :::
 
 ## If the task needs your terminal

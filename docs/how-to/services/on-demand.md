@@ -25,7 +25,13 @@ services:
 
 The service keeps its port and its hostname while it is stopped. A request to the hostname gets the proxy's [DL201 Service not running](../../errors/service-idle.md) page, which names the command that starts it.
 
-When you need the service, name it in a start, as in `devlanes start docs --no-ui`, or name one of its tags. It starts next to what the lane already runs, and the TUI can start it as well. After it has run, a plain start brings it back with the rest, such as after a reboot. Stopping the service, or the whole lane, leaves it out again.
+When you need the service, name it in a start, or name one of its tags with a plus, as in `+docs`. It starts next to what the lane already runs:
+
+```console title="~/dev/myapp"
+$ devlanes start docs --no-ui
+```
+
+After it has run, a plain start brings it back with the rest, such as after a reboot. Stopping the service, or the whole lane, leaves it out again.
 
 ## Use it with profiles
 

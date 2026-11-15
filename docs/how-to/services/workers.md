@@ -77,7 +77,13 @@ services:
       log: worker ${{ replica.index }} ready
 ```
 
-In the start, stop, restart and logs commands, the service's name stands for all its copies, so stopping the worker stops both. Name one copy, such as worker.2, to act on it alone. In expressions, the worker's URL and port are those of the first copy.
+In the start, stop, restart and logs commands, the service's name stands for all its copies, so this stops both:
+
+```console title="~/dev/myapp"
+$ devlanes stop worker
+```
+
+Name one copy, such as worker.2, to act on it alone. In expressions, the worker's URL and port are those of the first copy.
 
 The count is a plain number, the same in every lane, since each copy reserves ports in every lane's block.
 

@@ -26,13 +26,29 @@ services:
 
 The destination here sits in the lane's data folder, a folder devlanes keeps for each lane outside the worktree, so each lane gets a copy of its own and the path does not move with the worktree. Files that match an ignore pattern stay out of the copy.
 
-The copy starts when the service starts, so a service that already runs picks up the entry at its next restart. From then on the copy follows each change the build makes, deletions included, until the service stops, and it stays on disk after that.
+The copy starts when the service starts, so a service that already runs picks up the entry at its next restart:
 
-Point the browser, or whatever loads the folder, at the destination once; the path stays the same across rebuilds and restarts. `devlanes env show web` prints the lane's data folder as `DEVLANES_LANE_DATA`.
+```console title="~/dev/myapp"
+$ devlanes restart web --no-ui
+```
+
+From then on the copy follows each change the build makes, deletions included, until the service stops, and it stays on disk after that.
+
+Point the browser, or whatever loads the folder, at the destination once; the path stays the same across rebuilds and restarts. Cleaning the lane deletes the folder, and the next lane gets a new one. To find the path, print the service's environment and look for the `DEVLANES_LANE_DATA` line; the copy is the folder named chrome-mv3 inside it:
+
+```console title="~/dev/myapp"
+$ devlanes env show web
+```
+
+To see whether the copy runs, list the copies of the running lanes and look for its state:
+
+```console title="~/dev/myapp"
+$ devlanes remote sync
+```
 
 ## If you want the copy somewhere else
 
-A destination can also be an absolute path, or one relative to the project file's folder. Without a destination, the copy goes to a folder under `~/devlanes/sync` named after the project, the lane and the source folder. That default and a destination that starts with a tilde read the `HOME` variable, which PowerShell and cmd do not set.
+A destination can also be an absolute path, or one relative to the project file's folder. Without a destination, the copy goes to a folder under `~/devlanes/sync` named after the project, the lane and the source folder. That default, and a destination that is a lone tilde or starts with a tilde and a slash, read the `HOME` variable. PowerShell and cmd do not set it, so a start from them fails on the entry.
 
 devlanes marks the destination as its own and refuses to write into an existing folder that holds files it did not create, so move a folder you made by hand out of the way first.
 
@@ -43,8 +59,6 @@ When the service runs on a box you are connected to, your machine gets its own c
 The devlanes home is `~/.devlanes` unless the `DEVLANES_HOME` variable moves it.
 
 A service the box keeps to itself with `hidden` is not copied to your machine, and files past a size limit are skipped; [Remote mirroring](../../concepts/remote-mirroring.md) covers how the copy travels.
-
-`devlanes remote sync` lists the copies of running lanes, on this machine and from connected boxes, with the state of each.
 
 ## Related
 

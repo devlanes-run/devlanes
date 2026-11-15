@@ -25,30 +25,70 @@ infra:
 
 The address is where the server already listens, on the loopback interface. The hostname is the lane's domain, which is the project name followed by `.localhost`, so this file gives `myapp.localhost`. Pick the project name for the hostname you want.
 
-Then run `devlanes start --no-ui` once in the folder. It has nothing to start, but it makes the folder a lane of the project, and from then on the proxy sends each request for the hostname to port 4800, whether the server is up or not. When devlanes or a lane already holds that port, the start refuses the entry and names what holds it.
+## Install the daemon as a login service
 
-On Linux the proxy uses port 8443 unless the daemon may bind 443, and the URL then carries the port; [Choose the proxy's ports](../hostnames/proxy-ports.md) changes that.
+The proxy runs inside the daemon. A daemon that a command starts exits soon after the last command that watched it, and the external entry does not keep it up, so the hostname would stop answering. A daemon installed as a login service keeps running, and comes back after a reboot.
 
-devlanes never starts, stops or checks the server. Naming the entry in a start, stop, restart or logs command is an error, since no process of devlanes is behind it.
+::::tabs{sync="os"}
+:::tab[macOS and Linux]
+First check whether a daemon already runs. This command never starts one:
 
-## Keep the hostname answering
+```console
+$ devlanes daemon status
+```
 
-The daemon that a command starts exits a short while after the last command or TUI that watched it, and the proxy goes with it. [The daemon](../../concepts/daemon.md) has the details. Installing the daemon as a login service keeps it, and the hostname, up:
+If one runs, stop it, which also stops what it runs. Otherwise it stays in place of the installed one until your next login, and exits when unused.
+
+```console
+$ devlanes daemon stop
+```
+
+On macOS, if you installed the login service before, an install that finds the same service loaded starts nothing, so remove it first:
+
+```console
+$ devlanes daemon uninstall
+```
+
+Then install the service. It starts the daemon at once and again at each login:
 
 ```console
 $ devlanes daemon install
 ```
-
-::::tabs{sync="os"}
-:::tab[macOS and Linux]
-The service starts a daemon at once and again at each login. If a daemon started by a command is already running, the new one gives way to it, and the installed service takes over only at your next login. To have it take over at once, run `devlanes daemon stop` before the install; that also stops whatever that daemon runs.
 :::
 :::tab[Windows]
-The install adds an entry that starts the daemon at each sign-in. It starts none at the install itself, so the hostname keeps answering from your next sign-in.
+Install the service. It adds an entry that starts the daemon at each sign-in, and starts none when you run it:
+
+```console
+PS> devlanes daemon install
+```
+
+To keep the daemon that commands start running as well, turn off its exit when unused:
+
+```console
+PS> devlanes config set daemon.exit_when_idle false
+```
+
+A daemon that already runs keeps its old setting until it restarts, so restart it if one runs:
+
+```console
+PS> devlanes daemon restart
+```
 :::
 ::::
 
-`devlanes daemon uninstall` removes the login service and leaves a running daemon alone.
+## Start the lane
+
+Run one start in the folder:
+
+```console title="~/dev/myapp"
+$ devlanes start --no-ui
+```
+
+It has nothing to start, but it makes the folder a lane of the project, and the proxy sends each request for the hostname to port 4800, whether the server is up or not. When devlanes or a lane already holds that port, the start refuses the entry and names what holds it.
+
+Open `https://myapp.localhost`. While your server is down, the proxy answers with its [DL301 Service not listening](../../errors/upstream-unreachable.md) page instead. On Linux the proxy uses port 8443 unless the daemon may bind 443, and the URL then carries the port; [Choose the proxy's ports](../hostnames/proxy-ports.md) changes that.
+
+devlanes never starts, stops or checks the server.
 
 ## If only you run the server
 
