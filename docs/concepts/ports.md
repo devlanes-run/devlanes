@@ -10,7 +10,7 @@ The lanes of all projects on a machine take their ports from one shared pool, so
 
 The pool runs from 20000 to 32767 by default, below the range Linux usually picks ports for outgoing connections from, so the system does not hand a lane's port to another program's connection. [`ports.range`](/docs/reference/config/user/ports/) moves it.
 
-A new lane takes the lowest block that is free, and no two blocks overlap, whatever project they belong to. In the captures on this site myapp's first block starts at 20060, because lanes of other projects on that machine held the blocks below it.
+A new lane takes the lowest block that is free, and no two blocks overlap, whatever project they belong to. Here myapp's first block starts at 20060, because lanes of other projects on that machine held the blocks below it.
 
 ![The port pool from 20000 to 32767: other lanes hold the first blocks, then a block for each lane of myapp, where api and web have the same place and the rest of the block is spare](ports.svg)
 
@@ -38,9 +38,11 @@ Each machine has its own pool and its own lanes, so the ports of a lane depend o
 
 ## A block grows when the lane restarts
 
-When you add a service, a running lane keeps its block as long as the new ports fit in it. When they do not fit, the lane has to restart to move to a larger block. `devlanes reload` without unit names restarts the whole lane for that, and a start into the running lane refuses and asks you to stop the lane and start it again.
+When you add a service, a running lane keeps its block as long as the new ports fit in it. When they do not fit, the lane moves to a larger block, and every port of the lane moves with it, each at the same offset, so a URL written with the old port number stops working. A running process keeps the port it was started with, so the move waits until the lane restarts.
 
-A lane keeps its block while it exists, running or stopped. The block is freed when the lane is cleaned, by `devlanes lane clean` or by a garbage collection of lanes whose worktree is gone ([Remove lanes](../how-to/lanes/clean-up.md)).
+A reload that names no service, which applies edits to a running lane ([Config files and reload](config-and-reload.md)), restarts the whole lane for that. A start into the running lane refuses instead and asks you to stop the lane and start it again.
+
+A lane keeps its block while it exists, running or stopped. The block is freed when the lane is cleaned: by `devlanes lane gc` once its worktree is gone, by the daemon when the project sets `lanes.removed_worktrees: clean`, or by hand ([Remove lanes](../how-to/lanes/clean-up.md)).
 
 ## A service is handed its port
 
@@ -64,7 +66,7 @@ services:
     run: node --inspect=127.0.0.1:${{ self.ports.inspect }} server.mjs
 ```
 
-Other services can read that port, but only the service that owns it allocates it, and a reference from elsewhere to a name the owner never uses fails as undefined. `devlanes status --json` lists each unit's ports by name. [Give a service several ports and hostnames](../how-to/services/ports-and-hostnames.md) routes a hostname to a named port.
+Other services can read that port, but only the service that owns it allocates it, and a reference from elsewhere to a name the owner never uses fails as undefined. `devlanes status --json` lists the ports of each service by name. [Give a service several ports and hostnames](../how-to/services/ports-and-hostnames.md) routes a hostname to a named port.
 
 ## A fixed port is the same in every lane
 
@@ -80,11 +82,11 @@ services:
       PORT: "${{ lane.port + 5 }}"
 ```
 
-The number holds in each lane and takes no place in the block, so only one lane can run the web service at a time; a second lane that starts it fails on a port that is taken and names the lane that holds it. The expression reads the start of the lane's block, so each lane gets a port of its own and that place in the block is reserved.
+The number holds in each lane and takes no place in the block, so only one lane can run the web service at a time; a second lane that starts it fails on a port that is taken and names the lane that holds it. The expression reads the start of the lane's block, so each lane gets a port of its own, and that place in the block is reserved: no other service or named port is given it.
 
 ## Some ports stay out of blocks
 
-New blocks keep clear of ports that a connected box, a machine whose lanes are mirrored to yours, holds on this machine. Browsers refuse to connect to a list of ports, all of them at 10080 or below, and blocks and offsets skip those; that matters only when `ports.range` or a fixed block start reaches that low. On Windows, blocks also skip the ranges Hyper-V and WSL reserve ([Windows](../reference/windows.md)).
+A connected box, a machine whose lanes are mirrored to yours, opens the ports of its lanes on your machine too, and new blocks keep clear of them ([Remote mirroring](remote-mirroring.md)). Browsers refuse to connect to a list of ports, all of them at 10080 or below, and blocks and offsets skip those; that matters only when `ports.range` or a fixed block start reaches that low. On Windows, blocks also skip the ranges Hyper-V and WSL reserve ([Windows](../reference/windows.md)).
 
 ## Related
 

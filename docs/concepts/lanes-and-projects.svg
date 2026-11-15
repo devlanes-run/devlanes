@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 330" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
-  <title>Two worktrees of one repository, on main and feat/checkout; each holds a lane of myapp and a lane of billing, each lane with its own domain</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 370" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>Before the branches swap, ~/dev/myapp is lane 0 and ~/dev/myapp-checkout lane 1; after a start, ~/dev/myapp-checkout is lane 0 and ~/dev/myapp lane 2, each lane keeping its ports and data folder</title>
   <style>
     .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
     .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
@@ -7,36 +7,41 @@
     .dim { fill: currentColor; opacity: 0.65; }
   </style>
 
-  <rect class="line" x="10" y="30" width="580" height="290" rx="10" />
-  <text class="label" x="26" y="22">repository</text>
+  <text class="label" x="20" y="22">Before</text>
 
-  <!-- worktree on main -->
-  <rect class="fill" x="26" y="48" width="272" height="258" rx="8" />
-  <text class="label" x="42" y="72">worktree ~/dev/myapp</text>
-  <text class="dim" x="42" y="92">branch main</text>
+  <rect class="fill" x="20" y="32" width="272" height="112" rx="8" />
+  <text class="label" x="34" y="54">~/dev/myapp</text>
+  <text class="dim" x="34" y="74">on main</text>
+  <text class="label" x="34" y="96">lane 0</text>
+  <text class="dim" x="34" y="116">ports from 20060</text>
+  <text class="dim" x="34" y="134">data folder 208</text>
 
-  <rect class="line" x="42" y="106" width="240" height="88" rx="6" />
-  <text class="dim" x="56" y="128">devlanes.yaml</text>
-  <text class="label" x="56" y="152">myapp lane 0</text>
-  <text class="dim" x="56" y="176">domain myapp.localhost</text>
+  <rect class="fill" x="308" y="32" width="272" height="112" rx="8" />
+  <text class="label" x="322" y="54">~/dev/myapp-checkout</text>
+  <text class="dim" x="322" y="74">on feat/checkout</text>
+  <text class="label" x="322" y="96">lane 1</text>
+  <text class="dim" x="322" y="116">ports from 20070</text>
+  <text class="dim" x="322" y="134">data folder 209</text>
 
-  <rect class="line" x="42" y="204" width="240" height="88" rx="6" />
-  <text class="dim" x="56" y="226">apps/billing/devlanes.yaml</text>
-  <text class="label" x="56" y="250">billing lane 0</text>
-  <text class="dim" x="56" y="274">domain billing.localhost</text>
+  <path class="line" d="M 300 152 L 300 186" />
+  <path class="line" d="M 294 178 L 300 188 L 306 178" />
+  <text class="dim" x="316" y="174">the branches swap and a start</text>
 
-  <!-- worktree on feat/checkout -->
-  <rect class="fill" x="312" y="48" width="272" height="258" rx="8" />
-  <text class="label" x="328" y="72">worktree ~/dev/myapp-checkout</text>
-  <text class="dim" x="328" y="92">branch feat/checkout</text>
+  <text class="label" x="20" y="208">After</text>
 
-  <rect class="line" x="328" y="106" width="240" height="88" rx="6" />
-  <text class="dim" x="342" y="128">devlanes.yaml</text>
-  <text class="label" x="342" y="152">myapp lane 1</text>
-  <text class="dim" x="342" y="176">domain myapp1.localhost</text>
+  <rect class="fill" x="20" y="218" width="272" height="112" rx="8" />
+  <text class="label" x="34" y="240">~/dev/myapp</text>
+  <text class="dim" x="34" y="260">on feat/checkout</text>
+  <text class="label" x="34" y="282">lane 2</text>
+  <text class="dim" x="34" y="302">ports from 20060</text>
+  <text class="dim" x="34" y="320">data folder 208</text>
 
-  <rect class="line" x="328" y="204" width="240" height="88" rx="6" />
-  <text class="dim" x="342" y="226">apps/billing/devlanes.yaml</text>
-  <text class="label" x="342" y="250">billing lane 1</text>
-  <text class="dim" x="342" y="274">domain billing1.localhost</text>
+  <rect class="fill" x="308" y="218" width="272" height="112" rx="8" />
+  <text class="label" x="322" y="240">~/dev/myapp-checkout</text>
+  <text class="dim" x="322" y="260">on main</text>
+  <text class="label" x="322" y="282">lane 0</text>
+  <text class="dim" x="322" y="302">ports from 20070</text>
+  <text class="dim" x="322" y="320">data folder 209</text>
+
+  <text class="dim" x="300" y="356" text-anchor="middle">each lane keeps the ports and data folder it had</text>
 </svg>

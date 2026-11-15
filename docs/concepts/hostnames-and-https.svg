@@ -18,7 +18,7 @@
   <path class="path" d="M 430 92 L 430 180" />
   <path class="path" d="M 423 171 L 430 182 L 437 171" />
   <text class="dim" x="42" y="120">the name resolves to 127.0.0.1</text>
-  <text class="dim" x="42" y="140">TLS to port 443, asking for the name</text>
+  <text class="dim" x="42" y="140">TLS to port 443 (default), asking for the name</text>
 
   <rect class="fill" x="26" y="152" width="548" height="222" rx="8" />
   <text class="label" x="42" y="174">daemon</text>
@@ -33,13 +33,13 @@
   <path class="path" d="M 430 258 L 430 274" />
   <path class="path" d="M 423 265 L 430 276 L 437 265" />
 
-  <rect class="line" x="42" y="276" width="244" height="84" rx="6" />
-  <text class="label" x="56" y="298">lane 0</text>
-  <text class="dim" x="56" y="320">site myapp.localhost</text>
-  <text class="dim" x="56" y="342">api on port 20060</text>
+  <rect class="line" x="42" y="276" width="244" height="84" rx="6" stroke-dasharray="5 3" />
+  <text class="label" x="56" y="298">lane 0, site myapp.localhost</text>
+  <text class="dim" x="56" y="320">web and api share</text>
+  <text class="dim" x="56" y="342">its cookies</text>
 
-  <rect class="line" x="314" y="276" width="244" height="84" rx="6" />
-  <text class="label" x="328" y="298">lane 1</text>
-  <text class="dim" x="328" y="320">site myapp1.localhost</text>
-  <text class="dim" x="328" y="342">api on port 20070</text>
+  <rect class="line" x="314" y="276" width="244" height="84" rx="6" stroke-dasharray="5 3" />
+  <text class="label" x="328" y="298">lane 1, site myapp1.localhost</text>
+  <text class="dim" x="328" y="320">web and api share</text>
+  <text class="dim" x="328" y="342">its cookies; api on 20070</text>
 </svg>

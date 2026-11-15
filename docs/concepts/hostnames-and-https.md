@@ -4,7 +4,7 @@ description: Each lane has a domain of its own and is a separate site in the bro
 kind: concept
 ---
 
-A service with a hostname is reached over HTTPS through a proxy inside the daemon, which signs a certificate for each name it serves. The lane's number is part of the domain, so each lane has hostnames of its own and the browser keeps each lane's cookies apart.
+A service with a hostname is reached over HTTPS through a proxy inside the daemon, which signs a certificate for each name it serves. The lane's number is part of the domain, so each lane has hostnames of its own.
 
 ## The lane number is part of the domain
 
@@ -18,7 +18,7 @@ services:
     hosts: "${{ lane.domain }}"
 ```
 
-A project can replace the domain with a value of its own in [`lanes.vars.domain`](/docs/reference/config/project/lanes/). Under the resolver strategy, which [Fix programs that cannot resolve *.localhost](../how-to/hostnames/resolve-localhost.md) describes, the domains end in a top-level domain you choose, such as myapp1.test.
+A project can replace the domain with a value of its own in [`lanes.vars.domain`](/docs/reference/config/project/lanes/). Under the resolver strategy, where the daemon answers one top-level domain you choose with a DNS server of its own, the domains end in that domain, such as myapp1.test.
 
 Joining the number to the name means two project names can meet: lane 1 of a project called myapp2 and lane 0 of one called myapp21 are both myapp21.localhost. Both lanes then get a warning, and one keeps the hostname: a lane that runs something wins over one that does not, and otherwise the first by project name and lane number.
 
@@ -28,7 +28,7 @@ A browser keeps cookies per site, and under localhost a site is the label just b
 
 Opening a lane as localhost with a port gives the opposite. Cookies ignore the port, so every lane opened that way would share them, and none would get the proxy's HTTPS.
 
-Names that serve content the app does not control, such as pages its users write, can get a site of their own in each lane with the `domain()` function in an expression ([Environment and expressions](environment.md)).
+Names that serve content the app does not control, such as pages its users write, can get a site of their own in each lane from `domain()`, a function you call in an expression, a value the project file works out for each lane ([Environment and expressions](environment.md)).
 
 ```yaml devlanes
 lanes:
@@ -46,19 +46,21 @@ The hostnames of all lanes arrive on one port, 443 by default. The browser sends
 
 The proxy forwards the request to the service on 127.0.0.1 over plain HTTP. By default the service sees the hostname the browser asked for in the Host header, along with the usual forwarded headers. WebSockets and server-sent events pass through without an idle timeout. A request to a service that is still starting waits for it, for up to half a minute, and then gets [DL202 Service starting](../errors/service-starting.md).
 
-When the proxy cannot have port 443, it uses another one and the URLs carry that port ([Choose the proxy's ports](../how-to/hostnames/proxy-ports.md)).
+When the proxy cannot have port 443, it uses another one and the URLs carry that port. On Linux that is the usual case, unless the daemon is allowed to bind the low ports ([Choose the proxy's ports](../how-to/hostnames/proxy-ports.md)).
 
 ## The devlanes CA signs each hostname
 
-The certificates come from an authority, the devlanes CA, that devlanes creates on your machine for your user, and it can only sign names meant for local development. [Security](security.md) lists those names, says where its key is and what a leaked key could do.
+The certificates come from an authority, the devlanes CA, that devlanes creates on your machine for your user, and it is constrained to names meant for local development. [Security](security.md) lists those names, says where its key is and what a leaked key could do.
 
-The daemon does not add the CA to a trust store. `devlanes setup` does that in your terminal, and [Trust the devlanes CA](../how-to/hostnames/trust-the-ca.md) covers browsers, tools and runtimes. Node, Bun, Deno, Python and Rust processes that devlanes starts get variables that point their runtime at the CA. An existing mkcert root can sign instead, through [`tls.ca`](/docs/reference/config/user/tls/).
+The daemon does not add the CA to a trust store. `devlanes setup` does that in your terminal, where your operating system asks you to confirm the change or enter your password, and [Trust the devlanes CA](../how-to/hostnames/trust-the-ca.md) covers browsers, tools and runtimes. Node, Bun, Deno, Python and Rust processes that devlanes starts get variables that point their runtime at the CA. An existing mkcert root can sign instead, through [`tls.ca`](/docs/reference/config/user/tls/).
 
 ## Hostnames under localhost resolve to loopback
 
 Names ending in `.localhost` are reserved for the machine itself, so they need no DNS server. Chrome and Firefox answer them with 127.0.0.1 by themselves, and so do the system resolvers of Windows 11 and of many Linux and macOS systems.
 
-Some programs on your machine send the name to DNS instead, such as Wrangler's workerd and musl or pure-Go binaries. For those, on macOS and Linux, devlanes can write the exact hostnames to the hosts file through a small helper that `devlanes setup` installs. A hosts file cannot hold a wildcard, which is what the resolver strategy is for: the daemon then answers one top-level domain with a DNS server of its own. A program inside a container sees neither, since it resolves names in the container. [Fix programs that cannot resolve *.localhost](../how-to/hostnames/resolve-localhost.md) chooses between these.
+Some programs on macOS and Linux send the name to DNS instead, such as Wrangler's workerd and musl or pure-Go binaries. For those, devlanes can write the exact hostnames to the hosts file through a small helper that `devlanes setup` installs. Windows 11 answers these names for every program that asks the system, so devlanes does not write the hosts file there. A hosts file cannot hold a wildcard, which is what the resolver strategy is for.
+
+A program inside a container resolves names in the container, so it sees none of this and reaches a lane through the host's address and the port instead. [Fix programs that cannot resolve *.localhost](../how-to/hostnames/resolve-localhost.md) covers each case.
 
 ## Plain http redirects to HTTPS
 

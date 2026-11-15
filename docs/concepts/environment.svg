@@ -27,7 +27,8 @@
   <text class="dim" x="390" y="193">global</text>
 
   <rect class="line" x="20" y="212" width="500" height="32" rx="5" />
-  <text class="label" x="34" y="233">devlanes: PORT, HOST, DEVLANES_*</text>
+  <text class="label" x="34" y="233">devlanes' own variables</text>
+  <text class="dim" x="252" y="233">PORT=20060 wins</text>
   <text class="dim" x="390" y="233">devlanes</text>
 
   <rect class="line" x="20" y="252" width="500" height="32" rx="5" />
@@ -36,6 +37,7 @@
 
   <rect class="line" x="20" y="292" width="500" height="32" rx="5" />
   <text class="label" x="34" y="313">the shell that ran the start</text>
+  <text class="dim" x="276" y="313">PORT=3000</text>
   <text class="dim" x="390" y="313">client</text>
 
   <!-- precedence -->
