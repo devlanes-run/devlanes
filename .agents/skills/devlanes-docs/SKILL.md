@@ -145,7 +145,7 @@ Write the page the way it should read first. If no example fits, add one to the 
 A wrong page is worse than a missing one.
 
 - Run every command a page shows, on the release the page is for. Read `devlanes <command> --help` before naming a flag.
-- Output in a `console` block comes from a real run. Shorten it by dropping whole lines. Change nothing else except names, to the ones above. Never write output from memory.
+- Output in a `console` block comes from a real run. Shorten it by dropping whole lines. Change nothing else except names, to the ones above, and private paths, to `~/...`. Never write output from memory.
 - Show the command a person types and the output a person sees. A start on a terminal runs inside the TUI, so show starts with `--no-ui`. When an agent captures output, devlanes switches to its terse agent format; capture with `--output human` and `NO_COLOR=1`, and leave those two out of the block.
 - When you have no real output for something, show the config or a diagram instead. A page without an output block is fine; a page with invented output is not.
 - A `yaml devlanes` block that is a whole file passes `devlanes config check`. A block that is a fragment uses only keys the schema has; the website build fails on an unknown key.

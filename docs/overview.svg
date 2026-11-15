@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 330" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <style>
+    .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
+    .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
+    .accent { stroke: var(--dl-diagram-accent, #f5c542); fill: none; stroke-width: 2.5; }
+    .label { fill: currentColor; }
+    .dim { fill: currentColor; opacity: 0.65; }
+  </style>
+
+  <!-- your machine -->
+  <rect class="line" x="10" y="30" width="470" height="290" rx="10" />
+  <text class="label" x="26" y="22">your machine</text>
+
+  <text class="dim" x="30" y="62">browser</text>
+  <text class="label" x="30" y="82">https://myapp1.localhost</text>
+  <path class="line" d="M 130 92 L 130 116" />
+  <path class="line" d="M 124 108 L 130 118 L 136 108" />
+
+  <rect class="fill" x="26" y="122" width="438" height="184" rx="8" />
+  <text class="label" x="42" y="146">daemon</text>
+
+  <rect class="line" x="42" y="158" width="406" height="34" rx="6" />
+  <text class="label" x="56" y="180">proxy</text>
+  <text class="dim" x="118" y="180">HTTPS for every hostname</text>
+
+  <rect class="line" x="42" y="204" width="196" height="88" rx="6" />
+  <text class="label" x="56" y="226">lane 0</text>
+  <text class="dim" x="118" y="226">main</text>
+  <text class="label" x="56" y="252">api</text>
+  <text class="label" x="56" y="274">web</text>
+  <text class="dim" x="118" y="263">units</text>
+
+  <rect class="line" x="252" y="204" width="196" height="88" rx="6" />
+  <text class="label" x="266" y="226">lane 1</text>
+  <text class="dim" x="328" y="226">feat/checkout</text>
+  <text class="label" x="266" y="252">api</text>
+  <text class="label" x="266" y="274">web</text>
+  <text class="dim" x="328" y="263">units</text>
+
+  <!-- box -->
+  <rect class="line" x="560" y="122" width="190" height="184" rx="10" />
+  <text class="label" x="576" y="114">box</text>
+  <rect class="fill" x="576" y="138" width="158" height="152" rx="8" />
+  <text class="label" x="590" y="162">daemon</text>
+  <rect class="line" x="590" y="204" width="130" height="72" rx="6" />
+  <text class="label" x="602" y="226">lane 2</text>
+  <text class="label" x="602" y="252">api</text>
+  <text class="label" x="646" y="252">web</text>
+
+  <!-- connection -->
+  <path class="accent" d="M 464 248 L 576 248" />
+  <text class="dim" x="484" y="238">one</text>
+  <text class="dim" x="484" y="270">session</text>
+</svg>
