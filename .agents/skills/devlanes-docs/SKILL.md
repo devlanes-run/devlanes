@@ -20,6 +20,8 @@ Read these before writing:
 
 A developer opens the docs to decide whether devlanes fits, to get one thing working, or to look one thing up. Their coding agent does most of the typing: it reads the skill and the reference, runs the commands and writes the config. So the prose pages are there to give a person a clear picture fast, and the reference and the skill are there to be exact.
 
+Most people try devlanes by pointing their agent at it. So the overview and the install page lead with that path: a prompt to paste into a coding agent, which installs the skill and sets the project up, and the manual steps after it. Any page whose goal an agent can carry out says so in one line and links the skill; it does not repeat the prompt.
+
 That splits the writing into two registers. Prose pages (Learn, how-to guides, concepts) read like the feature pages of the website: a claim, a short explanation, one thing to look at. Reference pages and the skill are plain and complete.
 
 ## Process
@@ -144,6 +146,8 @@ A wrong page is worse than a missing one.
 
 - Run every command a page shows, on the release the page is for. Read `devlanes <command> --help` before naming a flag.
 - Output in a `console` block comes from a real run. Shorten it by dropping whole lines. Change nothing else except names, to the ones above. Never write output from memory.
+- Show the command a person types and the output a person sees. A start on a terminal runs inside the TUI, so show starts with `--no-ui`. When an agent captures output, devlanes switches to its terse agent format; capture with `--output human` and `NO_COLOR=1`, and leave those two out of the block.
+- When you have no real output for something, show the config or a diagram instead. A page without an output block is fine; a page with invented output is not.
 - A `yaml devlanes` block that is a whole file passes `devlanes config check`. A block that is a fragment uses only keys the schema has; the website build fails on an unknown key.
 - Check a claim about behaviour against the code or a run, not against the old docs or another page.
 - Follow every link you add.
@@ -159,7 +163,8 @@ A wrong page is worse than a missing one.
 `skills/devlanes/SKILL.md` is loaded by an agent on any task in a repository that uses devlanes, so every line costs context on every task.
 
 - `SKILL.md` covers daily use: the words (project, lane, unit, box), running this worktree's copy of the project, what a new worktree needs, getting URLs and ports, logs, tests, ad-hoc long-running commands, stopping what the agent started, what to tell the user to open, states, exit codes and errors.
-- It does not teach configuration. Writing or changing `devlanes.yaml`, migrating from another tool, registering the MCP server, setting up a box and fixing hostnames, proxy and lane problems each live in a file under `references/`, named at the top of `SKILL.md` with the situation that calls for it.
+- It does not teach configuration. Setting devlanes up in a repository for the first time, writing or changing `devlanes.yaml`, migrating from another tool, registering the MCP server, setting up a box and fixing hostnames, proxy and lane problems each live in a file under `references/`, named at the top of `SKILL.md` with the situation that calls for it.
+- It is the way most people try devlanes: they paste the prompt from the install page and their agent does the rest. `references/setup.md` has to take an agent from a repository without devlanes to a running lane and a URL for the user, and say which steps only the user can do, such as answering the prompt of `devlanes setup`.
 - It is exact and terse: imperative sentences, tables, real commands. The prose rules above about inline code and page shape do not apply to it. The rules under "Voice", "Words and names", "Left out of the docs" and "Accuracy" do.
 - Every command and flag in it exists in `--help`. It never guesses output.
 - An agent cannot open the TUI or the user's browser. The skill tells the agent what to ask the user to run or open.

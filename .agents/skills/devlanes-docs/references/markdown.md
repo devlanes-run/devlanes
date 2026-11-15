@@ -44,6 +44,16 @@ it works once and expires in 10 minutes
 - One command with its output per block where possible. A block of several commands with no output is a script.
 - Output is real ("Accuracy" in `SKILL.md`).
 
+## Prompt blocks
+
+````markdown
+```prompt
+Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then set up devlanes for this repository and give me the URL of each service.
+```
+````
+
+Text for the reader to paste into a coding agent. It renders as a card with a copy button. Write it as one instruction a person would give, in plain sentences. Use it on the overview and the install page, and on a how-to guide only when the whole guide is something an agent does.
+
 ## Config blocks
 
 ````markdown

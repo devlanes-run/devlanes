@@ -1,0 +1,131 @@
+# The docs sidebar, in order. Paths are relative to docs/ without the extension; index is README.md.
+# Keep it in step with .agents/skills/devlanes-docs/references/site-map.md.
+- label: Start
+  items:
+    - index
+    - install
+- label: Learn
+  sequence: true
+  items:
+    - learn/first-service
+    - learn/worktrees
+    - learn/connecting-services
+    - learn/databases
+    - learn/failures
+    - learn/agents
+    - learn/remote
+- label: How-to guides
+  items:
+    - label: Projects
+      collapsed: true
+      items:
+        - how-to/projects/add-devlanes
+        - how-to/projects/migrate
+        - how-to/projects/run-scripts
+        - how-to/projects/runtimes
+        - how-to/projects/vite-and-next
+        - how-to/projects/cloudflare-workers
+        - how-to/projects/tauri
+        - how-to/projects/monorepo
+        - how-to/projects/dev-and-prod
+        - how-to/projects/local-overrides
+        - how-to/projects/templates-and-profiles
+        - how-to/projects/env-files-and-tools
+    - label: Services
+      collapsed: true
+      items:
+        - how-to/services/ready-checks
+        - how-to/services/workers
+        - how-to/services/ports-and-hostnames
+        - how-to/services/on-demand
+        - how-to/services/tasks
+        - how-to/services/external
+    - label: Hostnames and HTTPS
+      collapsed: true
+      items:
+        - how-to/hostnames/trust-the-ca
+        - how-to/hostnames/wildcards
+        - how-to/hostnames/cors-and-cookies
+        - how-to/hostnames/resolve-localhost
+        - how-to/hostnames/proxy-ports
+    - label: Databases and containers
+      collapsed: true
+      items:
+        - how-to/infra/shared-database
+        - how-to/infra/container-per-lane
+        - how-to/infra/datastores
+        - how-to/infra/plain-containers
+    - label: Lanes
+      collapsed: true
+      items:
+        - how-to/lanes/two-lanes-one-folder
+        - how-to/lanes/attach-to-another-lane
+        - how-to/lanes/after-a-reboot
+        - how-to/lanes/clean-up
+        - how-to/lanes/many-lanes
+    - label: Coding agents
+      collapsed: true
+      items:
+        - how-to/agents/set-up
+        - how-to/agents/sandboxes
+    - label: Tests and CI
+      collapsed: true
+      items:
+        - how-to/ci/tests
+        - how-to/ci/ci
+    - label: Remote boxes
+      collapsed: true
+      items:
+        - how-to/remote/prepare-a-box
+        - how-to/remote/connect
+        - how-to/remote/connect-by-command
+        - how-to/remote/tailscale
+        - how-to/remote/cloudflare
+        - how-to/remote/several-boxes
+        - how-to/remote/ports-and-files
+    - how-to/wsl
+    - how-to/update
+    - how-to/report-a-bug
+- label: Concepts
+  items:
+    - concepts/lanes-and-projects
+    - concepts/daemon
+    - concepts/ports
+    - concepts/hostnames-and-https
+    - concepts/environment
+    - concepts/start-order
+    - concepts/config-and-reload
+    - concepts/idle-lanes
+    - concepts/remote-mirroring
+    - concepts/security
+- label: Reference
+  items:
+    - label: CLI
+      collapsed: true
+      items:
+        - reference/cli
+        - reference/cli/*
+    - label: Configuration
+      collapsed: true
+      items:
+        - reference/config
+        - reference/config/*
+    - reference/expressions
+    - reference/environment-variables
+    - reference/lane-and-unit-references
+    - reference/states-and-exit-codes
+    - reference/tui
+    - reference/mcp-tools
+    - reference/remote-states
+    - reference/files
+    - reference/windows
+    - reference/limits
+    - reference/glossary
+- label: Proxy errors
+  collapsed: true
+  items:
+    - errors
+    - errors/*
+- label: Troubleshooting
+  items:
+    - troubleshooting
