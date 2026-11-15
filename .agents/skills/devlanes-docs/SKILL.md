@@ -73,7 +73,7 @@ A page that mixes kinds is the main way these docs went wrong before. Explanatio
 These hold for Learn pages, how-to guides and concepts.
 
 - The first paragraph gives the situation and what comes out of it, in plain words, with no inline code. It does not talk about the page: no "this page", no "here you will".
-- A section is a heading, one or two short paragraphs and one thing to look at: a terminal block, a config block, a few lines of the app's code or a diagram.
+- A section is a heading, one or two short paragraphs and one thing to look at: a terminal block, a config block, a few lines of the app's code or a diagram. On a concept page a section may be prose alone, up to three paragraphs, when there is nothing real to show.
 - The heading states the point once. The sentence under it does not say it again; it gives the reason, the consequence or what to look for in the block. A section whose only sentence repeats its block is cut.
 - Commands and their output appear only in `console` blocks, never in a table or a sentence. Config appears only in `yaml devlanes` blocks; to talk about one line, show it as a fragment. Prose refers to both in words: "the start prints one line per service".
 - A command or a flag may be named in prose once, in code, when the sentence is about it. `--no-ui` is explained on `learn/first-service.md` and nowhere else.
@@ -154,10 +154,10 @@ Write the page the way it should read first. If no example fits, add one to the 
 A wrong page is worse than a missing one.
 
 - Run every command a page shows, on the release the page is for. Read `devlanes <command> --help` before naming a flag.
-- Output in a `console` block comes from a real run of the command the block shows. Shorten it by dropping whole lines. Change nothing else except names, to the ones above, and the user name in a path, to `you`. Never write output from memory, and never fill a block with lines from another command or another run.
+- Output in a `console` block comes from a real run of the command the block shows. Shorten it by dropping whole lines. Change nothing else except names, to the ones above, and paths: the user name becomes `you` and the project's folder becomes the one above, in the form the capture's OS prints (`C:\Users\you\dev\myapp` on Windows). Never write output from memory, and never fill a block with lines from another command or another run.
 - The command in a block is the one that was run. Do not rewrite it into the form another OS would use. A command that differs by OS is a tab per OS, each with its own capture.
 - Note the OS of every capture. Output that differs by OS (ports, paths, resolvers, trust stores) goes in OS tabs, or carries the OS in the block's title, such as `title="on Windows 11"`. Prefer artefacts that read the same everywhere: devlanes' own commands over `curl`.
-- Show the command a person types and the output a person sees. A start on a terminal runs inside the TUI, so show starts with `--no-ui`. When an agent captures output, devlanes switches to its terse agent format; capture with `--output human` and `NO_COLOR=1`, and leave those two out of the block.
+- Show the command a person types and the output a person sees. A start on a terminal runs inside the TUI, so show starts with `--no-ui`. When an agent captures output, devlanes switches to its terse agent format; capture with `--output human` and `NO_COLOR=1`, and leave those two out of the block. Any other flag that was passed stays in the block, `--output plain` included.
 - When you have no real output for something, show the config or a diagram instead. A page without an output block is fine; a page with invented output is not.
 - A prompt block asks only for what `skills/devlanes/` teaches an agent to do. Check the skill before you write one.
 - A `yaml devlanes` block that is a whole file passes `devlanes config check`. A block that is a fragment uses only keys the schema has; the website build fails on an unknown key.

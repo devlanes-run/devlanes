@@ -114,7 +114,7 @@ Prose. The reasoning, the trade-off, what was decided against and the reason.
 
 ````markdown
 ---
-title: Unit states and exit codes
+title: States and exit codes
 description: The states a unit can be in and the exit codes of the CLI.
 kind: reference
 ---

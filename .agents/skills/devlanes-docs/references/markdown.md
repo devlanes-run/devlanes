@@ -17,6 +17,10 @@ kind: how-to
 - `kind`: `overview` (the docs home only), `learn`, `how-to`, `concept` or `reference`.
 - `publish: false` keeps a file off the website. `docs/AGENTS.md` has it.
 
+## File names
+
+Lowercase words joined by hyphens. No page is named `agents.md` or `claude.md`: on Windows and macOS an agent's harness reads such a file as its instructions, whatever the letter case.
+
 ## Sidebar
 
 `docs/nav.yaml` lists every page in sidebar order. A page missing from it lands in the last group with a build warning. Add a new page to `nav.yaml` and to the site map in the same change.
@@ -26,7 +30,8 @@ kind: how-to
 - Link another docs page by its relative path with the `.md` extension: `[Idle lanes](../concepts/idle-lanes.md)`. The website turns it into the route.
 - Link a heading with `#` and its slug: `../concepts/ports.md#named-ports`.
 - Link text names the page or the thing. Never "here" or "this page".
-- The config reference is generated on the website, so link it by route: `/docs/reference/config/project/services/`.
+- The config reference is generated on the website, so link it by route. A project file key lives at `/docs/reference/config/project/<top-level key>/`, such as `/docs/reference/config/project/services/` or `/docs/reference/config/project/infra/`, and a user config key at `/docs/reference/config/user/<top-level key>/`. The link text is the key in code: [`services.<name>.ready`](/docs/reference/config/project/services/).
+- A proxy error page is linked by its own title, such as [DL201 Service not running](../errors/service-idle.md).
 
 ## Terminal blocks
 
@@ -42,6 +47,7 @@ it works once and expires in 10 minutes
 - `PS> ` starts a PowerShell command.
 - `title` names where the command runs when that matters: a folder, "on the box", "on your machine", or the OS when the output differs by OS.
 - One command with its output per block where possible. A block of several commands with no output is a script.
+- Output that contains a fenced block of its own, such as an error page in Markdown, goes in a block opened and closed with four backticks.
 - Output is real ("Accuracy" in `SKILL.md`).
 
 ## Prompt blocks

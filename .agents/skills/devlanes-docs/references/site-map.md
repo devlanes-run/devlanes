@@ -20,7 +20,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | `learn/connecting-services.md` | Services that find each other | A web app that calls the API of its own lane: expressions, the two kinds of URL, presets, a task that installs dependencies in a new lane. |
 | `learn/databases.md` | A database for each lane | One Postgres for every lane with a database per lane: containers, per-lane values, setup, tasks at lane events, cleaning a lane. |
 | `learn/failures.md` | When a service fails | A service that fails and a config edit: the failed state, no automatic restart, finding the reason, reload. |
-| `learn/agents.md` | A coding agent runs the lane | The daemon owns the processes, the skill, ad-hoc commands, tests against a lane, stopping what the agent started. |
+| `learn/coding-agents.md` | A coding agent runs the lane | The daemon owns the processes, the skill, ad-hoc commands, tests against a lane, stopping what the agent started. |
 | `learn/remote.md` | Lanes on another machine | A box, pairing, the same hostnames and ports on your machine. Carries the diagram of a box and your machine. |
 
 ## How-to guides

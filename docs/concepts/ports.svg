@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 230" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>The port pool from 20000 to 32767 holds a block of ten ports for each lane of myapp; api and web have the same place in lane 0 and lane 1</title>
+  <style>
+    .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
+    .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
+    .path { stroke: var(--dl-diagram-accent, currentColor); fill: none; stroke-width: 2.5; }
+    .label { fill: currentColor; }
+    .dim { fill: currentColor; opacity: 0.65; }
+  </style>
+
+  <text class="label" x="20" y="26">port pool</text>
+  <rect class="line" x="20" y="38" width="560" height="30" rx="4" />
+  <rect class="path" x="70" y="38" width="26" height="30" />
+  <rect class="path" x="96" y="38" width="26" height="30" />
+  <text class="dim" x="20" y="86">20000</text>
+  <text class="dim" x="580" y="86" text-anchor="end">32767</text>
+
+  <!-- each block, drawn larger -->
+  <path class="line" d="M 83 68 L 165 120" />
+  <path class="line" d="M 109 68 L 435 120" />
+
+  <rect class="fill" x="40" y="120" width="250" height="94" rx="6" />
+  <text class="label" x="54" y="142">myapp lane 0</text>
+  <text class="dim" x="54" y="162">block 20060-20069</text>
+  <rect class="line" x="54" y="174" width="106" height="28" rx="5" />
+  <text class="label" x="64" y="193">api 20060</text>
+  <rect class="line" x="170" y="174" width="106" height="28" rx="5" />
+  <text class="label" x="180" y="193">web 20061</text>
+
+  <rect class="fill" x="310" y="120" width="250" height="94" rx="6" />
+  <text class="label" x="324" y="142">myapp lane 1</text>
+  <text class="dim" x="324" y="162">block 20070-20079</text>
+  <rect class="line" x="324" y="174" width="106" height="28" rx="5" />
+  <text class="label" x="334" y="193">api 20070</text>
+  <rect class="line" x="440" y="174" width="106" height="28" rx="5" />
+  <text class="label" x="450" y="193">web 20071</text>
+</svg>

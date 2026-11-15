@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 300" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>Your machine and a box joined by one SSH session: your daemon holds the proxy, mirrored ports and synced folders; on the box a devlanes tunnel talks to the box daemon, which runs the lanes</title>
+  <style>
+    .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
+    .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
+    .path { stroke: var(--dl-diagram-accent, currentColor); fill: none; stroke-width: 2.5; }
+    .label { fill: currentColor; }
+    .dim { fill: currentColor; opacity: 0.65; }
+  </style>
+
+  <rect class="line" x="10" y="30" width="210" height="256" rx="10" />
+  <text class="label" x="26" y="22">your machine</text>
+
+  <rect class="fill" x="24" y="50" width="182" height="222" rx="8" />
+  <text class="label" x="36" y="74">daemon</text>
+  <rect class="line" x="36" y="96" width="158" height="34" rx="5" />
+  <text class="label" x="48" y="118">proxy</text>
+  <rect class="line" x="36" y="142" width="158" height="34" rx="5" />
+  <text class="label" x="48" y="164">mirrored ports</text>
+  <rect class="line" x="36" y="188" width="158" height="34" rx="5" />
+  <text class="label" x="48" y="210">synced folders</text>
+
+  <!-- the session -->
+  <text class="label" x="223" y="64" font-size="12">one SSH session</text>
+  <path class="path" d="M 206 78 L 354 78" />
+
+  <rect class="line" x="340" y="30" width="210" height="256" rx="10" />
+  <text class="label" x="356" y="22">box</text>
+
+  <rect class="line" x="354" y="50" width="182" height="52" rx="8" />
+  <text class="label" x="366" y="82">devlanes tunnel</text>
+
+  <path class="path" d="M 445 102 L 445 126" />
+  <path class="path" d="M 439 117 L 445 128 L 451 117" />
+
+  <rect class="fill" x="354" y="130" width="182" height="142" rx="8" />
+  <text class="label" x="366" y="154">box daemon</text>
+  <rect class="line" x="366" y="168" width="158" height="34" rx="5" />
+  <text class="label" x="378" y="190">lanes</text>
+  <text class="dim" x="366" y="230">you run commands</text>
+  <text class="dim" x="366" y="250">here, over ssh</text>
+</svg>

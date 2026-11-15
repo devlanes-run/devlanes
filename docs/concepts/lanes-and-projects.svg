@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 300" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>Two worktrees of one repository, on main and feat/checkout; each holds a lane of myapp and a lane of billing</title>
+  <style>
+    .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
+    .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
+    .label { fill: currentColor; }
+    .dim { fill: currentColor; opacity: 0.65; }
+  </style>
+
+  <rect class="line" x="10" y="30" width="580" height="254" rx="10" />
+  <text class="label" x="26" y="22">repository</text>
+
+  <!-- worktree of main -->
+  <rect class="fill" x="26" y="48" width="272" height="222" rx="8" />
+  <text class="label" x="42" y="72">worktree ~/dev/myapp</text>
+  <text class="dim" x="42" y="92">main</text>
+
+  <rect class="line" x="42" y="106" width="240" height="70" rx="6" />
+  <text class="dim" x="56" y="130">devlanes.yaml</text>
+  <text class="label" x="56" y="156">myapp lane 0</text>
+
+  <rect class="line" x="42" y="188" width="240" height="70" rx="6" />
+  <text class="dim" x="56" y="212">apps/billing/devlanes.yaml</text>
+  <text class="label" x="56" y="238">billing lane 0</text>
+
+  <!-- worktree of feat/checkout -->
+  <rect class="fill" x="312" y="48" width="272" height="222" rx="8" />
+  <text class="label" x="328" y="72">worktree ~/dev/myapp-checkout</text>
+  <text class="dim" x="328" y="92">feat/checkout</text>
+
+  <rect class="line" x="328" y="106" width="240" height="70" rx="6" />
+  <text class="dim" x="342" y="130">devlanes.yaml</text>
+  <text class="label" x="342" y="156">myapp lane 1</text>
+
+  <rect class="line" x="328" y="188" width="240" height="70" rx="6" />
+  <text class="dim" x="342" y="212">apps/billing/devlanes.yaml</text>
+  <text class="label" x="342" y="238">billing lane 1</text>
+</svg>

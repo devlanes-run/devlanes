@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 320" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
+  <title>A start runs containers, setup, tasks, services, then tasks after services, each phase once the one before it ended</title>
+  <style>
+    .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
+    .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
+    .path { stroke: var(--dl-diagram-accent, currentColor); fill: none; stroke-width: 2.5; }
+    .label { fill: currentColor; }
+    .dim { fill: currentColor; opacity: 0.65; }
+  </style>
+
+  <rect class="line" x="20" y="20" width="520" height="40" rx="6" />
+  <text class="label" x="36" y="45">containers</text>
+  <text class="dim" x="196" y="45">shared and per-lane, until ready</text>
+
+  <path class="path" d="M 280 60 L 280 78" />
+  <path class="path" d="M 274 71 L 280 80 L 286 71" />
+
+  <rect class="line" x="20" y="80" width="520" height="40" rx="6" />
+  <text class="label" x="36" y="105">setup</text>
+  <text class="dim" x="196" y="105">first start, entries side by side</text>
+
+  <path class="path" d="M 280 120 L 280 138" />
+  <path class="path" d="M 274 131 L 280 140 L 286 131" />
+
+  <rect class="line" x="20" y="140" width="520" height="40" rx="6" />
+  <text class="label" x="36" y="165">tasks</text>
+  <text class="dim" x="196" y="165">one at a time, in file order</text>
+
+  <path class="path" d="M 280 180 L 280 198" />
+  <path class="path" d="M 274 191 L 280 200 L 286 191" />
+
+  <rect class="fill" x="20" y="200" width="520" height="40" rx="6" />
+  <text class="label" x="36" y="225">services</text>
+  <text class="dim" x="196" y="225">all together, until ready or failed</text>
+
+  <path class="path" d="M 280 240 L 280 258" />
+  <path class="path" d="M 274 251 L 280 260 L 286 251" />
+
+  <rect class="line" x="20" y="260" width="520" height="40" rx="6" />
+  <text class="label" x="36" y="285">after services</text>
+  <text class="dim" x="196" y="285">tasks, once every service is ready</text>
+</svg>
