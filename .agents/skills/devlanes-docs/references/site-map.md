@@ -31,7 +31,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 |---|---|---|
 | `add-devlanes.md` | Add devlanes to a project | Put a project that already runs some other way on devlanes. |
 | `migrate.md` | Migrate from another process manager | Move from mprocs, a Procfile, process-compose, pm2, tmuxinator, `concurrently` or Compose, with an agent and the skill. |
-| `run-scripts.md` | Run scripts from project files | Run scripts from `package.json`, a Makefile, a justfile, `Cargo.toml`, `pyproject.toml` or `deno.json`. |
+| `run-scripts.md` | Run scripts your project already has | Run scripts from `package.json`, a Makefile, a justfile, `Cargo.toml`, `pyproject.toml` or `deno.json`. |
 | `runtimes.md` | Run Node, Bun, Deno, Python and Rust services | What each runtime needs, with tabs per runtime. |
 | `vite-and-next.md` | Run Vite and Next.js | The two presets and their gotchas. |
 | `cloudflare-workers.md` | Run Cloudflare Workers | Wrangler and the Cloudflare Vite plugin per lane. |
@@ -122,7 +122,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 
 | Page | Title | Explains |
 |---|---|---|
-| `lanes-and-projects.md` | Lanes and projects | First of the concepts, so it names what a lane is made of: units (services, tasks, containers), setup, profiles, the data folder. Worktrees, lanes, lane 0 and when it moves, lane names, what a deleted worktree leaves behind, projects and project names, two clones of one repository, several projects in one repository. |
+| `lanes-and-projects.md` | Lanes and projects | First of the concepts, so it names what a lane is made of: units (services, tasks), containers, setup, profiles, the data folder. Worktrees, lanes, lane 0 and when it moves, lane names, what a deleted worktree leaves behind, projects and project names, two clones of one repository, several projects in one repository. |
 | `daemon.md` | The daemon | The daemon and its clients, what it owns, when it starts and exits, sleep, reboot and daemon restart, that it does not restart a failed service or cap resources. Carries a diagram of the clients, the daemon and what it owns. |
 | `ports.md` | Ports | The port pool, a block per lane, a place per service, named ports, that ports differ between machines. |
 | `hostnames-and-https.md` | Hostnames and HTTPS | Lane domains, the proxy, certificates signed per hostname, how hostnames resolve, a lane as its own site for cookies. |

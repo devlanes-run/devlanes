@@ -1,12 +1,10 @@
 ---
 title: Open a GUI tool as a service
-description: Run a simulator, an Android screen or a remote desktop that serves HTTP or TCP as a service with a hostname, also from a box.
+description: Run a simulator, an Android emulator or a remote desktop that serves HTTP or TCP as a service with a hostname, also from a box.
 kind: how-to
 ---
 
-A simulator, an Android screen or a remote desktop that already shows itself in a browser or over a TCP port runs in a lane as an ordinary service, with a hostname you open on your machine.
-
-devlanes does not stream windows itself; [Limits](../../reference/limits.md) lists that. The tools below do the streaming, and devlanes gives each one a port, a hostname and a place in the lane.
+devlanes does not stream windows, but a simulator, an emulator or a remote desktop that already shows itself in a browser or over a TCP port runs in a lane as an ordinary service, with a hostname you open on your machine.
 
 ## Give the tool the service's port
 
@@ -20,7 +18,7 @@ services:
     autostart: false
 ```
 
-This one is serve-sim, which shows a booted iOS simulator in the browser on a Mac. Autostart is off because a simulator is not needed on every start; [Start a service only on demand](on-demand.md) covers that. ws-scrcpy, which shows an Android screen in the browser, follows the same pattern.
+This one is serve-sim, which shows a booted iOS simulator in the browser on a Mac. Autostart is off because a simulator is not needed on every start; [Start a service only on demand](on-demand.md) covers that.
 
 ## Open a desktop in the browser
 
@@ -33,7 +31,7 @@ services:
     hosts: "desktop.${{ lane.domain }}"
 ```
 
-The desktop then opens at the service's hostname, such as `https://desktop.myapp.localhost` in lane 0. Keep the tool in the foreground, as the daemon flag here does. A service whose process exits shows as failed, so a tool that forks into the background and returns looks broken to devlanes.
+The desktop opens at the service's hostname, such as `https://desktop.myapp.localhost` in lane 0. Keep the tool in the foreground, as the daemon flag here does. A service whose process exits shows as failed, so a tool that moves itself to the background looks broken to devlanes.
 
 ## Reach an emulator over TCP
 
@@ -45,17 +43,11 @@ services:
     run: "adb -P ${{ self.port }} nodaemon server"
 ```
 
-Tools on the same machine reach it by port, the one status lists for the service.
+The server listens on the port that status lists for the service. Point adb and the tools that use it at that port, with adb's own port flag or the `ANDROID_ADB_SERVER_PORT` variable.
 
-## From a box
+## If the tool runs on a box
 
-On a box you are connected to, the same services reach your machine. Hostnames open there through your proxy, and ports are mirrored under the same numbers, so the adb server on the box answers on your machine as well:
-
-```console title="on your machine"
-$ ANDROID_ADB_SERVER_PORT=<port> adb devices
-```
-
-The port is the one the box lists for the service. Only TCP is mirrored, so a tool that needs UDP does not work across the connection. [Lanes on another machine](../../learn/remote.md) shows a box and your machine side by side.
+On a box you are connected to, the same services reach your machine. Hostnames open there through your proxy, and ports are mirrored under the same numbers, so adb on your machine reaches the box's adb server on the port the box lists. The connection carries TCP only, so a tool that needs UDP does not work across it. [Lanes on another machine](../../learn/remote.md) shows a box and your machine side by side.
 
 ## Related
 

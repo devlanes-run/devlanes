@@ -31,7 +31,7 @@ That splits the writing into two registers. Prose pages (Learn, how-to guides, c
 3. Check the page's kind and follow its rules.
 4. Write. Then cut: read each sentence and ask whether a reader with this page's goal would miss it. If not, it moves to reference or goes.
 5. Verify ("Accuracy").
-6. If the page is new, add it to `docs/nav.yaml` and to the site map.
+6. If the page is new, add it to `docs/nav.yaml` and to the site map. A rename or a new title changes `nav.yaml`, the site map and every link to the page in the same commit.
 7. If the fact is one the skill states, change the skill in the same pull request.
 8. Put a `Docs:` line in the pull request description: the pages changed, or `none` and the reason.
 
@@ -113,12 +113,14 @@ These hold for Learn pages, how-to guides and concepts.
 | worktree | a Git worktree | checkout, working copy |
 | lane | a running copy of the project for one worktree | environment, instance, slot, and "copy" once the word lane is introduced |
 | project | what one `devlanes.yaml` describes | repo, workspace, and "app" for what devlanes runs |
-| project file | `devlanes.yaml` | config, manifest |
+| project file | `devlanes.yaml` | config, manifest, and "project file" for `package.json` and the like |
 | user config | `~/.devlanes/config.yaml` | settings file, global config |
 | local file | `devlanes.local.yaml` | override file |
-| unit | a service, task, exec command, container or external port | process, job |
+| unit | a service, task, exec command, setup or teardown entry, or external port | process, job |
 | service | a long-running process of a lane | server, app |
-| container | something under `infra` | infra (in prose) |
+| container | something under `infra`; a lane has containers next to its units | infra (in prose), unit |
+| unused lane | a lane with no activity, which is throttled, then frozen | idle lane: `idle` is the state of a lane that runs nothing |
+| thaw | a frozen lane running again | resume, wake: `devlanes lane resume` brings lanes back after the daemon went away |
 | ready check | `ready` | health check, health route, probe |
 | daemon | the background process that owns the lanes | server, agent |
 | box | a machine whose lanes are mirrored to another | remote, host, server |

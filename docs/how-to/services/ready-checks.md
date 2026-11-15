@@ -10,12 +10,12 @@ A start waits for each service's ready check, so a check that tests the real app
 
 ## Pick a check for the service
 
-A ready check is retried until it passes or its timeout runs out, 60 seconds unless you set one. Choose the kind by what the service offers:
+devlanes repeats a ready check until it passes or its timeout runs out. Choose the kind by what the service offers:
 
 - A health route: `http`, which passes when the route answers with a 2xx status.
 - A port and no route: `tcp`, which passes once the port accepts a connection.
-- No port, such as a worker: `log`, which passes when a line of its output matches.
-- A check that needs a tool: `cmd`, which passes once the command exits 0.
+- No port, such as a worker: `log`, which passes when a line of the service's output matches.
+- Something only a tool can tell: `cmd`, a check written as a command, which passes once the command exits 0.
 - Nothing to probe: `started`.
 
 ```yaml devlanes
@@ -24,16 +24,13 @@ services:
     ready:
       http:
         path: /healthz
-  worker:
-    ready:
-      log: "worker ready"
 ```
 
-A service without a ready check waits for its port when it has hostnames, and counts as ready as soon as it starts when it has none. A route that reads from the database tells you more than a port does, since a port only proves the socket is open. The fields of each kind are under [`ready`](/docs/reference/config/project/services/) in the config reference.
+Without a ready check, a service with hostnames waits for its port, and one without counts as ready once its process has run for a moment. A route that reads from the database tells you more than a port does, since an open port only proves the socket is there. The fields of each kind are under [`services.<name>.ready`](/docs/reference/config/project/services/) in the config reference, and [Run workers and replicas](workers.md) shows the log check on a worker.
 
 ## Give a slow service more time
 
-A service that compiles before it listens, such as a Rust binary or a Python environment that syncs first, needs a longer timeout.
+A service that compiles before it listens, such as a Rust binary or a Python environment that syncs first, needs a longer timeout:
 
 ```yaml devlanes
 services:
@@ -41,29 +38,14 @@ services:
     ready:
       http:
         path: /healthz
-      timeout: 3m
+      timeout: 5m
 ```
 
-The start itself waits three minutes by default. When the check takes longer, the start returns while the service goes on starting, and `devlanes wait api` follows it until it is ready or failed.
-
-## Check the app behind a file watcher
-
-A dev server under a file watcher, such as `node --watch`, stays alive after the program crashes and waits for the next file change. A service checked only for having started is then reported ready. An `http` check keeps failing instead, and the start reports the service failed with the watcher's last line:
-
-```console title="~/dev/myapp"
-$ devlanes restart api --no-ui
-myapp@0 · main
-✗ services  0 of 1 ready
-  ✗  api  wasn't ready in time   Failed running 'server.mjs'. Waiting for file changes before restarting...
-
-logs: devlanes logs myapp@0:api --tail 200
-```
-
-The error itself is earlier in the log the last line names. [When a service fails](../../learn/failures.md) follows this failure to its cause.
+The start also stops waiting after a while of its own, shorter than this check. Give it a longer wait too, as in `devlanes start --timeout 5m`, or it returns while the service goes on starting.
 
 ## When the check never passes
 
-A check that asks the wrong question fails the same way, after its timeout. The message shows the request the check made and what came back, and the hint names the field to change.
+A check that asks the wrong question fails after its timeout. The message shows the request the check made and what came back, and the hint names the field to change:
 
 ```console title="~/dev/myapp"
 $ devlanes restart api --no-ui
@@ -74,11 +56,11 @@ myapp@0 · main
 hint: use a `ready.http.path` that answers 2xx, set `ready.http.host` if the app routes by hostname, or set `ready.http.status: 404`
 ```
 
-Here the path was wrong. The check does not follow redirects, so a route that redirects to a login page needs its status set to 302. The process keeps running after a failed check, and devlanes does not restart it; a restart after the fix runs the check again.
+Here the path was wrong. The check does not follow redirects, so a route that redirects to a login page needs its status set to 302. The service keeps running and holds its port after a failed check, and devlanes does not restart it; a restart after the fix runs the check again.
 
 ## If the app answers only on its own hostname
 
-The check sends the request to the service's port with the Host header `127.0.0.1:<port>`. An app that refuses any other host, as Django's allowed hosts do, needs the check to send its hostname instead:
+The check sends its request to the service's port with the Host header `127.0.0.1:<port>`. An app that refuses any other host, as Django's allowed hosts do, needs the check to send its hostname instead:
 
 ```yaml devlanes
 services:
@@ -90,7 +72,11 @@ services:
         host: ${{ self.hosts[0] }}
 ```
 
-When a check needs more than a path and a header, write it as a `cmd` that runs `curl` or a script of your own.
+When a check needs more than a path and a header, write it as a command check that runs `curl` or a script of your own.
+
+## If the dev server runs under a file watcher
+
+A watcher such as `node --watch` stays alive after the program crashes and waits for the next file change, so a check that only asks whether the process started reports it ready. A check of the route keeps failing and the start reports the service failed. [When a service fails](../../learn/failures.md) follows such a failure to its cause.
 
 ## Related
 

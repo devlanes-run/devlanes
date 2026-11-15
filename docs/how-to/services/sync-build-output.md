@@ -6,9 +6,11 @@ kind: how-to
 
 When another program loads a folder your service builds from a path it remembers, such as a browser with an unpacked extension, devlanes can copy that folder to a fixed place and keep the copy current while the service runs.
 
-## Name the folder to copy
+::example{slug="remote-docker-box"}
 
-Add the build folder to the service that writes it. The path starts at the project file's folder in the lane's worktree:
+## Add the folder to the service
+
+Name the build folder on the service that writes it, with the destination. The source path starts at the project file's folder in the lane's worktree:
 
 ```yaml devlanes
 services:
@@ -18,44 +20,31 @@ services:
       name: dev
     sync:
       - from: web/.output/chrome-mv3
+        to: ${{ lane.data_path }}/chrome-mv3
         ignore: ["*.map"]
 ```
 
-The copy starts once the service starts and follows each change the build makes, deletions included, until the service stops. Files that match an ignore pattern stay out of it.
+The destination here sits in the lane's data folder, a folder devlanes keeps for each lane outside the worktree, so each lane gets a copy of its own and the path does not move with the worktree. Files that match an ignore pattern stay out of the copy.
 
-## Load the copy
+The copy starts when the service starts, so a service that already runs picks up the entry at its next restart. From then on the copy follows each change the build makes, deletions included, until the service stops, and it stays on disk after that.
 
-Without a destination, each lane's copy lands in a folder named after the project, the lane and the source folder: `~/devlanes/sync/myapp/main/chrome-mv3` for lane 0 and `~/devlanes/sync/myapp/lane1/chrome-mv3` for lane 1. Point the browser at that folder once. The path stays the same across rebuilds and restarts, and it does not depend on where the worktree is.
+Point the browser, or whatever loads the folder, at the destination once; the path stays the same across rebuilds and restarts. `devlanes env show web` prints the lane's data folder as `DEVLANES_LANE_DATA`.
 
-devlanes marks the folder as its own. It refuses to write into an existing folder that holds files it did not create, so a folder you made by hand has to be moved away first.
+## If you want the copy somewhere else
 
-## Choose the destination
+A destination can also be an absolute path, or one relative to the project file's folder. Without a destination, the copy goes to a folder under `~/devlanes/sync` named after the project, the lane and the source folder. That default and a destination that starts with a tilde read the `HOME` variable, which PowerShell and cmd do not set.
 
-A path of your own goes in the destination field. A leading `~/` is your home folder, and any other relative path starts at the project file's folder:
+devlanes marks the destination as its own and refuses to write into an existing folder that holds files it did not create, so move a folder you made by hand out of the way first.
 
-```yaml devlanes
-services:
-  web:
-    sync:
-      - from: web/.output/chrome-mv3
-        to: ~/extensions/myapp-${{ lane.name }}
-```
+## If the service runs on a box
 
-Keep the lane's name in the path, so each lane writes a folder of its own.
+When the service runs on a box you are connected to, your machine gets its own copy while the box's lane runs. It lands in the devlanes home on your machine, under the box's name, such as `sync/my-vps/myapp/myapp@1/chrome-mv3` for lane 1 on the box named my-vps. The destination in the project file is ignored there, so the box cannot choose where your machine writes.
 
-## From a box to your machine
+The devlanes home is `~/.devlanes` unless the `DEVLANES_HOME` variable moves it.
 
-When the service runs on a box you are connected to, your machine gets its own copy while the box's lane runs. It lands in the devlanes home on your machine, under the box's name: `~/.devlanes/sync/my-vps/myapp/myapp@1/chrome-mv3` for lane 1 on the box named my-vps. The destination field is ignored there, so the box cannot choose where your machine writes.
+A service the box keeps to itself with `hidden` is not copied to your machine, and files past a size limit are skipped; [Remote mirroring](../../concepts/remote-mirroring.md) covers how the copy travels.
 
-The two defaults differ by a dot: the local copy goes under `~/devlanes`, the copy from a box under `~/.devlanes`.
-
-One command lists the copies of running lanes and the state of each:
-
-```console title="on your machine"
-$ devlanes remote sync
-```
-
-A hidden service is not copied to your machine, and large files are skipped. [Remote mirroring](../../concepts/remote-mirroring.md) covers how the copy travels and its limits.
+`devlanes remote sync` lists the copies of running lanes, on this machine and from connected boxes, with the state of each.
 
 ## Related
 

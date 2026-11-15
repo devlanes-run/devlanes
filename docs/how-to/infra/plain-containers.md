@@ -1,0 +1,92 @@
+---
+title: Run containers without Compose
+description: Declare a container in the project file, read its port, wait for it and give it a hostname, shared or once per lane.
+kind: how-to
+---
+
+When a project needs a container or two, such as a mock login provider, and has no Compose file, you declare them in the project file and devlanes runs them through Docker.
+
+::example{slug="infra-plain-containers"}
+
+## Declare the container
+
+Name the container ports you need. devlanes publishes each one on a host port on 127.0.0.1 and picks the host port itself. A relative path in a volume starts at the folder of the project file.
+
+```yaml devlanes
+infra:
+  containers:
+    oidc:
+      image: ghcr.io/navikt/mock-oauth2-server:6.1.1
+      ports:
+        http: 8080
+      env:
+        JSON_CONFIG_PATH: /config/oidc.json
+      volumes: ["./infra/oidc.json:/config/oidc.json:ro"]
+```
+
+The next start creates the container before setup, tasks and services. [Start order and readiness](../../concepts/start-order.md) has the order.
+
+## Run one per lane
+
+A container is shared by every lane of the project unless you mark it per lane. A shared one runs once and every lane reads the same port; a per-lane one gets a port from each lane's block.
+
+```yaml devlanes
+infra:
+  containers:
+    oidc:
+      per_lane: true
+```
+
+A per-lane container runs from the lane's worktree, so its relative volume paths do too. A shared one reads them from the primary worktree.
+
+## Pass its port to the services
+
+Services run on your machine, outside Docker, so they reach the container through its host port, which differs between lanes for a per-lane container.
+
+```yaml devlanes
+global_env:
+  OIDC_PORT: ${{ infra.oidc.ports.http }}
+```
+
+## Wait until it is ready
+
+devlanes waits for the image's healthcheck, or for its first port to accept a connection when the image has none. A container that answers its port before it serves requests needs a ready check of its own.
+
+```yaml devlanes
+infra:
+  containers:
+    oidc:
+      ready:
+        http:
+          path: /isalive
+```
+
+A check that does not pass in time fails the start. The fields are in [`infra.containers.<name>.ready`](/docs/reference/config/project/infra/).
+
+## Give it a hostname
+
+A browser that has to open the container, as a login redirect does, needs it on a hostname under the lane's domain. The hostname routes to the container's first port.
+
+```yaml devlanes
+infra:
+  hosts:
+    oidc: "auth.${{ lane.domain }}"
+```
+
+## If you change the container
+
+A running container with the same image, command, variables, mounts and ports is kept as it is. After you change any of these, the next start of the lane or `devlanes infra up` replaces it.
+
+## If it keeps data
+
+A bare name as the source of a volume makes a named volume, kept per project for a shared container and per lane for a per-lane one. `devlanes lane clean` removes a lane's per-lane containers and their volumes. Shared containers stop when you clean the project's last lane, and their volumes stay.
+
+## If containers need to find each other
+
+Plain containers join Docker's default network, where containers cannot look each other up by name. Containers that talk to each other by name belong in a Compose file, as in [Share one database server between lanes](shared-database.md).
+
+## Related
+
+- [Give each lane its own container](container-per-lane.md)
+- [Give a server you run yourself a hostname](../services/external.md)
+- [Keep Redis, RabbitMQ, S3 and mail apart per lane](datastores.md)

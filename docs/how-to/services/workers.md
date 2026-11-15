@@ -10,7 +10,7 @@ A queue consumer, a scheduler or another background process runs as a service li
 
 ## Wait for a line the worker prints
 
-A service without hostnames counts as ready as soon as it starts, which tells you nothing about a worker that cannot reach its queue. Have the worker print one line once it is connected, and make that line its ready check:
+A service without hostnames counts as ready once its process has run for a moment, which tells you nothing about a worker that cannot reach its queue. Have the worker print one line once it is connected, and make that line its ready check:
 
 ```yaml devlanes
 services:
@@ -35,11 +35,11 @@ myapp
   worker  ready  20062  0.0%  12.8 MiB  http://127.0.0.1:20062
 ```
 
-The worker has a port and a URL although it listens on nothing. devlanes gives every service a port from the lane's block; a worker can leave it unused.
+The worker has a port and a URL although it listens on nothing. devlanes gives each service a port from the lane's block unless the service sets its own, and a worker can leave it unused.
 
 ## Let it finish its job on stop
 
-devlanes stops a service with SIGTERM and kills what is left after 10 seconds. A worker that finishes its job in hand on another signal, or needs longer, says so:
+devlanes stops a service with SIGTERM and kills what is left after a short grace period. A worker that finishes its job in hand on another signal, or needs longer, says so:
 
 ```yaml devlanes
 services:
@@ -49,23 +49,11 @@ services:
       timeout: 15s
 ```
 
-The signal goes to the whole process tree. A worker that catches it can log what it does before it exits:
-
-```console title="on Windows 11"
-$ devlanes logs worker.1 worker.2 --tail 8
-worker.2#15 worker.2 got SIGINT, finishing job 9 first
-worker.1#15 worker.1 got SIGINT, finishing job 10 first
-worker.1#17 worker.1 finished job 10 in 2000 ms
-worker.2#17 worker.2 finished job 9 in 2001 ms
-worker.1#18 worker.1 stopped cleanly, jobs:main keeps the waiting jobs for the next start
-worker.2#18 worker.2 stopped cleanly, jobs:main keeps the waiting jobs for the next start
-```
-
-Windows has no such signals. There SIGINT and SIGTERM both go out as Ctrl-C, which Node raises as its SIGINT event, and [Windows](../../reference/windows.md) covers the other signals.
+The signal goes to the whole process tree, so the worker gets it even when a package manager or a shell started it. Windows has no such signals. A stop there sends Ctrl-C or Ctrl-Break, and [Windows](../../reference/windows.md) says which.
 
 ## Keep its lane awake
 
-A lane that gets no requests is suspended after a while, and a suspended worker stops taking jobs. One setting keeps the lane running for as long as the worker runs:
+devlanes freezes a lane that nobody uses for a while, and a frozen worker stops taking jobs. One setting keeps the lane running for as long as the worker runs:
 
 ```yaml devlanes
 services:
@@ -73,7 +61,7 @@ services:
     keep_awake: true
 ```
 
-[Throttling and freezing](../../concepts/freezing.md) says what else counts as activity.
+[Throttling and freezing](../../concepts/freezing.md) says what counts as use.
 
 ## Run several copies
 
@@ -82,9 +70,6 @@ The replica count starts that many copies of the service, named `worker.1`, `wor
 ```yaml devlanes
 services:
   worker:
-    run_script:
-      file: apps/worker/package.json
-      name: dev
     replicas: 2
     env:
       WORKER_ID: ${{ replica.index }}
@@ -92,7 +77,7 @@ services:
       log: worker ${{ replica.index }} ready
 ```
 
-Commands that take the service's name act on every copy, so `devlanes stop worker` stops both. Name one copy to act on it alone, as the logs command above does. In expressions, `services.worker` means the first copy.
+In the start, stop, restart and logs commands, the service's name stands for all its copies, so stopping the worker stops both. Name one copy, such as worker.2, to act on it alone. In expressions, the worker's URL and port are those of the first copy.
 
 The count is a plain number, the same in every lane, since each copy reserves ports in every lane's block.
 

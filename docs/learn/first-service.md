@@ -89,7 +89,7 @@ The prefix on the line is a cursor, a position in the log that a later read can 
 ## On your own project
 
 - [Add devlanes to a project](../how-to/projects/add-devlanes.md)
-- [Run scripts from project files](../how-to/projects/run-scripts.md)
+- [Run scripts your project already has](../how-to/projects/run-scripts.md)
 - [Wait until a service is ready](../how-to/services/ready-checks.md)
 - [The daemon](../concepts/daemon.md)
 - [Hostnames and HTTPS](../concepts/hostnames-and-https.md)
