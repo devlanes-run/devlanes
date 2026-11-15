@@ -17,6 +17,6 @@ mod session;
 #[cfg(target_family = "wasm")]
 mod web;
 
-pub use session::Session;
+pub use session::{Session, UnknownView};
 #[cfg(target_family = "wasm")]
 pub use web::Demo;
