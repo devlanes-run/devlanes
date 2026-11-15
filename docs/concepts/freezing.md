@@ -1,5 +1,5 @@
 ---
-title: Idle lanes
+title: Throttling and freezing
 description: A lane nobody uses is slowed down, then suspended, and comes back on the next request with its memory, ports and processes as they were.
 kind: concept
 ---
@@ -10,7 +10,7 @@ A machine with several lanes runs several copies of each dev server and watcher,
 
 After 5 minutes without activity a lane is throttled: its processes run at background priority and keep serving requests. After 15 minutes it is frozen: every process of the lane is suspended and the containers that belong to the lane alone are paused. Both apply to the whole lane, so activity on one service brings back all of them.
 
-![A lane goes from running to throttled after 5m idle and to frozen after 15m idle; activity brings it back to running](idle-lanes.svg)
+![A lane goes from running to throttled after 5m idle and to frozen after 15m idle; activity brings it back to running](freezing.svg)
 
 Shared containers, such as one Postgres for every lane, are not paused, because other lanes still use them. Both times are settings, [`lanes.throttle_after`](/docs/reference/config/user/lanes/) and [`lanes.freeze_after`](/docs/reference/config/user/lanes/), and either can be turned off. [Run many lanes on one machine](../how-to/lanes/many-lanes.md) changes them.
 

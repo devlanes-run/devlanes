@@ -34,7 +34,7 @@ Human output and the TUI show some `ready` units with another word. JSON keeps `
 | `throttled` | The lane had no activity for a while and its processes are slowed down. | `power: "throttled"` | `ready` with `power=throttled` |
 | `running` | A service whose ready check is only that its process started. | `ready_check: "started"` | `ready` |
 
-[Idle lanes](../concepts/idle-lanes.md) explains what counts as activity.
+[Throttling and freezing](../concepts/freezing.md) explains what counts as activity.
 
 ### Drift
 

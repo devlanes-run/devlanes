@@ -97,7 +97,7 @@
     - concepts/environment
     - concepts/start-order
     - concepts/config-and-reload
-    - concepts/idle-lanes
+    - concepts/freezing
     - concepts/remote-mirroring
     - concepts/security
 - label: Reference

@@ -32,7 +32,7 @@ myapp
   1     feat/checkout  running  1/1       0.0%  38.6 MiB  https://myapp1.localhost
 ```
 
-A lane nobody uses is suspended after a while and resumes on the next request, keeping its memory, ports and processes. [Idle lanes](../concepts/idle-lanes.md) says what counts as use.
+A lane nobody uses is suspended after a while and resumes on the next request, keeping its memory, ports and processes. [Throttling and freezing](../concepts/freezing.md) says what counts as use.
 
 ## The lane number is in the hostname
 

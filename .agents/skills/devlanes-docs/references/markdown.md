@@ -27,10 +27,10 @@ Lowercase words joined by hyphens. No page is named `agents.md` or `claude.md`: 
 
 ## Links
 
-- Link another docs page by its relative path with the `.md` extension: `[Idle lanes](../concepts/idle-lanes.md)`. The website turns it into the route.
+- Link another docs page by its relative path with the `.md` extension: `[Throttling and freezing](../concepts/freezing.md)`. The website turns it into the route.
 - Link a heading with `#` and its slug: `../concepts/ports.md#named-ports`.
 - Link text names the page or the thing. Never "here" or "this page".
-- The config reference is generated on the website, so link it by route. A project file key lives at `/docs/reference/config/project/<top-level key>/`, such as `/docs/reference/config/project/services/` or `/docs/reference/config/project/infra/`, and a user config key at `/docs/reference/config/user/<top-level key>/`. The link text is the key in code: [`services.<name>.ready`](/docs/reference/config/project/services/).
+- The config reference is generated on the website, so link it by route. A project file key lives at `/docs/reference/config/project/<top-level key>/`, such as `/docs/reference/config/project/services/` or `/docs/reference/config/project/infra/`, and a user config key at `/docs/reference/config/user/<top-level key>/`. The link text is the full dotted key in code, never its last part alone: [`services.<name>.ready`](/docs/reference/config/project/services/).
 - A proxy error page is linked by its own title, such as [DL201 Service not running](../errors/service-idle.md).
 
 ## Terminal blocks
@@ -123,7 +123,7 @@ The slug is a `slug` from `catalog.json` in the examples repository whose `statu
 ![A box and your machine, joined by one SSH session](remote-mirroring.svg)
 ```
 
-An SVG file next to the page. The website puts it inline, so it can follow the theme: use `currentColor` and the variables `--dl-diagram-line`, `--dl-diagram-fill` and `--dl-diagram-accent`, with `currentColor` or `transparent` as the fallback and no colour written as a hex value. Give it a `<title>` that matches the alt text. The alt text says what the diagram shows, and the diagram contains every word the alt text names.
+An SVG file next to the page. The website puts it inline, so it can follow the theme: its only colours are `currentColor` and the variables `--dl-diagram-line`, `--dl-diagram-fill` and `--dl-diagram-accent`, with `currentColor` or `transparent` as the fallback and no colour written as a hex value. The accent is for one highlighted path, and a diagram without one leaves it out. A number in a diagram that is a default says so. Give it a `<title>` that matches the alt text. The alt text says what the diagram shows, and the diagram contains every word the alt text names.
 
 ## Asides
 

@@ -17,11 +17,11 @@ The words the devlanes docs use, in alphabetical order, each with the page that 
 | Exec command | A command started with `devlanes exec --name NAME`, which the daemon owns as a unit of the lane. | [A coding agent runs the lane](../learn/coding-agents.md) |
 | Expression | A `${{ ... }}` value in the project file, evaluated for each lane. | [Expressions](expressions.md) |
 | External port | An `infra.external` entry: a server devlanes does not start, given a hostname and mirrored to connected machines. | [Give a server you run yourself a hostname](../how-to/services/external.md) |
-| Frozen | The state of an idle lane whose processes are paused. They keep their memory, ports and state, and the next request, connection or command resumes them. | [Idle lanes](../concepts/idle-lanes.md) |
+| Frozen | The state of an idle lane whose processes are paused. They keep their memory, ports and state, and the next request, connection or command resumes them. | [Throttling and freezing](../concepts/freezing.md) |
 | Global env | `global_env` in the project file: variables every unit of the lane gets. | [Environment and expressions](../concepts/environment.md) |
 | Hostname | A name the proxy serves over HTTPS, such as `api.myapp1.localhost`. | [Hostnames and HTTPS](../concepts/hostnames-and-https.md) |
 | Hosts helper | `devlanes-hosts`, a small program that writes the routed hostnames into `/etc/hosts` for programs that cannot resolve `*.localhost`. macOS and Linux only. | [Fix programs that cannot resolve *.localhost](../how-to/hostnames/resolve-localhost.md) |
-| Idle lane | A lane with no requests, connections, CPU use or commands for a while. devlanes throttles and then freezes it. | [Idle lanes](../concepts/idle-lanes.md) |
+| Idle lane | A lane with no requests, connections, CPU use or commands for a while. devlanes throttles and then freezes it. | [Throttling and freezing](../concepts/freezing.md) |
 | Lane | A running copy of the project for one worktree, with its own ports, hostnames and data. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Lane 0 | The lane of the primary worktree. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Lane data folder | A folder of each lane outside its worktree, for files no other lane may share. | [Files and folders](files.md#lane-data-folder) |
@@ -60,7 +60,7 @@ The words the devlanes docs use, in alphabetical order, each with the page that 
 | Tag | A label in a service's `tags`, which commands select with `+tag`. | [Share settings and choose which services start](../how-to/projects/templates-and-profiles.md) |
 | Task | A one-off command of the lane, under `tasks`, such as an install or a migration. | [Run installs, migrations and seeds](../how-to/services/tasks.md) |
 | Template | A set of service settings that services take with `extends`. | [Share settings and choose which services start](../how-to/projects/templates-and-profiles.md) |
-| Throttled | The state of an idle lane whose processes run at background priority and still serve. On macOS and Windows only. | [Idle lanes](../concepts/idle-lanes.md) |
+| Throttled | The state of an idle lane whose processes run at background priority and still serve. On macOS and Windows only. | [Throttling and freezing](../concepts/freezing.md) |
 | TUI | The terminal interface that `devlanes` opens on a terminal. Closing it stops nothing. | [The TUI](tui.md) |
 | Unit | Something a lane runs or routes: a service, task, exec command, setup or teardown entry, or external port. | [Lane and unit references](lane-and-unit-references.md#unit-references) |
 | Unit reference | How a command names a unit, such as `api`, `1:api` or `myapp@1:api`. | [Lane and unit references](lane-and-unit-references.md#unit-references) |

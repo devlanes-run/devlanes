@@ -122,16 +122,16 @@ Read in order. One project, myapp, from one service to lanes on a box.
 
 | Page | Title | Explains |
 |---|---|---|
-| `lanes-and-projects.md` | Lanes and projects | Worktrees, lanes, lane 0, lane names, projects and project names, several projects in one repository. |
-| `daemon.md` | The daemon | The daemon and its clients, what it owns, when it exits, what it never does (restart a process, cap resources). |
-| `ports.md` | Ports | The port pool, a block per lane, a place per service, named ports. |
-| `hostnames-and-https.md` | Hostnames and HTTPS | Lane domains, the proxy, the CA and what it can sign, how hostnames resolve, a lane as its own site for cookies. |
-| `environment.md` | Environment and expressions | Where a unit's variables come from, in order, and how expressions are evaluated. |
-| `start-order.md` | Start order and readiness | Containers, setup, tasks, services; readiness; pacing of starts; the reason there is no dependency graph. |
+| `lanes-and-projects.md` | Lanes and projects | First of the concepts, so it names what a lane is made of: units (services, tasks, containers), setup, profiles, the data folder. Worktrees, lanes, lane 0 and when it moves, lane names, what a deleted worktree leaves behind, projects and project names, two clones of one repository, several projects in one repository. |
+| `daemon.md` | The daemon | The daemon and its clients, what it owns, when it starts and exits, sleep, reboot and daemon restart, that it does not restart a failed service or cap resources. Carries a diagram of the clients, the daemon and what it owns. |
+| `ports.md` | Ports | The port pool, a block per lane, a place per service, named ports, that ports differ between machines. |
+| `hostnames-and-https.md` | Hostnames and HTTPS | Lane domains, the proxy, certificates signed per hostname, how hostnames resolve, a lane as its own site for cookies. |
+| `environment.md` | Environment and expressions | Where a unit's variables come from, in order, that the shell's environment is never written to disk and what that protects, how expressions are evaluated. |
+| `start-order.md` | Start order and readiness | Containers, setup, tasks, services; setup against tasks; readiness; pacing of starts; that services have no dependency graph and what that asks of a service. |
 | `config-and-reload.md` | Config files and reload | How the project file, local files and `extends` merge; drift; what reload does. |
-| `idle-lanes.md` | Idle lanes | Throttling and freezing: what counts as activity and what a frozen lane keeps. |
+| `freezing.md` | Throttling and freezing | Throttling and freezing: what counts as activity, what a frozen lane keeps, what thaws it. |
 | `remote-mirroring.md` | Remote mirroring | Two daemons and one session: what crosses it, why a box keeps its hostnames and ports, one box per lane. |
-| `security.md` | Security | Who can reach the daemon, what the CA can sign, what pairing protects, what lanes do not isolate. |
+| `security.md` | Security | Who can reach the daemon, what the CA can sign and where its key is, what pairing protects, what lanes do not isolate, what devlanes sends over the network. Carries a diagram of who is checked where. |
 
 ## Reference (`reference/`)
 
@@ -145,8 +145,8 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | `states-and-exit-codes.md` (skill) | States and exit codes | Unit and lane states, exit codes, the shape of `--json` output, output modes. |
 | `tui.md` | The TUI | Views and keys of the TUI. |
 | `mcp-tools.md` (skill) | MCP tools | The tools `devlanes mcp` offers, per-host timeouts, consent. |
-| `remote-states.md` | Remote connection states | Connection states and warnings of `remote ls`. |
-| `files.md` | Files and folders | The devlanes home, the lane data folder, logs, the CA. |
+| `remote-states.md` | Remote connection states | Connection states and warnings of `remote ls`, the timings of pings, reconnects and waits, the pairing rules in numbers, what a box and a connected machine send each other. |
+| `files.md` | Files and folders | The devlanes home, the lane data folder, logs, the CA files, the socket or pipe, files outside the home, the files of a project. |
 | `windows.md` | Windows | Behaviour that differs on Windows: shells, stop signals, ports, terminals. |
 | `limits.md` | Limits | What devlanes does not do, each with its issue. |
 | `glossary.md` | Glossary | The terms, one or two sentences each. |
@@ -167,11 +167,20 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | Proxy ports and the fallback to 8443 and 8080 | `how-to/hostnames/proxy-ports.md` | One sentence in `install.md` |
 | Ready check kinds and fields | The generated config reference | `how-to/services/ready-checks.md` shows choosing one |
 | Start order | `concepts/start-order.md` | One sentence in `learn/databases.md` |
-| Freezing: what it keeps, what wakes a lane, timings | `concepts/idle-lanes.md` | One sentence in `learn/worktrees.md`; `how-to/lanes/many-lanes.md` changes the settings |
-| The daemon and terminals that end their child processes | `concepts/daemon.md` | A row in `troubleshooting.md` |
+| Freezing: what it keeps, what thaws a lane | `concepts/freezing.md` | One sentence in `learn/worktrees.md`; `how-to/lanes/many-lanes.md` changes the settings |
+| Freezing: the two default times | `concepts/freezing.md`, once | The generated config reference has the settings |
+| Freezing: the CPU threshold, how fast activity is noticed, how long a request waits for a thaw | `reference/states-and-exit-codes.md`, under the throttled and frozen states | Not on a prose page |
+| A failed service stays failed | `concepts/daemon.md` | One sentence in `concepts/start-order.md` and `learn/failures.md` |
+| The shell's environment is never written to disk | `concepts/environment.md` | One sentence in `concepts/daemon.md` |
+| What the CA can sign, where its key is | `concepts/security.md` | One sentence in `concepts/hostnames-and-https.md` |
+| A lane as its own site for cookies | `concepts/hostnames-and-https.md`, once | One sentence in `learn/worktrees.md` |
+| Variables a new daemon keeps from the shell that started it | `reference/environment-variables.md` | One sentence in `concepts/environment.md` |
+| The daemon and terminals that end their child processes | `reference/windows.md` | One sentence in `concepts/daemon.md`; a row in `troubleshooting.md` |
 | Pairing: the steps | `how-to/remote/connect.md` | `learn/remote.md` shows it once |
-| Pairing: code lifetime, limits, what it protects | `concepts/security.md` | Nowhere else |
-| What crosses a remote connection | `concepts/remote-mirroring.md` | `concepts/security.md` links it |
+| Pairing: what it protects and what it does not | `concepts/security.md` | Nowhere else |
+| Pairing: code length and lifetime, wrong-code limits, pairings per machine | `reference/remote-states.md` | `concepts/security.md` gives the behaviour without the numbers |
+| What crosses a remote connection | `concepts/remote-mirroring.md` | `concepts/security.md` links it; the full list in `reference/remote-states.md` |
+| Reconnect, ping and wait times of a box | `reference/remote-states.md` | `concepts/remote-mirroring.md` gives the behaviour without the numbers |
 | Connection states and warnings | `reference/remote-states.md` | `troubleshooting.md` links rows to it |
 | Exit codes and unit states | `reference/states-and-exit-codes.md` | The skill |
 | TUI keys | `reference/tui.md` | A page names a key only when its section is about that key |

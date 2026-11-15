@@ -57,7 +57,7 @@ When a service exits or cannot start, it shows as failed with its error and the 
 
 A dev server that restarts itself on a file change is a different case. Its process keeps running, and the proxy retries a refused connection for a few seconds while it comes back.
 
-The daemon measures the CPU and memory of each lane and does not limit them. The one thing it does to a lane on its own is slow down and suspend one that nobody uses, which keeps its processes, ports and memory ([Idle lanes](idle-lanes.md)).
+The daemon measures the CPU and memory of each lane and does not limit them. The one thing it does to a lane on its own is slow down and suspend one that nobody uses, which keeps its processes, ports and memory ([Throttling and freezing](freezing.md)).
 
 ## Some terminals end the daemon with them
 
@@ -76,5 +76,5 @@ The next command then starts a new daemon, which finds its lanes waiting for a s
 
 - [A service, a port and a hostname](../learn/first-service.md)
 - [Bring lanes back after a reboot](../how-to/lanes/after-a-reboot.md)
-- [Idle lanes](idle-lanes.md)
+- [Throttling and freezing](freezing.md)
 - [Security](security.md)

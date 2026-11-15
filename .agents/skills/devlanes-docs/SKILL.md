@@ -43,7 +43,9 @@ That splits the writing into two registers. Prose pages (Learn, how-to guides, c
 | A config key, its default or its meaning | The doc comment in `crates/config` (`crates/config/AGENTS.md` has the rules). The website builds the config reference from the schemas. |
 | Something a user can now set out to do | A how-to guide: a new one, or a section of the guide with the same goal. Link the example that shows it. |
 | A changed behaviour | The sentence that describes it, on the page that owns it. Capture any output it changes again. |
-| A limit, a timing, a format, an error message | Reference or a row in `troubleshooting.md`. Never a prose page. |
+| A limit, a timing, a format, an error message | Reference or a row in `troubleshooting.md`. A concept page may state the scale of a timing it owns, once. |
+| Something devlanes leaves out by design | The concept page of that subject, with the reason. |
+| A feature devlanes lacks | One entry on `reference/limits.md` with its issue. |
 | A change in how devlanes is built or reasons | A concept page. |
 | A removed feature | Delete every mention. Do not say it was removed. |
 | A bug fix | Nothing, unless a page described the bug. |
@@ -58,9 +60,9 @@ Every page has one kind, set in its frontmatter as `kind`.
 
 **Learn** (`docs/learn/`). A short sequence read in order, with previous and next links. It tells how one project, `myapp`, comes to run under devlanes: a service on a hostname, a second worktree, services that find each other, a database per lane, a failure, an agent, another machine. The reader reads and looks; they do not type along. No "open your terminal", no "now run", no "create a branch". Each page shows what the config says, what devlanes does with it and what comes back, and names each new idea once, in a sentence. Where the app itself has to do something, such as listen on the port it is given, the page shows those lines of the app. A page ends by linking the how-to guides that do the same on the reader's own project.
 
-**How-to guide** (`docs/how-to/`). One goal a person has, named in the title with an imperative verb: "Share one Postgres between lanes". It assumes the reader knows devlanes from Learn. It opens with one line saying when the guide applies, gives the steps, then the variations as "If ..., ...". It does not teach and does not describe keys one by one; it links the reference for those. It stops when the goal is reached, and may end with a "Related" section of at most four links.
+**How-to guide** (`docs/how-to/`). One goal a person has, named in the title with an imperative verb: "Share one Postgres between lanes". It assumes the reader knows devlanes from Learn. A guide the overview lists as a way in may open with one sentence of prerequisites that links the install page and the first Learn page. It opens with one line saying when the guide applies, gives the steps, then the variations as "If ..., ...". It does not teach and does not describe keys one by one; it links the reference for those. It stops when the goal is reached, and may end with a "Related" section of at most four links.
 
-**Concept** (`docs/concepts/`). One topic explained: how it works, the reasons behind it, what was traded for what. Prose and diagrams, no steps. A reader could take it in away from the keyboard.
+**Concept** (`docs/concepts/`). One topic explained: how it works, the reasons behind it, what was traded for what. Prose and diagrams, no steps. A reader could take it in away from the keyboard. It answers the questions a person has in their first week: what happens when they delete a worktree, close the lid, reboot, or hand the repository to a colleague. A reason on the page is one the code, `CONTRIBUTING.md` or the owner states. Where none is stated, give the fact and its consequence and no motive.
 
 **Reference** (`docs/reference/`, `docs/errors/`). Description only, in the same layout for every entry, complete and without advice. Tables and lists are fine here.
 
@@ -73,17 +75,19 @@ A page that mixes kinds is the main way these docs went wrong before. Explanatio
 These hold for Learn pages, how-to guides and concepts.
 
 - The first paragraph gives the situation and what comes out of it, in plain words, with no inline code. It does not talk about the page: no "this page", no "here you will".
-- A section is a heading, one or two short paragraphs and one thing to look at: a terminal block, a config block, a few lines of the app's code or a diagram. On a concept page a section may be prose alone, up to three paragraphs, when there is nothing real to show.
+- A section is a heading, one or two short paragraphs and one thing to look at: a terminal block, a config block, a few lines of the app's code or a diagram. On a concept page a section may be prose alone, up to three paragraphs, when there is nothing real to show. On a how-to guide an "If ..." variation may be a short paragraph and a link, and a step with nothing to show joins the step before it.
 - The heading states the point once. The sentence under it does not say it again; it gives the reason, the consequence or what to look for in the block. A section whose only sentence repeats its block is cut.
 - Commands and their output appear only in `console` blocks, never in a table or a sentence. Config appears only in `yaml devlanes` blocks; to talk about one line, show it as a fragment. Prose refers to both in words: "the start prints one line per service".
-- A command or a flag may be named in prose once, in code, when the sentence is about it. `--no-ui` is explained on `learn/first-service.md` and nowhere else.
+- A command or a flag may be named in prose once, in code, when the sentence is about it. Naming it beats talking around it: write `devlanes lane resume`, not "a resume of all lanes". `--no-ui` is explained on `learn/first-service.md` and nowhere else.
+- A term is defined before it is used, in one clause, or the page links the glossary at its first use. Unit, task, setup, profile, box and data folder are the ones writers forget.
 - At most two inline code spans in a paragraph. A paragraph that needs more belongs in reference.
 - Code spans are for what a person types or reads on screen: a command, a key, a hostname, a file name. The names of the project, its services and its branches are plain words: myapp, the API, the main branch.
 - A paragraph has at most four sentences, and a sentence carries one idea. No parentheses that list alternatives.
 - Lists are for parallel items. No nested lists and no bold inside a list item. Definitions belong in the glossary.
 - Headings are sentence case. On Learn and concept pages a heading states the point of its section ("Each lane gets its own ports"). On how-to guides it names the step or the case ("On Linux"). No heading starts with What, Why, Where or How.
 - Size: a Learn page about 800 words, a how-to guide about 600, a concept about 1,000. A page over its size usually has a second goal.
-- Limits, formats, timings and edge cases do not sit in prose. One sentence may name that a limit exists, with a link.
+- Limits, formats, timings and edge cases do not sit in prose. One sentence may name that a limit exists, with a link. A concept page may give the scale of a timing it owns, once ("frozen after 15 minutes by default"), so the reader knows whether it is seconds or hours. The exact values, thresholds and counts go to reference.
+- A fact has one owner. Every other page gets one sentence and a link, and a page does not state the same point in two of its own sections.
 - A one-sentence summary of a fact another page owns has to stay true. Check it against that page, and leave the fact out before you blur it.
 - Link text is the title of the page it opens, as the site map lists it.
 
@@ -99,7 +103,8 @@ These hold for Learn pages, how-to guides and concepts.
 - Do not count before a list ("three ways", "two reasons").
 - No "any", "every", "always", "never" or "nothing" unless it is true without exception. Most such sentences are wrong on one OS or in one case.
 - Vary the sentences. A run of short flat statements of the same shape reads as generated, and so does a list of three in every opening.
-- State what devlanes does. Say what it does not do on the limits page, not as a caveat on every page.
+- State what devlanes does. A feature it lacks is an entry on the limits page, not a caveat on every page. Something it leaves out by design is explained once, on the concept page of that subject.
+- Write from the reader's side where you can: "you close the lid", "you delete the branch". A page of rules with a generic subject ("a start runs", "a reload stops") reads like a specification.
 
 ## Words and names
 
@@ -123,6 +128,8 @@ These hold for Learn pages, how-to guides and concepts.
 
 Say "worktree" for the folder and "lane" for what runs from it.
 
+The Not column is about devlanes' own things. A program such as Vite is still a dev server, and what a CI job clones is still a checkout.
+
 Names in examples:
 
 - The project is `myapp`, with services `api`, `web` and `worker`.
@@ -137,7 +144,7 @@ The docs describe devlanes as it is in the release they ship with.
 
 - No history: no "now", "no longer", "new", "previously", "as of version", and no mention of a feature, command, key or file that was removed or renamed.
 - No plans. What devlanes does not do is one entry on `reference/limits.md` with its issue link, and nothing more.
-- No internals: crate names, protocol details, database tables, span names. A concept page explains behaviour a user can observe.
+- No internals: crate names, protocol details, database tables, span names. A concept page explains behaviour a user can observe. Which data leaves a machine is such behaviour; the names of messages and fields are not.
 - No contributor material. That goes in `CONTRIBUTING.md`.
 - No account of how a page came to be, and no notes to other writers. A page is not a changelog.
 
@@ -155,12 +162,15 @@ A wrong page is worse than a missing one.
 
 - Run every command a page shows, on the release the page is for. Read `devlanes <command> --help` before naming a flag.
 - Output in a `console` block comes from a real run of the command the block shows. Shorten it by dropping whole lines. Change nothing else except names, to the ones above, and paths: the user name becomes `you` and the project's folder becomes the one above, in the form the capture's OS prints (`C:\Users\you\dev\myapp` on Windows). Never write output from memory, and never fill a block with lines from another command or another run.
+- Capture under the docs' names, so nothing has to be renamed. Where a rename or dropped rows leave a column the command aligned wider or narrower than its values, re-align it with spaces and change nothing else.
+- Output in an example's README counts as a capture only when it was run on the release the page is for. Otherwise run the example again.
+- A command whose effect the reader has to see is shown with its output. A command may stand alone in a block when its output is beside the point, as with an installer. A command you have no capture for and whose output matters waits for one.
 - The command in a block is the one that was run. Do not rewrite it into the form another OS would use. A command that differs by OS is a tab per OS, each with its own capture.
 - Note the OS of every capture. Output that differs by OS (ports, paths, resolvers, trust stores) goes in OS tabs, or carries the OS in the block's title, such as `title="on Windows 11"`. Prefer artefacts that read the same everywhere: devlanes' own commands over `curl`.
 - Show the command a person types and the output a person sees. A start on a terminal runs inside the TUI, so show starts with `--no-ui`. When an agent captures output, devlanes switches to its terse agent format; capture with `--output human` and `NO_COLOR=1`, and leave those two out of the block. Any other flag that was passed stays in the block, `--output plain` included.
 - When you have no real output for something, show the config or a diagram instead. A page without an output block is fine; a page with invented output is not.
 - A prompt block asks only for what `skills/devlanes/` teaches an agent to do. Check the skill before you write one.
-- A `yaml devlanes` block that is a whole file passes `devlanes config check`. A block that is a fragment uses only keys the schema has; the website build fails on an unknown key.
+- A `yaml devlanes` block that is a whole file passes `devlanes config check`. A block that is a fragment uses only keys the schema has; the website build fails on an unknown key. A fragment does not lean on a variable or an entry the page never shows, such as a `lanes.vars` value from an example.
 - Check a claim about behaviour against the code or a run, not against the old docs or another page.
 - Follow every link you add.
 - Read the page once more against "Voice" and "Page shape", and count the code spans in each paragraph.

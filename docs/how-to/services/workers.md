@@ -73,7 +73,7 @@ services:
     keep_awake: true
 ```
 
-[Idle lanes](../../concepts/idle-lanes.md) says what else counts as activity.
+[Throttling and freezing](../../concepts/freezing.md) says what else counts as activity.
 
 ## Run several copies
 
@@ -104,4 +104,4 @@ A command that exits when its work is done, such as a cleanup or a one-off impor
 
 - [Wait until a service is ready](ready-checks.md)
 - [Run many lanes on one machine](../lanes/many-lanes.md)
-- [Idle lanes](../../concepts/idle-lanes.md)
+- [Throttling and freezing](../../concepts/freezing.md)

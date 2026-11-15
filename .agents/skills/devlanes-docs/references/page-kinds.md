@@ -83,7 +83,7 @@ A short paragraph, and a link to the guide for that case.
 
 ````markdown
 ---
-title: Idle lanes
+title: Throttling and freezing
 description: A lane nobody uses is slowed down, then suspended, and comes back on the next request.
 kind: concept
 ---
@@ -94,7 +94,7 @@ Two or three sentences: what the thing is and the problem it answers.
 
 Prose. The reasoning, the trade-off, what was decided against and the reason.
 
-![A lane moving between running, throttled and frozen](idle-lanes.svg)
+![A lane moving between running, throttled and frozen](freezing.svg)
 
 ## The next point
 
@@ -153,7 +153,7 @@ Where each fact goes:
 | It exits when idle, with the timings | `concepts/daemon.md`; the setting in the generated reference |
 | Starting twice is safe | `learn/first-service.md`, one sentence |
 | An edit never restarts anything; `reload` applies it | `learn/failures.md`, with an artefact; the model in `concepts/config-and-reload.md` |
-| Idle lanes freeze and resume | `concepts/idle-lanes.md`; one sentence in `learn/worktrees.md` |
+| A lane nobody uses is frozen and thaws on activity | `concepts/freezing.md`; one sentence in `learn/worktrees.md` |
 
 On the Learn page the first fact becomes a section:
 
