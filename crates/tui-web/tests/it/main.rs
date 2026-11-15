@@ -109,6 +109,51 @@ fn shift_m_opens_the_monitor_and_ticks_move_its_graphs() {
 }
 
 #[test]
+fn open_goes_to_each_view_by_name_from_any_view() {
+    let views = [
+        ("lanes", View::Project),
+        ("monitor", View::Monitor),
+        ("daemon", View::Daemon),
+        ("boxes", View::Boxes),
+    ];
+    for (from, _) in views {
+        for (name, view) in views {
+            let mut session = Session::new(COLUMNS, ROWS);
+            assert_eq!(session.open(from), Ok(()));
+            assert_eq!(session.open(name), Ok(()));
+            assert_eq!(session.app().view, view, "{from} then {name}");
+            assert_eq!(session.view(), name);
+            session.tick();
+            draw(&session);
+        }
+    }
+}
+
+#[test]
+fn open_loads_what_the_view_shows_as_its_key_does() {
+    let mut by_key = Session::new(COLUMNS, ROWS);
+    assert!(by_key.key("M", false, false, true, false));
+    let mut by_name = Session::new(COLUMNS, ROWS);
+    assert_eq!(by_name.open("monitor"), Ok(()));
+    assert!(by_name.app().metrics.is_some());
+    assert_eq!(text(&draw(&by_name)), text(&draw(&by_key)));
+}
+
+#[test]
+fn open_rejects_an_unknown_view_and_names_the_known_ones() {
+    let mut session = Session::new(COLUMNS, ROWS);
+    assert_eq!(session.open("monitor"), Ok(()));
+    let Err(error) = session.open("project") else {
+        panic!("project opened");
+    };
+    let message = error.to_string();
+    for name in ["lanes", "monitor", "daemon", "boxes"] {
+        assert!(message.contains(name), "{message}");
+    }
+    assert_eq!(session.app().view, View::Monitor);
+}
+
+#[test]
 fn the_page_keeps_tab_and_browser_shortcuts() {
     let mut session = Session::new(COLUMNS, ROWS);
     assert!(!session.key("Tab", false, false, false, false));

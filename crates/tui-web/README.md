@@ -36,8 +36,8 @@ session.tick();
 
 ## API
 
-- `Demo` (browser build): `new Demo(id)` mounts into an element, `key(key, ctrl, alt, shift, meta)` returns whether the TUI took the key, `tick()` moves the fake daemon on a second, `resize()` measures the element again, `columns` and `rows` give the size in cells, `free()` empties the element.
-- `Session`: the same without the page, with `resize(columns, rows)`.
+- `Demo` (browser build): `new Demo(id)` mounts into an element, `key(key, ctrl, alt, shift, meta)` returns whether the TUI took the key, `tick()` moves the fake daemon on a second, `open(view)` opens `lanes`, `monitor`, `daemon` or `boxes` without keys and `view()` names the open one, `resize()` measures the element again, `columns` and `rows` give the size in cells, `free()` empties the element.
+- `Session`: the same without the page, with `resize(columns, rows)`; `open` returns `UnknownView` for other names.
 - `keymap::key_event`: a `KeyboardEvent.key` and its modifiers as the TUI's key event, or `None` for keys the page keeps (Tab, modifiers alone, Meta chords, Alt chords other than typed symbols, and most Ctrl chords).
 - `scene`: the mock data and output the fake daemon answers with.
 - `palette::apply`: the colors the demo gives the TUI's ANSI and default colors.

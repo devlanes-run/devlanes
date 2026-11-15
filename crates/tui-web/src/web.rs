@@ -184,6 +184,25 @@ impl Demo {
         self.with(|screen| screen.remount(&id))
     }
 
+    /// Opens the view named `view` (`lanes`, `monitor`, `daemon` or
+    /// `boxes`) from any view, as its key would, and redraws; throws on any
+    /// other name. The page uses it instead of keys, which can change.
+    pub fn open(&mut self, view: &str) -> Result<(), JsError> {
+        self.with(|screen| {
+            screen.session.open(view).map_err(error)?;
+            screen.draw()
+        })
+    }
+
+    /// The name of the open view, as `open` takes it.
+    pub fn view(&self) -> String {
+        self.screen
+            .borrow()
+            .as_ref()
+            .map_or("lanes", |screen| screen.session.view())
+            .to_owned()
+    }
+
     /// The TUI's width in cells.
     #[wasm_bindgen(getter)]
     pub fn columns(&self) -> u16 {
