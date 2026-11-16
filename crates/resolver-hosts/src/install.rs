@@ -286,13 +286,16 @@ pub fn validate_user(user: &str) -> Result<(), InstallError> {
 ///
 /// A command without arguments in sudoers allows any arguments; the helper's own
 /// parser is the gate, and release builds accept no path override.
+///
+/// The rule has no `Defaults` line: sudo-rs (the default `sudo` on Ubuntu 25.10
+/// and later) rejects settings it does not implement, such as `requiretty`, and
+/// prints that error on every sudo call on the machine.
 pub fn sudoers_contents(user: &str) -> Result<String, InstallError> {
     validate_user(user)?;
     Ok(format!(
         "# Installed by `devlanes setup`; remove with `devlanes setup --remove`.\n\
          # Lets {user} run the devlanes /etc/hosts helper as root without a password.\n\
          # The helper only edits the block between `# devlanes begin` and `# devlanes end`.\n\
-         Defaults!{INSTALL_PATH} !requiretty\n\
          {user} ALL=(root) NOPASSWD: {INSTALL_PATH}\n"
     ))
 }
@@ -1012,7 +1015,6 @@ mod tests {
             "# Installed by `devlanes setup`; remove with `devlanes setup --remove`.\n\
              # Lets alice run the devlanes /etc/hosts helper as root without a password.\n\
              # The helper only edits the block between `# devlanes begin` and `# devlanes end`.\n\
-             Defaults!/usr/local/libexec/devlanes-hosts !requiretty\n\
              alice ALL=(root) NOPASSWD: /usr/local/libexec/devlanes-hosts\n"
         );
     }
