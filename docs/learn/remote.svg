@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 645" role="img" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="13">
-  <title>The browser on your machine opens https://myapp.localhost; your proxy passes it to your daemon's listener on 127.0.0.1:28001, which sends it over one connection to the daemon in devbox, a container on your machine's Docker, where web in myapp lane 0 answers on port 28001</title>
+  <title>The browser on your machine opens https://myapp.localhost and your proxy passes it to your daemon's listener on 127.0.0.1:28001, which a client on your machine can also reach; the listener sends it over one connection to the daemon on devbox, a container here, where web in myapp lane 0 answers on port 28001</title>
   <style>
     .line { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; }
     .fill { fill: var(--dl-diagram-fill, transparent); stroke: var(--dl-diagram-line, currentColor); stroke-width: 1.5; }
     .path { stroke: var(--dl-diagram-accent, currentColor); fill: none; stroke-width: 2.5; }
+    .second { stroke: var(--dl-diagram-line, currentColor); fill: none; stroke-width: 1.5; stroke-dasharray: 6 4; }
     .label { fill: currentColor; }
     .dim { fill: currentColor; opacity: 0.65; }
   </style>
@@ -11,6 +12,10 @@
   <!-- your machine -->
   <rect class="line" x="10" y="30" width="580" height="600" rx="10" />
   <text class="label" x="26" y="22">your machine</text>
+
+  <rect class="fill" x="30" y="48" width="200" height="50" rx="6" />
+  <text class="dim" x="44" y="68">client</text>
+  <text class="label" x="44" y="88">127.0.0.1:28001</text>
 
   <rect class="fill" x="280" y="48" width="260" height="50" rx="6" />
   <text class="dim" x="294" y="68">browser</text>
@@ -33,10 +38,11 @@
 
   <!-- the box -->
   <rect class="line" x="30" y="350" width="540" height="262" rx="8" />
-  <text class="label" x="46" y="374">devbox, a container on your machine's Docker</text>
+  <text class="label" x="46" y="374">devbox, a container here</text>
+  <text class="dim" x="46" y="392">a VPS works the same way</text>
 
-  <rect class="fill" x="50" y="400" width="500" height="196" rx="8" />
-  <text class="label" x="66" y="424">daemon</text>
+  <rect class="fill" x="50" y="404" width="500" height="192" rx="8" />
+  <text class="label" x="66" y="428">daemon</text>
 
   <rect class="line" x="250" y="436" width="280" height="146" rx="6" />
   <text class="label" x="264" y="458">myapp lane 0</text>
@@ -47,13 +53,17 @@
   <text class="dim" x="284" y="536">myapp.localhost</text>
   <text class="dim" x="284" y="556">port 28001</text>
 
+  <!-- the second way in: a client dials the mirrored port itself -->
+  <path class="second" d="M 130 98 L 130 245 L 246 245" />
+  <path class="second" d="M 237 238 L 248 245 L 237 252" />
+
   <!-- the request: browser, proxy, listener, the connection, the box's daemon, web -->
   <path class="path" d="M 410 98 L 410 148" />
   <path class="path" d="M 403 139 L 410 150 L 417 139" />
   <path class="path" d="M 410 200 L 410 218" />
   <path class="path" d="M 403 209 L 410 220 L 417 209" />
-  <path class="path" d="M 410 270 L 410 398" />
-  <path class="path" d="M 403 389 L 410 400 L 417 389" />
-  <path class="path" d="M 410 400 L 410 490" />
+  <path class="path" d="M 410 270 L 410 402" />
+  <path class="path" d="M 403 393 L 410 404 L 417 393" />
+  <path class="path" d="M 410 404 L 410 490" />
   <path class="path" d="M 403 481 L 410 492 L 417 481" />
 </svg>

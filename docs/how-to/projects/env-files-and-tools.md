@@ -14,6 +14,7 @@ The file sits next to the project file and stays out of Git. A lane whose worktr
 
 ```text title=".env"
 ACME_API_TOKEN=acme_dev_7f3a9c2e51
+FEATURE_FLAGS=new-checkout,dark-mode
 SENTRY_DSN=
 ```
 
@@ -24,10 +25,52 @@ devlanes reads the file for expressions and does not put its contents into any p
 ```yaml devlanes
 global_env:
   ACME_API_TOKEN: "${{ env.ACME_API_TOKEN }}"
+  FEATURE_FLAGS: "${{ env.FEATURE_FLAGS | default('') }}"
   SENTRY_DSN: "${{ env.SENTRY_DSN | default('') }}"
 ```
 
-A variable that neither the file nor your shell has stops the start, unless the expression gives a default as the second line does. The same name in the shell that runs the start wins over the file, and an edit to the file shows in `devlanes status` until `devlanes reload` applies it.
+A variable that neither the file nor your shell has stops the start, unless the expression gives a default as the last two lines do. The same name in the shell that runs the start wins over the file.
+
+Start the lane, and the explain output shows where each value came from. Values from `global_env` show the layer global, and the port devlanes hands out shows the layer devlanes:
+
+```console title="~/dev/myapp"
+$ devlanes start --no-ui
+✓ install
+✓ services ready
+myapp@0 · main
+✓ services  2 of 2 ready
+  ✓  web  https://myapp.localhost
+  ✓  api  https://api.myapp.localhost
+$ devlanes env show api --explain | grep -E "ACME_API_TOKEN|SENTRY_DSN|^PORT|PORT="
+ACME_API_TOKEN                [redacted]                                                                                                                global
+PORT                          20080                                                                                                                     devlanes
+SENTRY_DSN                    [redacted]                                                                                                                global
+```
+
+The explain output hides secret-looking values and empty ones alike, so the empty SENTRY_DSN reads `[redacted]` as the token does. It tells you that a variable is set, not what it holds.
+
+## Apply an edit to the file
+
+An edit to `.env` changes nothing that runs. Status names each service whose value changed, and a reload restarts them with it. Here the feature flags lost one entry:
+
+```console title="~/dev/myapp"
+$ devlanes status
+myapp
+  LANE  BRANCH  STATE    SERVICES  CPU   MEM        URL
+  0     main    running  2/2       0.0%  170.5 MiB  https://myapp.localhost  (config changed: 2 changed; devlanes reload --lane myapp@0 applies it)
+
+  UNIT     STATE   PORT   CPU   MEM       URL
+  web      ready   20081  0.0%  88.3 MiB  https://myapp.localhost
+  api      ready   20080  0.0%  82.2 MiB  https://api.myapp.localhost
+  web: env FEATURE_FLAGS changed since it started
+  api: env FEATURE_FLAGS changed since it started
+$ devlanes reload --no-ui
+✓ services ready
+myapp@0 · main
+✓ services  2 of 2 ready
+  ✓  web  https://myapp.localhost
+  ✓  api  https://api.myapp.localhost
+```
 
 ## Pin tool versions with mise
 
@@ -55,7 +98,11 @@ Both tools look only at the worktree root, not at a service's own folder. When t
 
 ## Apply a trust or an allow
 
-devlanes asks mise and direnv again each time it starts a service, and does not watch their files, so a trust or an allow changes nothing that runs and `devlanes status` shows no change. Restart the services with `devlanes restart`, or name the ones that need the new values.
+devlanes asks mise and direnv again each time it starts a service, and does not watch their files, so a trust or an allow changes nothing that runs and `devlanes status` shows no change. Restart the services, or name the ones that need the new values:
+
+```console title="~/dev/myapp"
+$ devlanes restart
+```
 
 To read the notes, run `devlanes env show --explain` with the service's name; they follow its variables.
 
@@ -65,7 +112,7 @@ A service that loads `.env` itself keeps working. Most dotenv loaders leave a va
 
 ## If a container needs a value
 
-devlanes hands Compose the `.env` next to the project file for the variables in the Compose file, and values under [`infra.env`](/docs/reference/config/project/infra/) go to Compose the same way. Neither reaches a service or task. [Share one database server between lanes](../infra/shared-database.md) uses that.
+devlanes hands Compose the `.env` next to the project file for the variables in the Compose file, and values under [`infra.env`](/docs/reference/config/project/infra/#infra-env) go to Compose the same way. Neither reaches a service or task. [Share one database server between lanes](../infra/shared-database.md) uses that.
 
 ## Related
 

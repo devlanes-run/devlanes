@@ -4,13 +4,13 @@ description: myapp gains a web app that calls the API of its own lane, in every 
 kind: learn
 ---
 
-myapp gains a web app: a page served by Vite that asks the API which lane it belongs to. Each lane serves the page, and each page has to call the API of its own lane, so no URL written into the code can be right for both.
+You add a web app to myapp: a page served by Vite that asks the API which lane it belongs to. Each lane serves the page, and each page has to call the API of its own lane, so no URL written into the code can be right for both.
 
 ## The web app takes the lane's domain
 
-The project file gains the web service and an install step for the packages. Where the web app needs the API's URL, the file holds an expression that reads the API's public URL. Like the expression in each hostname, devlanes works it out for each lane before the service starts. [Expressions](../reference/expressions.md) lists what else an expression can read.
+The project file gains the web service and an install step for the packages, the marked lines below. Where the web app needs the API's URL, the file holds an expression that reads the API's public URL. Like the expression in each hostname, devlanes works it out for each lane before the service starts. [Expressions](../reference/expressions.md) lists what else an expression can read.
 
-```yaml devlanes
+```yaml devlanes ins={4-7,19-26}
 # devlanes.yaml
 project: myapp
 
@@ -39,11 +39,11 @@ services:
       VITE_API_URL: "${{ services.api.public_url }}"
 ```
 
-The web service takes the lane's domain itself as its hostname. That domain has been in the lane's row of the status table from the start with nothing on it, and the web app is what answers there.
+The web service takes the lane's domain itself as its hostname, so the web app answers on the domain that has had nothing on it until now. Vite takes its port on its command line and ignores `PORT`, so the web service names a preset, a set of flags and settings devlanes adds for a dev server it knows. The vite preset passes Vite the lane's port, a flag that makes Vite exit when that port is taken instead of moving to another, and the loopback address.
 
-## A start that brings a lane up runs its tasks
+## Starting a stopped lane runs its tasks
 
-Both lanes have been stopped since the evening before, when they still ran the API alone. That matters, because a start into a running lane adds the services it lacks and runs no tasks. The web app lands on the main branch and is merged into the checkout branch, and each lane starts again.
+Both lanes are stopped. You add the web app on the main branch, merge it into the checkout branch and start each lane. A start of a stopped lane runs the lane's tasks; a start into a running lane adds the services the lane lacks and runs no tasks, which is why the lanes are stopped first.
 
 ```console title="~/dev/myapp"
 $ devlanes start --no-ui
@@ -55,27 +55,47 @@ myapp@0 · main
   ✓  web  https://myapp.localhost
 ```
 
-The install is a task: a unit that runs a command and ends, where a service keeps running. As a `lane.create` task it runs at each start that brings the lane up until it has succeeded once in that lane, and again after its entry in the file changes. The task is new to the file, so lane 0 has never run it, and this start runs it before any service. One install at the root of the npm workspace covers the API and the web app.
+```console title="~/dev/myapp-checkout"
+$ devlanes start --no-ui
+✓ install
+✓ services ready
+myapp@1 · feat/checkout
+✓ services  2 of 2 ready
+  ✓  api  https://api.myapp1.localhost
+  ✓  web  https://myapp1.localhost
+```
+
+The install is a task: a unit that runs a command and ends, while a service keeps running. As a `lane.create` task it runs at each start of a stopped lane until it has succeeded once in that lane, and again after its entry in the file changes. Neither lane has run it yet, so each start runs it before any service, and one `npm install` at the root, which lists the API and the web app as npm workspaces, installs the packages of both.
 
 ## Each lane hands the web app its own API
 
-The expression comes out different in each lane. In the checkout worktree it gives the API of lane 1.
+These are some of the variables the web app gets in the checkout worktree: its lane, its port and the API's URL that the expression gave it.
 
 ```console title="~/dev/myapp-checkout"
 $ devlanes env show web
 DEVLANES_LANE=1
-DEVLANES_ORIGINS=https://api.myapp1.localhost,http://localhost:20070,http://127.0.0.1:20070,https://myapp1.localhost,http://localhost:20072,http://127.0.0.1:20072
 DEVLANES_SERVICE=web
 HOST=127.0.0.1
 PORT=20072
 VITE_API_URL=https://api.myapp1.localhost
 ```
 
-That is the URL for a browser: the API's hostname, over HTTPS, through the proxy. A service has a second URL, for a call from another service of its lane, which `services.api.url` gives: the API's port on the loopback address, with neither the proxy nor TLS in between. The web app's code runs in the browser, so it takes the first.
+That is the URL for a browser: the API's hostname, over HTTPS, through the proxy. A call from another service of the lane would use `services.api.url` instead, the API's port on the loopback address with neither the proxy nor TLS in between. The web app's code runs in the browser, so it takes the first.
 
-## The page calls the URL it is handed
+## The API answers the page of its own lane
 
-Vite passes variables whose names start with `VITE_` to the page code, so the web app fetches whatever URL its lane gives it. The page and the API have different hostnames, so the browser reads the API's answer only if the API allows the page's origin. The API reads its lane's origins from `DEVLANES_ORIGINS`, shown above, and checks each request against them.
+Vite passes variables whose names start with `VITE_` to the page code, so the web app fetches the URL its lane gives it. The page and the API have different hostnames, so the browser reads the API's answer only if the API allows the page's origin. devlanes lists the lane's origins for every service in `DEVLANES_ORIGINS`, shown here among the variables the API of lane 0 gets, with the layer each comes from.
+
+```console title="~/dev/myapp"
+$ devlanes env show api --explain
+KEY               VALUE                                                                                                                     LAYER
+DEVLANES_LANE     0                                                                                                                         devlanes
+DEVLANES_ORIGINS  https://api.myapp.localhost,http://localhost:20060,http://127.0.0.1:20060,https://myapp.localhost,http://localhost:20...  devlanes
+DEVLANES_SERVICE  api                                                                                                                       devlanes
+PORT              20060                                                                                                                     devlanes
+```
+
+The list holds the lane's hostnames over HTTPS and each of its ports at localhost and 127.0.0.1; the explain view cuts a long value short with dots. The page fetches its URL, and the API checks each request's origin against the list inside its request handler.
 
 ```js
 // web/main.js
@@ -102,26 +122,9 @@ const server = createServer((req, res) => {
   }
 ```
 
-The list holds the lane's hostnames over HTTPS and each of its ports at localhost and 127.0.0.1. The API of lane 1 allows the page of lane 1 and sends no such header to the page of lane 0.
+## You stop both lanes before the database arrives
 
-## A preset hands Vite its port as a flag
-
-A preset is a set of flags and settings devlanes adds for a dev server it knows. Vite takes its port on its command line and ignores `PORT`, so the web service's preset adds the lane's port, a flag that makes Vite exit when that port is taken instead of moving to another one, and the loopback address.
-
-```yaml devlanes
-services:
-  web:
-    preset: vite
-    run_script:
-      file: web/package.json
-      name: dev
-```
-
-The web app's package file keeps its plain `vite` script; devlanes adds the flags when it runs it.
-
-## Both lanes stop before the database arrives
-
-The next change brings a task that has to run at each start, and only a start that brings a lane up runs tasks, so both lanes stop first.
+The database brings a task that has to run at each start, and only a start of a stopped lane runs tasks, so you stop both lanes first.
 
 ```console title="~/dev/myapp"
 $ devlanes stop
@@ -135,7 +138,7 @@ stopped myapp@1:api
 stopped myapp@1:web
 ```
 
-The API is about to keep data in Postgres, and [A database for each lane](databases.md) gives each lane a database of its own, so that a migration on one branch leaves the other's data alone.
+The API is about to keep data in Postgres, and [A database for each lane](databases.md) gives each lane a database of its own.
 
 ## On your own project
 

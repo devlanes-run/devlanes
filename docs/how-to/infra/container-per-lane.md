@@ -12,8 +12,7 @@ When a branch needs its own version of a database, or runs migrations that would
 
 The image creates the database `POSTGRES_DB` names on its first start, and the named volume holds the data. Each lane gets a volume of its own under that name.
 
-```yaml
-# docker-compose.yml
+```yaml title="docker-compose.yml"
 services:
   postgres:
     image: postgres:17.11-alpine
@@ -33,7 +32,7 @@ volumes:
 
 ## List the service as per lane
 
-Every Compose service is shared by the lanes of the project until you name it under [`infra.per_lane`](/docs/reference/config/project/infra/). A service listed there runs once for each lane, lane 0 included, in a Compose project named after the project and the lane number, such as `myapp-lane1`.
+Every Compose service is shared by the lanes of the project until you name it under [`infra.per_lane`](/docs/reference/config/project/infra/#infra-per_lane). A service listed there runs once for each lane, lane 0 included, in a Compose project named after the project and the lane number, such as `myapp-lane1`.
 
 ```yaml devlanes
 infra:
@@ -70,8 +69,17 @@ A stop leaves the lane's container running with its data, and it keeps using mem
 
 Cleaning the lane removes its Compose project together with its volumes, so the lane's database goes with it. Add `--dry-run` to see what it would remove:
 
-```console
+```console title="~/dev/myapp"
 $ devlanes lane clean 1 --dry-run
+would clean myapp@1 (feat/checkout):
+  stop      myapp@1:api
+  remove    compose container myapp-lane1-postgres-1
+  remove    compose project myapp-lane1
+  remove    volume myapp-lane1_pgdata (size unknown)
+  delete    logs (806 B)
+  delete    run and task history
+  free      ports 20080-20089
+next: devlanes lane clean myapp@1 --yes
 ```
 
 [Remove lanes](../lanes/clean-up.md) covers the clean itself and what else it deletes.
@@ -88,21 +96,27 @@ A volume with its own `name:` or `external: true` in the Compose file is one vol
 
 ## If the container is not in a Compose file
 
-A container declared in the project file runs once per lane with [`infra.containers.<name>.per_lane`](/docs/reference/config/project/infra/). [Run containers without Compose](plain-containers.md) shows it.
+A container declared in the project file runs once per lane with [`infra.containers.<name>.per_lane`](/docs/reference/config/project/infra/#infra-containers-name-per_lane). [Run containers without Compose](plain-containers.md) shows it.
 
 ## If you pulled a newer image
 
 A running healthy container keeps its old image after a pull, and a start into a lane that already runs does not create it again. Remove the lane's container by its Compose project:
 
-```console
+```console title="~/dev/myapp-checkout"
 $ docker compose -p myapp-lane1 rm -sf postgres
+Going to remove myapp-lane1-postgres-1
 ```
 
 Then, in the lane's worktree, bring its containers up again, or stop and start the lane:
 
-```console
+```console title="~/dev/myapp-checkout"
 $ devlanes infra up
+infra up for myapp@1
+  SERVICE   PORT   PORTS
+  postgres  20081  5432->20081
 ```
+
+The container comes back on the port it had, from the lane's block, so the running services keep a working URL and need no reload.
 
 ## Related
 

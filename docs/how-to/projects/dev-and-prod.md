@@ -12,7 +12,7 @@ Use this guide when you want the built app running next to the dev servers, from
 
 The second project runs each app from its build, so each package.json that holds a dev script needs a script that serves the build. In myapp the web app gets a build and a start script, and the API gets a start script that runs the server without the watch flag.
 
-```json
+```json title="web/package.json"
 {
   "scripts": {
     "dev": "vite",
@@ -22,7 +22,7 @@ The second project runs each app from its build, so each package.json that holds
 }
 ```
 
-A start fails on a service whose file has no start script, and lists the scripts the file has. `devlanes config check` does not open the scripts, so it passes such a file.
+A service whose file has no start script fails the start, as [Add devlanes to a project](add-devlanes.md#if-the-start-says-the-file-has-no-such-script) shows for a misspelt name. The config check in the next steps does not open the scripts, so it does not catch this.
 
 ## Write the second project file
 
@@ -59,18 +59,44 @@ The default profile, the services a lane's first plain start brings up, runs `st
 
 Any file name works except one that ends in `.local.yaml` or `.local.yml`.
 
-## Check and start it with --file
+## Check the second file
 
-devlanes finds only `devlanes.yaml` by itself, so name the second file with the global `--file` flag the first time.
+devlanes finds only `devlanes.yaml` by itself, so name the second file with the global `--file` flag.
 
 ```console title="on Windows 11"
 $ devlanes --file devlanes.prod.yaml config check
 ok myapp-prod (C:\Users\you\dev\myapp\devlanes.prod.yaml)
 ```
 
-Start it with `devlanes --file devlanes.prod.yaml start`. After that first start, `-p myapp-prod` reaches the project from any folder, and plain commands in the worktree keep using the dev project.
+## Start it with --file
 
-The second project numbers its lanes on its own. In the main worktree the built web app answers on `https://myapp-prod.localhost`, next to the dev server on `https://myapp.localhost`.
+The first start runs the install task, then the build, then the services from the build. The second project numbers its lanes on its own, so in the main worktree it is lane 0 too, with hostnames of its own.
+
+```console title="~/dev/myapp"
+$ devlanes --file devlanes.prod.yaml start --no-ui
+✓ install
+✓ build
+✓ services ready
+myapp-prod@0 · main
+✓ services  2 of 2 ready
+  ✓  api  https://api.myapp-prod.localhost
+  ✓  web  https://myapp-prod.localhost
+```
+
+The built web app answers on `https://myapp-prod.localhost`, next to the dev server on `https://myapp.localhost`. After this first start, `-p` reaches the project from any folder, and plain commands in the worktree keep using the dev project.
+
+```console title="~/dev/myapp"
+$ devlanes -p myapp-prod status
+myapp-prod
+  LANE  BRANCH  STATE    SERVICES  CPU   MEM       URL
+  0     main    running  2/2       0.0%  67.2 MiB  https://myapp-prod.localhost
+
+  UNIT     STATE   PORT   CPU   MEM       URL
+  api      ready   20070  0.0%  25.1 MiB  https://api.myapp-prod.localhost
+  web      ready   20071  0.0%  42.2 MiB  https://myapp-prod.localhost
+  build    exited  –      –     –
+  install  exited  –      –     –
+```
 
 ## If both projects build into the same folder
 
@@ -101,5 +127,5 @@ Its local file is named after it, `devlanes.prod.local.yaml`. [Keep personal cha
 
 - [Share settings and choose which services start](templates-and-profiles.md)
 - [Lanes and projects](../../concepts/lanes-and-projects.md)
-- [`extends`](/docs/reference/config/project/extends/)
-- [`profiles.<name>.run_scripts`](/docs/reference/config/project/profiles/)
+- [`extends`](/docs/reference/config/project/extends/#extends)
+- [`profiles.<name>.run_scripts`](/docs/reference/config/project/profiles/#profiles-name-run_scripts)

@@ -38,7 +38,7 @@ Deno.serve({
 
 Deno asks for permission to read the two variables, so the task grants it:
 
-```json
+```json title="deno.json"
 { "tasks": { "dev": "deno run --watch --allow-net --allow-env=PORT,HOST main.ts" } }
 ```
 :::
@@ -80,7 +80,11 @@ The `--watch` flag in the task above restarts the server on each edit.
 Add `--reload` to uvicorn, with `--reload-dir src` so the watcher skips the virtual environment. Django's runserver reloads by itself.
 :::
 :::tab[Rust]
-Nothing rebuilds the binary by itself. After an edit, `devlanes restart api` runs cargo again and starts the new build.
+Nothing rebuilds the binary by itself. After an edit, a restart of the service runs cargo again and starts the new build:
+
+```console
+$ devlanes restart api
+```
 
 To rebuild on every save, run cargo-watch or bacon as the service's command. The first start compiles every dependency, so give the ready check a long timeout.
 :::
@@ -110,4 +114,4 @@ Node, Bun, Deno, Python and Rust services get the variable their runtime reads f
 
 - [Run scripts your project already has](run-scripts.md)
 - [Read .env values and pin tool versions](env-files-and-tools.md)
-- [`services.<name>.platform`](/docs/reference/config/project/services/)
+- [`services.<name>.platform`](/docs/reference/config/project/services/#services-name-platform)

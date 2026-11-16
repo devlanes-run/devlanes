@@ -27,7 +27,7 @@ services:
     hosts: "accounts.${{ lane.domain }}"
 ```
 
-Mappings such as the script and the ready check merge by key, so this service keeps the template's script name and adds its own file. Lists and single values replace the template's. [`services.<name>.extends`](/docs/reference/config/project/services/) has the full rules.
+Mappings such as the script and the ready check merge by key, so this service keeps the template's script name and adds its own file. Lists and single values replace the template's. [`services.<name>.extends`](/docs/reference/config/project/services/#services-name-extends) has the full rules.
 
 ## Tag the services
 
@@ -64,17 +64,29 @@ profiles:
 
 A selector that matches no service makes the file invalid, and `devlanes config check` names the profile. A glob leaves out services whose autostart is off, while a name or a tag includes them, which [Start a service only on demand](../services/on-demand.md) uses.
 
-The profile named `default` is what a plain start runs when the lane has nothing to bring back, on its first start and after the whole lane was stopped. With [`start.restore`](/docs/reference/config/user/start/) set to false, every plain start runs it. A project without one starts every service whose autostart is on.
+The profile named `default` is what a plain start runs when the lane has nothing to bring back, on its first start and after the whole lane was stopped. With [`start.restore`](/docs/reference/config/user/start/#start-restore) set to false, every plain start runs it. A project without one starts every service whose autostart is on.
 
 ## Start with a profile
 
-Name the profile with `--profile` on the start, and repeat the flag to combine several; where two set the same variable, the later one wins. The lane remembers its profiles, so a plain start after a reboot brings back the same selection. Stopping the whole lane makes it forget them, and its next plain start runs the default profile again.
+Name the profile with `--profile` on the start. The start runs what the profile selects and lists each service with its hostname, or its local address when it has none:
 
-On a lane that already runs, the start adds the profile's services that the lane lacks. Services that already run keep the settings they started with, and the start warns about those the profile would change. `devlanes status` lists them, and `devlanes reload` restarts them with the profile.
+```console title="~/dev/myapp"
+$ devlanes start --profile backend --no-ui
+✓ install
+✓ services ready
+myapp@0 · main
+✓ services  4 of 4 ready
+  ✓  accounts-api  https://accounts.myapp.localhost
+  ✓  billing-api   https://billing.myapp.localhost
+  ✓  catalog-api   https://catalog.myapp.localhost
+  ✓  mailer        http://127.0.0.1:20085
+```
+
+Repeat the flag to combine several profiles; where two set the same variable, the later one wins. The lane remembers its profiles, so a plain start after a reboot brings back the same selection. Stopping the whole lane makes it forget them, and its next plain start runs the default profile again.
 
 ## If a profile needs its own variables
 
-A profile written as a mapping can set variables for its services. They also reach the lane's tasks and its `infra.setup` commands, and the variables a service or task sets itself cannot override them:
+A profile written as a mapping can set variables. While the profile is active they reach every unit of the lane, which means each service, including those the profile does not select, each task and the lane's `infra.setup` commands. The variables a service or task sets itself cannot override them:
 
 ```yaml devlanes
 profiles:
@@ -84,7 +96,32 @@ profiles:
       DATA_FILE: "${{ lane.data_path }}/test/${{ self.name }}.json"
 ```
 
-Put a variable that some task needs to change, such as a production mode next to an install task, in `global_env` instead, where the task's own `env` can override it.
+A value meant only for some services belongs in their own variables or in a template they share. A variable that some task needs to change, such as a production mode next to an install task, belongs in `global_env`, where the task's own `env` can override it.
+
+## If the lane already runs
+
+A start with another profile adds the services it selects that the lane lacks, and the lane remembers the new profile in place of the old one. Services that already run keep running with the settings they started with. After the backend start above, a start with the test profile leaves this status:
+
+```console title="~/dev/myapp"
+$ devlanes status
+myapp
+  LANE  BRANCH  STATE    SERVICES  CPU   MEM        URL
+  0     main    running  5/6       0.0%  426.5 MiB  https://myapp.localhost  (config changed: 4 changed; devlanes reload --lane myapp@0 applies it)
+
+  UNIT            STATE   PORT   CPU   MEM       URL
+  accounts-api    ready   20080  0.0%  86.6 MiB  https://accounts.myapp.localhost
+  billing-api     ready   20082  0.0%  84.4 MiB  https://billing.myapp.localhost
+  catalog-api     ready   20083  0.0%  85.3 MiB  https://catalog.myapp.localhost
+  shop-web        ready   20086  0.0%  85.0 MiB  https://myapp.localhost
+  admin-web       idle    20081  –     –         https://admin.myapp.localhost
+  mailer          ready   20085  0.0%  85.2 MiB  http://127.0.0.1:20085
+  accounts-api: env DATA_FILE changed since it started
+  billing-api: env DATA_FILE changed since it started
+  catalog-api: env DATA_FILE changed since it started
+  mailer: env DATA_FILE changed since it started
+```
+
+The shop's web app was added, and the four services that kept running would now get the test profile's file path. The billing API is among them although the profile does not select it. `devlanes reload` restarts them with the new values.
 
 ## If a profile should skip the containers
 

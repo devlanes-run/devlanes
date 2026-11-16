@@ -32,13 +32,53 @@ $ devlanes infra up
 
 ## Run one per lane
 
-A container is shared by every lane of the project unless you mark it per lane. A shared one runs once and every lane reads the same port; a per-lane one gets a port from each lane's block.
+A container is shared by every lane of the project unless you mark it per lane. A shared one runs once and every lane reads the same port; a per-lane one gets a port from each lane's block of ports. Here the login provider runs per lane, next to a small shared web server:
 
 ```yaml devlanes
 infra:
   containers:
     oidc:
       per_lane: true
+    whoami:
+      image: traefik/whoami:v1.11.0
+      ports:
+        http: 80
+```
+
+The containers of a lane are listed from its worktree. Lane 0 has its own login provider and the shared server:
+
+```console title="~/dev/myapp"
+$ devlanes infra status
+infra for myapp@0
+  containers:
+    name: devlanes-myapp-whoami
+    scope: shared
+    ports:
+      80: 20082
+
+    name: devlanes-myapp-lane0-oidc
+    scope:
+      lane: 0
+    ports:
+      8080: 20071
+```
+
+Lane 1 has a login provider of its own on another port, and the same shared server on the same port:
+
+```console title="~/dev/myapp-checkout"
+$ devlanes infra status
+infra for myapp@1
+  containers:
+    name: devlanes-myapp-lane1-oidc
+    scope:
+      lane: 1
+    ports:
+      8080: 20091
+
+    name: devlanes-myapp-whoami
+    scope: shared
+    ports:
+      80: 20082
 ```
 
 A per-lane container runs from the lane's worktree, so its relative volume paths do too. A shared one reads them from the primary worktree.
@@ -65,7 +105,7 @@ infra:
           path: /isalive
 ```
 
-A check that does not pass in time fails the start. The fields are in [`infra.containers.<name>.ready`](/docs/reference/config/project/infra/).
+A check that does not pass in time fails the start. The fields are in [`infra.containers.<name>.ready`](/docs/reference/config/project/infra/#infra-containers-name-ready).
 
 ## Give it a hostname
 
@@ -79,11 +119,17 @@ infra:
 
 ## If you change the container
 
-A running container with the same image, command, variables, mounts and ports is kept as it is. After you change any of these, the next start of a stopped lane replaces it, and in a running lane this does:
+A running container with the same image, command, variables, mounts and ports is kept as it is. After you change any of these, the next start of a stopped lane replaces it. A start into a lane that runs leaves it as it was, so in a running lane replace it yourself:
 
-```console
+```console title="~/dev/myapp"
 $ devlanes infra up
+infra up for myapp@0
+  SERVICE  PORT   PORTS
+  oidc     20071  http->20071
+  whoami   20082  http->20082
 ```
+
+This run replaced lane 0's login provider after a new variable in its `env`, and left the shared server alone. The output lists every container with its port and does not say which one it replaced. The replaced container keeps its port, so the services need no reload.
 
 A shared container follows the project file of the lane that last brought it up. A branch that changes its image replaces it for every lane when that branch's lane comes up, and a lane of another branch puts the old one back the next time it comes up. Change a shared container on the main branch.
 

@@ -30,31 +30,60 @@ The copy starts when the service starts, so a service that already runs picks up
 
 ```console title="~/dev/myapp"
 $ devlanes restart web --no-ui
+✓ services ready
+myapp@0 · main
+✓ services  1 of 1 ready
+  ✓  web  http://127.0.0.1:20070
 ```
 
 From then on the copy follows each change the build makes, deletions included, until the service stops, and it stays on disk after that.
 
-Point the browser, or whatever loads the folder, at the destination once; the path stays the same across rebuilds and restarts. Cleaning the lane deletes the folder, and the next lane gets a new one. To find the path, print the service's environment and look for the `DEVLANES_LANE_DATA` line; the copy is the folder named chrome-mv3 inside it:
+Point the browser, or whatever loads the folder, at the destination once; the path stays the same across rebuilds and restarts. Cleaning the lane deletes the folder, and the next lane gets a new one. The service's environment holds the data folder's path:
 
-```console title="~/dev/myapp"
+```console title="on Windows 11"
 $ devlanes env show web
+DEVLANES_LANE_DATA=C:/Users/you/.devlanes/data/myapp/217
 ```
 
-To see whether the copy runs, list the copies of the running lanes and look for its state:
+The copy is the folder named chrome-mv3 inside it. Next to the copied files sits an empty file, `.devlanes-sync`, which marks the folder as devlanes' own; leave it there.
 
-```console title="~/dev/myapp"
+```console title="on Windows 11"
+$ powershell.exe -NoProfile -Command "Get-ChildItem C:/Users/you/.devlanes/data/myapp/217/chrome-mv3"
+    Directory: C:\Users\you\.devlanes\data\myapp\217\chrome-mv3
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----        11/15/2026   8:52 PM              0 .devlanes-sync
+-a----        11/15/2026   8:52 PM             55 manifest.json
+```
+
+The build also writes a map file, which the ignore pattern keeps out of the copy. To see whether the copy runs, list the copies of the running lanes and look for its state:
+
+```console title="on Windows 11"
 $ devlanes remote sync
+items:
+  lane: myapp@0
+  unit: web
+  kind: local
+  local:
+    to: C:/Users/you/.devlanes/data/myapp/217/chrome-mv3
+    status:
+      state: watching
+      files: 1
+remote: -
 ```
+
+Watching means the copy is up to date and follows the build. The list also holds the copies from connected boxes.
 
 ## If you want the copy somewhere else
 
 A destination can also be an absolute path, or one relative to the project file's folder. Without a destination, the copy goes to a folder under `~/devlanes/sync` named after the project, the lane and the source folder. That default, and a destination that is a lone tilde or starts with a tilde and a slash, read the `HOME` variable. PowerShell and cmd do not set it, so a start from them fails on the entry.
 
-devlanes marks the destination as its own and refuses to write into an existing folder that holds files it did not create, so move a folder you made by hand out of the way first.
+devlanes refuses to write into an existing folder that holds files but no marker file, so move a folder you made by hand out of the way first.
 
 ## If the service runs on a box
 
-When the service runs on a box you are connected to, your machine gets its own copy while the box's lane runs. It lands in the devlanes home on your machine, under the box's name, such as `sync/my-vps/myapp/myapp@1/chrome-mv3` for lane 1 on the box named my-vps. The destination in the project file is ignored there, so the box cannot choose where your machine writes.
+When the service runs on a box, another machine whose lanes you open from yours, and you are connected to it, your machine gets its own copy while the box's lane runs. It lands in the devlanes home on your machine, under the box's name, such as `sync/my-vps/myapp/myapp@1/chrome-mv3` for lane 1 on the box named my-vps. The destination in the project file is ignored there, so the box cannot choose where your machine writes.
 
 The devlanes home is `~/.devlanes` unless the `DEVLANES_HOME` variable moves it.
 

@@ -39,7 +39,7 @@ The script stays a plain `wrangler dev`. A script that passes its own port or in
 
 ## Pass lane values as Worker variables
 
-A Worker does not see the environment of the process that runs it. The preset turns each entry of [`services.<name>.wrangler.vars`](/docs/reference/config/project/services/) into a `--var` flag, which wins over the same name in the Wrangler config:
+A Worker does not see the environment of the process that runs it. The preset turns each entry of [`services.<name>.wrangler.vars`](/docs/reference/config/project/services/#services-name-wrangler-vars) into a `--var` flag, which wins over the same name in the Wrangler config:
 
 ```yaml devlanes
 services:
@@ -89,7 +89,33 @@ A service binding names the other Worker, and needs nothing from devlanes:
 }
 ```
 
-Each lane has its own Wrangler dev registry in its data folder, and devlanes points every unit of the lane at it, so the binding reaches the catalog of the same lane. Setting `WRANGLER_REGISTRY_PATH` or a variable like it in the project file overrides the lane's registry, so leave them out.
+Each lane has its own Wrangler dev registry in its data folder, and devlanes points every service and task of the lane at it, so the binding reaches the catalog of the same lane. Setting `WRANGLER_REGISTRY_PATH` or a variable like it in the project file overrides the lane's registry, so leave them out.
+
+## Start the lane
+
+The start brings up both Workers on their hostnames:
+
+```console title="~/dev/myapp"
+$ devlanes start --no-ui
+✓ install
+✓ services ready
+myapp@0 · main
+✓ services  2 of 2 ready
+  ✓  gateway  https://myapp.localhost
+  ✓  catalog  https://catalog.myapp.localhost
+```
+
+With the same inspector route on the catalog, the list of routed hostnames shows each inspector hostname on its Worker's inspector port:
+
+```console title="~/dev/myapp"
+$ devlanes url ls
+HOST                                 TARGET           PORT   STATE
+myapp.localhost                  ->  myapp@0:gateway  20102  ready
+inspect-gateway.myapp.localhost  ->  myapp@0:gateway  20103  ready
+catalog.myapp.localhost          ->  myapp@0:catalog  20100  ready
+inspect-catalog.myapp.localhost  ->  myapp@0:catalog  20101  ready
+proxy: http :80, https :443
+```
 
 ## If a Worker fetches another by hostname
 
@@ -104,7 +130,7 @@ lanes:
   hosts_file: always
 ```
 
-This needs the hosts helper that `devlanes setup` installs. Wildcard hostnames cannot go in the hosts file.
+Writing the file needs the hosts helper. When `devlanes setup` skipped it because macOS resolves `*.localhost` itself, run it again once the lane has started, and it installs the helper the project now needs. Wildcard hostnames cannot go in the hosts file.
 :::
 :::tab[Linux]
 workerd sends `*.localhost` names to DNS. Have devlanes write the lane's hostnames to the hosts file:
@@ -114,10 +140,20 @@ lanes:
   hosts_file: always
 ```
 
-This needs the hosts helper that `devlanes setup` installs. Wildcard hostnames cannot go in the hosts file.
+Writing the file needs the hosts helper. When `devlanes setup` skipped it because your system resolves `*.localhost` itself, run it again once the lane has started, and it installs the helper the project now needs. Wildcard hostnames cannot go in the hosts file.
 :::
 :::tab[Windows]
-Nothing to set. Windows 11 answers `*.localhost` names with loopback, and devlanes does not write the hosts file on Windows, so the setting changes nothing there.
+Nothing to set. Windows 11 answers `*.localhost` names with loopback, devlanes does not write the hosts file on Windows, and workerd accepts the devlanes certificate once the CA is trusted. In [Cloudflare Workers](/examples/frameworks-wrangler-workers/), the gateway's fetch returns the catalog of its own lane:
+
+```console title="on Windows 11"
+$ curl.exe -sS -i --ssl-revoke-best-effort https://myapp.localhost/api/catalog-by-hostname
+HTTP/1.1 200 OK
+content-length: 165
+content-type: application/json
+via: 1.1 devlanes.run
+
+{"gateway_lane":0,"catalog":{"project":"myapp","lane":0,"lane_name":"main","branch":"main","service":"catalog","port":20100,"url":"https://catalog.myapp.localhost"}}
+```
 :::
 ::::
 

@@ -81,9 +81,27 @@ In the start, stop, restart and logs commands, the service's name stands for all
 
 ```console title="~/dev/myapp"
 $ devlanes stop worker
+stopped myapp@0:worker.1
+stopped myapp@0:worker.2
 ```
 
-Name one copy, such as worker.2, to act on it alone. In expressions, the worker's URL and port are those of the first copy.
+Name one copy, such as worker.2, to act on it alone, or several. In the example [Queue workers per lane](/examples/workflows-queue-workers/), each copy's log shows it finishing its job on the stop signal; the tail counts lines per copy:
+
+```console title="on Windows 11"
+$ devlanes logs worker.1 worker.2 --tail 8
+worker.1#1 worker 1 ready, waiting on jobs:main:waiting
+worker.2#1 worker 2 ready, waiting on jobs:main:waiting
+worker.1#2 worker.1 started job 2
+worker.2#2 worker.2 started job 1
+worker.1#3 worker.1 got SIGINT, finishing job 2 first
+worker.2#3 worker.2 got SIGINT, finishing job 1 first
+worker.1#4 worker.1 finished job 2 in 2007 ms
+worker.2#4 worker.2 finished job 1 in 2007 ms
+worker.1#5 worker.1 stopped cleanly, jobs:main keeps the waiting jobs for the next start
+worker.2#5 worker.2 stopped cleanly, jobs:main keeps the waiting jobs for the next start
+```
+
+In expressions, the worker's URL and port are those of the first copy.
 
 The count is a plain number, the same in every lane, since each copy reserves ports in every lane's block.
 

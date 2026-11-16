@@ -4,7 +4,7 @@ description: The API of myapp breaks on the checkout branch while main keeps run
 kind: learn
 ---
 
-The checkout branch of myapp breaks its API while the main branch keeps running. Later on the same branch, the project file gets a typo and then an edit while the lane is up. devlanes keeps each failure where you can read it, and it applies no edit until you ask.
+The checkout branch of myapp breaks its API while the main branch keeps running. Later on the same branch, you make a typo in the project file and then edit it while the lane is up. You read each failure in the status and the API's log, and an edit to the project file waits until you reload or restart.
 
 ## A failed service stays failed
 
@@ -24,19 +24,11 @@ myapp
   1     feat/checkout  failed   1/2       0.0%  55.5 MiB  https://myapp1.localhost
 ```
 
-The restart's row quotes the last line the API printed, which is Node's. In the status, lane 1 reads failed with one of its two services ready, and lane 0 on main runs as before. devlanes does not restart a failed service, so the API stays failed, with its reason, until someone restarts or stops it.
+In the status, lane 1 reads failed with one of its two services ready, and lane 0 on main runs as before. devlanes does not restart a failed service, so the API stays failed, with its reason, until someone restarts or stops it.
 
-## The reason is kept with the failure
+## devlanes pulls the stack trace out of the log
 
-`devlanes debug why` says what went wrong with a unit and names the command that reads its log.
-
-```console title="~/dev/myapp-checkout"
-$ devlanes debug why api
-failed myapp@1:api
-  did not become ready before the timeout (devlanes logs myapp@1:api --tail 200)
-```
-
-The timeout says only that the ready check gave up. What the API printed is in its log, and `devlanes debug errors` shows the stack from it for each failed unit.
+`devlanes debug why api` says only that the API did not become ready before the timeout. The cause is in what the API printed, and `devlanes debug errors` takes the stack from the log of each failed unit.
 
 ```console title="~/dev/myapp-checkout"
 $ devlanes debug errors
@@ -53,7 +45,7 @@ failed myapp@1:api
 
 ## A fix does not clear the failure
 
-You take the broken line out again, and the API still reads failed. devlanes runs a service's ready check when it starts the service, and does not run it again later by itself.
+You take the broken line out again, and the API still reads failed. The dev script's own watcher may already be serving the fixed file, but devlanes runs a service's ready check when it starts the service and does not look again by itself.
 
 ```console title="~/dev/myapp-checkout"
 $ devlanes status 1
@@ -71,7 +63,7 @@ myapp
   api: wasn't ready in time
 ```
 
-A restart starts the API again and waits for its ready check, which passes this time.
+A restart settles it: devlanes runs the ready check again, and it passes.
 
 ```console title="~/dev/myapp-checkout"
 $ devlanes restart api --no-ui
@@ -83,7 +75,7 @@ myapp@1 · feat/checkout
 
 ## The project file is checked before it is used
 
-A typo in an expression, `lane.domian` in the API's hostname, is the kind of mistake the config check catches. It reads the file as a lane would and names the line, the column and the name it expected. Line 35 is the API's `hosts` line in the file on the page before.
+You write `lane.domian` for the lane's domain in the API's hostname, and the config check catches it. It reads the file as a lane would and names the line, the column and the name it expected. Line 35 is the API's `hosts` line in the whole file that [A database for each lane](databases.md) shows.
 
 ```console title="~/dev/myapp-checkout, on Windows 11"
 $ devlanes config check
@@ -132,7 +124,7 @@ myapp@1 · feat/checkout
   ✓  api  https://api.myapp1.localhost
 ```
 
-The reload counts only what it restarted, the API, and the web app keeps its process. A reload is for an edit to the project file or `.env`. A restart is for a service that failed or whose code needs a fresh process; it reads the project file as it stands too, so a restarted service starts with its own edits.
+The reload counts only what it restarted, the API, and the web app keeps its process. A plain start of this lane would not have applied the edit, since a start leaves running units alone and adds only what the lane lacks. A restart runs the units you name again from the file as it stands, so it would have given the API its log level too. A reload works out the difference for you and restarts only the units it touches.
 
 So far a person has typed every command. Next, a coding agent gets a worktree of its own and runs a lane there.
 

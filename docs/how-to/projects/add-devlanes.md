@@ -36,8 +36,7 @@ services:
 
 devlanes picks a port for each service in each lane and passes it in the `PORT` variable, with `HOST` set to the loopback address. A server that reads both needs no other change, and the fallbacks keep it working when you start it without devlanes. [Run Node, Bun, Deno, Python and Rust services](runtimes.md) has the same lines for other runtimes.
 
-```js
-// api/server.mjs
+```js title="api/server.mjs"
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";
 
@@ -98,17 +97,21 @@ The check does not open the scripts the file names, so a misspelt script name pa
 
 ## Start the lane
 
-The start runs the script, waits for the ready check to pass and prints the hostname to open.
+The start runs the script, waits for the ready check to pass and prints the hostname to open, as [A service, a port and a hostname](../../learn/first-service.md) shows for this file.
 
-```console title="~/dev/myapp"
+```console
 $ devlanes start --no-ui
-✓ services ready
-myapp@0 · main
-✓ services  1 of 1 ready
-  ✓  api  https://api.myapp.localhost
 ```
 
-A script name the file does not have fails the start, and the error lists the scripts the file does have.
+## If the start says the file has no such script
+
+The name under `run_script` has to match a script in the file. A misspelt one fails the start with exit code 1, and the error lists the scripts the file does have.
+
+```console title="on Windows 11"
+$ devlanes start --no-ui
+myapp@0 · main
+  ✗  api  api: run_script: invalid input: `C:\Users\you\dev\myapp\api\package.json` has no script `devv` (available: dev)
+```
 
 ## If the command takes its port as a flag
 
@@ -133,4 +136,4 @@ Replace the fixed address with the other service's URL in the same lane, as [Ser
 - [Run Node, Bun, Deno, Python and Rust services](runtimes.md)
 - [Read .env values and pin tool versions](env-files-and-tools.md)
 - [Keep personal changes out of Git](local-overrides.md)
-- [`services.<name>.run_script`](/docs/reference/config/project/services/)
+- [`services.<name>.run_script`](/docs/reference/config/project/services/#services-name-run_script)

@@ -34,7 +34,7 @@ The server listens on the port that status lists for the service. Point adb and 
 
 ## If the tool runs on a box
 
-On a box you are connected to, the same services reach your machine. Hostnames open there through your proxy, and ports are mirrored under the same numbers, so adb on your machine reaches the box's adb server on the port the box lists. The connection carries TCP only, so a tool that needs UDP does not work across it. [Lanes on another machine](../../learn/remote.md) shows a box and your machine side by side.
+On a box, another machine whose lanes you open from yours, the same services reach your machine. Hostnames open there through your proxy, and ports are mirrored under the same numbers, so adb on your machine reaches the box's adb server on the port the box lists. The connection carries TCP only, so a tool that needs UDP does not work across it. [Lanes on another machine](../../learn/remote.md) shows a box and your machine side by side.
 
 ## Related
 

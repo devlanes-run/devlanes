@@ -4,11 +4,11 @@ description: The API of myapp starts under devlanes and answers on an HTTPS host
 kind: learn
 ---
 
-myapp starts as one API with a dev script. Under devlanes that script becomes a service with a port of its own and an HTTPS hostname, and it stays up when the terminal that started it goes away.
+myapp starts as one API with a dev script. Under devlanes that script becomes a service with a port of its own and an HTTPS hostname, and it stays up when you close the terminal that started it.
 
 ## One file describes the project
 
-The file is `devlanes.yaml`. It sits at the root of the repository and is committed like the rest of the code. It names the project and lists its services, the long-running processes the project is made of.
+You add one file, `devlanes.yaml`, at the root of the repository and commit it with the rest of the code. It names the project and lists its services, the long-running processes the project is made of.
 
 ```yaml devlanes
 # devlanes.yaml
@@ -29,7 +29,7 @@ The file says which script starts the API, which hostname it wants and how to te
 
 ## The service listens where it is told
 
-devlanes picks a port for each service and passes it in the `PORT` variable. Reading it is the one thing the project has to do.
+devlanes picks a port for each service and passes it in the `PORT` variable, with the address to listen on in `HOST`. Reading them is the one thing the project has to do.
 
 ```js
 // api/server.mjs
@@ -45,7 +45,7 @@ A dev server that takes its port as a flag gets it another way, which [Services 
 
 ## A start runs the script and waits for it
 
-A start runs the dev script with that port, repeats the ready check until the API answers, then prints where to find it.
+When you start the lane, devlanes runs the dev script with that port, repeats the ready check until the API answers, then prints where to find it.
 
 ```console title="~/dev/myapp"
 $ devlanes start --no-ui
@@ -57,11 +57,11 @@ myapp@0 · main
 
 The second line reads as lane 0 of myapp, on the main branch. A lane is one worktree's place to run the project, with a number, ports and hostnames of its own; [Every worktree gets a lane](worktrees.md) adds another.
 
-On an interactive terminal the start runs inside the TUI, a full-screen view of each lane and its output. The `--no-ui` flag prints the same start as text, which is the form these pages show. Starting again is safe: a second start finds the API running and starts nothing.
+On an interactive terminal the start runs inside the TUI, a full-screen view of each lane and its output. The `--no-ui` flag prints the same start as text, which is the form these pages show. A second start finds the API running and starts nothing.
 
-## The daemon owns the process, not the terminal
+## A background daemon keeps the API running
 
-The start handed the API to a background daemon and returned. The terminal it was typed in has no part in keeping the API up.
+The start handed the API to a background daemon and returned, and from then on the daemon runs it, whichever terminal you type in next.
 
 ```console title="~/dev/myapp"
 $ devlanes status
@@ -73,20 +73,20 @@ myapp
   api   ready  20060  0.0%  38.6 MiB  https://api.myapp.localhost
 ```
 
-The first table is the lane. Its URL is the lane's domain, where nothing answers yet: the API asked for a hostname under it, not for the domain itself. The second table lists the lane's units, the things devlanes runs in a lane, of which a service is one kind: here only the API, ready on port 20060 behind the hostname the project file asked for. A stop ends the process and keeps both the port and the hostname for the next start.
+The first table is the lane. Its URL is the lane's domain, where nothing answers yet: the API asked for a hostname under it, not for the domain itself. The second table lists the lane's units, the things devlanes runs in a lane, of which a service is one kind: here only the API, ready on port 20060 behind the hostname the project file asked for. When you stop the lane, the API's process ends and the lane keeps the port and the hostname for the next start.
 
-## The output is kept
+## The daemon keeps what the API prints
 
-What a service prints goes to the daemon, which keeps it. A terminal opened later can read it back.
+You can read the API's output back later from any terminal.
 
 ```console title="~/dev/myapp"
 $ devlanes logs api --tail 10
 api#1 api listening on http://127.0.0.1:20060
 ```
 
-The prefix `api#1` is the unit's name and the number of the line in its log, here the first, and a later read can pick up after that line with `--cursor api#1`.
+Each line starts with the unit's name and the line's number, which `devlanes logs --cursor` takes to read on from that line.
 
-When the checkout branch gets a worktree of its own, the same project file starts the API a second time, on other ports and another hostname.
+Next you start a checkout feature on a branch of its own, and the same file runs the API a second time, on other ports and another hostname.
 
 ## On your own project
 

@@ -43,7 +43,7 @@ If one runs, stop it, which also stops what it runs. Otherwise it stays in place
 $ devlanes daemon stop
 ```
 
-On macOS, if you installed the login service before, an install that finds the same service loaded starts nothing, so remove it first:
+If you installed the login service before, an install that finds the same service loaded starts nothing, so remove it first:
 
 ```console
 $ devlanes daemon uninstall
@@ -97,17 +97,48 @@ PS> devlanes daemon restart
 
 ## Start the lane
 
-Run one start in the folder:
+One start in the folder makes it a lane of the project. There is nothing to start:
 
 ```console title="~/dev/myapp"
 $ devlanes start --no-ui
+myapp@0 · main
+✓ nothing to start
 ```
 
-It has nothing to start, but it makes the folder a lane of the project, and the proxy sends each request for the hostname to port 4800, whether the server is up or not. When devlanes or a lane already holds that port, the start refuses the entry and names what holds it.
+When devlanes or a lane already holds the declared port, the start refuses the entry and names what holds it. Otherwise the hostname is routed at once:
 
-Open `https://myapp.localhost`. While your server is down, the proxy answers with its [DL301 Service not listening](../../errors/upstream-unreachable.md) page instead. On Linux the proxy uses port 8443 unless the daemon may bind 443, and the URL then carries the port; [Choose the proxy's ports](../hostnames/proxy-ports.md) changes that.
+```console title="~/dev/myapp"
+$ devlanes url ls
+HOST                 TARGET        PORT  STATE
+myapp.localhost  ->  myapp@0:docs  4800  ready
+proxy: http :80, https :443
+```
 
-devlanes never starts, stops or checks the server.
+The state reads ready whether or not your server listens, since devlanes never starts, stops or checks it. A request while your server is down gets the proxy's [DL301 Service not listening](../../errors/upstream-unreachable.md) page:
+
+```console title="on Windows 11"
+$ curl.exe -sS -i --ssl-revoke-best-effort https://myapp.localhost
+HTTP/1.1 503 Service Unavailable
+x-devlanes-error: upstream-unreachable
+
+# DL301 Service not listening
+
+`upstream-unreachable`, 503 Service Unavailable, error. Sent by the devlanes 0.13.0 proxy, not by the service.
+
+devlanes has the service as running, but nothing accepted connections on its port while the proxy retried.
+```
+
+For a server you run yourself, the page means that nothing listens on the declared address. Its advice about `PORT` does not apply: start your server on that address, and the same request reaches it, here a test server that answers with one word:
+
+```console title="on Windows 11"
+$ curl.exe -sS -i --ssl-revoke-best-effort https://myapp.localhost
+HTTP/1.1 200 OK
+via: 1.1 devlanes.run
+
+docs
+```
+
+On Linux the proxy uses port 8443 unless the daemon may bind 443, and the URL then carries the port; [Choose the proxy's ports](../hostnames/proxy-ports.md) changes that.
 
 ## If only you run the server
 

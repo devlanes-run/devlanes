@@ -10,7 +10,7 @@ When one process listens on more than one port, such as an app with a separate W
 
 ## Name a second port
 
-Mention a port by name anywhere in the service and devlanes allocates it, next to the service's main port and with the same offset in every lane. The service learns the number from a variable you pass it:
+Mention a port by name anywhere in the service and devlanes allocates it from the lane's block of ports, at the same place in every lane. The service learns the number from a variable you pass it:
 
 ```yaml devlanes
 services:
@@ -40,13 +40,18 @@ services:
         port: admin
 ```
 
-In lane 0 the main port answers on `myapp.localhost` and the ws port on `ws.myapp.localhost`, and the admin port follows the same pattern.
-
-To check the routes, list them and look for each hostname next to the port it reaches:
+The list of routes shows each hostname next to the port it reaches:
 
 ```console title="~/dev/myapp"
 $ devlanes url ls
+HOST                       TARGET       PORT   STATE
+myapp.localhost        ->  myapp@0:web  20071  ready
+ws.myapp.localhost     ->  myapp@0:web  20072  ready
+admin.myapp.localhost  ->  myapp@0:web  20070  ready
+proxy: http :80, https :443
 ```
+
+A named port's number can be below the main port's, as the admin port's is here.
 
 WebSockets and server-sent events pass through the proxy on any of these hostnames without a setting.
 

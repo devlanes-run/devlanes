@@ -26,7 +26,7 @@ services:
         path: /healthz
 ```
 
-Without a ready check, a service with hostnames waits for its port, and one without counts as ready once its process has run for a moment. A route that reads from the database tells you more than a port does, since an open port only proves the socket is there. The fields of each kind are under [`services.<name>.ready`](/docs/reference/config/project/services/) in the config reference, and [Run workers and replicas](workers.md) shows the log check on a worker.
+Without a ready check, a service with hostnames waits for its port, and one without counts as ready once its process has run for a moment. A route that reads from the database tells you more than a port does, since an open port only proves the socket is there. The fields of each kind are under [`services.<name>.ready`](/docs/reference/config/project/services/#services-name-ready) in the config reference, and [Run workers and replicas](workers.md) shows the log check on a worker.
 
 ## Give a slow service more time
 
@@ -41,10 +41,24 @@ services:
       timeout: 5m
 ```
 
-The start also stops waiting after a while of its own, shorter than this check. Give it a longer wait too, or it returns while the service goes on starting:
+The start has a limit of its own, shorter than this check. For an API that takes longer than that to listen, a plain start gives up while the service goes on starting, and exits with code 124, the timeout code in [States and exit codes](../../reference/states-and-exit-codes.md):
+
+```console title="~/dev/myapp"
+$ devlanes start --no-ui
+myapp@0 · main
+! services  0 of 1 ready
+  starting  api
+! timed out before every unit was ready
+```
+
+Give the start a longer wait too, and it returns once the service is ready:
 
 ```console title="~/dev/myapp"
 $ devlanes start --timeout 5m --no-ui
+✓ services ready
+myapp@0 · main
+✓ services  1 of 1 ready
+  ✓  api  https://api.myapp.localhost
 ```
 
 ## When the check never passes

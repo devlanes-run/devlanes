@@ -10,7 +10,7 @@ When the lanes of a project share a store such as Redis or RabbitMQ, you give ea
 
 ## Name each namespace from the lane
 
-Each store gets one lane variable. Setup creates the namespace, teardown removes it when you clean the lane, and the URL the services get points into it, all from that one name. Redis databases are numbered, so its value is the lane number.
+Each store gets one lane variable under [`lanes.vars`](/docs/reference/config/project/lanes/#lanes-vars). Setup creates the namespace, teardown removes it when you clean the lane, and the URL the services get points into it, all from that one name. Redis databases are numbered, so its value is the lane number.
 
 ```yaml devlanes
 lanes:
@@ -21,7 +21,7 @@ lanes:
     bucket: "myapp-${{ lane.name }}"
 ```
 
-The stores stay shared, as every Compose service is unless you list it under [`infra.per_lane`](/docs/reference/config/project/infra/). Setup and teardown entries reach them with a plain `docker compose`, as in [Share one database server between lanes](shared-database.md).
+The stores stay shared, as every Compose service is unless you list it under [`infra.per_lane`](/docs/reference/config/project/infra/#infra-per_lane). Setup and teardown entries reach them with a plain `docker compose`, as in [Share one database server between lanes](shared-database.md).
 
 ## Create the namespace and pass its URL
 
@@ -29,8 +29,7 @@ The stores stay shared, as every Compose service is unless you list it under [`i
 :::tab[Redis]
 A lane uses the database that matches its number and needs nothing created. The clean empties it.
 
-```yaml
-# docker-compose.yml
+```yaml title="docker-compose.yml"
 services:
   redis:
     image: redis:8.10.3-alpine
@@ -55,8 +54,7 @@ A lane cleaned without its teardown, such as one whose worktree you deleted firs
 :::tab[RabbitMQ]
 A vhost per lane keeps exchanges and queues apart. RabbitMQ keeps its data under a node name taken from the container's hostname, so a fixed hostname lets a recreated container find its vhosts again. The healthcheck waits until RabbitMQ itself runs, which is what the setup entry needs.
 
-```yaml
-# docker-compose.yml
+```yaml title="docker-compose.yml"
 services:
   rabbitmq:
     image: rabbitmq:4.3.7-management-alpine
@@ -99,10 +97,9 @@ global_env:
 The container publishes the broker and the management UI, so the URL picks the broker by its container port. Every lane connects as the same user `app`, which has rights on every lane's vhost.
 :::
 :::tab[S3]
-A bucket per lane, in RustFS here. Its command line runs from a second Compose service, so your machine needs no S3 tool. The profile keeps that service out of the containers devlanes starts; Compose still runs it when a command names it. Leave `tools` out of [`infra.profiles`](/docs/reference/config/project/infra/), or the helper starts with every lane.
+A bucket per lane, in RustFS here. Its command line runs from a second Compose service, so your machine needs no S3 tool. The profile keeps that service out of the containers devlanes starts; Compose still runs it when a command names it. Leave `tools` out of [`infra.profiles`](/docs/reference/config/project/infra/#infra-profiles), or the helper starts with every lane.
 
-```yaml
-# docker-compose.yml
+```yaml title="docker-compose.yml"
 services:
   rustfs:
     image: rustfs/rustfs:1.0.4
@@ -145,8 +142,7 @@ global_env:
 :::tab[Mail]
 A mail catcher has nothing to split, so each lane runs its own Mailpit and gets its own inbox. [Give each lane its own container](container-per-lane.md) covers services listed as per lane.
 
-```yaml
-# docker-compose.yml
+```yaml title="docker-compose.yml"
 services:
   mailpit:
     image: axllent/mailpit:v1.33.0
@@ -169,7 +165,7 @@ global_env:
 :::
 ::::
 
-A failed teardown entry does not stop the clean either way; `ignore_errors` marks the failure as expected in the clean's report.
+A failed teardown entry does not stop the clean, with or without `ignore_errors`. The flag marks a failure you expect, such as a vhost or bucket that is already gone.
 
 ## Open a store's web UI on a hostname
 

@@ -6,19 +6,19 @@ sidebar:
   label: Overview
 ---
 
-devlanes runs your dev stack once per Git worktree, so two branches of the same project can be up at the same time. Each worktree gets a lane: a numbered place with ports, HTTPS hostnames and data of its own, which it keeps whether its services run or not. A lane can have a database of its own as well. Your project needs one small file, and each service has to listen on the port devlanes hands it.
+devlanes runs your dev stack once per Git worktree, so two branches of the same project can be up at the same time. Each worktree gets a lane: a numbered place with ports, HTTPS hostnames and data of its own, which it keeps while it is stopped. A lane can have a database of its own as well. Your project needs one small file, and each service has to listen on the port devlanes hands it.
 
-The quickest way to try it is to hand it to your coding agent.
+Your coding agent can set it up for you.
 
 ```prompt
 Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then install devlanes on this machine if it is missing, set it up for this repository, start it and give me the URL of each service.
 ```
 
-To do it by hand, start with [Install devlanes](install.md).
+The agent installs the devlanes command, leaves the HTTPS setup for you to confirm when your system asks, adds `devlanes.yaml` to the repository and commits nothing unless you agree. To do it by hand, start with [Install devlanes](install.md).
 
 ## Two branches, both running
 
-Here the main branch and a feature branch of myapp run side by side, each from its own folder, and `devlanes status` lists both lanes from either folder.
+Here the main branch and a feature branch of myapp run side by side, each from its own folder.
 
 ```console title="~/dev/myapp"
 $ devlanes status
@@ -28,7 +28,7 @@ myapp
   1     feat/checkout  running  2/2       0.0%  84.8 MiB  https://myapp1.localhost
 ```
 
-Each row is a lane; its URL is the lane's domain, where myapp's web app answers. Each other service gets a hostname under that domain, such as `api.myapp1.localhost` for the API of lane 1 in the diagram below. devlanes picked the ports and built the hostnames from the lane's number; the project file names no port and no lane.
+Each row is a lane; its URL is the lane's domain, where myapp's web app answers. The API gets a hostname under it, `api.myapp1.localhost` in lane 1. devlanes picked the ports and built the hostnames from the lane's number; the project file names no port and no lane.
 
 ## A daemon and a proxy do the work
 

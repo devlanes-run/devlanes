@@ -18,7 +18,7 @@ services:
       name: dev
 ```
 
-A start looks the name up in the file first, and a misspelt name fails with the list of names the file has. A Makefile or justfile the check cannot read through, such as one that includes others, is left to make or just at run time. Tasks take the same two keys.
+A start looks the name up in the file first, and a misspelt name fails with the list of names the file has, as [Add devlanes to a project](add-devlanes.md#if-the-start-says-the-file-has-no-such-script) shows. A Makefile or justfile the check cannot read through, such as one that includes others, is left to make or just at run time. Tasks take the same two keys.
 
 ## Match the file kind
 
@@ -36,7 +36,7 @@ make cannot pass extra arguments to a target, so a service with a preset cannot 
 :::tab[justfile]
 devlanes runs `just <recipe>`. A preset adds its flags after the recipe name, so the recipe needs a last parameter that takes any number of arguments:
 
-```just
+```just title="justfile"
 dev *ARGS:
     vite {{ARGS}}
 ```
@@ -51,7 +51,7 @@ There is no way to add `--release` or features here. Use a plain command for tho
 :::tab[pyproject.toml]
 The name is an entry under `[project.scripts]` or Poetry's scripts table. devlanes runs it with uv when the project has a uv lockfile or uv settings, and with Poetry when it has a Poetry lockfile.
 
-With neither, the start fails and suggests `uv lock` or `poetry lock`. uv installs these entries only for a packaged project, one with a build system. A dev server started by a tool, such as uvicorn, is a plain command.
+With neither, the start fails until you create one of the two lockfiles. uv installs these entries only for a packaged project, one with a build system. A dev server started by a tool, such as uvicorn, is a plain command.
 :::
 :::tab[deno.json]
 devlanes runs `deno task <name>`, and `deno.jsonc` works the same way. Comments and trailing commas are fine in both.
@@ -78,11 +78,11 @@ A profile, a named choice of services for a start, can swap the script name for 
 
 ## If only you need a different script
 
-Your local file can change the script name and keep the file from the project file. [Keep personal changes out of Git](local-overrides.md) covers the local file.
+Your local file, the `devlanes.local.yaml` that stays out of Git, can change the script name and keep the file from the project file. [Keep personal changes out of Git](local-overrides.md) covers the local file.
 
 ## Related
 
 - [Add devlanes to a project](add-devlanes.md)
 - [Run Node, Bun, Deno, Python and Rust services](runtimes.md)
-- [`services.<name>.run_script`](/docs/reference/config/project/services/)
-- [`tasks.<name>.run_script`](/docs/reference/config/project/tasks/)
+- [`services.<name>.run_script`](/docs/reference/config/project/services/#services-name-run_script)
+- [`tasks.<name>.run_script`](/docs/reference/config/project/tasks/#tasks-name-run_script)

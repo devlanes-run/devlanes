@@ -67,15 +67,13 @@ The proxy passes the hostname the browser asked for, such as `myapp1.localhost`,
 
 ::::tabs
 :::tab[Vite]
-Vite accepts `localhost` and its subdomains without a setting. When lane domains use another top-level domain through [`hostnames.tld`](/docs/reference/config/user/hostnames/), list that domain:
+Vite accepts `localhost` and its subdomains without a setting. When lane domains use another top-level domain through [`hostnames.tld`](/docs/reference/config/user/hostnames/#hostnames-tld), list that domain:
 
 ```ts title="web/vite.config.ts"
 export default defineConfig({
   server: { allowedHosts: [".test"] },
 });
 ```
-
-Open the app on its hostname and hot reload works through the proxy. Vite's update client connects back to the host the page came from, and the proxy carries that WebSocket like any other request.
 :::
 :::tab[Next.js]
 Next.js checks where requests for its dev assets come from, and allows `localhost` and its subdomains without a setting. When lane domains use another top-level domain, or when next dev warns about or blocks a cross-origin request from a lane hostname, list the domain:
@@ -85,6 +83,22 @@ module.exports = { allowedDevOrigins: ["**.test"] };
 ```
 :::
 ::::
+
+## Start the lane
+
+The start runs the dev script with the preset's flags and lists the dev server on the lane's hostname. In [Next.js app with an HTTPS sibling API](/examples/web-next-app/), the web app sits next to its API:
+
+```console title="~/dev/myapp"
+$ devlanes start --no-ui
+✓ install
+✓ services ready
+myapp@0 · main
+✓ services  2 of 2 ready
+  ✓  web  https://myapp.localhost
+  ✓  api  https://api.myapp.localhost
+```
+
+Open the app on its hostname. With Vite, hot reload works through the proxy: its update client connects back to the host the page came from, and the proxy carries that WebSocket like any other request.
 
 ## If the dev server proxies API calls
 
@@ -109,7 +123,18 @@ export default defineConfig({
 
 ## If two lanes of Next.js run from one folder
 
-Lanes of one folder share the `.next` build folder. When the second lane's next dev exits with "Another next dev server is already running.", give each lane a build folder of its own, next to `.next` inside the app:
+Lanes of one folder share the `.next` build folder, so the second lane's next dev fails, and its log names the server that holds the folder. Here the second lane is named review:
+
+```console title="~/dev/myapp"
+$ devlanes logs review:web --tail 30
+web#1 ▲ Next.js 16.4.5 (Turbopack)
+web#2 - Local:         http://127.0.0.1:20091
+web#6 ⨯ Another next dev server is already running.
+web#8 - Local:        http://127.0.0.1:20081
+web#9 - PID:          51872
+```
+
+Give each lane a build folder of its own, next to `.next` inside the app:
 
 ```js title="web/next.config.js"
 module.exports = { distDir: process.env.NEXT_DIST_DIR || ".next" };

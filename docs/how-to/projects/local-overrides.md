@@ -61,13 +61,42 @@ infra:
 
 A lane whose worktree has no local file, such as a new one, reads the primary worktree's, as [Files and folders](../../reference/files.md#files-of-a-project) describes. One file there reaches each such lane of the project.
 
-An edit to the local file leaves running processes alone, though new hostnames are routed at once. `devlanes status` shows the lanes whose config changed, and `devlanes reload` applies the change to them. An error in the file is reported with the local file's name and line.
+An edit to the local file leaves running processes alone, though new hostnames are routed at once. Status names each service the edit changes, and a reload restarts those services with it. Here the API's log level went from info to debug:
+
+```console title="~/dev/myapp"
+$ devlanes status
+myapp
+  LANE  BRANCH  STATE    SERVICES  CPU   MEM       URL
+  0     main    running  1/1       0.0%  38.4 MiB  https://myapp.localhost  (config changed: 1 changed; devlanes reload --lane myapp@0 applies it)
+
+  UNIT  STATE  PORT   CPU   MEM       URL
+  api   ready  20080  0.0%  38.4 MiB  https://api.myapp.localhost
+  api: env LOG_LEVEL changed since it started
+$ devlanes reload --no-ui
+✓ services ready
+myapp@0 · main
+✓ services  1 of 1 ready
+  ✓  api  https://api.myapp.localhost
+```
+
+An error in the file is reported with the local file's name and line.
 
 ## If one worktree needs other changes
 
 Create a local file in that worktree. Its lanes then read that file instead of the primary worktree's, and the two are not merged, so copy over what you want to keep.
 
-Some settings apply to the whole project, and devlanes warns when a worktree's file sets them differently. For `lanes.max` and `lanes.primary` the primary worktree's value applies. Shared containers are started by every lane, so a lane whose file defines them differently changes them for all lanes when it starts.
+Some settings apply to the whole project, and devlanes warns when a worktree's file sets them differently. For `lanes.max` and `lanes.primary` the primary worktree's value applies. Here the second worktree's local file sets a different maximum number of lanes:
+
+```console title="~/dev/myapp-checkout"
+$ devlanes status
+myapp
+  LANE  BRANCH         STATE    SERVICES  CPU   MEM       URL
+  0     main           running  1/1       0.0%  37.0 MiB  https://myapp.localhost
+  1     feat/checkout  running  1/1       0.0%  38.5 MiB  https://myapp1.localhost
+! myapp@1: lanes.max differs from the primary worktree's project file, whose value applies
+```
+
+The warning says project file even when the primary's value sits in its local file. Shared containers are started by every lane, so a lane whose file defines them differently changes them for all lanes when it starts.
 
 ## If you use a second project file
 

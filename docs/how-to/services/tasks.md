@@ -52,10 +52,19 @@ tasks:
       API_URL: ${{ services.api.url }}
 ```
 
-When a service fails, or the start stops waiting before every service is ready, these tasks are skipped. The first start of a new lane runs the install, the migration, the services and the seed, in that order:
+When a service fails, or the start stops waiting before every service is ready, these tasks are skipped. The example also has a shared Postgres container and a setup entry, a command that creates each lane's database in it, and those come first. After them, the first start of a new lane runs the install, the migration, the services and the seed, in that order:
 
 ```console title="~/dev/myapp"
 $ devlanes start --no-ui
+✓ infra
+✓ setup
+✓ install
+✓ migrate
+✓ services ready
+✓ seed
+myapp@0 · main
+✓ services  1 of 1 ready
+  ✓  api  https://myapp.localhost
 ```
 
 ## Run a task by hand
@@ -64,7 +73,11 @@ A task without an event runs only when you name it, and every other task can be 
 
 ```console title="~/dev/myapp"
 $ devlanes run migrate
+migrate#3 myapp_main: 0 applied, 1 already there
+exited myapp@0:migrate exit=0
 ```
+
+Each line of the task's output carries its name and a position in its log, and the last line gives the exit code.
 
 A task can also be a list of steps: other tasks and setup or teardown entries, run in order until one fails. Give a destructive one a question to ask first:
 
