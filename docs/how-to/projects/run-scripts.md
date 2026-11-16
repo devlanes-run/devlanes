@@ -23,7 +23,7 @@ The file name picks the tool:
 - `package.json`: the script, with the package manager the project declares in `packageManager` or its lockfile.
 - A Makefile: `make <target>`.
 - A justfile: `just <recipe>`.
-- A Taskfile, such as `Taskfile.yml`: `task <name>`. The task gets a preset's flags in `{{.CLI_ARGS}}`.
+- A Taskfile (`Taskfile.yml`, `Taskfile.yaml`, `Taskfile.dist.yml` or `Taskfile.dist.yaml`, also in lowercase): `task <name>`. The task gets a preset's flags in `{{.CLI_ARGS}}`. devlanes runs `task`, so on Arch Linux, where the binary is `go-task`, put a `task` link to it on your `PATH`.
 - `Cargo.toml`: `cargo run --bin <name>`, where the name is a binary.
 - `pyproject.toml`: an entry under `[project.scripts]`, run with uv or Poetry.
 - `deno.json`: `deno task <name>`.

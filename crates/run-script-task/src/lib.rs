@@ -269,16 +269,27 @@ fn validate_name(name: &str) -> Result<(), TaskError> {
 
 /// Parses the tasks of a Taskfile.
 pub fn parse(contents: &str) -> Result<Tasks, ParseError> {
-    // No source snippet: the message ends up on one line of a launch error.
-    let options = serde_saphyr::options! { with_snippet: false };
-    let document: Value = serde_saphyr::from_str_with_options(contents, options)
-        .map_err(|error| ParseError::Yaml(Box::new(error)))?;
+    // Accept what task's YAML parser accepts: a repeated key keeps its last
+    // value, and `.nan` or `.inf` anywhere in the file is not an error.
+    let options = serde_saphyr::options! {
+        with_snippet: false,
+        duplicate_keys: serde_saphyr::DuplicateKeyPolicy::LastWins,
+        non_finite_float_policy: serde_saphyr::NonFiniteFloatPolicy::PassThrough,
+    };
+    // Task reads the first non-empty document and ignores the rest, so the
+    // stream is read lazily and stops there.
+    let mut reader = contents.as_bytes();
+    let document: Value = serde_saphyr::read_with_options(&mut reader, options)
+        .next()
+        .transpose()
+        .map_err(|error| ParseError::Yaml(Box::new(error)))?
+        .unwrap_or(Value::Null);
     let root = match &document {
         Value::Object(root) => root,
-        // An empty file has no tasks.
-        Value::Null => return Ok(Tasks::default()),
+        Value::Null => return Err(ParseError::Shape(MISSING_VERSION)),
         _ => return Err(ParseError::Shape("the file is not a mapping")),
     };
+    check_version(root.get("version"))?;
     let mut parsed = Tasks::default();
     if root
         .get("includes")
@@ -291,6 +302,12 @@ pub fn parse(contents: &str) -> Result<Tasks, ParseError> {
         None | Some(Value::Null) => return Ok(parsed),
         Some(_) => return Err(ParseError::Shape("`tasks` is not a mapping")),
     };
+    // Root `vars` and `env` reach every task, so copying CLI_ARGS there
+    // counts as a read in all of them.
+    let root_reads_cli_args = ["vars", "env"]
+        .iter()
+        .filter_map(|key| root.get(*key))
+        .any(mentions_cli_args);
     for (name, value) in tasks {
         // A string or a list is the shorthand for a task with only commands.
         let (aliases, internal) = match value {
@@ -312,10 +329,31 @@ pub fn parse(contents: &str) -> Result<Tasks, ParseError> {
             name: name.clone(),
             aliases,
             internal,
-            reads_cli_args: mentions_cli_args(value),
+            reads_cli_args: root_reads_cli_args || mentions_cli_args(value),
         });
     }
     Ok(parsed)
+}
+
+const MISSING_VERSION: &str = "the file has no `version`; task needs `version: '3'`";
+
+/// Accepts the schema versions task 3 runs: major version 3, written as a
+/// string or a number, with an optional `v` prefix (`3`, `'3.0'`, `v3`).
+fn check_version(version: Option<&Value>) -> Result<(), ParseError> {
+    let text = match version {
+        None | Some(Value::Null) => return Err(ParseError::Shape(MISSING_VERSION)),
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Number(number)) => number.to_string(),
+        Some(_) => return Err(ParseError::Shape("`version` is not a version number")),
+    };
+    let major = text.strip_prefix('v').unwrap_or(&text).split('.').next();
+    if major.and_then(|major| major.parse::<u64>().ok()) == Some(3) {
+        Ok(())
+    } else {
+        Err(ParseError::Shape(
+            "task runs only Taskfiles with `version: '3'`",
+        ))
+    }
 }
 
 /// Whether `value` is null or an empty mapping or list.
@@ -481,6 +519,106 @@ tasks:
             }
         );
         assert!(matches!(tasks.check("build"), TaskCheck::Found(_)));
+        let tasks = parse("version: '3'\nincludes: {}\ntasks:\n  build: make\n").expect("parse");
+        assert_eq!(
+            tasks.check("seed"),
+            TaskCheck::Missing {
+                known: vec!["build".to_owned()]
+            }
+        );
+    }
+
+    /// An internal task stays internal when reached through an alias or a
+    /// wildcard, so `plan` refuses it either way.
+    #[test]
+    fn internal_through_alias_and_wildcard() {
+        let tasks = parse(
+            "version: '3'\ntasks:\n  setup:\n    internal: true\n    aliases: [s]\n    cmd: make\n  gen:*:\n    internal: true\n    cmd: make\n",
+        )
+        .expect("parse");
+        for call in ["s", "gen:api"] {
+            assert!(
+                matches!(tasks.check(call), TaskCheck::Found(task) if task.internal),
+                "{call}"
+            );
+        }
+    }
+
+    /// A task built from a `<<: *anchor` merge key gets the anchor's keys.
+    #[test]
+    fn merge_keys() {
+        let tasks = parse(
+            "version: '3'\ntasks:\n  base: &base\n    internal: true\n    cmds: ['vite {{.CLI_ARGS}}']\n  dev:\n    <<: *base\n    desc: dev\n",
+        )
+        .expect("parse");
+        let dev = &tasks.tasks[1];
+        assert_eq!(
+            (dev.name.as_str(), dev.internal, dev.reads_cli_args),
+            ("dev", true, true)
+        );
+    }
+
+    /// Root `vars` and `env` reach every task, so a CLI_ARGS there counts.
+    #[test]
+    fn cli_args_in_root_vars_or_env() {
+        for root in [
+            "vars:\n  ARGS: '{{.CLI_ARGS}}'\n",
+            "env:\n  ARGS: '{{.CLI_ARGS}}'\n",
+        ] {
+            let tasks =
+                parse(&format!("version: '3'\n{root}tasks:\n  dev: vite\n")).expect("parse");
+            assert!(tasks.tasks[0].reads_cli_args, "{root}");
+        }
+    }
+
+    /// Duplicate keys keep the last value and non-finite floats parse, as in task.
+    #[test]
+    fn accepts_what_task_accepts() {
+        let tasks = parse(
+            "version: '3'\nvars:\n  RATIO: .nan\n  MAX: -.inf\ntasks:\n  dev: vite\n  dev:\n    internal: true\n    cmd: vite\n",
+        )
+        .expect("parse");
+        assert_eq!(tasks.tasks.len(), 1);
+        assert!(tasks.tasks[0].internal);
+    }
+
+    /// Task reads the first document only; later ones are never parsed.
+    #[test]
+    fn reads_first_document() {
+        let tasks = parse("version: '3'\ntasks:\n  dev: vite\n---\nversion: '3'\ntasks:\n  other: make\n---\n: : [\n")
+            .expect("parse");
+        let names: Vec<&str> = tasks.tasks.iter().map(|task| task.name.as_str()).collect();
+        assert_eq!(names, ["dev"]);
+    }
+
+    /// The schema versions task 3.54 runs pass; a missing or other major
+    /// version fails like task does.
+    #[test]
+    fn checks_version() {
+        for version in ["'3'", "3", "'3.0'", "3.54", "'v3'", "'3.0.1'", "'03'"] {
+            parse(&format!("version: {version}\ntasks:\n  dev: vite\n"))
+                .unwrap_or_else(|error| panic!("{version}: {error}"));
+        }
+        for (contents, message) in [
+            ("", MISSING_VERSION),
+            ("tasks:\n  dev: vite\n", MISSING_VERSION),
+            (
+                "version: '2'\n",
+                "task runs only Taskfiles with `version: '3'`",
+            ),
+            (
+                "version: '4'\n",
+                "task runs only Taskfiles with `version: '3'`",
+            ),
+            (
+                "version: ''\n",
+                "task runs only Taskfiles with `version: '3'`",
+            ),
+            ("version: true\n", "`version` is not a version number"),
+        ] {
+            let error = parse(contents).expect_err(contents);
+            assert_eq!(error.to_string(), message, "{contents}");
+        }
     }
 
     /// `*` matches any text, including none and `:`, and the whole name must match.

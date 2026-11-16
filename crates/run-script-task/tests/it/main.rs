@@ -92,8 +92,11 @@ fn checks_task() {
         temp.path(),
         &[
             ("Taskfile.yml", TASKFILE),
-            ("broken/Taskfile.yml", "tasks: [dev]\n"),
-            ("shared/Taskfile.yml", "includes:\n  db: ./db\n"),
+            ("broken/Taskfile.yml", "version: '3'\ntasks: [dev]\n"),
+            (
+                "shared/Taskfile.yml",
+                "version: '3'\nincludes:\n  db: ./db\n",
+            ),
         ],
     );
     let args = vec!["--port".to_owned(), "1".to_owned()];
