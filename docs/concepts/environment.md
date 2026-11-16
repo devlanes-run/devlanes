@@ -10,7 +10,7 @@ Each time a service or task of a lane starts, devlanes puts its environment toge
 
 A unit, a service or task of a lane for example ([Glossary](../reference/glossary.md)), gets seven layers. When two set the same name, the higher one wins. From the bottom up:
 
-1. client: your shell's environment, which the lane keeps as described below.
+1. client: your shell's environment, which the lane keeps as described below. Services and tasks from the project file get it without the variables coding agents set to identify themselves, such as `CLAUDECODE` and `AI_AGENT`, so they run the same whether you or an agent started the lane.
 2. contributor: what mise and direnv add, the variables that point Node, Python and the other runtimes at the devlanes CA, and a preset's settings for a dev server such as Vite.
 3. devlanes: devlanes' own variables, such as `PORT` and `HOST`.
 4. global: `global_env` in the project file, for every unit of the lane.

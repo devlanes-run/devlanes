@@ -709,6 +709,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
         for key in &remove {
             client.remove(&devlanes_core::env::fold_name(key.clone()));
         }
+        remove_agent_markers(&mut client);
         // The script's variables sit with devlanes' own, which win over them.
         let mut devlanes = script_env;
         devlanes.extend(self.devlanes.clone());
@@ -1140,6 +1141,41 @@ fn prepend_path(env: &mut devlanes_core::env::Environment, dirs: &[PathBuf]) {
             env.sources.entry(key).or_insert(EnvLayer::Devlanes);
         }
         Err(error) => tracing::warn!(%error, "a script directory cannot go on PATH"),
+    }
+}
+
+/// Variables is-ai-agent detects agents by that are not agent markers: an
+/// agent leaves its mark in their value, and programs read them for their own
+/// purpose (the shell prompt, the AWS SDKs).
+const SHARED_SIGNALS: &[&str] = &["PS1", "PROMPT_COMMAND", "AWS_EXECUTION_ENV"];
+
+/// Removes from a unit's client layer every variable is-ai-agent detects an
+/// agent by, so a unit from the project file runs the same whether a person or
+/// an agent started the lane: Prisma refuses `migrate reset` under an agent,
+/// and other tools change their output or telemetry. Detection runs again
+/// without each match until it finds none. `${{ env.X }}` still reads them.
+fn remove_agent_markers(client: &mut BTreeMap<String, String>) {
+    let mut found: BTreeSet<&'static str> = BTreeSet::new();
+    while let Some(agent) = is_ai_agent::detect_with(
+        |name| {
+            (!found.contains(name))
+                .then(|| client.get(name).cloned())
+                .flatten()
+        },
+        // A marker file is not in the environment, so there is nothing to remove.
+        |_| false,
+    ) {
+        let is_ai_agent::Signal::EnvVar { name, .. } = agent.signal else {
+            break;
+        };
+        if !found.insert(name) {
+            break;
+        }
+    }
+    for name in found {
+        if !SHARED_SIGNALS.contains(&name) {
+            client.remove(name);
+        }
     }
 }
 
