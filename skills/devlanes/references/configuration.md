@@ -156,7 +156,7 @@ Values may contain `${{ ... }}` expressions, evaluated for each lane. An undefin
 
 Layers, lowest first: the shell that started the lane, tools and runtimes (mise, direnv, the CA variables, a preset's settings), devlanes' variables (`DEVLANES_*`, and `PORT`, `HOST` for services), `global_env`, the service's `env`, the profile's `env`, `--env` on the command line. `devlanes env show api --explain` names the layer of each variable.
 
-`.env` is never put into processes; it only feeds `${{ env.X }}`. Name what a process needs (`DB_PASSWORD: "${{ env.DB_PASSWORD }}"`) or let the app load its own dotenv. Never copy `.env` values into the project file. mise `[env]` and an allowed `.envrc` already reach every unit.
+`.env` is never put into processes; it only feeds `${{ env.X }}`. Name what a process needs (`SMTP_HOST: "${{ env.SMTP_HOST }}"`) or let the app load its own dotenv. Never copy `.env` values into the project file. mise `[env]` and an allowed `.envrc` already reach every unit.
 
 [Expressions](https://devlanes.run/docs/reference/expressions.md) lists the functions and filters, and [Environment variables](https://devlanes.run/docs/reference/environment-variables.md) every variable devlanes sets.
 

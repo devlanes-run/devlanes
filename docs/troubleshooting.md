@@ -13,7 +13,7 @@ kind: reference
 | `UNIT couldn't start: PROGRAM: command not found on PATH` | The program is not on the `PATH` of the shell that started the lane | Start the lane from a shell that finds it ([Bring lanes back after a reboot](how-to/lanes/after-a-reboot.md#if-the-daemon-is-still-running)) |
 | `UNIT wasn't ready in time` | The ready check never passed | [Wait until a service is ready](how-to/services/ready-checks.md) |
 | `nothing accepts connections on port PORT` | The service listens on another port than the one devlanes gave it | [Give a service several ports and hostnames](how-to/services/ports-and-hostnames.md#if-the-program-insists-on-a-fixed-port) |
-| A service crashed, and `status` still shows it `ready` | A watcher such as `node --watch` keeps the process alive | [Wait until a service is ready](how-to/services/ready-checks.md#if-the-dev-server-runs-under-a-file-watcher) |
+| A service crashed, and `status` still shows it `ready` | A watcher such as `node --watch` keeps the process alive | Read `devlanes logs` for the service and run `devlanes restart` on it ([When a service fails](learn/failures.md)) |
 | `port PORT is taken by pid N` | Another program holds a port of the lane | Stop that program, then start again |
 | `PATH has no value in LANE` | An expression such as `${{ env.API_KEY }}` has no value, often a missing `.env` | [Read .env values and pin tool versions](how-to/projects/env-files-and-tools.md) |
 | `Docker isn't running or can't be reached` | The project has containers and Docker is down | Start Docker |
@@ -34,7 +34,7 @@ kind: reference
 | What you see | Cause | Fix |
 |---|---|---|
 | A certificate error, such as `ERR_CERT_AUTHORITY_INVALID` | This browser or tool does not trust the devlanes CA | [Trust the devlanes CA](how-to/hostnames/trust-the-ca.md) |
-| HTTPS fails with no page for a hostname | No lane routes that hostname | Check the name with `devlanes url ls` ([Give a service several ports and hostnames](how-to/services/ports-and-hostnames.md#route-a-hostname-to-it)) |
+| HTTPS fails with no page for a hostname | No lane routes that hostname | Check the name with `devlanes url ls` ([Give a service several ports and hostnames](how-to/services/ports-and-hostnames.md#name-the-ports-and-route-hostnames-to-them)) |
 | A program cannot resolve a `*.localhost` name | Its resolver does not send `*.localhost` to your machine | [Fix programs that cannot resolve *.localhost](how-to/hostnames/resolve-localhost.md) |
 | URLs end in `:8443` or `:8080` | Another program holds port 443 or 80 | [Choose the proxy's ports](how-to/hostnames/proxy-ports.md) |
 | [DL201 Service not running](errors/service-idle.md) | The service or its lane is stopped | Start it with the command the page shows |

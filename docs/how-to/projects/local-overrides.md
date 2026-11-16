@@ -27,7 +27,7 @@ services:
     hosts: "scratch.${{ lane.domain }}"
 ```
 
-Here a plain start leaves the web service out unless the lane ran it before or you name it, the API gets one more variable and keeps the rest, and a service only you run joins the lane. The local file cannot set `project` or a file-level `extends`. [Config files and reload](../../concepts/config-and-reload.md#files-merge-in-a-fixed-order) has the merge rules.
+Here a plain start leaves the web service out unless the lane ran it before or you name it, the API gets one more variable and keeps the rest, and a service only you run joins the lane. The local file cannot set `project` or a file-level `extends`. [Config files and reload](../../concepts/config-and-reload.md#the-local-file-wins-over-the-project-file) has the merge rules.
 
 ## Keep it out of Git
 
