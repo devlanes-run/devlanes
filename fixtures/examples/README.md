@@ -1,6 +1,6 @@
 # Configuration examples
 
-Configuration examples for a made-up `acme` project. They describe the v1 contract; the application files and Compose files they mention are not included. Runnable fixture projects are under `fixtures/`.
+Configuration examples for a made-up `acme` project. They describe the v1 contract; the application files and Compose files they mention are not included. The other folders under `fixtures/` are runnable projects.
 
 ## Usage
 
@@ -14,7 +14,7 @@ Configuration examples for a made-up `acme` project. They describe the v1 contra
 
 ## Behaviour
 
-Map keys merge; lists and scalars replace. Files a project file `extends` merge before it, each with its own `.local.yaml`. Merge precedes template expansion. A `.local.yaml` file is normally gitignored; this documentation copy is intentionally tracked.
+Map keys merge; lists and scalars replace. Files a project file `extends` merge before it, each with its own `.local.yaml`. Merge precedes template expansion. A `.local.yaml` file is normally gitignored; this copy is intentionally tracked.
 
 ## License
 

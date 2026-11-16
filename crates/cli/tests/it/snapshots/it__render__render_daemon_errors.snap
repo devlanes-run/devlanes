@@ -42,7 +42,7 @@ hint: devlanes daemon restart
 error: the start of acme@2 was cancelled by a stop, clean or reset of the lane
 hint: devlanes status acme@2
 error: no devlanes.yaml in /work/acme/src or its parents (searched up to /work/acme)
-hint: create devlanes.yaml in /work/acme (a minimal one: https://github.com/devlanes-run/devlanes/blob/main/docs/examples/minimal.yaml), or name another project file with --file
+hint: create devlanes.yaml in /work/acme (a minimal one: https://devlanes.run/docs/how-to/projects/add-devlanes/), or name another project file with --file
 error: no profile e2r; did you mean e2e?
 hint: devlanes start --profile e2e
 error: no profile staging; profiles: dev, e2e

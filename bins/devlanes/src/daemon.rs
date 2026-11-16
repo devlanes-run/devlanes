@@ -861,8 +861,9 @@ pub async fn service_report() -> serde_json::Value {
     })
 }
 
-/// Removes the logon start (and Task Manager's record of it); the running
-/// daemon keeps running.
+/// Removes the login service (on Windows the logon start and Task Manager's
+/// record of it). A running daemon keeps running, except on macOS, where
+/// launchd stops the one it started.
 pub async fn uninstall(runtime: &Runtime) -> Result<u8, RpcError> {
     let location = remove_login_service().await?;
     let _ = runtime;
@@ -934,7 +935,8 @@ pub(crate) async fn remove_login_service() -> Result<String, RpcError> {
 }
 
 /// Stops the service manager from starting the daemon, removes the per-user
-/// service definition and returns its path; the running daemon keeps running.
+/// service definition and returns its path. Under systemd a running daemon
+/// keeps running; launchd's `bootout` stops the daemon it started.
 #[cfg(unix)]
 pub(crate) async fn remove_login_service() -> Result<String, RpcError> {
     let manager = Manager::current();

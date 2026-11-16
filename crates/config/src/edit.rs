@@ -309,7 +309,7 @@ mod tests {
 
     const COMMENTED: &str = "\
 # devlanes machine settings
-# see https://devlanes.run/docs/config
+# see https://devlanes.run/docs/reference/config/
 
 proxy:
   # 443 needs the helper on macOS

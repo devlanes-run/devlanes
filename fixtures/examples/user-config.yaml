@@ -127,7 +127,7 @@ remote:
   # Boxes devlanes remote connect reaches by running a command here instead of SSH,
   # by the name you connect with: `devlanes remote connect acme` runs this command.
   # It must run `devlanes tunnel --stdio` in the box with stdin and stdout passed
-  # through; see docs/guides/remote-command.md.
+  # through; see docs/how-to/remote/connect-by-command.md.
   # boxes:
   #   acme:
   #     command: [docker, exec, -i, acme, devlanes, tunnel, --stdio]

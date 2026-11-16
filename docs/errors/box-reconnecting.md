@@ -17,4 +17,4 @@ devlanes remote connect my-box      # shows SSH prompts in this terminal
 devlanes daemon logs --tail 50
 ```
 
-On a Linux box, `sudo loginctl enable-linger "$USER"` keeps its daemon running after you log out. See [remote boxes](../remote.md).
+On a Linux box, `sudo loginctl enable-linger "$USER"` keeps its daemon running after you log out. See [remote boxes](../how-to/remote/prepare-a-box.md#keep-the-daemon-running-after-you-log-out).

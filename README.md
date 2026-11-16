@@ -18,7 +18,7 @@ These install release builds for macOS or Linux (glibc), arm64 or x86_64. `pipx 
 cargo install --locked --git https://github.com/devlanes-run/devlanes devlanes devlanes-hosts-helper
 ```
 
-On Windows 11 24H2 or later, x64 or arm64, install from PowerShell; npm, uv and cargo binstall work there too. [Windows](docs/guides/windows.md) lists the requirements and what differs:
+On Windows 11 24H2 or later, x64 or arm64, install from PowerShell; npm, uv and cargo binstall work there too. [Windows](https://devlanes.run/docs/reference/windows/) lists the requirements and what differs:
 
 ```powershell
 irm https://devlanes.run/install.ps1 | iex
@@ -36,7 +36,7 @@ iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
 iex "& {$(irm https://devlanes.run/install.ps1)} -Dir C:\tools\devlanes"
 ```
 
-`devlanes update` installs new releases the way devlanes was installed, and a build of `main` updates to the latest build of `main`. devlanes installs and updates to the latest release only. Installing an older release is not recommended; if you need one, use the npm or PyPI package with that version (`npm install -g devlanes@X.Y.Z`, `uv tool install devlanes==X.Y.Z` or `pipx install devlanes==X.Y.Z`). [Updates](docs/guides/updates.md) has the details.
+`devlanes update` installs new releases the way devlanes was installed, and a build of `main` updates to the latest build of `main`. devlanes installs and updates to the latest release only. Installing an older release is not recommended; if you need one, use the npm or PyPI package with that version (`npm install -g devlanes@X.Y.Z`, `uv tool install devlanes==X.Y.Z` or `pipx install devlanes==X.Y.Z`). [Update and uninstall](https://devlanes.run/docs/how-to/update/) has the details.
 
 [packaging](packaging/README.md) describes the release pipeline.
 
@@ -68,11 +68,11 @@ devlanes logs api -f
 devlanes                    # the TUI
 ```
 
-[Getting started](docs/getting-started.md) walks from install to two lanes. The [CLI reference](docs/reference/cli/) and the [config reference](docs/reference/config.md) are generated from the code, and tests fail when they fall behind.
+[Install devlanes](https://devlanes.run/docs/install/) and [the first lesson](https://devlanes.run/docs/learn/first-service/) walk from install to two lanes. The [CLI reference](https://devlanes.run/docs/reference/cli/) and the [config reference](https://devlanes.run/docs/reference/config/) are generated from the code, and tests fail when they fall behind.
 
-[Coding agents](docs/guides/mcp.md) covers the devlanes skill for agents and `devlanes mcp`, an MCP server for Claude Code, Codex, OpenCode, Cursor, VS Code, Claude Desktop and Goose.
+[Set up a coding agent](https://devlanes.run/docs/how-to/agents/set-up/) covers the devlanes skill for agents and `devlanes mcp`, an MCP server for Claude Code, Codex, OpenCode, Cursor, VS Code, Claude Desktop and Goose.
 
-`devlanes --help` lists the commands, and `devlanes <command> --help` describes each one. See [design](docs/design.md), [development conventions](AGENTS.md), [fixtures](fixtures/README.md) and [M0 commands](docs/milestones/M0.md). mprocs and dekit informed terminal interaction; pitchfork, process-compose, devenv, Coasts, portless, kache, overmind and Conductor informed process and worktree workflows.
+`devlanes --help` lists the commands, and `devlanes <command> --help` describes each one. See [design](CONTRIBUTING.md#design), [development conventions](AGENTS.md) and [fixtures](fixtures/README.md). mprocs and dekit informed terminal interaction; pitchfork, process-compose, devenv, Coasts, portless, kache, overmind and Conductor informed process and worktree workflows.
 
 ## Config example
 
@@ -100,7 +100,7 @@ services:
     hosts: "${{ lane.domain }}"
 ```
 
-In the worktree of lane 2 this serves `https://api.acme2.localhost` and `https://acme2.localhost`, each on its own allocated port. The excerpt comes from [minimal.yaml](docs/examples/minimal.yaml), which also has shared Postgres and a database per lane; [devlanes.yaml](docs/examples/devlanes.yaml) shows every form.
+In the worktree of lane 2 this serves `https://api.acme2.localhost` and `https://acme2.localhost`, each on its own allocated port. The excerpt comes from [minimal.yaml](fixtures/examples/minimal.yaml), which also has shared Postgres and a database per lane; [devlanes.yaml](fixtures/examples/devlanes.yaml) shows every form.
 
 ## License
 

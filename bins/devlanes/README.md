@@ -23,7 +23,7 @@ On a terminal, `start`, `restart`, `reload`, `lane resume` and `lane new --start
 
 `devlanes with` starts the lane, waits until it is ready, runs the command with the lane's env and `DEVLANES_PUBLIC_URL_<SERVICE>` variables, stops what it started and exits with the command's code.
 
-Configuration examples and design notes are in `docs/` at the repository root. The agent skill is in `skills/devlanes/`.
+The user docs are in `docs/` at the repository root, configuration examples in `fixtures/examples/` and design notes in `CONTRIBUTING.md`. The agent skill is in `skills/devlanes/`.
 
 ## Config example
 
@@ -38,7 +38,7 @@ terminal:
   progress: auto
 ```
 
-Project settings live in each repository's `devlanes.yaml`; `docs/examples/user-config.yaml` lists every user setting. `devlanes config get [KEY]`, `config set KEY VALUE` and `config unset KEY` read and change `config.yaml` without the daemon, keeping its comments.
+Project settings live in each repository's `devlanes.yaml`; `fixtures/examples/user-config.yaml` lists every user setting. `devlanes config get [KEY]`, `config set KEY VALUE` and `config unset KEY` read and change `config.yaml` without the daemon, keeping its comments.
 
 ## Behaviour
 

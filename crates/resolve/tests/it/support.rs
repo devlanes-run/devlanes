@@ -19,8 +19,8 @@ use devlanes_core::{
 use devlanes_resolve::{LaneFacts, Launch, ResolvedLane, port_needs};
 use serde_json::{Value, json};
 
-pub const FULL: &str = include_str!("../../../../docs/examples/devlanes.yaml");
-pub const MINIMAL: &str = include_str!("../../../../docs/examples/minimal.yaml");
+pub const FULL: &str = include_str!("../../../../fixtures/examples/devlanes.yaml");
+pub const MINIMAL: &str = include_str!("../../../../fixtures/examples/minimal.yaml");
 
 /// Parses and validates a project config.
 pub fn parse(yaml: &str) -> ProjectConfig {

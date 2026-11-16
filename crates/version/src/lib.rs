@@ -24,9 +24,8 @@ pub const BUILD_ID: &str = match option_env!("DEVLANES_BUILD_ID") {
 /// and `cargo binstall --git` build from.
 pub const REPOSITORY: &str = repository!();
 
-/// A minimal `devlanes.yaml` on the default branch, for users who have none yet.
-pub const MINIMAL_CONFIG_URL: &str =
-    concat!(repository!(), "/blob/main/docs/examples/minimal.yaml");
+/// The docs page that starts from a minimal `devlanes.yaml`, for users who have none yet.
+pub const MINIMAL_CONFIG_URL: &str = "https://devlanes.run/docs/how-to/projects/add-devlanes/";
 
 /// The manifest of the latest stable release. GitHub's `latest` skips drafts and
 /// prereleases, `next` included.

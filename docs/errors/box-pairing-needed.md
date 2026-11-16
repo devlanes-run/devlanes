@@ -15,4 +15,4 @@ devlanes daemon pair                              # on the box: prints a code su
 devlanes remote connect my-box --code K7QM-3XWD   # here; without --code it asks for the code
 ```
 
-A code works once, for 10 minutes. A wrong code voids every code the box handed out, so ask for a new one after a typo; after 5 wrong codes in 10 minutes the box hands out none for a while, and `remote ls` says how long. See [pairing](../remote.md#pairing).
+A code works once, for 10 minutes. A wrong code voids every code the box handed out, so ask for a new one after a typo; after 5 wrong codes in 10 minutes the box hands out none for a while, and `remote ls` says how long. See [pairing](../how-to/remote/connect.md#pair-and-connect).
