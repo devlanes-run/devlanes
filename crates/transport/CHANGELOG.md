@@ -1,5 +1,11 @@
 # devlanes-transport
 
+## 0.5.1 — 2026-11-16
+
+### Patch changes
+
+- [3ea80b58](https://github.com/devlanes-run/devlanes/commit/3ea80b58cb9bbe020952302ae55c18051763991c) Added a `Server-Timing` header to proxied responses that splits each request's time between devlanes and the service, turned off with `proxy.server_timing: false`.
+
 ## 0.5.0 — 2026-11-09
 
 ### Patch changes

@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-config"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "devlanes-core",
  "devlanes-preset-next",
@@ -1272,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-daemon"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1393,7 +1393,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-hosts-helper"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "sha2 0.10.9",
  "tempfile",
@@ -1721,7 +1721,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-proxy"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1748,7 +1748,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-resolve"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "async-trait",
  "devlanes-config",
@@ -1782,7 +1782,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-resolver-hosts"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "async-trait",
  "devlanes-hosts-helper",
@@ -2028,7 +2028,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-transport"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2046,7 +2046,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-transport-command"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "devlanes-sys",
@@ -2062,7 +2062,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-transport-ssh"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2142,7 +2142,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tui"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "ab_glyph",
  "async-trait",
@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tui-web"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "console_error_panic_hook",
  "devlanes-client",
@@ -2198,7 +2198,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tunnel"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "async-trait",
  "bytes",

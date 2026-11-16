@@ -1,6 +1,6 @@
 # devlanes-tui
 
-## 0.13.1 — 2026-11-16
+## 0.13.1 ... 0.13.2 — 2026-11-16
 
 Version bump only, to follow other packages.
 

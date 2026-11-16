@@ -1,5 +1,12 @@
 # devlanes
 
+## 0.13.2 — 2026-11-16
+
+### Patch changes
+
+- [8f144944](https://github.com/devlanes-run/devlanes/commit/8f144944c416fa59ce16d83f4dda8a514f73bcd7) Fixed `devlanes setup` failing to install the `/etc/hosts` helper on Ubuntu 25.10 and later, where `sudo` is sudo-rs.
+- [3ea80b58](https://github.com/devlanes-run/devlanes/commit/3ea80b58cb9bbe020952302ae55c18051763991c) Added a `Server-Timing` header to proxied responses that splits each request's time between devlanes and the service, turned off with `proxy.server_timing: false`.
+
 ## 0.13.1 — 2026-11-16
 
 ### Patch changes
