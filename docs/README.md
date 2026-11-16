@@ -14,8 +14,8 @@ Your coding agent can set it up for you.
 Install the devlanes skill:
 npx skills add devlanes-run/devlanes --skill devlanes
 
-Then install devlanes on this machine if it is missing, set it up for
-this repository, start it and give me the URL of each service.
+Then install devlanes on this machine, set up everything it needs,
+and help me port this project to devlanes from whatever runs it today.
 ```
 
 To do it by hand, start with [Install devlanes](install.md).

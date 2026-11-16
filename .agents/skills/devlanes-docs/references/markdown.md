@@ -54,12 +54,12 @@ $ devlanes daemon pair
 Install the devlanes skill:
 npx skills add devlanes-run/devlanes --skill devlanes
 
-Then install devlanes on this machine if it is missing, set it up for
-this repository, start it and give me the URL of each service.
+Then install devlanes on this machine, set up everything it needs,
+and help me port this project to devlanes from whatever runs it today.
 ```
 ````
 
-Text for the reader to paste into a coding agent. Break its lines by hand at about 70 characters, with the skill's install command on a line of its own, so the block needs no sideways scrolling on the website or on GitHub. A prompt says "install devlanes if it is missing" when it needs the command, because the skill installs it only when asked. It renders as a card with a copy button. Write it as one instruction a person would give, in plain sentences. Use it on the overview and the install page, and on a how-to guide when the guide, or its first step, is something an agent does.
+Text for the reader to paste into a coding agent. Break its lines by hand at about 70 characters, with the skill's install command on a line of its own, so the block needs no sideways scrolling on the website or on GitHub. The docs use this one prompt wherever a page hands the work to an agent; only `how-to/agents/set-up.md` has its own. It asks for the install outright, because the skill installs devlanes only when asked. It renders as a card with a copy button. Write it as one instruction a person would give, in plain sentences. Use it on the overview and the install page, and on a how-to guide when the guide, or its first step, is something an agent does.
 
 ## Config blocks
 

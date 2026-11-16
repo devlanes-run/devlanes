@@ -12,9 +12,8 @@ Your coding agent can install it for you, apart from one dialog your operating s
 Install the devlanes skill:
 npx skills add devlanes-run/devlanes --skill devlanes
 
-Then install devlanes on this machine if it is missing, set up its
-HTTPS certificates and hostnames, and check the machine with
-`devlanes doctor`. Tell me which steps I have to do myself.
+Then install devlanes on this machine, set up everything it needs,
+and help me port this project to devlanes from whatever runs it today.
 ```
 
 ## Install the command

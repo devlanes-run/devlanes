@@ -10,10 +10,8 @@ Use this guide when mprocs, a Procfile, process-compose, pm2, tmuxinator, concur
 Install the devlanes skill:
 npx skills add devlanes-run/devlanes --skill devlanes
 
-Then install devlanes on this machine if it is missing, and migrate
-this repository's dev setup to a devlanes.yaml, keeping the old files.
-Start the lane and give me the URL of each service. Tell me what did
-not carry over and what I have to do myself.
+Then install devlanes on this machine, set up everything it needs,
+and help me port this project to devlanes from whatever runs it today.
 ```
 
 ::example{slug="workflows-mprocs-migration"}
