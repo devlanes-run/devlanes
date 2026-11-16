@@ -30,7 +30,7 @@ The address is where the server already listens, on the loopback interface. The 
 The proxy runs inside the daemon. A daemon that a command starts exits soon after the last command that watched it, and the external entry does not keep it up, so the hostname would stop answering. A daemon installed as a login service keeps running, and comes back after a reboot.
 
 ::::tabs{sync="os"}
-:::tab[macOS and Linux]
+:::tab[macOS]
 First check whether a daemon already runs. This command never starts one:
 
 ```console
@@ -47,6 +47,25 @@ On macOS, if you installed the login service before, an install that finds the s
 
 ```console
 $ devlanes daemon uninstall
+```
+
+Then install the service. It starts the daemon at once and again at each login:
+
+```console
+$ devlanes daemon install
+```
+:::
+:::tab[Linux]
+First check whether a daemon already runs. This command never starts one:
+
+```console
+$ devlanes daemon status
+```
+
+If one runs, stop it, which also stops what it runs. Otherwise it stays in place of the installed one until your next login, and exits when unused.
+
+```console
+$ devlanes daemon stop
 ```
 
 Then install the service. It starts the daemon at once and again at each login:

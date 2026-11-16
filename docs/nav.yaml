@@ -107,11 +107,19 @@
       items:
         - reference/cli
         - reference/cli/*
-    - label: Configuration
+    # The website generates these pages from the two JSON Schemas. The lanes key
+    # exists in both files, so each file gets a group of its own.
+    - reference/config
+    - label: Project file
       collapsed: true
       items:
-        - reference/config
-        - reference/config/*
+        - reference/config/project
+        - reference/config/project/*
+    - label: User config
+      collapsed: true
+      items:
+        - reference/config/user
+        - reference/config/user/*
     - reference/expressions
     - reference/environment-variables
     - reference/lane-and-unit-references

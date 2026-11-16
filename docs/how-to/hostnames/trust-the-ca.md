@@ -92,8 +92,16 @@ $ devlanes env shell
 To have them in every shell, point runtimes that add to their trusted certificates at `ca.pem`, and runtimes that replace them at `bundle.pem`, which holds the system's root certificates plus the devlanes CA.
 
 ::::tabs{sync="shell"}
-:::tab[bash and zsh]
+:::tab[bash]
 ```sh title="~/.bashrc"
+export NODE_EXTRA_CA_CERTS="$HOME/.devlanes/ca/ca.pem"
+export DENO_CERT="$HOME/.devlanes/ca/ca.pem"
+export SSL_CERT_FILE="$HOME/.devlanes/ca/bundle.pem"
+export REQUESTS_CA_BUNDLE="$HOME/.devlanes/ca/bundle.pem"
+```
+:::
+:::tab[zsh]
+```sh title="~/.zshrc"
 export NODE_EXTRA_CA_CERTS="$HOME/.devlanes/ca/ca.pem"
 export DENO_CERT="$HOME/.devlanes/ca/ca.pem"
 export SSL_CERT_FILE="$HOME/.devlanes/ca/bundle.pem"
@@ -142,7 +150,12 @@ via: 1.1 devlanes.run
 A JDK from your Linux distribution reads the system store, so the system entry covers it. Other JDKs, and every JDK on macOS and Windows, keep their own store. Import the CA into the store of the JDK you run, answer yes when keytool asks whether to trust it, and give the store's password, `changeit` unless someone changed it:
 
 ::::tabs{sync="shell"}
-:::tab[bash and zsh]
+:::tab[bash]
+```console
+$ keytool -importcert -cacerts -alias devlanes -file "$HOME/.devlanes/ca/ca.pem"
+```
+:::
+:::tab[zsh]
 ```console
 $ keytool -importcert -cacerts -alias devlanes -file "$HOME/.devlanes/ca/ca.pem"
 ```

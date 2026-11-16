@@ -39,7 +39,14 @@ Inside the sandbox, the sandbox line is the one to act on. Starting the daemon f
 Run this in your own terminal, not through the agent. The agent's commands then find a running daemon and stop trying to start one.
 
 ::::tabs{sync="os"}
-:::tab[macOS and Linux]
+:::tab[macOS]
+```console title="outside the sandbox"
+$ devlanes daemon install
+```
+
+This registers a login service that starts the daemon now and at each login. Whether the sandboxed shell may then connect to the daemon's socket is up to the sandbox. When it may not, the refusal names the socket, and the MCP server below is the way in.
+:::
+:::tab[Linux]
 ```console title="outside the sandbox"
 $ devlanes daemon install
 ```

@@ -14,7 +14,9 @@ kind: how-to
 
 - `title`: sentence case. The page has no `#` heading; the website renders the title.
 - `description`: one sentence, shown in search results and in `llms.txt`. Plain words, no inline code.
-- `kind`: `overview` (the docs home only), `learn`, `how-to`, `concept` or `reference`.
+- `kind`: `overview` (the docs home only), `learn`, `how-to`, `concept` or `reference`. Any other value fails the website build. `troubleshooting.md` is `reference`.
+- The pages under `docs/errors/` are the exception to all of the above: each keeps its `# DL101 Unknown host` heading and a frontmatter of exactly `sidebar: order: <number>`, because a test in `crates/pages` checks both against the pages the proxy serves. Link one by its heading text.
+- `sidebar: { label: Overview }` gives a page a sidebar label that differs from its title. `docs/README.md` and `docs/errors/README.md` use it.
 - `publish: false` keeps a file off the website. `docs/AGENTS.md` has it.
 
 ## File names
@@ -23,14 +25,14 @@ Lowercase words joined by hyphens. No page is named `agents.md` or `claude.md`: 
 
 ## Sidebar
 
-`docs/nav.yaml` lists every page in sidebar order. A page missing from it lands in the last group with a build warning. Add a new page to `nav.yaml` and to the site map in the same change.
+`docs/nav.yaml` lists every page in sidebar order. A page missing from it lands in the last group with a build warning, and a path in it that names no page fails the build. Add a new page to `nav.yaml` and to the site map in the same change, and take a deleted one out of both.
 
 ## Links
 
 - Link another docs page by its relative path with the `.md` extension: `[Throttling and freezing](../concepts/freezing.md)`. The website turns it into the route.
 - Link a heading with `#` and its slug: `../concepts/ports.md#named-ports`.
 - Link text names the page or the thing. Never "here" or "this page".
-- The config reference is generated on the website, so link it by route. A project file key lives at `/docs/reference/config/project/<top-level key>/`, such as `/docs/reference/config/project/services/` or `/docs/reference/config/project/infra/`, and a user config key at `/docs/reference/config/user/<top-level key>/`. The link text is the full dotted key in code, never its last part alone: [`services.<name>.ready`](/docs/reference/config/project/services/). A link to a whole reference uses its title: [Project file reference](/docs/reference/config/project/) or [User config reference](/docs/reference/config/user/).
+- The config reference is generated on the website, so link it by route. Never create `docs/reference/config.md`: the website writes that page. A project file key lives at `/docs/reference/config/project/<top-level key>/` and a user config key at `/docs/reference/config/user/<top-level key>/`, each with an anchor made from the dotted path: lowercase, `<` and `>` removed, `[]` dropped, dots turned into `-`. The link text is the full dotted key in code, never its last part alone: [`services.<name>.ready`](/docs/reference/config/project/services/#services-name-ready). An item of a list is written with `[]`, as in `services.<name>.hosts[].host`, and a key that takes one entry or a list uses the list form. A link to a whole reference uses its title: [Project file reference](/docs/reference/config/project/) or [User config reference](/docs/reference/config/user/).
 - A proxy error page is linked by its own title, such as [DL201 Service not running](../errors/service-idle.md).
 
 ## Terminal blocks
@@ -74,7 +76,7 @@ services:
 ````
 
 - `yaml devlanes` is a project file or a fragment of one. `yaml devlanes-user` is the user config.
-- A first-line comment with a file name sets the tab title: `# devlanes.local.yaml`.
+- A first-line comment with a file name sets the tab title: `# devlanes.local.yaml`. The website takes that line out of the rendered file, so line 1 of the block is the line after it and line numbers in error messages match.
 - Each key shows its description on hover and links to the reference. An unknown key fails the website build.
 - Plain `yaml` is for other files: Compose files, CI workflows. Other files take their own language: `js`, `json`, `toml`, `sh`, `powershell`, `ssh-config`, and `text` when nothing fits. A `title` names the file.
 - Comments in a config block say why a line is there. They do not repeat the hover.
@@ -95,7 +97,16 @@ services:
 ::::
 ```
 
-Sync keys: `os` (macOS, Linux, Windows), `install` (the install methods), `shell` (bash, zsh, fish, PowerShell), `agent` (agent hosts). Use tabs only where the content differs by that key. Two systems that share the content share a tab: `:::tab[macOS and Linux]`. Tabs with the same key switch together. Tabs by anything else, such as a framework or a datastore, are `::::tabs` with no `sync`, and switch alone. A page with several tab groups by the same thing gives them a key of its own so they switch together: `sync="runtime"` on the runtimes guide.
+Tabs with the same `sync` key switch together, and they are matched by the text of the label. So a key has one fixed set of labels, spelled the same on every page:
+
+| `sync` | Labels |
+|---|---|
+| `os` | macOS, Linux, Windows |
+| `shell` | bash, zsh, fish, PowerShell |
+| `install` | Homebrew, npm, uv, cargo |
+| `agent` | Claude Code, Codex, OpenCode, Cursor |
+
+A page leaves out the labels it has nothing for, and never joins two ("macOS and Linux"). When two systems share the content, each gets its own tab with the content repeated. Use tabs only where the content differs by that key. Tabs by anything else, such as a framework or a datastore, are `::::tabs` with no `sync`, and switch alone. A page with several tab groups by the same thing gives them a key of its own so they switch together: `sync="runtime"` on the runtimes guide.
 
 ## Steps
 
@@ -115,7 +126,15 @@ For a short run of actions inside a how-to guide. Longer procedures are sections
 ::example{slug="infra-postgres-shared"}
 ```
 
-The slug is a `slug` from `catalog.json` in the examples repository whose `status` is `ready`. One card per page, placed after the opening line of a how-to guide.
+The slug is a `slug` from `catalog.json` in the examples repository whose `status` is `ready`. One card per page, placed after the opening line of a how-to guide. Each example has a page of its own at `https://devlanes.run/examples/<slug>/`, and `/examples/` lists them; link an example in prose by that route, as `[infra-postgres-shared](/examples/infra-postgres-shared/)`.
+
+## The TUI
+
+```markdown
+::tui{view="lanes"}
+```
+
+A live TUI on the page. `view` is `lanes`, `monitor`, `daemon` or `boxes`. It renders nothing when the website was built without the TUI bundle, so the page has to read correctly without it. `reference/tui.md` is the page that uses it.
 
 ## Diagrams
 

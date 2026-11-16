@@ -15,7 +15,14 @@ Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill de
 ## Install the command
 
 ::::tabs{sync="os"}
-:::tab[macOS and Linux]
+:::tab[macOS]
+```console
+$ curl -fsSL https://devlanes.run/install.sh | sh
+```
+
+The command goes into `~/.local/bin`, and the script tells you when that folder is not on your `PATH`.
+:::
+:::tab[Linux]
 ```console
 $ curl -fsSL https://devlanes.run/install.sh | sh
 ```

@@ -96,7 +96,17 @@ Each lane has its own Wrangler dev registry in its data folder, and devlanes poi
 workerd looks the name up itself, and the request goes over HTTPS, so workerd has to resolve the lane hostname and accept the devlanes certificate.
 
 ::::tabs{sync="os"}
-:::tab[macOS and Linux]
+:::tab[macOS]
+workerd sends `*.localhost` names to DNS. Have devlanes write the lane's hostnames to the hosts file:
+
+```yaml devlanes
+lanes:
+  hosts_file: always
+```
+
+This needs the hosts helper that `devlanes setup` installs. Wildcard hostnames cannot go in the hosts file.
+:::
+:::tab[Linux]
 workerd sends `*.localhost` names to DNS. Have devlanes write the lane's hostnames to the hosts file:
 
 ```yaml devlanes

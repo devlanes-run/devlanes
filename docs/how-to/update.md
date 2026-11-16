@@ -41,7 +41,12 @@ A box is a machine whose lanes are mirrored to yours, and updating your machine 
 Each commit on the main branch of devlanes that passes CI is built, and the newest is published as the `next` build. The install scripts install it with the next channel:
 
 ::::tabs{sync="os"}
-:::tab[macOS and Linux]
+:::tab[macOS]
+```console
+$ curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
+```
+:::
+:::tab[Linux]
 ```console
 $ curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
 ```

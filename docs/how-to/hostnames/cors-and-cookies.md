@@ -28,7 +28,18 @@ The credentials option lets the browser send the session cookie with these reque
 Send the lane 1 API a request with the origin of lane 1's web app, then one with lane 0's. Only the first gets an allow-origin header back, so a page of lane 0 cannot read the answer.
 
 ::::tabs{sync="os"}
-:::tab[macOS and Linux]
+:::tab[macOS]
+When your lane URLs carry a port, such as 8443, add it to the URL and to both origins.
+
+```console
+$ curl -s -i -H "Origin: https://myapp1.localhost" https://api.myapp1.localhost/
+```
+
+```console
+$ curl -s -i -H "Origin: https://myapp.localhost" https://api.myapp1.localhost/
+```
+:::
+:::tab[Linux]
 When your lane URLs carry a port, such as 8443, add it to the URL and to both origins.
 
 ```console

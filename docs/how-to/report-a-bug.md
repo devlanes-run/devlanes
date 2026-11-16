@@ -39,7 +39,12 @@ Before anything is written, devlanes replaces the values of variables whose name
 `devlanes daemon logs` prints the end of the daemon's own log. For more detail in it, restart the daemon with a debug level, then do what goes wrong again. The restart stops each running service and starts it again, so it asks first when services run.
 
 ::::tabs{sync="os"}
-:::tab[macOS and Linux]
+:::tab[macOS]
+```console
+$ DEVLANES_LOG=debug devlanes daemon restart
+```
+:::
+:::tab[Linux]
 ```console
 $ DEVLANES_LOG=debug devlanes daemon restart
 ```
