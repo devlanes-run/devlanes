@@ -257,6 +257,8 @@ struct Inner {
     cancel: CancellationToken,
     /// The latest mirror report, which the control task sends once.
     report: watch::Sender<Option<Value>>,
+    /// The latest answered ping's round trip.
+    round_trip: watch::Receiver<Option<Duration>>,
 }
 
 impl Drop for Inner {
@@ -305,6 +307,7 @@ impl Session {
                 let (end_tx, end) = watch::channel(None);
                 let cancel = CancellationToken::new();
                 let report = watch::Sender::new(None);
+                let (round_trip_tx, round_trip) = watch::channel(None);
                 tokio::spawn(run_control(
                     control,
                     Control {
@@ -314,6 +317,7 @@ impl Session {
                         end_tx,
                         mux: mux.clone(),
                         reports: report.subscribe(),
+                        round_trip: round_trip_tx,
                     },
                 ));
                 Ok(Self {
@@ -325,6 +329,7 @@ impl Session {
                         end,
                         cancel,
                         report,
+                        round_trip,
                     }),
                 })
             }
@@ -358,6 +363,12 @@ impl Session {
     /// The registry this session keeps up to date.
     pub fn registry(&self) -> &ClientRegistry {
         &self.inner.registry
+    }
+
+    /// How long the latest answered ping took to come back; `None` before the
+    /// first pong. A pong queued behind a large transfer reads high.
+    pub fn round_trip(&self) -> Option<Duration> {
+        *self.inner.round_trip.borrow()
     }
 
     /// Opens a raw byte stream to `target`; the box rejects unregistered targets.
@@ -614,6 +625,8 @@ struct Control {
     mux: MuxClient,
     /// Mirror reports to send, latest only.
     reports: watch::Receiver<Option<Value>>,
+    /// Set from each answered ping.
+    round_trip: watch::Sender<Option<Duration>>,
 }
 
 /// Applies registry changes, pings and sends mirror reports until the
@@ -626,6 +639,7 @@ async fn run_control(mut control: Channel<MuxStream>, parts: Control) {
         end_tx,
         mux,
         mut reports,
+        round_trip,
     } = parts;
     let mut ticker =
         tokio::time::interval_at(Instant::now() + timing.ping_interval, timing.ping_interval);
@@ -644,7 +658,10 @@ async fn run_control(mut control: Channel<MuxStream>, parts: Control) {
                 Ok(Some((BoxControl::Snapshot { snapshot }, _))) => registry.replace(snapshot),
                 Ok(Some((BoxControl::Event { event }, _))) => registry.apply(event),
                 Ok(Some((BoxControl::Pong { nonce: answered }, _))) => {
-                    if outstanding.is_some_and(|(sent, _)| sent == answered) {
+                    if let Some((waiting, sent)) = outstanding
+                        && waiting == answered
+                    {
+                        round_trip.send_replace(Some(sent.elapsed()));
                         outstanding = None;
                     }
                 }

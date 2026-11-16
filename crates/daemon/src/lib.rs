@@ -56,6 +56,7 @@ pub mod update;
 mod wsl;
 
 pub use engine::{Engine, EngineOptions, UNWATCHED_IDLE_FACTOR};
+pub use remote::BoxRoundTrips;
 
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};

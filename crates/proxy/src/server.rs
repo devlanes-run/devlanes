@@ -29,6 +29,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{OwnedSemaphorePermit, Semaphore, watch},
     task::{JoinHandle, JoinSet},
+    time::Instant,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -38,6 +39,7 @@ use crate::{
     health::{Health, ListenerGuard, ListenerHealth},
     lane::{ClientReads, LaneActivity},
     pool::{Connection, Pool, PoolKey},
+    timing::{BoxLatency, Timings},
 };
 
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -93,9 +95,14 @@ pub struct ProxyConfig {
     pub https_redirect_port: Option<u16>,
     /// Adds `Via: 1.1 devlanes.run` to forwarded responses.
     pub via: bool,
+    /// Adds a `Server-Timing` field with the proxy's share of each response's time,
+    /// except to 101 responses.
+    pub server_timing: bool,
     /// Told about requests to ready routes with an owner and about client bytes on their
     /// upgraded streams. Error pages, redirects and unknown hosts are not reported.
     pub activity: Option<Arc<dyn LaneActivity>>,
+    /// Asked for the round trip to the box behind a remote route, for `Server-Timing`.
+    pub latency: Option<Arc<dyn BoxLatency>>,
 }
 
 impl Default for ProxyConfig {
@@ -106,20 +113,24 @@ impl Default for ProxyConfig {
             connect_timeout: Duration::from_secs(5),
             https_redirect_port: None,
             via: true,
+            server_timing: true,
             activity: None,
+            latency: None,
         }
     }
 }
 
 impl fmt::Debug for ProxyConfig {
-    /// Shows only whether an activity receiver is set, since it has no `Debug`.
+    /// Shows only whether the activity and latency hooks are set, since they have no `Debug`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProxyConfig")
             .field("lan", &self.lan)
             .field("connect_timeout", &self.connect_timeout)
             .field("https_redirect_port", &self.https_redirect_port)
             .field("via", &self.via)
+            .field("server_timing", &self.server_timing)
             .field("activity", &self.activity.is_some())
+            .field("latency", &self.latency.is_some())
             .finish()
     }
 }
@@ -476,8 +487,32 @@ impl Proxy {
         }
     }
 
-    /// Validates authority before routing and forwards bodies without collecting them.
+    /// Answers one request through [`Self::forward`] and adds `Server-Timing`.
     async fn handle(
+        &self,
+        request: Request<Incoming>,
+        peer: SocketAddr,
+        local: SocketAddr,
+        secure: bool,
+        shutdown: CancellationToken,
+        permit: Arc<OwnedSemaphorePermit>,
+    ) -> Result<Response<Body>, Infallible> {
+        let started = Instant::now();
+        let mut timings = Timings::default();
+        let Ok(mut response) = self
+            .forward(request, peer, local, secure, shutdown, permit, &mut timings)
+            .await;
+        // A 101 hands the connection over; its timings would describe nothing.
+        if self.config.server_timing && response.status() != StatusCode::SWITCHING_PROTOCOLS {
+            timings.append(started.elapsed(), response.headers_mut());
+        }
+        Ok(response)
+    }
+
+    /// Validates authority before routing and forwards bodies without collecting them,
+    /// noting in `timings` where the time went.
+    #[allow(clippy::too_many_arguments)]
+    async fn forward(
         &self,
         mut request: Request<Incoming>,
         peer: SocketAddr,
@@ -485,6 +520,7 @@ impl Proxy {
         secure: bool,
         shutdown: CancellationToken,
         permit: Arc<OwnedSemaphorePermit>,
+        timings: &mut Timings,
     ) -> Result<Response<Body>, Infallible> {
         let format = Format::negotiate(accept(request.headers()).as_deref());
         let Some(authority) = request_authority(&request) else {
@@ -529,7 +565,10 @@ impl Proxy {
             ));
         }
         if matches!(route.state, RouteState::Starting | RouteState::Reconnecting) {
-            match self.settle(&host, &shutdown).await {
+            let waiting = Instant::now();
+            let settled = self.settle(&host, &shutdown).await;
+            timings.wait += waiting.elapsed();
+            match settled {
                 Some(settled) => route = settled,
                 None => return Ok(self.unknown_host(&host, peer.ip(), format)),
             }
@@ -559,6 +598,7 @@ impl Proxy {
             && !route.remote
             && let Some(thaw) = activity.request(owner)
         {
+            let waiting = Instant::now();
             tokio::select! {
                 _ = shutdown.cancelled() => {}
                 waited = tokio::time::timeout(self.limits.thaw_wait, thaw) => {
@@ -567,6 +607,12 @@ impl Proxy {
                     }
                 }
             }
+            timings.wait += waiting.elapsed();
+        }
+        if route.remote
+            && let (Some(latency), Some(owner)) = (&self.config.latency, &route.owner)
+        {
+            timings.tunnel = latency.round_trip(owner);
         }
         let upgrading = header_has_token(request.headers(), header::CONNECTION, "upgrade")
             && request.headers().contains_key(header::UPGRADE);
@@ -633,6 +679,9 @@ impl Proxy {
         } else {
             self.pool.take(&pool_key)
         };
+        // Restarted before the send that answers, so a failed attempt on a
+        // pooled connection counts as the proxy's own time.
+        let mut sending = Instant::now();
         let (connection, sent) = match pooled {
             Some(mut connection) => {
                 set_upstream_host(&mut request, route.host_header, &connection);
@@ -643,9 +692,13 @@ impl Proxy {
                     Err(mut error) => match error.take_message() {
                         Some(unsent) => {
                             request = unsent;
-                            match self.connect_retrying(&host, target, &shutdown).await {
+                            let dialing = Instant::now();
+                            let dialed = self.connect_retrying(&host, target, &shutdown).await;
+                            timings.connect = Some(dialing.elapsed());
+                            match dialed {
                                 Ok(mut fresh) => {
                                     set_upstream_host(&mut request, route.host_header, &fresh);
+                                    sending = Instant::now();
                                     let sent = fresh.sender.send_request(request).await;
                                     (fresh, sent)
                                 }
@@ -662,18 +715,25 @@ impl Proxy {
                     },
                 }
             }
-            None => match self.connect_retrying(&host, target, &shutdown).await {
-                Ok(mut connection) => {
-                    set_upstream_host(&mut request, route.host_header, &connection);
-                    let sent = connection.sender.send_request(request).await;
-                    (connection, sent)
+            None => {
+                let dialing = Instant::now();
+                let dialed = self.connect_retrying(&host, target, &shutdown).await;
+                timings.connect = Some(dialing.elapsed());
+                match dialed {
+                    Ok(mut connection) => {
+                        set_upstream_host(&mut request, route.host_header, &connection);
+                        sending = Instant::now();
+                        let sent = connection.sender.send_request(request).await;
+                        (connection, sent)
+                    }
+                    Err(error) => {
+                        tracing::debug!(%error, host = %route.host, "upstream dial failed");
+                        return Ok(unavailable());
+                    }
                 }
-                Err(error) => {
-                    tracing::debug!(%error, host = %route.host, "upstream dial failed");
-                    return Ok(unavailable());
-                }
-            },
+            }
         };
+        timings.upstream = Some(sending.elapsed());
         let mut response = match sent {
             Ok(response) => response,
             Err(error) => {

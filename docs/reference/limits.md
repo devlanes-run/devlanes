@@ -29,7 +29,6 @@ What devlanes does not do, with the issue that tracks each limit. An empty Issue
 | No public DNS name points at a lane. | |
 | The CA is not installed in iOS simulators or Android emulators. | |
 | Cookies, storage and saved passwords cannot be shared between lanes. | [#190](https://github.com/devlanes-run/devlanes/issues/190) |
-| The proxy adds no `Server-Timing` header. | [#141](https://github.com/devlanes-run/devlanes/issues/141) |
 
 ## Remote boxes
 

@@ -31,6 +31,7 @@ async fn serve(shutdown: CancellationToken) -> Result<(), Box<dyn std::error::Er
 - `ScopedPorts::open` serves one extra HTTPS port on loopback with only the routes whose `listen_port` names it (a box's own HTTPS port); `close` resolves once its sockets are gone.
 - `Proxy::with_limits` replaces the default `ProxyLimits` (connection cap, header and idle timeouts, how long requests wait for starting services, reconnecting boxes and thawing lanes, how long refused connections are retried).
 - `LaneActivity`, set as `ProxyConfig::activity`, hears about forwarded requests and client bytes on upgraded streams per route owner, and can hold a request until the lane thaws (at most `thaw_wait`).
+- `BoxLatency`, set as `ProxyConfig::latency`, gives the latest round trip to the box behind a remote route, for `Server-Timing`.
 
 ## Config example
 
@@ -51,7 +52,7 @@ Host is preserved unless a route selects `HostHeader::Upstream`. `Upstream::Loca
 
 Routes marked `fallback` apply only when no other route matches, even an exact fallback route against a wildcard. Within each group an exact host beats the longest matching wildcard.
 
-The proxy replaces `Forwarded` and the `X-Forwarded-*` headers and drops client-sent `X-Real-IP`, `X-Forwarded-Ssl`, `X-Forwarded-Scheme`, `X-Forwarded-Prefix`, `X-Forwarded-Server`, `X-Original-URL` and `Front-End-Https`. Upstream apps always connect from loopback, so with `lan: true` they see 127.0.0.1 as the peer address and must read the client address from `X-Forwarded-For` or `Forwarded`. Forwarded responses get `Via: 1.1 devlanes.run`, or `1.1 devlanes.run (remote)` for box routes, unless `ProxyConfig::via` is off.
+The proxy replaces `Forwarded` and the `X-Forwarded-*` headers and drops client-sent `X-Real-IP`, `X-Forwarded-Ssl`, `X-Forwarded-Scheme`, `X-Forwarded-Prefix`, `X-Forwarded-Server`, `X-Original-URL` and `Front-End-Https`. Upstream apps always connect from loopback, so with `lan: true` they see 127.0.0.1 as the peer address and must read the client address from `X-Forwarded-For` or `Forwarded`. Forwarded responses get `Via: 1.1 devlanes.run`, or `1.1 devlanes.run (remote)` for box routes, unless `ProxyConfig::via` is off. Every response but a 101 gets a `Server-Timing` field after the service's own, unless `ProxyConfig::server_timing` is off: `devlanes` (the proxy's time), `devlanes-wait`, `devlanes-connect`, `devlanes-upstream` (request sent to response head) and, for box routes, `devlanes-tunnel` from `BoxLatency`.
 
 When the proxy answers itself, the response carries `x-devlanes-error` with the error's slug, and the body is HTML or Markdown depending on `Accept`. Failure pages include the service's log tail only for loopback clients. Unknown-host pages list the routed hostnames only for loopback clients requesting `localhost`, an IP or a `.localhost` name, which no DNS-rebinding page can use as its origin. A request to a starting route or a reconnecting box waits for the route to turn ready before it gets a page, and refused connections to a ready route are retried for a few seconds; neither can send a request twice. Plain HTTP to a known route gets an empty 308 to HTTPS. In HTTP/1, an absolute-form target overrides a conflicting Host.
 

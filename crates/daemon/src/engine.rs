@@ -61,6 +61,8 @@ pub struct EngineOptions {
     /// Lane activity shared with the proxy, which records requests in it and
     /// waits on it for frozen lanes to thaw.
     pub idle: Arc<crate::idle::IdleBoard>,
+    /// Box round trips the proxy reads for `Server-Timing`; the engine binds it.
+    pub round_trips: Arc<crate::remote::BoxRoundTrips>,
     /// The lanes a replacing daemon starts once it announced readiness (a
     /// `daemon restart`). Kept in memory only and dropped once used: it
     /// carries the restarting client's environment.
@@ -86,6 +88,7 @@ impl std::fmt::Debug for EngineOptions {
             .field("update_check", &self.update_check)
             .field("idle_exit", &self.idle_exit)
             .field("idle", &self.idle)
+            .field("round_trips", &self.round_trips)
             .field("resume", &self.resume.as_ref().map(|plan| plan.lanes.len()))
             .field("ci", &self.ci)
             .finish()
@@ -108,6 +111,7 @@ impl EngineOptions {
             update_check: crate::update::UpdateCheckOptions::from_env(),
             idle_exit: None,
             idle: Arc::default(),
+            round_trips: Arc::default(),
             resume: None,
             ci: false,
         }
@@ -187,7 +191,7 @@ impl Engine {
         let resume = opts.resume.take();
         // The listener bound before the engine was built, so its port is fixed.
         let https_port = integ.routes.https_port();
-        Self {
+        let engine = Self {
             inner: Arc::new_cyclic(|me| Inner {
                 me: me.clone(),
                 clock: crate::units::FactsClock::default(),
@@ -216,7 +220,10 @@ impl Engine {
                 watched: AtomicBool::new(false),
                 resume: Mutex::new(resume),
             }),
-        }
+        };
+        let inner = &engine.inner;
+        inner.opts.round_trips.bind(inner.me.clone());
+        engine
     }
 }
 

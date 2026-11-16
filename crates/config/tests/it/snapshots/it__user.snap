@@ -29,7 +29,8 @@ expression: user
     "https_port": 443,
     "http_port": 80,
     "lan": false,
-    "via": true
+    "via": true,
+    "server_timing": true
   },
   "logs": {
     "retention": {
