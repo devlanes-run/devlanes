@@ -1,5 +1,9 @@
 # devlanes-resolve
 
+## 0.13.1 — 2026-11-16
+
+Version bump only, to follow other packages.
+
 ## 0.13.0 — 2026-11-09
 
 ### Minor changes

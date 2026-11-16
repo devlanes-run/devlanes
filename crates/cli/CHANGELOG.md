@@ -1,5 +1,11 @@
 # devlanes-cli
 
+## 0.13.1 — 2026-11-16
+
+### Patch changes
+
+- [9f3f2500](https://github.com/devlanes-run/devlanes/commit/9f3f2500338b7170deeb1ae232b9c92eb6099b17) Fixed the OpenCode and Cursor registration lines that `devlanes mcp --help` prints.
+
 ## 0.13.0 — 2026-11-09
 
 ### Minor changes

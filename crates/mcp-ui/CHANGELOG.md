@@ -1,5 +1,9 @@
 # devlanes-mcp-ui
 
+## 0.3.1 — 2026-11-16
+
+Version bump only, to follow other packages.
+
 ## 0.3.0 — 2026-11-09
 
 ### Patch changes
