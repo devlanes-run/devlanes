@@ -65,7 +65,15 @@ Then install devlanes on this machine if it is missing, set it up for
 this repository, start it and give me the URL of each service.
 ```
 
-Or install it yourself, on macOS and Linux:
+Or install it yourself, with the package manager you already use:
+
+```sh
+brew install devlanes-run/tap/devlanes
+npm install -g devlanes
+uv tool install devlanes
+```
+
+Or with the install script, on macOS and Linux:
 
 ```sh
 curl -fsSL https://devlanes.run/install.sh | sh
@@ -77,7 +85,9 @@ On Windows 11:
 irm https://devlanes.run/install.ps1 | iex
 ```
 
-Homebrew, npm, uv and cargo work too. [Install devlanes](https://devlanes.run/docs/install/) has them, along with the steps that follow the install.
+[Install devlanes](https://devlanes.run/docs/install/) has the steps that follow the install.
+
+devlanes tells you when a newer release is out, and `devlanes update` installs it the way you installed devlanes. With `updates.mode: auto` in your user config, patch releases install in the background with nothing to confirm, and apply the next time you start devlanes.
 
 ## A project in one file
 

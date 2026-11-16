@@ -19,6 +19,36 @@ HTTPS certificates and hostnames, and check the machine with
 
 ## Install the command
 
+devlanes runs on macOS, on Linux with glibc, and on Windows 11 version 24H2 or later with [Git for Windows](https://gitforwindows.org). Install it with the package manager you already use.
+
+::::tabs{sync="install"}
+:::tab[Homebrew]
+```console
+$ brew install devlanes-run/tap/devlanes
+```
+
+Homebrew has builds for macOS and Linux.
+:::
+:::tab[npm]
+```console
+$ npm install -g devlanes
+```
+:::
+:::tab[uv]
+```console
+$ uv tool install devlanes
+```
+:::
+:::tab[cargo]
+```console
+$ cargo binstall --git https://github.com/devlanes-run/devlanes devlanes
+$ cargo binstall --git https://github.com/devlanes-run/devlanes devlanes-hosts-helper
+```
+:::
+::::
+
+## Or use the install script
+
 ::::tabs{sync="os"}
 :::tab[macOS]
 ```console
@@ -29,15 +59,13 @@ $ curl -fsSL https://devlanes.run/install.sh | sh
 ```console
 $ curl -fsSL https://devlanes.run/install.sh | sh
 ```
-
-The Linux build needs glibc, so Alpine and other musl systems are not supported.
 :::
 :::tab[Windows]
 ```console
 PS> irm https://devlanes.run/install.ps1 | iex
 ```
 
-Open a new terminal afterwards. devlanes needs Windows 11 version 24H2 or later and [Git for Windows](https://gitforwindows.org).
+Open a new terminal afterwards.
 :::
 ::::
 
@@ -60,32 +88,6 @@ $ devlanes doctor
 ```
 
 The doctor checks what a first start depends on and prints a fix under each line that is off. A project with containers also needs Docker running.
-
-## If you use a package manager
-
-::::tabs{sync="install"}
-:::tab[Homebrew]
-```console
-$ brew install devlanes-run/tap/devlanes
-```
-:::
-:::tab[npm]
-```console
-$ npm install -g devlanes
-```
-:::
-:::tab[uv]
-```console
-$ uv tool install devlanes
-```
-:::
-:::tab[cargo]
-```console
-$ cargo binstall --git https://github.com/devlanes-run/devlanes devlanes
-$ cargo binstall --git https://github.com/devlanes-run/devlanes devlanes-hosts-helper
-```
-:::
-::::
 
 ## If you want shell completions
 

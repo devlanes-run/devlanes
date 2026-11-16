@@ -16,6 +16,21 @@ The command asks once, installs the latest release the way you installed devlane
 
 A box, a machine whose lanes are mirrored to yours, needs its own update: run the same command there. Two machines on releases with different protocols do not connect.
 
+## Let devlanes update itself
+
+Set [`updates.mode`](/docs/reference/config/user/updates/#updates-mode) to `auto` in the user config, then restart the daemon:
+
+```yaml devlanes-user
+updates:
+  mode: auto
+```
+
+```console
+$ devlanes daemon restart
+```
+
+Patch releases then install in the background, with nothing to confirm, where the way you installed devlanes allows it. They apply the next time you start devlanes at a terminal. A minor release still waits for `devlanes update`.
+
 ## Turn the update check off
 
 Set [`updates.mode`](/docs/reference/config/user/updates/) in the user config, then restart the daemon:
