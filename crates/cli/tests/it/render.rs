@@ -1608,6 +1608,24 @@ fn doctor_says_how_to_recreate_an_unconstrained_ca() {
 }
 
 #[test]
+fn doctor_reports_a_missing_java_trust_store() {
+    let data = json!({
+        "ca": {
+            "present": true, "path": "/x/ca.pem", "name_constrained": true, "hint": null,
+            "truststore_error": "trust store has no readable certificate",
+        },
+    });
+    let text = render_text(Method::Doctor, &data);
+    assert!(
+        text.contains("JVMs do not trust the CA: trust store has no readable certificate"),
+        "{text}"
+    );
+    assert!(text.contains("fix: devlanes daemon restart"), "{text}");
+    let written = json!({"ca": {"present": true, "path": "/x/ca.pem", "truststore_error": null}});
+    assert!(!render_text(Method::Doctor, &written).contains("JVMs"));
+}
+
+#[test]
 fn doctor_shows_release_facts_and_the_upgrade_command() {
     let release = |update_available: bool, daemon: &str| {
         json!({"release": {

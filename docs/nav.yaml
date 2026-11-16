@@ -24,6 +24,7 @@
         - how-to/projects/run-scripts
         - how-to/projects/runtimes
         - how-to/projects/vite-and-next
+        - how-to/projects/spring-boot-and-quarkus
         - how-to/projects/cloudflare-workers
         - how-to/projects/monorepo
         - how-to/projects/dev-and-prod

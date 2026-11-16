@@ -23,6 +23,15 @@ pub const CA_CERT_ENV: &str = "DEVLANES_CA_CERT";
 /// root. Runtimes that replace their roots, such as Python's `SSL_CERT_FILE`, point here.
 pub const CA_BUNDLE_ENV: &str = "DEVLANES_CA_BUNDLE";
 
+/// `ca_env` key holding the path of a PKCS#12 trust store with the same roots as
+/// [`CA_BUNDLE_ENV`], for JVMs, which cannot read PEM bundles. Its password is
+/// [`CA_TRUSTSTORE_PASSWORD`]. Absent when the store could not be written.
+pub const CA_TRUSTSTORE_ENV: &str = "DEVLANES_CA_TRUSTSTORE";
+
+/// Password of the [`CA_TRUSTSTORE_ENV`] store. Public on purpose: the store holds
+/// only public root certificates, and Java needs some password to check it.
+pub const CA_TRUSTSTORE_PASSWORD: &str = "changeit";
+
 /// Variables runtimes read for their roots, with the devlanes CA variable each
 /// points at: the certificate where a runtime adds roots, the bundle where it
 /// replaces them.
@@ -33,19 +42,70 @@ pub const RUNTIME_CA_ENV: [(&str, &str); 4] = [
     ("REQUESTS_CA_BUNDLE", CA_BUNDLE_ENV),
 ];
 
+/// Options every JVM reads at startup, build tool JVMs included. Quotes inside
+/// the value are honoured, so a quoted path may contain spaces.
+pub const JAVA_TOOL_OPTIONS: &str = "JAVA_TOOL_OPTIONS";
+
+/// System property whose presence in [`JAVA_TOOL_OPTIONS`] means the trust
+/// store is already chosen.
+const TRUST_STORE_PROPERTY: &str = "javax.net.ssl.trustStore=";
+
+/// Whether a `JAVA_TOOL_OPTIONS` value already names a trust store.
+pub fn java_options_set_trust_store(options: &str) -> bool {
+    options.contains(TRUST_STORE_PROPERTY)
+}
+
+/// `base` (the `JAVA_TOOL_OPTIONS` value already set, if any) followed by the
+/// flags that make a JVM trust the PKCS#12 store at `truststore`. `None` when
+/// `base` already names a trust store: the user chose it, and it may hold roots
+/// imported into the JDK's own `cacerts`.
+pub fn java_trust_options(base: Option<&str>, truststore: &str) -> Option<String> {
+    let base = base.map(str::trim).unwrap_or_default();
+    if java_options_set_trust_store(base) {
+        return None;
+    }
+    // HotSpot splits JAVA_TOOL_OPTIONS on whitespace and strips quotes inside a
+    // token, without backslash escapes, so Windows paths stay intact.
+    let path = if !truststore.contains(char::is_whitespace) {
+        truststore.to_owned()
+    } else if truststore.contains('"') {
+        format!("'{truststore}'")
+    } else {
+        format!("\"{truststore}\"")
+    };
+    let flags = format!(
+        "-D{TRUST_STORE_PROPERTY}{path} -Djavax.net.ssl.trustStoreType=PKCS12 \
+         -Djavax.net.ssl.trustStorePassword={CA_TRUSTSTORE_PASSWORD}"
+    );
+    Some(if base.is_empty() {
+        flags
+    } else {
+        format!("{base} {flags}")
+    })
+}
+
 /// Points the [`RUNTIME_CA_ENV`] variables at the devlanes CA paths in `ca`, for
 /// commands no platform contributor plans (`devlanes exec`, `devlanes with`).
-/// Names `is_set` reports are skipped: a value the shell set may name a CA the
-/// command needs as well.
-pub fn runtime_ca_env(
+/// `shell` returns the value a variable already has. Those variables are
+/// skipped, since a value the shell set may name a CA the command needs as
+/// well, except [`JAVA_TOOL_OPTIONS`], which keeps the shell's options and gains
+/// the trust store flags unless it already names a trust store.
+pub fn runtime_ca_env<'v>(
     ca: &BTreeMap<String, String>,
-    is_set: impl Fn(&str) -> bool,
+    shell: impl Fn(&str) -> Option<&'v str>,
 ) -> BTreeMap<String, String> {
-    RUNTIME_CA_ENV
+    let mut env: BTreeMap<String, String> = RUNTIME_CA_ENV
         .iter()
-        .filter(|(name, _)| !is_set(name))
+        .filter(|(name, _)| shell(name).is_none())
         .filter_map(|(name, source)| Some(((*name).to_owned(), ca.get(*source)?.clone())))
-        .collect()
+        .collect();
+    if let Some(options) = ca
+        .get(CA_TRUSTSTORE_ENV)
+        .and_then(|store| java_trust_options(shell(JAVA_TOOL_OPTIONS), store))
+    {
+        env.insert(JAVA_TOOL_OPTIONS.to_owned(), options);
+    }
+    env
 }
 
 /// Static service facts available before any expression is evaluated.
@@ -308,5 +368,58 @@ mod tests {
         assert_eq!(memo.get::<u32>("k").as_deref(), Some(&5));
         assert!(memo.get::<String>("k").is_none());
         assert!(memo.get::<u32>("missing").is_none());
+    }
+
+    #[test]
+    /// The trust flags extend the existing options, quote a path with spaces and
+    /// stay out when the options already name a trust store.
+    fn java_trust_options_compose() {
+        let flags =
+            "-Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit";
+        assert_eq!(
+            java_trust_options(None, "/ca/truststore.p12").as_deref(),
+            Some(format!("-Djavax.net.ssl.trustStore=/ca/truststore.p12 {flags}").as_str())
+        );
+        assert_eq!(
+            java_trust_options(Some("-Xmx1g "), r"C:\Users\Jane Doe\ca\truststore.p12").as_deref(),
+            Some(
+                format!(
+                    r#"-Xmx1g -Djavax.net.ssl.trustStore="C:\Users\Jane Doe\ca\truststore.p12" {flags}"#
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(
+            java_trust_options(Some("-Djavax.net.ssl.trustStore=/mine.jks"), "/ca/t.p12"),
+            None
+        );
+    }
+
+    #[test]
+    /// Shell values keep the CA variables out, but `JAVA_TOOL_OPTIONS` composes
+    /// onto the shell's value.
+    fn runtime_ca_env_composes_java_options() {
+        let ca = BTreeMap::from([
+            (CA_CERT_ENV.to_owned(), "/ca/ca.pem".to_owned()),
+            (CA_BUNDLE_ENV.to_owned(), "/ca/bundle.pem".to_owned()),
+            (
+                CA_TRUSTSTORE_ENV.to_owned(),
+                "/ca/truststore.p12".to_owned(),
+            ),
+        ]);
+        let shell = BTreeMap::from([
+            ("NODE_EXTRA_CA_CERTS", "/mine.pem"),
+            (JAVA_TOOL_OPTIONS, "-Xmx1g"),
+        ]);
+        let env = runtime_ca_env(&ca, |name| shell.get(name).copied());
+        assert!(!env.contains_key("NODE_EXTRA_CA_CERTS"));
+        assert_eq!(env["SSL_CERT_FILE"], "/ca/bundle.pem");
+        assert!(
+            env[JAVA_TOOL_OPTIONS]
+                .starts_with("-Xmx1g -Djavax.net.ssl.trustStore=/ca/truststore.p12 ")
+        );
+
+        let without_store = BTreeMap::from([(CA_CERT_ENV.to_owned(), "/ca/ca.pem".to_owned())]);
+        assert!(!runtime_ca_env(&without_store, |_| None).contains_key(JAVA_TOOL_OPTIONS));
     }
 }

@@ -1457,6 +1457,56 @@ async fn snapshot_minimal() {
 }
 
 #[tokio::test]
+/// A Java unit whose global or service env sets `JAVA_TOOL_OPTIONS` without a
+/// trust store gets a note saying the devlanes trust store is replaced.
+async fn java_options_from_config_env_get_a_note() {
+    let config = parse(
+        r#"
+project: demo
+global_env:
+  JAVA_TOOL_OPTIONS: -Xmx1g
+services:
+  global: { run: dev, platform: java }
+  own:
+    run: dev
+    platform: java
+    env: { JAVA_TOOL_OPTIONS: -Xss4m }
+  mine:
+    run: dev
+    platform: java
+    env: { JAVA_TOOL_OPTIONS: "-Djavax.net.ssl.trustStore=/mine.jks" }
+  web: { run: dev, platform: node }
+"#,
+    );
+    let facts = facts("demo", 1, None);
+    let (block, offsets) = allocation(&config, 21_000, &[]);
+    let ca = BTreeMap::from([(
+        "DEVLANES_CA_TRUSTSTORE".to_owned(),
+        "/ca/truststore.p12".to_owned(),
+    )]);
+    let mut input = ResolveInput::new(&config, &facts, block, &offsets);
+    input.ca_env = &ca;
+    let lane = resolve_lane(input).await.expect("resolves");
+    let notes = |unit: &str| lane.services[unit].launch.notes.clone();
+    assert!(
+        notes("global")
+            .iter()
+            .any(|n| n.starts_with("JAVA_TOOL_OPTIONS from global_env replaces")),
+        "{:?}",
+        notes("global")
+    );
+    assert!(
+        notes("own")
+            .iter()
+            .any(|n| n.starts_with("JAVA_TOOL_OPTIONS from the service env replaces")),
+        "{:?}",
+        notes("own")
+    );
+    assert!(notes("mine").is_empty(), "{:?}", notes("mine"));
+    assert!(notes("web").is_empty(), "{:?}", notes("web"));
+}
+
+#[tokio::test]
 /// `only` plans just the named units, each exactly as a full resolve does, and
 /// leaves the namespaces whole; no other unit reaches a script runner.
 async fn only_plans_the_named_units() {

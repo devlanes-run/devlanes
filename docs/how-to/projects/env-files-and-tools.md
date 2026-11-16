@@ -47,5 +47,5 @@ A service that loads `.env` itself keeps working. Most dotenv loaders leave a va
 
 - [Environment and expressions](../../concepts/environment.md)
 - [Keep personal changes out of Git](local-overrides.md)
-- [Run Node, Bun, Deno, Python, Rust and Go services](runtimes.md)
+- [Run a service in its runtime](runtimes.md)
 - [Expressions](../../reference/expressions.md)

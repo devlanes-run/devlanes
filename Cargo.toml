@@ -37,6 +37,9 @@ serde = { version = "1", features = ["derive"] }
 # here so per-crate and workspace builds don't disagree through feature unification.
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
+# Splits the `run_script` names of the Maven and Gradle runners and the JVM
+# contributors that inspect them.
+shell-words = "1"
 # Constant-time comparison of pairing codes and token hashes.
 subtle = "2.6"
 thiserror = "2"

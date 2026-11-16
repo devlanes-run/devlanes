@@ -1338,6 +1338,39 @@
       },
       "type": "object"
     },
+    "InjectedPresetOptions4": {
+      "additionalProperties": false,
+      "description": "Options for `preset: spring-boot`, which sets `SERVER_PORT` to the service's port, binds the app to 127.0.0.1, trusts the devlanes proxy's forwarded headers and turns off LiveReload, whose fixed port 35729 collides between lanes.",
+      "examples": [
+        {
+          "docker_compose": true
+        }
+      ],
+      "markdownDescription": "Options for `preset: spring-boot`, which sets `SERVER_PORT` to the service's port, binds the app to 127.0.0.1, trusts the devlanes proxy's forwarded headers and turns off LiveReload, whose fixed port 35729 collides between lanes.",
+      "properties": {
+        "docker_compose": {
+          "description": "Lets Spring Boot's own Docker Compose support (`spring-boot-docker-compose`) start the project's compose file. Default: `false`, which sets `SPRING_DOCKER_COMPOSE_ENABLED=false`: devlanes already runs the project's containers per lane or shared, and Spring's support would start a second copy for every worktree. Set `true` only when devlanes does not manage those containers.",
+          "examples": [
+            true
+          ],
+          "markdownDescription": "Lets Spring Boot's own Docker Compose support (`spring-boot-docker-compose`) start the project's compose file. Default: `false`, which sets `SPRING_DOCKER_COMPOSE_ENABLED=false`: devlanes already runs the project's containers per lane or shared, and Spring's support would start a second copy for every worktree. Set `true` only when devlanes does not manage those containers.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "InjectedPresetOptions5": {
+      "additionalProperties": false,
+      "description": "Options for `preset: quarkus`, which sets the HTTP port and host, lets continuous testing pick a free port and moves the dev-mode debugger from 5005 to `self.ports.debug`, so two lanes can run dev mode side by side. The preset has no settings, so the key can be left out.",
+      "examples": [
+        {}
+      ],
+      "markdownDescription": "Options for `preset: quarkus`, which sets the HTTP port and host, lets continuous testing pick a free port and moves the dev-mode debugger from 5005 to `self.ports.debug`, so two lanes can run dev mode side by side. The preset has no settings, so the key can be left out.",
+      "type": "object"
+    },
     "LanesConfig": {
       "additionalProperties": false,
       "description": "Each Git worktree of the project is a lane with its own ports, hostnames and data. These settings decide which worktrees get a lane, how many ports each lane reserves, and the values each lane computes.",
@@ -1693,23 +1726,23 @@
         },
         "run_scripts": {
           "additionalProperties": {
-            "description": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained.",
+            "description": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained. The whole `name` is matched, so a Maven or Gradle `name` such as `spring-boot:run -Pdev` is swapped only by that exact text.",
             "examples": [
               "start"
             ],
-            "markdownDescription": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained.",
+            "markdownDescription": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained. The whole `name` is matched, so a Maven or Gradle `name` such as `spring-boot:run -Pdev` is swapped only by that exact text.",
             "minLength": 1,
             "pattern": "\\S",
             "type": "string"
           },
           "default": {},
-          "description": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained.",
+          "description": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained. The whole `name` is matched, so a Maven or Gradle `name` such as `spring-boot:run -Pdev` is swapped only by that exact text.",
           "examples": [
             {
               "dev": "start"
             }
           ],
-          "markdownDescription": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained.",
+          "markdownDescription": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained. The whole `name` is matched, so a Maven or Gradle `name` such as `spring-boot:run -Pdev` is swapped only by that exact text.",
           "propertyNames": {
             "minLength": 1,
             "pattern": "\\S",
@@ -1953,7 +1986,7 @@
     },
     "RunScript": {
       "additionalProperties": false,
-      "description": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, Taskfile.yml (task), deno.json, pyproject.toml (uv or poetry), Cargo.toml (a binary) and go.mod (a main package). In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
+      "description": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, Taskfile.yml (task), deno.json, pyproject.toml (uv or poetry), Cargo.toml (a binary), go.mod (a main package), pom.xml (Maven goals) and build.gradle, build.gradle.kts, settings.gradle or settings.gradle.kts (Gradle tasks). Maven and Gradle use the project's wrapper (`mvnw`, `gradlew`) when one exists. In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
       "examples": [
         {
           "file": "apps/api/package.json",
@@ -1962,27 +1995,35 @@
         {
           "file": "justfile",
           "name": "fixtures"
+        },
+        {
+          "file": "services/web/pom.xml",
+          "name": "spring-boot:run -Pdev"
         }
       ],
-      "markdownDescription": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, Taskfile.yml (task), deno.json, pyproject.toml (uv or poetry), Cargo.toml (a binary) and go.mod (a main package). In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
+      "markdownDescription": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, Taskfile.yml (task), deno.json, pyproject.toml (uv or poetry), Cargo.toml (a binary), go.mod (a main package), pom.xml (Maven goals) and build.gradle, build.gradle.kts, settings.gradle or settings.gradle.kts (Gradle tasks). Maven and Gradle use the project's wrapper (`mvnw`, `gradlew`) when one exists. In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
       "properties": {
         "file": {
           "description": "File that defines the script, relative to the project file's directory, such as `apps/api/package.json`. The script runs in this file's directory. Required unless an override or `extends` child keeps the inherited file.",
           "examples": [
             "apps/api/package.json",
             "Makefile",
-            "justfile"
+            "justfile",
+            "pom.xml",
+            "build.gradle.kts"
           ],
           "markdownDescription": "File that defines the script, relative to the project file's directory, such as `apps/api/package.json`. The script runs in this file's directory. Required unless an override or `extends` child keeps the inherited file.",
           "type": "string"
         },
         "name": {
-          "description": "Script, target, recipe, task, binary or package name in that file. For go.mod, a bare name such as `api` means `./cmd/api`, and `.` or a path with `/` is relative to go.mod. Required unless an override or `extends` child keeps the inherited name.",
+          "description": "Script, target, recipe, task, binary or package name in that file. For go.mod, a bare name such as `api` means `./cmd/api`, and `.` or a path with `/` is relative to go.mod. For pom.xml and Gradle files it is the arguments as typed after `mvn` or `gradle`, such as `-pl web -am spring-boot:run` or `:web:bootRun`; quote an argument that contains spaces, as in a shell. It must name at least one goal or task. Required unless an override or `extends` child keeps the inherited name.",
           "examples": [
             "dev",
-            "fixtures"
+            "fixtures",
+            "spring-boot:run -Pdev",
+            ":web:bootRun --offline"
           ],
-          "markdownDescription": "Script, target, recipe, task, binary or package name in that file. For go.mod, a bare name such as `api` means `./cmd/api`, and `.` or a path with `/` is relative to go.mod. Required unless an override or `extends` child keeps the inherited name.",
+          "markdownDescription": "Script, target, recipe, task, binary or package name in that file. For go.mod, a bare name such as `api` means `./cmd/api`, and `.` or a path with `/` is relative to go.mod. For pom.xml and Gradle files it is the arguments as typed after `mvn` or `gradle`, such as `-pl web -am spring-boot:run` or `:web:bootRun`; quote an argument that contains spaces, as in a shell. It must name at least one goal or task. Required unless an override or `extends` child keeps the inherited name.",
           "type": "string"
         }
       },
@@ -2088,6 +2129,44 @@
                   "tauri"
                 ],
                 "markdownDescription": "`tauri` options require `preset: tauri`."
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "spring-boot"
+            ]
+          },
+          "then": {
+            "properties": {
+              "preset": {
+                "const": "spring-boot",
+                "description": "`spring-boot` options require `preset: spring-boot`.",
+                "examples": [
+                  "spring-boot"
+                ],
+                "markdownDescription": "`spring-boot` options require `preset: spring-boot`."
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "quarkus"
+            ]
+          },
+          "then": {
+            "properties": {
+              "preset": {
+                "const": "quarkus",
+                "description": "`quarkus` options require `preset: quarkus`.",
+                "examples": [
+                  "quarkus"
+                ],
+                "markdownDescription": "`quarkus` options require `preset: quarkus`."
               }
             }
           }
@@ -2265,7 +2344,7 @@
           "markdownDescription": "Options for `preset: next`, which adds `--port <self.port> --hostname 127.0.0.1` to the `next dev` command. Without the hostname flag Next listens on `0.0.0.0` instead of loopback."
         },
         "platform": {
-          "description": "Runtime of the service: `node`, `bun`, `deno`, `python`, `rust` or `go`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong. `none` skips detection and adds no platform variables.",
+          "description": "Runtime of the service: `node`, `bun`, `deno`, `python`, `rust`, `go` or `java`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, a trust store in `JAVA_TOOL_OPTIONS`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong, such as `java` for a `java -jar` command in a folder without a `pom.xml` or Gradle file. `none` skips detection and adds no platform variables.",
           "examples": [
             "node",
             "bun",
@@ -2273,29 +2352,34 @@
             "python",
             "rust",
             "go",
+            "java",
             "none"
           ],
-          "markdownDescription": "Runtime of the service: `node`, `bun`, `deno`, `python`, `rust` or `go`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong. `none` skips detection and adds no platform variables.",
+          "markdownDescription": "Runtime of the service: `node`, `bun`, `deno`, `python`, `rust`, `go` or `java`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, a trust store in `JAVA_TOOL_OPTIONS`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong, such as `java` for a `java -jar` command in a folder without a `pom.xml` or Gradle file. `none` skips detection and adds no platform variables.",
           "type": [
             "string",
             "null"
           ]
         },
         "preset": {
-          "description": "Framework integration that adds the flags and variables a dev server needs to run in a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite`, so you do not pass them yourself. Requires `run_script`; with a hand-written `run`, drop the preset and pass its flags yourself. Its options go under a sibling key with the preset's name, for example `vite: { args: [--open] }`.",
+          "description": "Framework integration that adds the flags and variables a dev server needs to run in a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite` or `SERVER_PORT` for `spring-boot`, so you do not pass them yourself. One of `vite`, `next`, `wrangler`, `tauri`, `spring-boot` or `quarkus`. Requires `run_script` (`quarkus` needs a `pom.xml` or `build.gradle(.kts)` one); with a hand-written `run`, drop the preset and pass its flags yourself. Its options go under a sibling key with the preset's name, for example `vite: { args: [--open] }`.",
           "enum": [
             "vite",
             "next",
             "wrangler",
-            "tauri"
+            "tauri",
+            "spring-boot",
+            "quarkus"
           ],
           "examples": [
             "vite",
             "next",
             "wrangler",
-            "tauri"
+            "tauri",
+            "spring-boot",
+            "quarkus"
           ],
-          "markdownDescription": "Framework integration that adds the flags and variables a dev server needs to run in a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite`, so you do not pass them yourself. Requires `run_script`; with a hand-written `run`, drop the preset and pass its flags yourself. Its options go under a sibling key with the preset's name, for example `vite: { args: [--open] }`.",
+          "markdownDescription": "Framework integration that adds the flags and variables a dev server needs to run in a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite` or `SERVER_PORT` for `spring-boot`, so you do not pass them yourself. One of `vite`, `next`, `wrangler`, `tauri`, `spring-boot` or `quarkus`. Requires `run_script` (`quarkus` needs a `pom.xml` or `build.gradle(.kts)` one); with a hand-written `run`, drop the preset and pass its flags yourself. Its options go under a sibling key with the preset's name, for example `vite: { args: [--open] }`.",
           "type": [
             "string",
             "null"
@@ -2319,6 +2403,14 @@
             false
           ],
           "markdownDescription": "Run the service in a pseudoterminal, so it sees a terminal as it would in your shell and you can type into it from the TUI. Set false to use pipes instead: stdin is empty and stdout and stderr are read separately. Defaults to true."
+        },
+        "quarkus": {
+          "$ref": "#/$defs/InjectedPresetOptions5",
+          "description": "Options for `preset: quarkus`, which sets the HTTP port and host, lets continuous testing pick a free port and moves the dev-mode debugger from 5005 to `self.ports.debug`, so two lanes can run dev mode side by side. The preset has no settings, so the key can be left out.",
+          "examples": [
+            {}
+          ],
+          "markdownDescription": "Options for `preset: quarkus`, which sets the HTTP port and host, lets continuous testing pick a free port and moves the dev-mode debugger from 5005 to `self.ports.debug`, so two lanes can run dev mode side by side. The preset has no settings, so the key can be left out."
         },
         "ready": {
           "anyOf": [
@@ -2397,7 +2489,7 @@
               "type": "null"
             }
           ],
-          "description": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file name (`package.json`, `Makefile`, `justfile`, `Taskfile.yml`, `deno.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`), runs the script in that file's directory and checks that it exists before starting. Presets need it to place their flags, and a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied.",
+          "description": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file name (`package.json`, `Makefile`, `justfile`, `Taskfile.yml`, `deno.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle(.kts)`, `settings.gradle(.kts)`), runs the script in that file's directory and checks that it exists before starting. For Maven and Gradle, `name` is the arguments as typed after `mvn` or `gradle`, and Maven or Gradle reports a goal or task that does not exist. Presets need it to place their flags, and a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied.",
           "examples": [
             {
               "file": "apps/api/package.json",
@@ -2406,9 +2498,23 @@
             {
               "file": "justfile",
               "name": "fixtures"
+            },
+            {
+              "file": "services/web/pom.xml",
+              "name": "spring-boot:run -Pdev"
             }
           ],
-          "markdownDescription": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file name (`package.json`, `Makefile`, `justfile`, `Taskfile.yml`, `deno.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`), runs the script in that file's directory and checks that it exists before starting. Presets need it to place their flags, and a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied."
+          "markdownDescription": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file name (`package.json`, `Makefile`, `justfile`, `Taskfile.yml`, `deno.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle(.kts)`, `settings.gradle(.kts)`), runs the script in that file's directory and checks that it exists before starting. For Maven and Gradle, `name` is the arguments as typed after `mvn` or `gradle`, and Maven or Gradle reports a goal or task that does not exist. Presets need it to place their flags, and a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied."
+        },
+        "spring-boot": {
+          "$ref": "#/$defs/InjectedPresetOptions4",
+          "description": "Options for `preset: spring-boot`, which sets `SERVER_PORT` to the service's port, binds the app to 127.0.0.1, trusts the devlanes proxy's forwarded headers and turns off LiveReload, whose fixed port 35729 collides between lanes.",
+          "examples": [
+            {
+              "docker_compose": true
+            }
+          ],
+          "markdownDescription": "Options for `preset: spring-boot`, which sets `SERVER_PORT` to the service's port, binds the app to 127.0.0.1, trusts the devlanes proxy's forwarded headers and turns off LiveReload, whose fixed port 35729 collides between lanes."
         },
         "stop": {
           "anyOf": [
@@ -2999,6 +3105,10 @@
             {
               "file": "justfile",
               "name": "fixtures"
+            },
+            {
+              "file": "services/web/pom.xml",
+              "name": "spring-boot:run -Pdev"
             }
           ],
           "markdownDescription": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: migrate }`. It runs with that file's tool (the project's package manager for package.json) in the file's directory, and a missing script fails before anything starts. Prefer it to `run` for scripts that live in a file. Use exactly one of `run`, `run_script` or `steps`."

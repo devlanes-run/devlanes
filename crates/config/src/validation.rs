@@ -186,12 +186,21 @@ fn preset_script(
     let inherited = template
         .map(|name| format!(" (`preset` or `run` may come from template `{name}`)"))
         .unwrap_or_default();
-    Err(fail(
-        &format!("{path}.run"),
+    // JVM presets mostly set variables and run through Maven or Gradle, so their hint
+    // shows a pom.xml goal and points at their own page.
+    let jvm = |goal: &str| {
         format!(
+            "`preset: {preset}` needs run_script, such as `run_script: {{ file: pom.xml, name: {goal} }}`, so the preset can pass its settings to the build tool; to keep this command, remove `preset` and set the preset's variables in `env` yourself (https://devlanes.run/docs/how-to/projects/spring-boot-and-quarkus/ lists them){inherited}"
+        )
+    };
+    let message = match preset {
+        "spring-boot" => jvm("spring-boot:run"),
+        "quarkus" => jvm("quarkus:dev"),
+        _ => format!(
             "`preset: {preset}` needs run_script, such as `run_script: {{ file: apps/web/package.json, name: dev }}`, so the preset can place its flags; to keep this command, remove `preset` and add the preset's flags to `run` yourself (https://devlanes.run/docs/how-to/projects/vite-and-next/ lists them){inherited}"
         ),
-    ))
+    };
+    Err(fail(&format!("{path}.run"), message))
 }
 
 /// Ensure readiness is a single mechanism rather than an ambiguous combination.

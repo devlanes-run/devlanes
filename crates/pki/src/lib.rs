@@ -9,6 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod truststore;
+
+pub use truststore::{TrustStore, pkcs12_trust_store};
+
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose,
     GeneralSubtree, IsCa, Issuer, KeyPair, KeyUsagePurpose, NameConstraints, SanType,
@@ -59,6 +63,10 @@ pub enum Error {
     InvalidCa,
     #[error("certificate SAN list must contain valid DNS names")]
     InvalidNames,
+    #[error("trust store has no readable certificate")]
+    EmptyTrustStore,
+    #[error("trust store encoding failed: {0}")]
+    TrustStore(#[from] p12_keystore::error::Error),
 }
 
 /// Owns an ECDSA signing key without exposing it through Debug or accessors.

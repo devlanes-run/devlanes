@@ -13,10 +13,11 @@ use devlanes_core::{
     StopPolicy, StopSignal,
     color::unit_color,
     contrib::{
-        ContribCx, ContribMemo, Contributor, DetectCx, DraftCommand, LaunchDraft, ScriptInfo,
-        ScriptPlan, ScriptRequest, ScriptRunner, UnitKind,
+        CA_TRUSTSTORE_ENV, ContribCx, ContribMemo, Contributor, DetectCx, DraftCommand,
+        JAVA_TOOL_OPTIONS, LaunchDraft, ScriptInfo, ScriptPlan, ScriptRequest, ScriptRunner,
+        UnitKind, java_options_set_trust_store,
     },
-    env::{EnvLayer, assemble},
+    env::{EnvLayer, Environment, assemble},
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -729,6 +730,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
             (EnvLayer::Override, input.overrides.clone()),
         ]);
         prepend_path(&mut env, &script_path);
+        notes.extend(java_options_note(platform.as_deref(), input.ca_env, &env));
         Ok(Launch {
             program: program.clone(),
             args: rest.to_vec(),
@@ -830,6 +832,33 @@ impl<E: Extensions> Planner<'_, '_, E> {
         }
         Ok(specs)
     }
+}
+
+/// A note for a Java unit whose `JAVA_TOOL_OPTIONS` from the global, service or
+/// profile env replaced the trust store flags the Java contributor added, since
+/// those layers win over contributors. Not for `--env` overrides, which the user
+/// typed for this one launch.
+fn java_options_note(
+    platform: Option<&str>,
+    ca_env: &BTreeMap<String, String>,
+    env: &Environment,
+) -> Option<String> {
+    if platform != Some("java") || !ca_env.contains_key(CA_TRUSTSTORE_ENV) {
+        return None;
+    }
+    let layer = match env.sources.get(JAVA_TOOL_OPTIONS)? {
+        EnvLayer::Global => "global_env",
+        EnvLayer::Service => "the service env",
+        EnvLayer::Profile => "the profile env",
+        _ => return None,
+    };
+    let value = env.values.get(JAVA_TOOL_OPTIONS)?;
+    (!java_options_set_trust_store(value)).then(|| {
+        format!(
+            "JAVA_TOOL_OPTIONS from {layer} replaces the devlanes trust store, so this JVM does not trust devlanes HTTPS; \
+             pass the application's JVM flags another way, such as -Dspring-boot.run.jvmArguments with Maven or JAVA_OPTS for scripts that read it"
+        )
+    })
 }
 
 /// Asks every platform contributor to claim a unit without `platform` and keeps

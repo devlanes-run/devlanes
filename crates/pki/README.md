@@ -25,6 +25,7 @@ CA loading performs blocking filesystem I/O. Run it on a blocking thread when ca
 - `CertificateAuthority::from_mkcert` loads an existing mkcert CAROOT without invoking mkcert.
 - `certificate_pem` and `certificate_der` expose the public root for trust configuration.
 - `combined_bundle` appends the root to caller-supplied PEM roots without writing a file.
+- `pkcs12_trust_store` encodes PEM roots as a PKCS#12 trust store for JVMs, listing the certificates it skipped instead of failing.
 - `CertificatePolicy::lookup` supplies authorized SANs, the owning `project@lane` and a route generation for cache invalidation.
 
 ## Config example
@@ -43,6 +44,10 @@ With `mkcert`, the daemon loads mkcert's root from `mkcert -CAROOT` through `Cer
 New CA directories use mode `0700`; key files use `0600`. Loading rejects mismatched pairs and a certificate without its key. The key is written before the certificate, so a key without a certificate is treated as an interrupted creation and replaced by a new CA. This crate does not modify system trust stores.
 
 On Windows a new CA directory gets an explicit owner and an access list for the user, SYSTEM and Administrators that its files inherit. An existing directory, the key and the lock file must already be owned by the user, grant no other account access and be no symlink or junction; the key must also have a single hard link. `Error::InsecurePath` then names the path, the problem and, for access lists, the `icacls` command that fixes it.
+
+## Java trust stores
+
+Every certificate in a `pkcs12_trust_store` carries the Oracle trusted-key-usage attribute, without which Java ignores certificate bags. The store uses 3DES and an HMAC-SHA1 MAC, which JDK 8 before 8u301 and JDK 11 before 11.0.12 still read. It needs a password because the encoder cannot write an unprotected store; the store holds only public certificates.
 
 ## Name constraints
 

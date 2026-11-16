@@ -1171,6 +1171,7 @@ async fn exec_gets_the_lane_environment() {
             ca_env: [
                 ("DEVLANES_CA_CERT", "/ca/ca.pem"),
                 ("DEVLANES_CA_BUNDLE", "/ca/bundle.pem"),
+                ("DEVLANES_CA_TRUSTSTORE", "/ca/truststore.p12"),
             ]
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .into(),
@@ -1184,6 +1185,8 @@ async fn exec_gets_the_lane_environment() {
         )
         .await
         .expect("exec");
+        let java = "-Djavax.net.ssl.trustStore=/ca/truststore.p12 \
+                    -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit";
         let env = explained(&h, "tool", cx(&main)).await;
         let entry = |key: &str| env.get(key).map(|(v, l)| (v.as_str(), l.as_str()));
         assert_eq!(entry("GREETING"), Some(("hi-main", "global")));
@@ -1195,12 +1198,14 @@ async fn exec_gets_the_lane_environment() {
             entry("SSL_CERT_FILE"),
             Some(("/ca/bundle.pem", "contributor"))
         );
+        assert_eq!(entry("JAVA_TOOL_OPTIONS"), Some((java, "contributor")));
         assert_eq!(entry("PATH").map(|(_, layer)| layer), Some("client"));
         assert_eq!(entry("PER"), None);
 
         let mut shell = cx(&main);
         if let Some(env) = shell.env.as_mut() {
             env.insert("NODE_EXTRA_CA_CERTS".into(), "/mine.pem".into());
+            env.insert("JAVA_TOOL_OPTIONS".into(), "-Xmx1g".into());
         }
         h.call(
             Method::Exec,
@@ -1213,6 +1218,11 @@ async fn exec_gets_the_lane_environment() {
         assert_eq!(
             env.get("NODE_EXTRA_CA_CERTS").map(|(v, _)| v.as_str()),
             Some("/mine.pem")
+        );
+        let composed = format!("-Xmx1g {java}");
+        assert_eq!(
+            env.get("JAVA_TOOL_OPTIONS").map(|(v, _)| v.as_str()),
+            Some(composed.as_str())
         );
 
         // The lane's env (`env export`, `with`) sets the CA variables the

@@ -37,6 +37,7 @@ A unit's output is kept until it is older than `logs.retention.days` (default 7)
 | `ca/ca.pem` | The root certificate. It can only sign names for local development. |
 | `ca/ca-key.pem` | The root's private key, readable by your account only. |
 | `ca/bundle.pem` | The system's root certificates and `ca.pem` in one file, for programs that replace their trust store instead of adding to it. |
+| `ca/truststore.p12` | The certificates of `bundle.pem` as a PKCS#12 trust store for Java, with the password `changeit`. |
 
 ## Lane data folder
 

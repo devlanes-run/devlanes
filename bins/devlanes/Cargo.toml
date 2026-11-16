@@ -58,6 +58,8 @@ devlanes-testing = { path = "../../crates/testing" }
 devlanes-config = { path = "../../crates/config" }
 devlanes-preset-vite = { path = "../../crates/preset-vite" }
 devlanes-preset-next = { path = "../../crates/preset-next" }
+devlanes-preset-quarkus = { path = "../../crates/preset-quarkus" }
+devlanes-preset-spring-boot = { path = "../../crates/preset-spring-boot" }
 devlanes-preset-wrangler = { path = "../../crates/preset-wrangler" }
 devlanes-preset-tauri = { path = "../../crates/preset-tauri" }
 # Parses CHANGELOG.md into the notes this binary shows after an update.
@@ -93,16 +95,21 @@ devlanes-metrics-linux = { path = "../../crates/metrics-linux" }
 devlanes-metrics-macos = { path = "../../crates/metrics-macos" }
 devlanes-metrics-windows = { path = "../../crates/metrics-windows" }
 devlanes-platform-node = { path = "../../crates/platform-node" }
+devlanes-platform-java = { path = "../../crates/platform-java" }
 devlanes-platform-python = { path = "../../crates/platform-python" }
 devlanes-run-script-cargo = { path = "../../crates/run-script-cargo" }
 devlanes-run-script-deno = { path = "../../crates/run-script-deno" }
 devlanes-run-script-go = { path = "../../crates/run-script-go" }
+devlanes-run-script-gradle = { path = "../../crates/run-script-gradle" }
+devlanes-run-script-maven = { path = "../../crates/run-script-maven" }
 devlanes-run-script-python = { path = "../../crates/run-script-python" }
 devlanes-platform-bun = { path = "../../crates/platform-bun" }
 devlanes-platform-deno = { path = "../../crates/platform-deno" }
 devlanes-platform-go = { path = "../../crates/platform-go" }
 devlanes-platform-rust = { path = "../../crates/platform-rust" }
 devlanes-preset-next = { path = "../../crates/preset-next" }
+devlanes-preset-quarkus = { path = "../../crates/preset-quarkus" }
+devlanes-preset-spring-boot = { path = "../../crates/preset-spring-boot" }
 devlanes-preset-tauri = { path = "../../crates/preset-tauri" }
 devlanes-preset-vite = { path = "../../crates/preset-vite" }
 devlanes-preset-wrangler = { path = "../../crates/preset-wrangler" }

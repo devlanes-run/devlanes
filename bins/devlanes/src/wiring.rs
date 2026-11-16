@@ -12,7 +12,10 @@ use devlanes_cli::Runtime;
 use devlanes_client::Paths;
 use devlanes_core::{
     ExitOutcome, LaunchSpec, OutputChunk, ProcessIdentity, StopPolicy, TerminalSize, Unit,
-    contrib::{CA_BUNDLE_ENV, CA_CERT_ENV, Contributor, ScriptRunner},
+    contrib::{
+        CA_BUNDLE_ENV, CA_CERT_ENV, CA_TRUSTSTORE_ENV, CA_TRUSTSTORE_PASSWORD, Contributor,
+        ScriptRunner,
+    },
 };
 use devlanes_daemon::integrations::ExitDetails;
 use devlanes_daemon::integrations::{
@@ -366,6 +369,7 @@ fn contributors() -> Vec<Arc<dyn Contributor>> {
         Arc::new(devlanes_platform_node::NodeContributor),
         Arc::new(devlanes_platform_node::CloudflareContributor),
         Arc::new(devlanes_platform_python::PythonContributor),
+        Arc::new(devlanes_platform_java::JavaContributor),
         Arc::new(devlanes_platform_bun::BunContributor),
         Arc::new(devlanes_platform_deno::DenoContributor),
         Arc::new(devlanes_platform_rust::RustContributor),
@@ -374,11 +378,13 @@ fn contributors() -> Vec<Arc<dyn Contributor>> {
         Arc::new(devlanes_preset_next::NextPreset),
         Arc::new(devlanes_preset_wrangler::WranglerPreset),
         Arc::new(devlanes_preset_tauri::TauriPreset),
+        Arc::new(devlanes_preset_spring_boot::SpringBootPreset),
+        Arc::new(devlanes_preset_quarkus::QuarkusPreset),
     ]
 }
 
 /// `run_script` sources: package.json, Makefile, justfile, Taskfile, deno.json,
-/// Cargo.toml, pyproject.toml and go.mod.
+/// Cargo.toml, pyproject.toml, go.mod, pom.xml and Gradle build or settings files.
 fn script_runners() -> Vec<Arc<dyn ScriptRunner>> {
     vec![
         Arc::new(devlanes_run_script_npm::NpmScripts),
@@ -389,6 +395,8 @@ fn script_runners() -> Vec<Arc<dyn ScriptRunner>> {
         Arc::new(devlanes_run_script_cargo::CargoBins),
         Arc::new(devlanes_run_script_python::PythonScripts),
         Arc::new(devlanes_run_script_go::GoPackages),
+        Arc::new(devlanes_run_script_maven::MavenGoals),
+        Arc::new(devlanes_run_script_gradle::GradleTasks),
     ]
 }
 
@@ -423,6 +431,22 @@ fn presets() -> Vec<PresetEntry> {
             name: devlanes_preset_tauri::NAME,
             parse: Arc::new(|value| {
                 devlanes_preset_tauri::parse_options(value)
+                    .map(drop)
+                    .map_err(|e| e.to_string())
+            }),
+        },
+        PresetEntry {
+            name: devlanes_preset_spring_boot::NAME,
+            parse: Arc::new(|value| {
+                devlanes_preset_spring_boot::parse_options(value)
+                    .map(drop)
+                    .map_err(|e| e.to_string())
+            }),
+        },
+        PresetEntry {
+            name: devlanes_preset_quarkus::NAME,
+            parse: Arc::new(|value| {
+                devlanes_preset_quarkus::parse_options(value)
                     .map(drop)
                     .map_err(|e| e.to_string())
             }),
@@ -689,22 +713,28 @@ async fn certificate_authority_with(
             roots.pem
         };
         let bundle = directory.join("bundle.pem");
-        let temp = directory.join(".bundle.pem.tmp");
-        std::fs::write(&temp, ca.combined_bundle(&system))?;
-        #[cfg(unix)]
-        std::fs::rename(&temp, &bundle)?;
-        // A program reading the old bundle briefly blocks the replace on Windows.
-        #[cfg(windows)]
-        devlanes_sys_windows::file::rename_retrying(&temp, &bundle)?;
-        Ok::<_, devlanes_pki::Error>((ca, cert, bundle))
+        let combined = ca.combined_bundle(&system);
+        replace_file(&directory, "bundle.pem", combined.as_bytes())?;
+        let truststore = write_truststore(&directory, &combined);
+        Ok::<_, devlanes_pki::Error>((ca, cert, bundle, truststore))
     })
     .await;
     match result {
-        Ok(Ok((ca, cert, bundle))) => {
-            let env = BTreeMap::from([
+        Ok(Ok((ca, cert, bundle, truststore))) => {
+            let mut env = BTreeMap::from([
                 (CA_CERT_ENV.to_owned(), cert.display().to_string()),
                 (CA_BUNDLE_ENV.to_owned(), bundle.display().to_string()),
             ]);
+            let truststore_error = match truststore {
+                Ok(path) => {
+                    env.insert(CA_TRUSTSTORE_ENV.to_owned(), path.display().to_string());
+                    None
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "truststore.p12 unavailable; JVMs keep their own roots");
+                    Some(error.to_string())
+                }
+            };
             let constrained = devlanes_trust::CaCertificate::from_pem(ca.certificate_pem(), "ca")
                 .ok()
                 .map(|c| c.is_name_constrained());
@@ -719,12 +749,39 @@ async fn certificate_authority_with(
                 "name_constrained": constrained,
                 "hint": recreate.then_some(crate::setup::UNCONSTRAINED_CA),
                 "fix": recreate.then(|| crate::setup::recreate_ca_command(home)),
+                "truststore_error": truststore_error,
             });
             (env, status, Some(Arc::new(ca)))
         }
         Ok(Err(error)) => failed(kind_word, "ca_invalid", error.to_string()),
         Err(error) => failed(kind_word, "ca_invalid", error.to_string()),
     }
+}
+
+/// Replaces `directory/name` with `contents` through a temporary file, so readers
+/// never see a partial file. Blocking.
+fn replace_file(directory: &Path, name: &str, contents: &[u8]) -> std::io::Result<()> {
+    let path = directory.join(name);
+    let temp = directory.join(format!(".{name}.tmp"));
+    std::fs::write(&temp, contents)?;
+    #[cfg(unix)]
+    std::fs::rename(&temp, &path)?;
+    // A program reading the old file briefly blocks the replace on Windows.
+    #[cfg(windows)]
+    devlanes_sys_windows::file::rename_retrying(&temp, &path)?;
+    Ok(())
+}
+
+/// Writes `truststore.p12` next to `bundle.pem` from the same roots, for JVMs.
+/// Kept apart from the CA's own result: when it fails only JVMs lose the
+/// devlanes root, so the CA and HTTPS stay up. Blocking.
+fn write_truststore(directory: &Path, roots: &str) -> Result<PathBuf, devlanes_pki::Error> {
+    let store = devlanes_pki::pkcs12_trust_store(roots, CA_TRUSTSTORE_PASSWORD)?;
+    for problem in &store.problems {
+        tracing::warn!(%problem, "truststore.p12 roots");
+    }
+    replace_file(directory, "truststore.p12", &store.pkcs12)?;
+    Ok(directory.join("truststore.p12"))
 }
 
 /// Binds the proxy (HTTP with fallback 8080, HTTPS with fallback 8443 when a CA
@@ -3182,6 +3239,13 @@ mod tests {
             bundled.contains(root.trim()),
             "bundle carries the mkcert root"
         );
+        let truststore = home.join("ca").join("truststore.p12");
+        assert_eq!(env[CA_TRUSTSTORE_ENV], truststore.display().to_string());
+        assert!(
+            std::fs::metadata(&truststore).expect("truststore").len() > 0,
+            "truststore.p12 is written next to the bundle"
+        );
+        assert_eq!(status["truststore_error"], Value::Null, "{status}");
         assert!(
             !home.join("ca/ca.pem").exists(),
             "no devlanes CA is created"

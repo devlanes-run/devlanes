@@ -17,6 +17,7 @@ Services, tasks, and `infra.setup` and `infra.teardown` entries get these.
 | `DEVLANES` | `1`. |
 | `DEVLANES_CA_BUNDLE` | The path of `~/.devlanes/ca/bundle.pem`: the system's roots and the devlanes root in one file. |
 | `DEVLANES_CA_CERT` | The path of the devlanes root certificate: `~/.devlanes/ca/ca.pem`, or mkcert's `rootCA.pem` with `tls.ca: mkcert`. |
+| `DEVLANES_CA_TRUSTSTORE` | The path of `~/.devlanes/ca/truststore.p12`: the certificates of `DEVLANES_CA_BUNDLE` as a PKCS#12 trust store with the password `changeit`. Not set when devlanes could not write it; `devlanes doctor` says why. |
 | `DEVLANES_LANE` | The lane number: `0`, `1`, `2` and so on. |
 | `DEVLANES_LANE_DATA` | The path of the [lane data folder](files.md#lane-data-folder). |
 | `DEVLANES_LANE_NAME` | `main` for lane 0, `lane<N>` for lane N. |
@@ -40,10 +41,11 @@ Services, tasks, and `infra.setup` and `infra.teardown` entries get these.
 | Python | `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` | The path in `DEVLANES_CA_BUNDLE`. |
 | Rust | `SSL_CERT_FILE` | The path in `DEVLANES_CA_BUNDLE`. |
 | Go | `SSL_CERT_FILE` | The path in `DEVLANES_CA_BUNDLE`. |
+| Java | `JAVA_TOOL_OPTIONS` | The value from the shell, mise or direnv, followed by `-Djavax.net.ssl.trustStore=<the path in DEVLANES_CA_TRUSTSTORE> -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit`. Left as it is when it already sets `javax.net.ssl.trustStore`. |
 
 ### For commands run with exec and with
 
-`devlanes exec` and `devlanes with` give the command the lane's variables: the ones for every unit, the `global_env` and profile `env` entries that read neither `self` nor `replica`, and one variable per service:
+`devlanes exec`, `devlanes with` and `devlanes env shell` give the command the lane's variables: the ones for every unit, the runtime variables above that your shell does not set, `JAVA_TOOL_OPTIONS` composed onto your shell's value, the `global_env` and profile `env` entries that read neither `self` nor `replica`, and one variable per service:
 
 | Variable | Value |
 |---|---|

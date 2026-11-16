@@ -216,23 +216,28 @@ pub enum Run {
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 #[schemars(deny_unknown_fields, transform = optional_script_keys)]
-#[schemars(extend("examples" = [{"file":"apps/api/package.json","name":"dev"},{"file":"justfile","name":"fixtures"}]))]
+#[schemars(extend("examples" = [{"file":"apps/api/package.json","name":"dev"},{"file":"justfile","name":"fixtures"},{"file":"services/web/pom.xml","name":"spring-boot:run -Pdev"}]))]
 /// Script from a project file, as a mapping with `file` and `name`. devlanes picks the
 /// tool from the file name: package.json (the project's package manager), Makefile or
 /// `*.mk`, justfile or `*.just`, Taskfile.yml (task), deno.json, pyproject.toml (uv or
-/// poetry), Cargo.toml (a binary) and go.mod (a main package). In `devlanes.local.yaml` or
-/// a service that `extends` a template, either key can be left out to keep the inherited
-/// one.
+/// poetry), Cargo.toml (a binary), go.mod (a main package), pom.xml (Maven goals) and
+/// build.gradle, build.gradle.kts, settings.gradle or settings.gradle.kts (Gradle tasks).
+/// Maven and Gradle use the project's wrapper (`mvnw`, `gradlew`) when one exists. In
+/// `devlanes.local.yaml` or a service that `extends` a template, either key can be left out
+/// to keep the inherited one.
 pub struct RunScript {
     /// File that defines the script, relative to the project file's directory, such as
     /// `apps/api/package.json`. The script runs in this file's directory. Required unless
     /// an override or `extends` child keeps the inherited file.
-    #[schemars(extend("examples" = ["apps/api/package.json","Makefile","justfile"]))]
+    #[schemars(extend("examples" = ["apps/api/package.json","Makefile","justfile","pom.xml","build.gradle.kts"]))]
     pub file: String,
-    #[schemars(extend("examples" = ["dev","fixtures"]))]
+    #[schemars(extend("examples" = ["dev","fixtures","spring-boot:run -Pdev",":web:bootRun --offline"]))]
     /// Script, target, recipe, task, binary or package name in that file. For go.mod, a
     /// bare name such as `api` means `./cmd/api`, and `.` or a path with `/` is relative
-    /// to go.mod. Required unless an override or `extends` child keeps the inherited name.
+    /// to go.mod. For pom.xml and Gradle files it is the arguments as typed after `mvn` or
+    /// `gradle`, such as `-pl web -am spring-boot:run` or `:web:bootRun`; quote an argument
+    /// that contains spaces, as in a shell. It must name at least one goal or task.
+    /// Required unless an override or `extends` child keeps the inherited name.
     pub name: String,
 }
 
@@ -404,7 +409,9 @@ pub struct ProfileOptions {
     pub env: Env,
     /// Swap script names for services that use `run_script`: `{ dev: start }` runs the
     /// `start` script wherever a service's `run_script` names `dev`. The file stays the
-    /// same, and each name is swapped once, not chained.
+    /// same, and each name is swapped once, not chained. The whole `name` is matched, so a
+    /// Maven or Gradle `name` such as `spring-boot:run -Pdev` is swapped only by that exact
+    /// text.
     #[serde(default)]
     #[schemars(schema_with = "script_remaps_schema", extend("examples" = [{"dev":"start"}]))]
     pub run_scripts: IndexMap<String, String>,

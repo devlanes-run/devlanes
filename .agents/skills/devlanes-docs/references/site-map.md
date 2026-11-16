@@ -31,9 +31,10 @@ Read in order. One project, myapp, from one service to lanes on a box.
 |---|---|---|
 | `add-devlanes.md` | Add devlanes to a project | Put a project that already runs some other way on devlanes. |
 | `migrate.md` | Migrate from another process manager | Move from mprocs, a Procfile, process-compose, pm2, tmuxinator, `concurrently` or Compose, with an agent and the skill. |
-| `run-scripts.md` | Run scripts your project already has | Run scripts from `package.json`, a Makefile, a justfile, a Taskfile, `Cargo.toml`, `pyproject.toml`, `deno.json` or `go.mod`. |
-| `runtimes.md` | Run Node, Bun, Deno, Python, Rust and Go services | What each runtime needs, with tabs per runtime. |
+| `run-scripts.md` | Run scripts your project already has | Run scripts from `package.json`, a Makefile, a justfile, a Taskfile, `Cargo.toml`, `pyproject.toml`, `deno.json` or `go.mod`, and Maven goals and Gradle tasks. |
+| `runtimes.md` | Run a service in its runtime | What a Node, Bun, Deno, Python, Rust, Go or Java service needs, with tabs per runtime. |
 | `vite-and-next.md` | Run Vite and Next.js | The two presets and their gotchas. |
+| `spring-boot-and-quarkus.md` | Run Spring Boot and Quarkus | The two presets, a Maven multi-module build, and leaving containers to devlanes. |
 | `cloudflare-workers.md` | Run Cloudflare Workers | Wrangler and the Cloudflare Vite plugin per lane. |
 | `tauri.md` | Run a Tauri app | A desktop app per lane and replica. |
 | `monorepo.md` | Split a monorepo into projects | One project for the repository, or one per app. |
@@ -161,7 +162,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 |---|---|---|
 | Lane numbers, lane names, lane domains | `concepts/lanes-and-projects.md` | One sentence in `learn/worktrees.md` |
 | What `devlanes setup` changes | `install.md` | Linked from the hostname guides |
-| Trusting the CA in browsers, tools and runtimes | `how-to/hostnames/trust-the-ca.md` | Linked from `install.md` |
+| Trusting the CA in browsers, tools and runtimes, `JAVA_TOOL_OPTIONS` included | `how-to/hostnames/trust-the-ca.md` | Linked from `install.md` |
 | The proxy's ports | `how-to/hostnames/proxy-ports.md` | Nowhere else |
 | Ready checks | The generated config reference | `how-to/services/ready-checks.md` shows choosing one |
 | Start order, setup against tasks | `concepts/start-order.md` | The table on `learn/databases.md` |
