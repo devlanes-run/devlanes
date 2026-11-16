@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use devlanes_proto::{AttachResult, AttachView, Page};
 use devlanes_tui::{
     ApiError,
-    app::{App, Effect, Msg},
+    app::{App, Effect, Msg, View},
     logfile::{LogChunk, LogPosition},
     settings,
 };
@@ -53,6 +53,21 @@ impl Fake {
     /// Applies `msg` and everything the daemon answers to its effects.
     pub fn send(&mut self, msg: Msg) {
         self.queue.push_back(msg);
+        self.drain();
+    }
+
+    /// Opens `view` as its key would, with the daemon's answers to what it
+    /// loads; nothing changes when it is open already, where the key would
+    /// go back to the project.
+    pub fn open(&mut self, view: View) {
+        if self.app.view == view {
+            return;
+        }
+        let mut effects = Vec::new();
+        self.app.set_view(view, &mut effects);
+        for effect in effects {
+            self.answer(effect);
+        }
         self.drain();
     }
 

@@ -2,12 +2,39 @@
 //! and seconds. The browser build draws it; tests drive it natively.
 
 use devlanes_tui::{
-    app::Msg,
+    app::{Msg, View},
     keys::{KeyModifiers, MouseEvent, MouseEventKind},
     theme::{Glyphs, Theme, Tier},
 };
 
 use crate::{fake::Fake, keymap};
+
+/// The views the page opens by name. The page says `lanes` for the project
+/// view, as the website's docs do.
+const VIEWS: [(&str, View); 4] = [
+    ("lanes", View::Project),
+    ("monitor", View::Monitor),
+    ("daemon", View::Daemon),
+    ("boxes", View::Boxes),
+];
+
+/// A view name [`Session::open`] does not know.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownView(pub String);
+
+impl std::fmt::Display for UnknownView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<_> = VIEWS.iter().map(|(name, _)| *name).collect();
+        write!(
+            f,
+            "unknown view {:?}, expected one of: {}",
+            self.0,
+            names.join(", ")
+        )
+    }
+}
+
+impl std::error::Error for UnknownView {}
 
 /// The TUI running on the fake daemon.
 pub struct Session {
@@ -60,6 +87,26 @@ impl Session {
             row,
             modifiers,
         }));
+    }
+
+    /// Opens the view the page names (`lanes`, `monitor`, `daemon` or
+    /// `boxes`) as if the user went there; nothing changes when it is open.
+    pub fn open(&mut self, name: &str) -> Result<(), UnknownView> {
+        let view = VIEWS
+            .iter()
+            .find(|(known, _)| *known == name)
+            .map(|(_, view)| *view)
+            .ok_or_else(|| UnknownView(name.to_owned()))?;
+        self.fake.open(view);
+        Ok(())
+    }
+
+    /// The page's name for the open view, as [`Session::open`] takes it.
+    pub fn view(&self) -> &'static str {
+        VIEWS
+            .iter()
+            .find(|(_, view)| *view == self.fake.app.view)
+            .map_or("lanes", |(name, _)| name)
     }
 
     /// The TUI's size in cells.
