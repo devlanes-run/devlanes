@@ -4,13 +4,13 @@ description: Share one Redis, RabbitMQ or S3 store between lanes with a namespac
 kind: how-to
 ---
 
-When the lanes of a project share a store such as Redis or RabbitMQ, you give each lane a namespace of its own inside it, so the code of one lane does not see another lane's keys, queues or files.
+Use this when the lanes of a project share a store such as Redis or RabbitMQ: each lane gets a namespace of its own inside it, so one lane's code does not see another lane's keys, queues or files.
 
 ::example{slug="infra-multi-database"}
 
-## Name each namespace from the lane
+## Name a namespace per lane
 
-Each store gets one lane variable under [`lanes.vars`](/docs/reference/config/project/lanes/#lanes-vars). Setup creates the namespace, teardown removes it when you clean the lane, and the URL the services get points into it, all from that one name. Redis databases are numbered, so its value is the lane number.
+One variable per store under [`lanes.vars`](/docs/reference/config/project/lanes/#lanes-vars). Setup creates the namespace, teardown removes it when you clean the lane, and the URL points into it. The stores are services in your Compose file, as in [Share one database server between lanes](shared-database.md).
 
 ```yaml devlanes
 lanes:
@@ -21,68 +21,28 @@ lanes:
     bucket: "myapp-${{ lane.name }}"
 ```
 
-The stores stay shared, as every Compose service is unless you list it under [`infra.per_lane`](/docs/reference/config/project/infra/#infra-per_lane). Setup and teardown entries reach them with a plain `docker compose`, as in [Share one database server between lanes](shared-database.md).
-
-## Create the namespace and pass its URL
+## Create it and pass its URL
 
 ::::tabs
 :::tab[Redis]
-A lane uses the database that matches its number and needs nothing created. The clean empties it.
-
-```yaml title="docker-compose.yml"
-services:
-  redis:
-    image: redis:8.10.3-alpine
-    ports: ["127.0.0.1::6379"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 2s
-      retries: 30
-```
+Each lane uses the numbered database that matches its lane number.
 
 ```yaml devlanes
 infra:
-  compose: docker-compose.yml
   teardown:
     redis: docker compose exec -T redis redis-cli -n ${{ lane.redis_db }} FLUSHDB
 global_env:
   REDIS_URL: redis://127.0.0.1:${{ infra.redis.port }}/${{ lane.redis_db }}
 ```
-
-A lane cleaned without its teardown, such as one whose worktree you deleted first, leaves its keys to the next lane with the same number.
 :::
 :::tab[RabbitMQ]
-A vhost per lane keeps exchanges and queues apart. RabbitMQ keeps its data under a node name taken from the container's hostname, so a fixed hostname lets a recreated container find its vhosts again. The healthcheck waits until RabbitMQ itself runs, which is what the setup entry needs.
-
-```yaml title="docker-compose.yml"
-services:
-  rabbitmq:
-    image: rabbitmq:4.3.7-management-alpine
-    hostname: rabbitmq
-    environment:
-      RABBITMQ_DEFAULT_USER: app
-      RABBITMQ_DEFAULT_PASS: app
-    ports: ["127.0.0.1::5672", "127.0.0.1::15672"]
-    volumes: [rabbitdata:/var/lib/rabbitmq]
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
-      interval: 5s
-      retries: 30
-
-volumes:
-  rabbitdata:
-```
-
-The setup entry names the container, so it runs again whenever the container has restarted, in case the vhost is gone.
+A vhost per lane. The Compose service sets the user `app` and a fixed `hostname`, so a recreated container keeps its vhosts. `container` runs the entry again after RabbitMQ restarts.
 
 ```yaml devlanes
 infra:
-  compose: docker-compose.yml
   setup:
     rabbitmq:
-      # After a restart the node can still be booting when the entry runs.
       run: |
-        until docker compose exec -T rabbitmq rabbitmq-diagnostics -q check_running >/dev/null 2>&1; do sleep 2; done &&
         docker compose exec -T rabbitmq rabbitmqctl add_vhost ${{ lane.vhost }} &&
         docker compose exec -T rabbitmq rabbitmqctl set_permissions -p ${{ lane.vhost }} app '.*' '.*' '.*'
       container: rabbitmq
@@ -93,42 +53,12 @@ infra:
 global_env:
   AMQP_URL: amqp://app:app@127.0.0.1:${{ infra.rabbitmq.ports['5672'] }}/${{ lane.vhost }}
 ```
-
-The container publishes the broker and the management UI, so the URL picks the broker by its container port. Every lane connects as the same user `app`, which has rights on every lane's vhost.
 :::
 :::tab[S3]
-A bucket per lane, in RustFS here. Its command line runs from a second Compose service, so your machine needs no S3 tool. The profile keeps that service out of the containers devlanes starts; Compose still runs it when a command names it. Leave `tools` out of [`infra.profiles`](/docs/reference/config/project/infra/#infra-profiles), or the helper starts with every lane.
-
-```yaml title="docker-compose.yml"
-services:
-  rustfs:
-    image: rustfs/rustfs:1.0.4
-    environment:
-      RUSTFS_ACCESS_KEY: rustfsadmin
-      RUSTFS_SECRET_KEY: rustfsadmin
-      RUSTFS_CONSOLE_ENABLE: "true"
-    ports: ["127.0.0.1::9000", "127.0.0.1::9001"]
-    volumes: [s3data:/data]
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
-      interval: 2s
-      retries: 30
-
-  rc:
-    image: rustfs/rc:v0.1.37
-    profiles: [tools]
-    environment:
-      RC_HOST_local: http://rustfsadmin:rustfsadmin@rustfs:9000
-
-volumes:
-  s3data:
-```
-
-Port 9000 is the S3 API and 9001 the web console.
+A bucket per lane, here in RustFS. The bucket commands run from an `rc` service in the Compose file that has `profiles: [tools]`, so it does not start with the lanes.
 
 ```yaml devlanes
 infra:
-  compose: docker-compose.yml
   setup:
     s3: docker compose run --rm rc bucket create --ignore-existing --format human local/${{ lane.bucket }}
   teardown:
@@ -140,24 +70,10 @@ global_env:
 ```
 :::
 :::tab[Mail]
-A mail catcher has nothing to split, so each lane runs its own Mailpit and gets its own inbox. [Give each lane its own container](container-per-lane.md) covers services listed as per lane.
-
-```yaml title="docker-compose.yml"
-services:
-  mailpit:
-    image: axllent/mailpit:v1.33.0
-    ports: ["127.0.0.1::8025", "127.0.0.1::1025"]
-    healthcheck:
-      test: ["CMD", "/mailpit", "readyz"]
-      interval: 2s
-      retries: 30
-```
-
-Port 1025 takes the mail and 8025 serves the inbox.
+A mail catcher has nothing to split, so each lane runs its own Mailpit ([Give each lane its own container](container-per-lane.md)).
 
 ```yaml devlanes
 infra:
-  compose: docker-compose.yml
   per_lane: [mailpit]
 global_env:
   SMTP_URL: smtp://127.0.0.1:${{ infra.mailpit.ports['1025'] }}
@@ -165,36 +81,26 @@ global_env:
 :::
 ::::
 
-A failed teardown entry does not stop the clean, with or without `ignore_errors`. The flag marks a failure you expect, such as a vhost or bucket that is already gone.
+Start each lane as usual, and its setup creates its namespaces.
 
-## Open a store's web UI on a hostname
+```console
+$ devlanes start
+```
 
-A hostname under each lane's domain opens a store's console in the browser. A shared store shows the same console, with every lane's namespace, under each lane's hostname, while the per-lane Mailpit shows the lane's own inbox. Each route names the container port it opens.
+## If you want a store's web UI
+
+Route a hostname under the lane's domain to the UI's container port. A shared store shows every lane's namespaces there.
 
 ```yaml devlanes
 infra:
   hosts:
     rabbitmq: { host: "rabbitmq.${{ lane.domain }}", port: "15672" }
-    rustfs:
-      - { host: "rustfs.${{ lane.domain }}", port: "9001" }
-      - { host: "s3.${{ lane.domain }}", port: "9000" }
     mailpit: { host: "mail.${{ lane.domain }}", port: "8025" }
 ```
 
-The second RustFS route serves the S3 API. Build the presigned URLs that the browser opens on that hostname.
-
 ## If you run more than 16 lanes on Redis
 
-Redis has 16 databases unless its config raises `databases`. Raise it, or list Redis under `per_lane`.
-
-## If your Redis is a cluster
-
-A Redis Cluster supports database 0 alone. Build a key prefix from the lane name instead, and have your code pass it to its Redis client:
-
-```yaml devlanes
-global_env:
-  REDIS_KEY_PREFIX: myapp_${{ lane.name }}
-```
+Redis has 16 databases unless its `databases` setting raises the number.
 
 ## Related
 

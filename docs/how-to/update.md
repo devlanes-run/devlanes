@@ -4,41 +4,46 @@ description: Install new devlanes releases, choose how devlanes checks for them,
 kind: how-to
 ---
 
-devlanes tells you when a newer release is out, and one command installs it the way devlanes was installed and brings your lanes back on the new version. Removing devlanes is one command as well, and it asks before it deletes your data.
+devlanes tells you when a newer release is out. Use this to install it, to stop the checks, or to remove devlanes.
 
-## Update to the latest release
-
-The update checks for a newer release and asks once. A patch release defaults to yes, while a minor release, which before 1.0 may break what worked, lists its breaking changes and defaults to no. Without a terminal, add `--yes`.
+## Update
 
 ```console
 $ devlanes update
 ```
 
-It installs the release the way you installed devlanes: through the package manager when one installed it, or by downloading the release and checking it against its checksums. For cargo, a project's own dependency and other installs it cannot replace, it prints the command to run instead. Then it restarts the daemon, which stops the running services and starts them again on the new version. `--check` shows the latest release and what changed without installing anything.
+The command asks once, installs the latest release the way you installed devlanes, and restarts the daemon, which stops your running services and starts them again on the new version. A minor release lists its breaking changes first. Without a terminal, add `--yes`.
+
+A box, a machine whose lanes are mirrored to yours, needs its own update: run the same command there. Two machines on releases with different protocols do not connect.
 
 ## Turn the update check off
 
-The daemon asks the registry you installed from for the latest version every few hours, and each command in a terminal mentions a newer release on one line, at most once a day. [Security](../concepts/security.md) says what those requests carry. To stop the checks, set [`updates.mode`](/docs/reference/config/user/updates/) in the user config:
+Set [`updates.mode`](/docs/reference/config/user/updates/) in the user config, then restart the daemon:
 
 ```yaml devlanes-user
 updates:
   mode: disable
 ```
 
-The daemon reads the setting when it starts, so run `devlanes daemon restart` afterwards. An update you ask for still works with the checks off, and in CI they are off already. The value `auto` goes the other way: where the install method allows it, it also installs patch releases in the background, and they take effect the next time you open devlanes in a terminal.
+```console
+$ devlanes daemon restart
+```
 
-## Update a box together with your machine
+An update you ask for still works.
 
-A box is a machine whose lanes are mirrored to yours, and updating your machine does not update a box. Two machines that run releases with different protocols do not connect, and the error says to install the same release on both. Releases with the same protocol connect with a warning.
+## Uninstall
 
-:::steps
-1. On the box, run `devlanes update`.
-2. On your machine, run `devlanes update`.
-:::
+```console
+$ devlanes uninstall
+```
 
-## Try builds of the main branch
+The command stops the daemon, undoes what `devlanes setup` changed, including the CA trust, and removes the install. It then lists the devlanes home and the lane data, and deletes them only if you answer yes. `--dry-run` shows the plan without changing anything.
 
-Each commit on the main branch of devlanes that passes CI is built, and the newest is published as the `next` build. The install scripts install it with the next channel:
+Containers stay in Docker with their volumes, and so do the folders services sync build output to, the MCP server registered with your agents and the skill. To remove each lane's own containers first, see [Remove lanes](lanes/clean-up.md).
+
+## If you want to try builds of the main branch
+
+The newest build of main that passed CI is published as the `next` build, and the install script installs it with `--channel next`. From then on, updates stay on `next` builds.
 
 ::::tabs{sync="os"}
 :::tab[macOS]
@@ -58,44 +63,9 @@ PS> iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
 :::
 ::::
 
-Over a script install, it takes the place of the release. From then on `devlanes update` installs the latest build of main and does not go back to releases by itself. An install from Homebrew or another package manager has to be removed first, because the scripts stop when another installer's devlanes comes first on your path.
+## If you want to go back to releases
 
-To go back to releases, uninstall and keep your data, install again as [Install devlanes](../install.md) shows, and run the setup again, since the uninstall took the CA out of your trust store:
-
-```console
-$ devlanes uninstall --keep-data
-```
-
-```console
-$ devlanes setup
-```
-
-## Uninstall devlanes
-
-The uninstall asks once, naming the processes the daemon runs, then goes through these steps and carries on when one fails:
-
-- Stops the daemon and removes its login service.
-- Undoes what the setup changed: the CA trust, the hosts file helper and the resolver.
-- Removes the install: the files the install scripts placed and, on Windows, the user `PATH` entry, or the package manager's remove command.
-- Lists the devlanes home and the lane data with their sizes, and deletes them only if you answer yes to a second question.
-
-```console
-$ devlanes uninstall
-```
-
-To see the plan for this machine first, `--dry-run` prints it and changes nothing.
-
-Without a terminal the command needs `--yes`, and the data stays unless you add `--remove-data`.
-
-## If you want nothing left behind
-
-The daemon leaves containers running when it stops. Cleaning the lanes first, as [Remove lanes](lanes/clean-up.md) shows, removes each lane's own containers. Shared containers stop and keep their volumes, so remove those with Docker afterwards.
-
-The folders that services on this machine sync build output to sit outside the devlanes home by default, and they stay. So do the completion lines in your shell's startup file, the MCP server registered with your agents and the project files in your repositories. A devlanes that a project lists as a dependency stays too. The skill comes out of your agents with its own command:
-
-```console
-$ npx skills remove devlanes
-```
+Uninstall with `--keep-data`, then install and run the setup again, as [Install devlanes](../install.md) shows.
 
 ## Related
 

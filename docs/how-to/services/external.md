@@ -4,13 +4,13 @@ description: Put an HTTPS hostname in front of a server you start yourself, thro
 kind: how-to
 ---
 
-When you already run a server yourself, such as a docs site, pgAdmin or a tool from another project, devlanes can give it an HTTPS hostname without starting or watching it.
+When you already run a server yourself, such as a docs site or pgAdmin, devlanes can give it an HTTPS hostname without starting or watching it.
 
 This needs devlanes installed with HTTPS set up, as [Install devlanes](../../install.md) describes, and a look at [A service, a port and a hostname](../../learn/first-service.md) helps.
 
 ## Declare the server
 
-devlanes reads a project file, `devlanes.yaml`, in the folder you run it from. The folder can be a Git repository or a plain folder. For a server devlanes does not start, the file names the project and the server's port:
+devlanes reads a project file, `devlanes.yaml`, in the folder you run it from, a Git repository or a plain folder. For a server devlanes does not start, the file names the project and the address where your server listens:
 
 ```yaml devlanes
 # devlanes.yaml
@@ -23,126 +23,23 @@ infra:
       hosts: "${{ lane.domain }}"
 ```
 
-The address is where the server already listens, on the loopback interface. The hostname is the lane's domain, which is the project name followed by `.localhost`, so this file gives `myapp.localhost`. Pick the project name for the hostname you want.
-
-## Install the daemon as a login service
-
-The proxy runs inside the daemon. A daemon that a command starts exits soon after the last command that watched it, and the external entry does not keep it up, so the hostname would stop answering. A daemon installed as a login service keeps running, and comes back after a reboot.
-
-::::tabs{sync="os"}
-:::tab[macOS]
-First check whether a daemon already runs. This command never starts one:
-
-```console
-$ devlanes daemon status
-```
-
-If one runs, stop it, which also stops what it runs. Otherwise it stays in place of the installed one until your next login, and exits when unused.
-
-```console
-$ devlanes daemon stop
-```
-
-If you installed the login service before, an install that finds the same service loaded starts nothing, so remove it first:
-
-```console
-$ devlanes daemon uninstall
-```
-
-Then install the service. It starts the daemon at once and again at each login:
-
-```console
-$ devlanes daemon install
-```
-:::
-:::tab[Linux]
-First check whether a daemon already runs. This command never starts one:
-
-```console
-$ devlanes daemon status
-```
-
-If one runs, stop it, which also stops what it runs. Otherwise it stays in place of the installed one until your next login, and exits when unused.
-
-```console
-$ devlanes daemon stop
-```
-
-Then install the service. It starts the daemon at once and again at each login:
-
-```console
-$ devlanes daemon install
-```
-:::
-:::tab[Windows]
-Install the service. It adds an entry that starts the daemon at each sign-in, and starts none when you run it:
-
-```console
-PS> devlanes daemon install
-```
-
-To keep the daemon that commands start running as well, turn off its exit when unused:
-
-```console
-PS> devlanes config set daemon.exit_when_idle false
-```
-
-A daemon that already runs keeps its old setting until it restarts, so restart it if one runs:
-
-```console
-PS> devlanes daemon restart
-```
-:::
-::::
+The hostname is the project name followed by `.localhost`, so this file gives `myapp.localhost`.
 
 ## Start the lane
 
-One start in the folder makes it a lane of the project. There is nothing to start:
+Run one start in the folder:
 
 ```console title="~/dev/myapp"
 $ devlanes start --no-ui
-myapp@0 · main
-✓ nothing to start
 ```
 
-When devlanes or a lane already holds the declared port, the start refuses the entry and names what holds it. Otherwise the hostname is routed at once:
+There is nothing to start, but the folder becomes a lane of the project and the proxy routes the hostname to port 4800. Open `https://myapp.localhost`: while your server runs, it answers; while it is down, the proxy shows an error page saying nothing listens.
 
-```console title="~/dev/myapp"
-$ devlanes url ls
-HOST                 TARGET        PORT  STATE
-myapp.localhost  ->  myapp@0:docs  4800  ready
-proxy: http :80, https :443
-```
-
-The state reads ready whether or not your server listens, since devlanes never starts, stops or checks it. A request while your server is down gets the proxy's [DL301 Service not listening](../../errors/upstream-unreachable.md) page:
-
-```console title="on Windows 11"
-$ curl.exe -sS -i --ssl-revoke-best-effort https://myapp.localhost
-HTTP/1.1 503 Service Unavailable
-x-devlanes-error: upstream-unreachable
-
-# DL301 Service not listening
-
-`upstream-unreachable`, 503 Service Unavailable, error. Sent by the devlanes 0.13.0 proxy, not by the service.
-
-devlanes has the service as running, but nothing accepted connections on its port while the proxy retried.
-```
-
-For a server you run yourself, the page means that nothing listens on the declared address. Its advice about `PORT` does not apply: start your server on that address, and the same request reaches it, here a test server that answers with one word:
-
-```console title="on Windows 11"
-$ curl.exe -sS -i --ssl-revoke-best-effort https://myapp.localhost
-HTTP/1.1 200 OK
-via: 1.1 devlanes.run
-
-docs
-```
-
-On Linux the proxy uses port 8443 unless the daemon may bind 443, and the URL then carries the port; [Choose the proxy's ports](../hostnames/proxy-ports.md) changes that.
+The proxy lives in the daemon, and a daemon that a command started exits a while after the last command. To keep the hostname answering, run the daemon as a login service, as [The daemon](../../concepts/daemon.md) describes.
 
 ## If only you run the server
 
-A server the rest of the team does not run belongs in the local file, `devlanes.local.yaml` next to the project file, which stays out of Git. [Keep personal changes out of Git](../projects/local-overrides.md) covers the file.
+Put the entry in the local file, `devlanes.local.yaml` next to the project file, which stays out of Git. [Keep personal changes out of Git](../projects/local-overrides.md) covers it.
 
 ## If the server rejects the hostname
 
@@ -158,13 +55,9 @@ infra:
         host_header: upstream
 ```
 
-## If the server runs on a box
-
-When the server runs on a machine whose lanes you open from your own, declare it in the project file on that machine. [Choose what a box shares](../remote/what-a-box-shares.md) covers what your machine gets of it.
-
 ## Related
 
 - [A service, a port and a hostname](../../learn/first-service.md)
 - [Hostnames and HTTPS](../../concepts/hostnames-and-https.md)
 - [The daemon](../../concepts/daemon.md)
-- [Trust the devlanes CA](../hostnames/trust-the-ca.md)
+- [Choose the proxy's ports](../hostnames/proxy-ports.md)

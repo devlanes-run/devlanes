@@ -4,78 +4,27 @@ description: Let a web app call its own lane's API, share a login cookie between
 kind: how-to
 ---
 
-Follow these steps when a web app and its API run on two hostnames of one lane and the browser has to call the API with the user's cookie, without any other lane getting through.
+Follow these steps when a web app and its API run on two hostnames of one lane and the browser calls the API with the user's cookie.
 
 ::example{slug="web-frontend-api"}
 
 ## Allow the lane's own origins
 
-devlanes gives every service a variable with its lane's origins: the HTTPS origin of each hostname in the lane, wildcards left out, and the localhost and 127.0.0.1 address of each service's port. Build the API's CORS allow-list from it instead of writing hostnames down, so each lane allows its own pages and no other lane's.
+devlanes gives every service a variable, `DEVLANES_ORIGINS`, with the origins of its own lane, separated by commas. Build the API's CORS allow-list from it, so each lane allows its own pages and no other lane's:
 
 ```ts
 import { cors } from "hono/cors";
 
 const origins = (process.env.DEVLANES_ORIGINS ?? "").split(",").filter(Boolean);
 
-export const laneCors = () =>
-  cors({ origin: origins, credentials: true });
+export const laneCors = () => cors({ origin: origins, credentials: true });
 ```
 
-The credentials option lets the browser send the session cookie with these requests. The variable belongs to the process, so read it in code; an expression in the project file cannot read it.
-
-## Check that another lane gets no CORS headers
-
-Send the lane 1 API a request with the origin of lane 1's web app, then one with lane 0's. Only the first gets an allow-origin header back, so a page of lane 0 cannot read the answer.
-
-::::tabs{sync="os"}
-:::tab[macOS]
-When your lane URLs carry a port, such as 8443, add it to the URL and to both origins.
-
-```console
-$ curl -s -i -H "Origin: https://myapp1.localhost" https://api.myapp1.localhost/
-```
-
-```console
-$ curl -s -i -H "Origin: https://myapp.localhost" https://api.myapp1.localhost/
-```
-:::
-:::tab[Linux]
-When your lane URLs carry a port, such as 8443, add it to the URL and to both origins.
-
-```console
-$ curl -s -i -H "Origin: https://myapp1.localhost" https://api.myapp1.localhost/
-```
-
-```console
-$ curl -s -i -H "Origin: https://myapp.localhost" https://api.myapp1.localhost/
-```
-:::
-:::tab[Windows]
-```console
-$ curl.exe -s -i -H "Origin: https://myapp1.localhost" --ssl-revoke-best-effort https://api.myapp1.localhost/
-HTTP/1.1 200 OK
-access-control-allow-origin: https://myapp1.localhost
-vary: origin
-content-type: application/json
-
-{"lane":1,"lane_name":"lane1","service":"api","port":20070}
-```
-
-```console
-$ curl.exe -s -i -H "Origin: https://myapp.localhost" --ssl-revoke-best-effort https://api.myapp1.localhost/
-HTTP/1.1 200 OK
-content-type: application/json
-
-{"lane":1,"lane_name":"lane1","service":"api","port":20070}
-```
-:::
-::::
-
-When the proxy runs on its fallback port, the HTTPS origins carry that port, the way a browser sends them. [Environment variables](../../reference/environment-variables.md) describes the variable in full.
+[Environment variables](../../reference/environment-variables.md) has what the list holds.
 
 ## Share a cookie between the app and its API
 
-A cookie set for the lane's domain reaches every hostname under it, so in lane 1 it reaches both the app at myapp1.localhost and the API at api.myapp1.localhost. Pass the domain to the service that sets the cookie:
+A cookie set for the lane's domain reaches every hostname under it, so in lane 1 it reaches both myapp1.localhost and api.myapp1.localhost, and never lane 0. Pass the domain to the service that sets the cookie:
 
 ```yaml devlanes
 services:
@@ -88,22 +37,19 @@ services:
       COOKIE_DOMAIN: ${{ lane.domain }}
 ```
 
-The API then sets the cookie with that domain, `SameSite=Lax` and `Secure`:
-
 ```ts
 setCookie(c, "session", token, {
   domain: process.env.COOKIE_DOMAIN,
-  path: "/",
   sameSite: "Lax",
   secure: true,
 });
 ```
 
-Lane 0's hostnames are outside that domain, so the cookie never reaches them, and signing in on one lane leaves you signed out on the other. [Hostnames and HTTPS](../../concepts/hostnames-and-https.md#each-lane-is-a-site-of-its-own) explains how a browser groups names into sites.
+Each lane then has its own login: signing in on one lane leaves you signed out on the others.
 
 ## Give each lane its own login callback
 
-A login through an outside provider sends the browser back to a callback URL, and each lane needs its own. Build it from the service's public URL, and register each lane's URL with the provider, port included when lane URLs carry one:
+A login through an outside provider returns to a callback URL, and each lane needs its own. Build it from the service's public URL, and register each lane's URL with the provider:
 
 ```yaml devlanes
 services:
@@ -115,7 +61,7 @@ services:
 
 ## If the web app proxies its API calls
 
-A dev server that forwards a path such as `/api` to the API makes every call same-origin, so the API needs no CORS. Point the forward at the API's local URL, which skips the proxy:
+A dev server that forwards a path such as `/api` to the API makes every call same-origin, so the API needs no CORS and the cookie needs no domain. Point the forward at the API's local URL:
 
 ```yaml devlanes
 services:
@@ -124,22 +70,9 @@ services:
       API_PROXY_TARGET: ${{ services.api.url }}
 ```
 
-The cookie then belongs to the app's own hostname and needs no domain.
+## If tenant pages call the API
 
-## If tenant subdomains call the API
-
-The variable leaves out wildcard hostnames, and tenant pages on a domain of their own, as [Serve wildcard and tenant subdomains](wildcards.md) sets them up, are another site. Their calls to the API are cross-site, so the session cookie does not go with them. The API checks their origin against the tenant domain itself, which it needs in its own environment:
-
-```yaml devlanes
-lanes:
-  vars:
-    sites_domain: ${{ domain('myapp-sites') }}
-
-services:
-  api:
-    env:
-      SITES_DOMAIN: ${{ lane.sites_domain }}
-```
+Tenant pages on a domain of their own, as in [Serve wildcard and tenant subdomains](wildcards.md), are another site: the session cookie does not go with their calls, and their origins are not in the variable.
 
 ## Related
 

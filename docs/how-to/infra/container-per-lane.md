@@ -4,13 +4,13 @@ description: Run a Compose service once per lane, with its own port and volume, 
 kind: how-to
 ---
 
-When a branch needs its own version of a database, or runs migrations that would break the other lanes, you give each lane a container of its own instead of a namespace in a shared one.
+Use this when a branch needs its own version of a database, or runs migrations that would break the other lanes: each lane gets a container and a volume of its own.
 
 ::example{slug="infra-postgres-per-lane"}
 
 ## Write the service in the Compose file
 
-The image creates the database `POSTGRES_DB` names on its first start, and the named volume holds the data. Each lane gets a volume of its own under that name.
+The image creates the database `POSTGRES_DB` names, and each lane has a `pgdata` volume of its own.
 
 ```yaml title="docker-compose.yml"
 services:
@@ -30,93 +30,41 @@ volumes:
   pgdata:
 ```
 
-## List the service as per lane
+## List it as per lane
 
-Every Compose service is shared by the lanes of the project until you name it under [`infra.per_lane`](/docs/reference/config/project/infra/#infra-per_lane). A service listed there runs once for each lane, lane 0 included, in a Compose project named after the project and the lane number, such as `myapp-lane1`.
+A service under [`infra.per_lane`](/docs/reference/config/project/infra/#infra-per_lane) runs once for each lane, on a port from that lane's block of ports. The URL reads that port, so it differs in each lane. This needs Compose 2.24.4 or newer.
 
 ```yaml devlanes
 infra:
   compose: docker-compose.yml
   per_lane: [postgres]
-```
 
-The lane's container runs from that lane's worktree. devlanes publishes its ports from the lane's block of ports, whatever host ports the Compose file declares, and the lane's Compose project has its own named volumes. This needs Compose 2.24.4 or newer.
-
-## Point the URL at the lane's port
-
-The expression is the same as for a shared container, and it gives a different port in each lane. The database name stays fixed, since each lane has the server to itself.
-
-```yaml devlanes
 global_env:
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/myapp
 ```
 
-## Prepare its data in setup
+A plain `docker compose` in a setup entry reaches the shared containers. To run a command in the lane's own container, name its Compose project with `-p "$DEVLANES_COMPOSE_LANE_PROJECT"`.
 
-In a setup entry, a plain `docker compose` reaches the shared project, where this service does not run. The lane's own project is named in a variable devlanes sets for setup entries and tasks, and not for services.
+## Start and clean the lane
 
-```yaml devlanes
-infra:
-  setup:
-    extensions: docker compose -p "$DEVLANES_COMPOSE_LANE_PROJECT" exec -T postgres psql -U postgres -d myapp -c "CREATE EXTENSION IF NOT EXISTS pgcrypto"
+Each start brings up the lane's container. Stopping the lane leaves the container running; cleaning the lane removes the container and its volume, so its data is gone.
+
+```console
+$ devlanes start
+$ devlanes lane clean 1 --yes
 ```
 
-A new lane runs the entry on its first start, against its new container. Removing the container by hand keeps its volume and what the entry created in it, so the entry does not need to run again.
+## If you replace the container
 
-## Stop, freeze and clean the lane
+A start into a running lane does not recreate a container you removed, for example to use a newly pulled image. Bring it back in the lane's worktree:
 
-A stop leaves the lane's container running with its data, and it keeps using memory until you clean the lane or stop the container with Docker. When the lane is frozen, devlanes pauses its own containers and unpauses them when it thaws; shared containers keep running. [Throttling and freezing](../../concepts/freezing.md) says what thaws a lane.
-
-Cleaning the lane removes its Compose project together with its volumes, so the lane's database goes with it. Add `--dry-run` to see what it would remove:
-
-```console title="~/dev/myapp"
-$ devlanes lane clean 1 --dry-run
-would clean myapp@1 (feat/checkout):
-  stop      myapp@1:api
-  remove    compose container myapp-lane1-postgres-1
-  remove    compose project myapp-lane1
-  remove    volume myapp-lane1_pgdata (size unknown)
-  delete    logs (806 B)
-  delete    run and task history
-  free      ports 20080-20089
-next: devlanes lane clean myapp@1 --yes
+```console
+$ devlanes infra up
 ```
-
-[Remove lanes](../lanes/clean-up.md) covers the clean itself and what else it deletes.
-
-## If a shared service depends on it
-
-A shared service whose `depends_on` names a per-lane service is refused, with both names in the message. Remove the dependency, or list both services as per lane.
-
-The other way round is accepted. The lane's container may name a shared service in `depends_on`, and devlanes starts it without starting that service a second time. The lane's container runs in its own Compose project, though, so it cannot reach the shared service by its name.
-
-## If the volume has a fixed name
-
-A volume with its own `name:` or `external: true` in the Compose file is one volume for the whole machine, so every lane mounts the same data. Drop the fixed name to get a volume per lane.
 
 ## If the container is not in a Compose file
 
-A container declared in the project file runs once per lane with [`infra.containers.<name>.per_lane`](/docs/reference/config/project/infra/#infra-containers-name-per_lane). [Run containers without Compose](plain-containers.md) shows it.
-
-## If you pulled a newer image
-
-A running healthy container keeps its old image after a pull, and a start into a lane that already runs does not create it again. Remove the lane's container by its Compose project:
-
-```console title="~/dev/myapp-checkout"
-$ docker compose -p myapp-lane1 rm -sf postgres
-Going to remove myapp-lane1-postgres-1
-```
-
-Then, in the lane's worktree, bring its containers up again, or stop and start the lane:
-
-```console title="~/dev/myapp-checkout"
-$ devlanes infra up
-infra up for myapp@1
-  SERVICE   PORT   PORTS
-  postgres  20081  5432->20081
-```
-
-The container comes back on the port it had, from the lane's block, so the running services keep a working URL and need no reload.
+Set [`infra.containers.<name>.per_lane`](/docs/reference/config/project/infra/#infra-containers-name-per_lane), as in [Run containers without Compose](plain-containers.md).
 
 ## Related
 

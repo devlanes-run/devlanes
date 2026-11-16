@@ -4,13 +4,11 @@ description: Give one service extra ports by name, route hostnames to them, and 
 kind: how-to
 ---
 
-When one process listens on more than one port, such as an app with a separate WebSocket or admin server, each port can get a name of its own and a hostname that reaches it.
+When one process listens on more than one port, such as an app with a separate WebSocket or admin server, each port can get a name and a hostname of its own.
 
 ::example{slug="web-realtime-ws"}
 
-## Name a second port
-
-Mention a port by name anywhere in the service and devlanes allocates it from the lane's block of ports, at the same place in every lane. The service learns the number from a variable you pass it:
+## Name the ports and route hostnames to them
 
 ```yaml devlanes
 services:
@@ -21,17 +19,6 @@ services:
     env:
       WS_PORT: ${{ self.ports.ws }}
       ADMIN_PORT: ${{ self.ports.admin }}
-```
-
-Your program has to read those variables and listen on each port, as it does with `PORT` for the main one. Another service reads a named port as `${{ services.web.ports.ws }}`, but only the service that owns the port allocates it.
-
-## Route a hostname to it
-
-A hostname that names a port goes to that port; a plain one goes to the main port. Both kinds sit in one list:
-
-```yaml devlanes
-services:
-  web:
     hosts:
       - ${{ lane.domain }}
       - host: ws.${{ lane.domain }}
@@ -40,49 +27,17 @@ services:
         port: admin
 ```
 
-The list of routes shows each hostname next to the port it reaches:
+Naming a port in the service gives it one more port in each lane, and your program reads the number from the variable, as it reads `PORT` for the main one. A hostname that names a port goes to that port, and a plain one to the main port. In lane 0 that gives `myapp.localhost`, `ws.myapp.localhost` and `admin.myapp.localhost`; this lists them with their ports:
 
 ```console title="~/dev/myapp"
 $ devlanes url ls
-HOST                       TARGET       PORT   STATE
-myapp.localhost        ->  myapp@0:web  20071  ready
-ws.myapp.localhost     ->  myapp@0:web  20072  ready
-admin.myapp.localhost  ->  myapp@0:web  20070  ready
-proxy: http :80, https :443
 ```
 
-A named port's number can be below the main port's, as the admin port's is here.
-
-WebSockets and server-sent events pass through the proxy on any of these hostnames without a setting.
-
-## Wait for the right port
-
-The ready check goes to the main port. When the program opens its ports one after another, open the main port last, or point a port check at the named one:
-
-```yaml devlanes
-services:
-  web:
-    ready:
-      tcp: ws
-```
-
-## Give one service several hostnames
-
-Plain entries in the same list are several hostnames for the main port, such as an app that serves a second brand on its own name. The first one without a wildcard becomes the service's public URL, the one other services read from it.
-
-```yaml devlanes
-services:
-  web:
-    hosts:
-      - ${{ lane.domain }}
-      - shop.${{ lane.domain }}
-```
-
-Keep every name under the lane's domain, so each lane gets its own and two lanes never claim the same hostname. [Serve wildcard and tenant subdomains](../hostnames/wildcards.md) covers names with a wildcard.
+WebSockets and server-sent events pass through the proxy without a setting. Plain entries in the list are extra hostnames for the main port.
 
 ## If the program insists on a fixed port
 
-A program that cannot be told its port listens where it wants, while the ready check and the proxy look for it on the port devlanes allocated. Set the port to the one the program uses, so devlanes checks and routes that one:
+Set the port to the one the program uses, so devlanes checks and routes that one:
 
 ```yaml devlanes
 services:
@@ -91,7 +46,7 @@ services:
       PORT: 3000
 ```
 
-The number is then the same in every lane, so only one lane at a time can run the service; a start in a second lane fails on the taken port. When the program takes its port as a flag instead, pass `${{ self.port }}` in the command and each lane keeps its own.
+Only one lane at a time can then run the service. When the program takes its port as a flag, pass `${{ self.port }}` instead and each lane keeps its own.
 
 ## Related
 

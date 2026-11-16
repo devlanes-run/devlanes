@@ -1,34 +1,37 @@
 # Page kinds
 
-A skeleton for each kind, then one dense paragraph rewritten. The skeletons show shape and order; the words in them are placeholders.
+A skeleton for each kind of page. Copy the shape, not the words.
 
-## Learn page
+## Learn
+
+One step of the story of myapp. The reader reads and does not type along. About 400 words outside code.
 
 ````markdown
 ---
 title: Every worktree gets a lane
-description: A second worktree of myapp starts next to the first, on its own ports and hostname.
+description: A second worktree of myapp starts next to the first, on its own ports and its own hostname.
 kind: learn
 ---
 
-One or two sentences: where myapp stands after the page before, and what this page adds.
+The API of myapp runs from the main branch. You start a checkout feature on a branch of its own, and both have to be up together.
 
-## A heading that states the point
+## A second worktree starts as lane 1
 
-One or two short paragraphs. What the reader is about to look at, and the one new idea in it, named once.
+The project file is committed, so the new folder has it, and the start is the same command as before.
 
-```console title="~/dev/myapp-checkout"
+```console
+$ git worktree add ../myapp-checkout -b feat/checkout
+$ cd ../myapp-checkout
 $ devlanes start
-myapp@1 (feat/checkout): 2/2 ready
-ready api https://api.myapp1.localhost
-ready web https://myapp1.localhost
 ```
 
-One paragraph on what the artefact shows that the reader should notice.
+The main worktree is lane 0. This one becomes lane 1, and its API answers at `https://api.myapp1.localhost`.
 
-## The next point
+## The lane number is in the hostname
 
-...
+(a short paragraph and one fragment or command)
+
+The next page gives myapp a web app that has to find the API of its own lane.
 
 ## On your own project
 
@@ -36,136 +39,100 @@ One paragraph on what the artefact shows that the reader should notice.
 - [Lanes and projects](../concepts/lanes-and-projects.md)
 ````
 
-- The page follows `myapp` from the page before. It does not start a new story.
-- Three to five sections. Each has one artefact.
-- No instruction to the reader. The page shows a command and what came back; it never says to run it.
-- One new idea per section, in one sentence. The concept page holds the rest.
-- The last section is links only: the how-to guides that do this on the reader's project, and the concept page.
+- Three to five sections, each a heading that states its point, a short paragraph and one fragment or command.
+- After a command, one sentence says what happened: which lane, which hostname.
+- Show the lines a page adds to the project file, not the whole file.
+- The last sentence before the links leads into the next page.
 
 ## How-to guide
 
+One goal. About 300 words outside code.
+
 ````markdown
 ---
-title: Share one Postgres between lanes
+title: Share one database server between lanes
 description: Run one Postgres container for every lane and give each lane its own database in it.
 kind: how-to
 ---
 
-One line: the situation this guide is for, and what you end up with.
+Use this when every lane should have a database of its own and one Postgres is enough for all of them.
 
 ::example{slug="infra-postgres-shared"}
 
-## Add the container
+## Declare the container
 
-A sentence or two, then the config.
-
-```yaml devlanes
-infra:
-  compose: docker-compose.yml
-```
+(one sentence, then the smallest config that works)
 
 ## Create a database for each lane
 
-...
+(one sentence, then the fragment)
 
-## If each lane needs its own server
+## Start the lane
 
-A short paragraph, and a link to the guide for that case.
-````
+```console
+$ devlanes start
+```
 
-- The title starts with a verb and names the goal, not the feature.
-- Steps are sections in the order a person does them. Use the steps directive only for a short run of commands.
-- No explanation of how things work. One clause of reason is enough ("so a migration on a branch leaves `main` alone"), with a link to the concept page.
-- Variations come last, each under a heading that names the case.
-- Keys and flags the guide does not need are not mentioned. The reference has them.
+## If you pulled a newer image
 
-## Concept page
-
-````markdown
----
-title: Throttling and freezing
-description: A lane nobody uses is slowed down, then suspended, and comes back on the next request.
-kind: concept
----
-
-Two or three sentences: what the thing is and the problem it answers.
-
-## A heading that states the point
-
-Prose. The reasoning, the trade-off, what was decided against and the reason.
-
-![A lane moving between running, throttled and frozen](freezing.svg)
-
-## The next point
-
-...
+(a sentence or two and a command)
 
 ## Related
 
-- [Run many lanes on one machine](../how-to/lanes/many-lanes.md)
-- [`lanes.freeze_after`](/docs/reference/config/user/lanes/)
+- [Remove lanes](../lanes/clean-up.md)
 ````
 
-- No steps and no commands to run. A command may appear in an artefact that shows behaviour.
-- Reasons and alternatives are the content. A concept page may hold an opinion.
-- Settings are named in a link to the reference, not described.
+- The title starts with a verb and names the goal.
+- Steps in the order a person does them. Variations last, as "If ..." headings, two at most.
+- One clause of reason at most, then a link to the concept page. Keys are not described one by one: link the config reference.
 
-## Reference page
+## Concept
+
+One part of devlanes as a model. About 600 words.
+
+````markdown
+---
+title: Ports
+description: How devlanes gives each lane a block of ports and each service a place in it.
+kind: concept
+---
+
+No two lanes can listen on the same port, so devlanes hands the ports out. You never write one in the project file.
+
+## Each lane takes a block of ports
+
+(two or three short paragraphs)
+
+![The port pool with the blocks of lane 0 and lane 1 of myapp](ports.svg)
+
+## A service has the same place in every block
+
+(...)
+````
+
+- Headings state the point of their section.
+- The ordinary case, and the one or two consequences worth knowing. No list of conditions, no exceptions catalogue, no timings.
+- A reason only when the code or the owner states one.
+
+## Reference
+
+What a person sets, types or sees.
 
 ````markdown
 ---
 title: States and exit codes
-description: The states a unit can be in and the exit codes of the CLI.
+description: The states of a unit and a lane, and the exit codes of the devlanes command.
 kind: reference
 ---
-
-One sentence saying what the page lists.
 
 ## Unit states
 
 | State | Meaning |
 |---|---|
-| `ready` | The unit runs and passed its ready check. |
-
-## Exit codes
-
-| Code | Meaning |
-|---|---|
-| `0` | Success. |
+| `starting` | The process runs and its ready check has not passed yet. |
+| `ready` | The ready check passed. |
 ````
 
-- Describe; do not advise or explain reasons. Link a how-to guide or a concept for those.
-- The same layout for every entry on the page.
-- Complete. A reference page that lists some of the states is wrong.
-- Order follows the product: the order of the config, of the help, of the screen.
-
-## A dense paragraph, rewritten
-
-This paragraph is correct, and no reader gets through it. It holds a lifetime rule, an idempotence rule, the reload model and the freezing model, with a setting name and two cross-references.
-
-> The daemon starts on first use or with `devlanes daemon start`, and stops on its own about 15 seconds after the last TUI closes while nothing runs (the summary printed when the TUI closes says so), or after about 5 minutes when neither a TUI nor a command showing progress ever watched it, as when only scripts or agents used it (`daemon.exit_when_idle`). `start` is safe to repeat: running services are left alone. An edit to `devlanes.yaml` leaves them alone too: `devlanes status` shows which services it changed, added or removed, and `devlanes reload` restarts, starts or stops only those. A lane without requests, connections or commands for 15 minutes is frozen, and the next request, connection or command resumes it.
-
-Where each fact goes:
-
-| Fact | Page |
-|---|---|
-| The daemon starts on first use and outlives the terminal | `learn/first-service.md`, one sentence |
-| It exits when idle, with the timings | `concepts/daemon.md`; the setting in the generated reference |
-| Starting twice is safe | `learn/first-service.md`, one sentence |
-| An edit never restarts anything; `reload` applies it | `learn/failures.md`, with an artefact; the model in `concepts/config-and-reload.md` |
-| A lane nobody uses is frozen and thaws on activity | `concepts/freezing.md`; one sentence in `learn/worktrees.md` |
-
-On the Learn page the first fact becomes a section:
-
-````markdown
-## The daemon owns the process, not the terminal
-
-The start handed the service to a background daemon. The terminal it was typed in has no part in keeping it up.
-
-```console
-$ devlanes status
-myapp
-  LANE  BRANCH  STATE    SERVICES  URL
-  0     main    running  1/1       https://myapp.localhost
-```
-````
+- The same layout for every entry, in the order of the product.
+- No advice and no reasons.
+- Complete for what it covers, and it covers only what someone would look up.

@@ -4,39 +4,33 @@ description: Collect the versions, checks and logs a devlanes bug report needs, 
 kind: how-to
 ---
 
-When devlanes does something you did not expect, a report with what you ran, what came back and what the daemon logged lets someone else reproduce it. A few commands collect most of that.
+Use this when devlanes does something you did not expect and you want someone to reproduce it.
 
 ## Check the machine
 
-The doctor command checks the daemon, Docker, the proxy, the CA and hostname lookups, and prints a fix under each line that is off. Its release lines are what a report needs first: the version, the build and how devlanes was installed.
-
-```console title="on Windows 11"
+```console
 $ devlanes doctor
-release
-  ✓ devlanes 0.13.0 (release build v0.13.0), installed with install.ps1
-  ✓ runs from C:\Users\you\AppData\Local\Programs\devlanes\devlanes.exe
-  ✓ latest release 0.13.0, read from github, updates.mode: notify, checked 1h ago
 ```
 
-When a service is the problem, `devlanes debug why` with its name gives the reasons it is not running or not ready, and `devlanes debug errors` lists what failed, how often it crashed and its recent error lines. Put their output in the report too.
+The doctor checks the daemon, Docker, the proxy, the CA and hostname lookups, prints a fix under each line that is off, and names the version and how devlanes was installed. When a service is the problem, `devlanes debug why` with the service's name gives the reasons.
 
 ## Make a debug bundle
 
-The bundle writes an archive for the report and prints where it is. Add the command that goes wrong after two dashes, and the bundle runs it again, with the most detailed diagnostics, and adds what it printed. That command really runs: a start starts the service, and a clean with `--yes` cleans the lane.
+Add the command that goes wrong after the two dashes. The bundle runs it again with full diagnostics, so a start really starts the service.
 
 ```console
 $ devlanes debug bundle -- start api
 ```
 
-The archive holds the client and daemon versions, the doctor checks, a check of the project file, the status of the lanes, the end of the daemon's log and the output of the command you added. Without a command after the two dashes, the bundle only reads from a running daemon and never starts one, so it also works when the daemon does not come up.
+It writes an archive with the versions, the doctor's checks, the status of the lanes, the end of the daemon's log and the output of that command, and prints where the archive is. Values of variables named like tokens, keys or passwords are replaced, but a secret under another name stays, so read the files before you attach them.
 
-## Read the archive before you attach it
+## File the issue
 
-Before anything is written, devlanes replaces the values of variables whose names look secret, such as names with token, key or password in them, along with passwords in URLs and your home directory. Project, branch and host names stay. A secret in a variable whose name does not say so, or in a command's arguments, stays as well, so open the files and remove what should not be public.
+Open an issue at [github.com/devlanes-run/devlanes/issues](https://github.com/devlanes-run/devlanes/issues) with your OS, the command you ran, what you expected and what you got, the lines of the project file involved with secrets removed, and the bundle.
 
-## Turn up the daemon's log
+## If the daemon's log needs more detail
 
-`devlanes daemon logs` prints the end of the daemon's own log. For more detail in it, restart the daemon with a debug level, then do what goes wrong again. The restart stops each running service and starts it again, so it asks first when services run.
+Restart the daemon with a debug level, then do what goes wrong again and make the bundle. The restart stops your services and starts them again.
 
 ::::tabs{sync="os"}
 :::tab[macOS]
@@ -56,20 +50,9 @@ PS> $env:DEVLANES_LOG = "debug"; devlanes daemon restart
 :::
 ::::
 
-For a single command, `-v` prints what the client and the daemon did, step by step, with timestamps, on stderr. `-vv` prints more.
-
-## File the issue
-
-Open an issue at [github.com/devlanes-run/devlanes/issues](https://github.com/devlanes-run/devlanes/issues) with:
-
-- your OS and its version, and the release lines of the doctor, with your user name replaced
-- the command you ran, what you expected and what you got, with its output
-- the lines of the project file the problem touches, with secrets removed
-- the debug bundle
-
 ## If it is a security problem
 
-Do not open a public issue. Follow the [devlanes-run security policy](https://github.com/devlanes-run/.github/blob/main/SECURITY.md), which says where to send it and what to include.
+Do not open a public issue. Follow the [devlanes-run security policy](https://github.com/devlanes-run/.github/blob/main/SECURITY.md).
 
 ## Related
 

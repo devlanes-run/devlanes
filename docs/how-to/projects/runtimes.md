@@ -4,11 +4,11 @@ description: The lines a Node, Bun, Deno, Python or Rust service needs to listen
 kind: how-to
 ---
 
-Use this guide when you put a Node, Bun, Deno, Python or Rust service on devlanes and want to know what its code and command need. devlanes tells which runtime a service uses from its script's file or its folder, and sets the variables that runtime reads.
+Use this guide when you put a Node, Bun, Deno, Python or Rust service on devlanes and want the lines its code and command need.
 
 ## Listen on the port and host
 
-Each service gets its port in `PORT` and the loopback address in `HOST`. Read both where the server starts listening, with fallbacks for when you run it without devlanes.
+Each service gets its port in `PORT` and the loopback address in `HOST`. Read both where the server starts listening.
 
 ::::tabs{sync="runtime"}
 :::tab[Node]
@@ -16,8 +16,6 @@ Each service gets its port in `PORT` and the loopback address in `HOST`. Read bo
 const port = Number(process.env.PORT ?? 3000);
 server.listen(port, process.env.HOST ?? "127.0.0.1");
 ```
-
-Express and Koa take the same two arguments. Fastify takes them as `{ port, host }`.
 :::
 :::tab[Bun]
 ```ts
@@ -36,22 +34,18 @@ Deno.serve({
 }, handler);
 ```
 
-Deno asks for permission to read the two variables, so the task grants it:
+The task has to allow reading the two variables:
 
 ```json title="deno.json"
 { "tasks": { "dev": "deno run --watch --allow-net --allow-env=PORT,HOST main.ts" } }
 ```
 :::
 :::tab[Python]
-Python dev servers take the port and host as flags, so the service is a plain command with an expression for the port.
-
 ```yaml devlanes
 services:
   api:
-    run: uv run uvicorn acme.main:app --host 127.0.0.1 --port ${{ self.port }} --proxy-headers
+    run: uv run uvicorn acme.main:app --host 127.0.0.1 --port ${{ self.port }} --reload
 ```
-
-Django and Flask need settings of their own to read the proxy's forwarded headers, which [Set CORS and cookies for each lane](../hostnames/cors-and-cookies.md) shows.
 :::
 :::tab[Rust]
 ```rust
@@ -64,54 +58,35 @@ let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
 
 ## Reload on change
 
-devlanes runs the command you give it and leaves watching files to the runtime, so put the runtime's watch flag in the script.
+devlanes leaves watching files to the runtime, so use its watch mode in the command:
 
-::::tabs{sync="runtime"}
-:::tab[Node]
-Use `node --watch`, tsx watch or nodemon in the dev script.
-:::
-:::tab[Bun]
-Use `bun --watch` in the dev script.
-:::
-:::tab[Deno]
-The `--watch` flag in the task above restarts the server on each edit.
-:::
-:::tab[Python]
-Add `--reload` to uvicorn, with `--reload-dir src` so the watcher skips the virtual environment. Django's runserver reloads by itself.
-:::
-:::tab[Rust]
-Nothing rebuilds the binary by itself. After an edit, a restart of the service runs cargo again and starts the new build:
+- Node: `node --watch`, tsx watch or nodemon.
+- Bun: `bun --watch`.
+- Deno: `deno run --watch`, as in the task above.
+- Python: uvicorn's `--reload`.
+
+A Rust service rebuilds when you restart it:
 
 ```console
 $ devlanes restart api
 ```
 
-To rebuild on every save, run cargo-watch or bacon as the service's command. The first start compiles every dependency, so give the ready check a long timeout.
-:::
-::::
-
-A watcher keeps running after the program under it crashes. Give the service a ready check that reaches the app, as [Wait until a service is ready](../services/ready-checks.md) shows, so a crash on start does not pass as ready.
-
 ## If devlanes picks the wrong runtime
 
-A folder with a `package.json` counts as Node even when it also holds a Python or Rust manifest. Set the runtime on the service:
+devlanes tells the runtime from the script's file or the service's folder. A folder with a package.json counts as Node, so set the runtime on a Python or Rust service there:
 
 ```yaml devlanes
 services:
   api:
     platform: python
-    cwd: services/api
-    run: uv run uvicorn acme.main:app --host 127.0.0.1 --port ${{ self.port }}
 ```
-
-A Bun project with a `bunfig.toml` and no lockfile runs under Bun while its scripts run with npm. Name Bun in the project's `packageManager` field, which settles both.
 
 ## If a service calls another hostname over HTTPS
 
-Node, Bun, Deno, Python and Rust services get the variable their runtime reads for the devlanes CA, so delete any setting that turns certificate checks off. A script that sets `NODE_EXTRA_CA_CERTS` itself replaces the devlanes CA, so remove that line. A Rust client built only on webpki-roots reads no variable; add the file in `DEVLANES_CA_CERT` to its roots in code. [Trust the devlanes CA](../hostnames/trust-the-ca.md) covers other runtimes and TLS stacks.
+devlanes points these runtimes at its CA, so remove any setting that turns certificate checks off. [Trust the devlanes CA](../hostnames/trust-the-ca.md) covers other runtimes.
 
 ## Related
 
 - [Run scripts your project already has](run-scripts.md)
-- [Read .env values and pin tool versions](env-files-and-tools.md)
+- [Wait until a service is ready](../services/ready-checks.md)
 - [`services.<name>.platform`](/docs/reference/config/project/services/#services-name-platform)

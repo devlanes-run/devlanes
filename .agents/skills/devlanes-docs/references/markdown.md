@@ -40,17 +40,12 @@ Lowercase words joined by hyphens. No page is named `agents.md` or `claude.md`: 
 ````markdown
 ```console title="on the box"
 $ devlanes daemon pair
-pairing code: K7QM-3XWD
-it works once and expires in 10 minutes
 ```
 ````
 
-- A line that starts with `$ ` is a command. Every other line is output. The copy button takes the commands only.
-- `PS> ` starts a PowerShell command.
-- `title` names where the command runs when that matters: a folder, "on the box", "on your machine", or the OS when the output differs by OS.
-- One command with its output per block where possible. A block of several commands with no output is a script.
-- Output that contains a fenced block of its own, such as an error page in Markdown, goes in a block opened and closed with four backticks.
-- Output is real ("Accuracy" in `SKILL.md`).
+- A block holds the commands a person types, one per line, each starting with `$ `. `PS> ` starts a PowerShell command. No output: the reader runs the command and sees it.
+- `title` names where the commands run when that matters: "on the box", "on your machine".
+- Commands that share a block are run one after another.
 
 ## Prompt blocks
 
@@ -76,9 +71,9 @@ services:
 ````
 
 - `yaml devlanes` is a project file or a fragment of one. `yaml devlanes-user` is the user config.
-- A first-line comment with a file name sets the tab title: `# devlanes.local.yaml`. The website takes that line out of the rendered file, so line 1 of the block is the line after it and line numbers in error messages match.
+- A first-line comment with a file name sets the tab title: `# devlanes.local.yaml`.
 - Each key shows its description on hover and links to the reference. An unknown key fails the website build.
-- When a page shows a whole file that an earlier page already showed, mark the lines that are new: `yaml devlanes ins={12-30,41}`. Ranges count lines as written in the Markdown, the file-name comment included.
+- Show the lines a step is about. A whole file only on the page that first builds it.
 - Plain `yaml` is for other files: Compose files, CI workflows. Other files take their own language: `js`, `json`, `toml`, `sh`, `powershell`, `ssh-config`, and `text` when nothing fits. A `title` names the file.
 - Comments in a config block say why a line is there. They do not repeat the hover.
 

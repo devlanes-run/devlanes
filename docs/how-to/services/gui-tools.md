@@ -5,11 +5,11 @@ kind: how-to
 publish: false
 ---
 
-devlanes does not stream windows, but a simulator, an emulator or a remote desktop that already shows itself in a browser or over a TCP port runs in a lane as an ordinary service, with a hostname you open on your machine.
+devlanes does not stream windows, but a tool that already shows itself in a browser or over a TCP port runs in a lane as an ordinary service.
 
 ## Give the tool the service's port
 
-devlanes gives each service a port and sends the service's hostnames to it, so the tool has to listen on that port. Each tool has its own flag for it. Xpra, which runs X11 programs on a Linux machine and serves them through an HTML5 client on its TCP port, takes it in its bind option:
+devlanes routes the service's hostname to its port, so pass the port to the tool's own listen flag and keep the tool in the foreground. Xpra serves X11 programs through an HTML5 client:
 
 ```yaml devlanes
 services:
@@ -18,11 +18,11 @@ services:
     hosts: "desktop.${{ lane.domain }}"
 ```
 
-The HTML5 client is then behind the service's hostname, such as `https://desktop.myapp.localhost` in lane 0. Keep the tool in the foreground, as the daemon flag here does. A service whose process exits shows as failed, so a tool that moves itself to the background looks broken to devlanes.
+The desktop then opens at `https://desktop.myapp.localhost` in lane 0.
 
-## Reach an emulator over TCP
+## If the tool speaks plain TCP
 
-An Android emulator is reached through an adb server, which speaks plain TCP and needs no hostname. Its port flag sets the port the server listens on, and its nodaemon form keeps it in the foreground:
+An Android emulator's adb server needs no hostname. Point adb at the port status lists for the service, with its own port flag:
 
 ```yaml devlanes
 services:
@@ -30,11 +30,9 @@ services:
     run: "adb -P ${{ self.port }} nodaemon server"
 ```
 
-The server listens on the port that status lists for the service. Point adb and the tools that use it at that port, with adb's own port flag or the `ANDROID_ADB_SERVER_PORT` variable.
-
 ## If the tool runs on a box
 
-On a box, another machine whose lanes you open from yours, the same services reach your machine. Hostnames open there through your proxy, and ports are mirrored under the same numbers, so adb on your machine reaches the box's adb server on the port the box lists. The connection carries TCP only, so a tool that needs UDP does not work across it. [Lanes on another machine](../../learn/remote.md) shows a box and your machine side by side.
+On a box, another machine whose lanes you open from yours, hostnames open on your machine and ports are mirrored under the same numbers. [Lanes on another machine](../../learn/remote.md) shows how.
 
 ## Related
 

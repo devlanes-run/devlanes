@@ -4,34 +4,21 @@ description: Each Git worktree of a project runs as a numbered lane with its own
 kind: concept
 ---
 
-You work on two branches at once, each in a Git worktree of its own. devlanes gives each worktree a lane: a place to run the project, with a number, hostnames, a block of ports and a data folder of its own, which it keeps whether its services run or not. The project is what one project file describes, and its name together with the lane number gives each lane its hostnames.
+You work on two branches at once, each in a Git worktree of its own. devlanes runs a lane for each worktree: a running copy of the project with its own number, hostnames, ports and data folder. The project is what one project file describes, and its name is what ties the lanes together.
 
 ## Each worktree runs its own lane
 
-A worktree is a folder with one branch of its own. devlanes ties each lane to one worktree, and knows the worktree by Git's record of it rather than by its path. When you move a worktree with `git worktree move`, its lane keeps its number and its ports.
+A worktree is a folder with one branch checked out. Each lane belongs to one worktree, so lanes in two worktrees share no source files, installed dependencies or build output. When you move a worktree with `git worktree move`, its lane follows it.
 
-What a lane runs are its units, chiefly the services and tasks of the project file, next to the containers the project declares, such as a database ([Glossary](../reference/glossary.md)). A start can pick a profile, a named selection of services, and runs the setup entries, such as creating the lane's database, once its containers are up ([Start order and readiness](start-order.md)).
+What a lane runs are its units, mostly the services and tasks of the project file, next to the containers the project declares, such as a database ([Glossary](../reference/glossary.md)).
 
-A folder outside Git has one lane. A folder can also get a second lane, which shares every file in it ([Run a folder as two lanes](../how-to/lanes/two-lanes-one-folder.md)).
+![Two worktrees of myapp: ~/dev/myapp on main is lane 0 at myapp.localhost, ~/dev/myapp-checkout on feat/checkout is lane 1 at myapp1.localhost](lanes-and-projects.svg)
 
-## A worktree gets its lane when you first use it
+## Lanes are numbered
 
-The worktree on the primary branch is lane 0, the main lane. The primary branch is the remote's default branch, or main or master without a remote, unless the project file names another.
+The worktree on the primary branch, usually main, is lane 0, the main lane. Any other worktree gets the lowest free number the first time you run devlanes in it, with a start or a status, for example. Creating a worktree with Git does nothing by itself.
 
-```yaml devlanes
-lanes:
-  primary: main
-```
-
-That worktree gets its lane without a command running in it. So does the main checkout, the folder the repository was cloned into, when no worktree is on the primary branch, though it then takes the lowest free number. Any other worktree gets its lane the first time you run a command there that acts on the lane or shows its ports, URLs or environment, such as `devlanes start` or `devlanes status`. Reading logs only reads what is there, so it gives a worktree no lane.
-
-A new lane takes the lowest number no other lane holds. Creating a worktree with Git does nothing by itself, and [`lanes.new_worktrees`](/docs/reference/config/project/lanes/) says whether a lane is only reserved, or also set up or started, when the worktree gets it.
-
-CI usually checks a pull request out detached from any branch, so there the main checkout takes lane 0 while it is free, whatever its branch.
-
-## A lane is named after its number
-
-Lane 0 is named main and the others lane1, lane2 and so on, whatever their branch. A value built from the name follows the number.
+Lane 0 is named main and the others lane1, lane2 and so on, whatever their branch. Values built from the name differ per lane, which is how each lane gets a database of its own:
 
 ```yaml devlanes
 lanes:
@@ -39,47 +26,30 @@ lanes:
     db_name: myapp_${{ lane.name }}
 ```
 
-That gives myapp_main in lane 0 and myapp_lane1 in lane 1.
+That gives myapp_main in lane 0 and myapp_lane1 in lane 1. The number also gives the lane its domain, as [Hostnames and HTTPS](hostnames-and-https.md) describes.
 
-## Lane 0 can move to another worktree
+Each lane also has a data folder outside its worktree, for files that no other lane may share, such as a local database file ([Files and folders](../reference/files.md#lane-data-folder)).
 
-Say you switch the folder you cloned into to a feature branch, and check the main branch out in your second worktree. At that worktree's next start, once neither lane runs anything, it becomes lane 0, and the old main lane takes the lowest free number.
+## A deleted worktree keeps its lane until you clean it
 
-![Before the branches swap, ~/dev/myapp is lane 0 and ~/dev/myapp-checkout lane 1; after a start, ~/dev/myapp-checkout is lane 0 and ~/dev/myapp lane 2, each lane keeping its ports and data folder](lanes-and-projects.svg)
-
-Each lane keeps its ports and its data folder, which is keyed by an id that does not change. Its name and domain follow the new number, and devlanes copies and renames nothing. So a database named after the lane changes under it: the new lane 0 opens myapp_main, which the old main lane filled, and the old main lane looks for one under its new name. Data that has to stay with a lane belongs in its data folder ([Files and folders](../reference/files.md#lane-data-folder)).
-
-## A deleted worktree leaves its lane behind
-
-When you delete a worktree, say with `git worktree remove` after a merge, the daemon notices and stops what the lane runs, skipping its `lane.stop` tasks, which need the folder. It keeps the lane itself: its number, port block and data folder, and the containers that belong to the lane alone, which keep running. Status marks the lane as missing its worktree, and a new worktree takes the lowest number still free.
-
-`devlanes lane gc` cleans the lanes whose worktree is gone, while `devlanes lane clean` cleans one lane you name.
-
-A project can have the daemon clean these lanes by itself.
-
-```yaml devlanes
-lanes:
-  removed_worktrees: clean
-```
-
-A running lane is then cleaned at once, and one that runs nothing once its folder has been gone a few seconds, so a moved worktree keeps its lane. The clean removes the lane's own containers and its data folder and frees its number and port block for the next worktree. [Remove lanes](../how-to/lanes/clean-up.md) says what a clean skips without the folder.
+When you remove a worktree after a merge, devlanes stops what its lane ran but keeps the lane: its number, ports, data folder and containers. A new worktree takes another number in the meantime. `devlanes lane gc` cleans the lanes whose worktree is gone, and cleaning deletes the lane's data folder and its own containers. [Remove lanes](../how-to/lanes/clean-up.md) covers this, and how to have it happen by itself.
 
 ## A project is known by its name
 
-The name builds each lane's domain, the names of its containers and lane references such as `myapp@1`, and other projects use it to read this one's URLs. A name belongs to one repository, and two clones of one repository are two repositories. Commands in the second clone are refused while the first is still on disk, and the error asks you to give the second another name. Once the first clone is gone, the name moves to the second.
+The `project` name in the project file builds each lane's domain and the names of the containers devlanes creates, and commands use it to name a lane, as in `myapp@1`. Every worktree of a repository shares the name, so every worktree is a lane of the same project.
 
-If you rename the project, or check out a branch whose project file uses another name, the worktree's next command goes to a different project, with new lanes, ports and domains. The old lane stays and keeps running until you stop it. Switching back finds it as it was, unless `devlanes lane gc` cleaned it meanwhile.
+Renaming the project makes a new project, with new lanes, ports and domains; the old lanes stay until you clean them. A name belongs to one repository, so on one machine use worktrees of one clone rather than a second clone.
 
 ## One repository can hold several projects
 
-A command uses the nearest project file above the current folder, up to the root of the repository, since a file above the repository belongs to some other project ([Config files and reload](config-and-reload.md)). An app in a monorepo can therefore be a project of its own, with a project file in its folder and a name of its own.
+A command uses the nearest project file above the current folder, up to the root of the repository. So an app in a monorepo can be a project of its own, with a project file in its folder and a name of its own:
 
 ```yaml devlanes
 # apps/billing/devlanes.yaml
 project: billing
 ```
 
-A worktree then holds a lane of each project, such as myapp lane 1 at `myapp1.localhost` and billing lane 1 at `billing1.localhost`, while the worktree's files stay shared. [Split a monorepo into projects](../how-to/projects/monorepo.md) weighs one project against several, and [Run dev servers and a production build side by side](../how-to/projects/dev-and-prod.md) adds a second project file to one folder.
+A worktree then holds a lane of each project, with domains of its own. [Split a monorepo into projects](../how-to/projects/monorepo.md) weighs one project against several, and [Run dev servers and a production build side by side](../how-to/projects/dev-and-prod.md) adds a second project file to one folder.
 
 ## Related
 
