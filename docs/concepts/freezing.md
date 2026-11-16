@@ -12,6 +12,7 @@ By default a lane is throttled after 5 minutes without activity: its processes r
 
 ```mermaid
 stateDiagram-v2
+  accTitle: A running lane is throttled, then frozen, and activity makes it run again
   direction LR
   running --> throttled: unused for the throttle time
   throttled --> frozen: unused for the freeze time

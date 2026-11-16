@@ -14,6 +14,7 @@ What a lane runs are its units, mostly the services and tasks of the project fil
 
 ```mermaid
 flowchart LR
+  accTitle: Each worktree of myapp runs as its own lane with its own hostname
   subgraph repo["The worktrees of myapp"]
     wt0["~/dev/myapp<br/>branch main"]
     wt1["~/dev/myapp-checkout<br/>branch feat/checkout"]

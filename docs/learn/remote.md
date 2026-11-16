@@ -53,6 +53,7 @@ You open `https://myapp.localhost` in the browser on your machine. Your daemon a
 
 ```mermaid
 flowchart LR
+  accTitle: The browser on your machine reaches the web service on the box through the two daemons
   subgraph you["Your machine"]
     browser["Browser<br/>https://myapp.localhost"]
     daemon["devlanes daemon"]

@@ -32,6 +32,7 @@ All hostnames arrive at the proxy on one port, 443 by default. The browser names
 
 ```mermaid
 flowchart TB
+  accTitle: A request for api.myapp1.localhost resolves to 127.0.0.1 and the proxy passes it to the api of lane 1
   browser["Browser<br/>https://api.myapp1.localhost"]
   dns["The name resolves to 127.0.0.1"]
   proxy["Proxy in the daemon<br/>finds the route and signs a certificate with the devlanes CA"]

@@ -14,6 +14,7 @@ A new lane takes the lowest free block of consecutive ports, and no two blocks o
 
 ```mermaid
 flowchart LR
+  accTitle: The port pool holds a block for each lane, with api and web at the same place in each block
   subgraph pool["The port pool, 20000 to 32767"]
     subgraph b0["Block of lane 0"]
       a0["api: first port"]

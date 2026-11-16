@@ -12,6 +12,7 @@ The daemon starts and stops each unit of a lane, a service or task for example (
 
 ```mermaid
 flowchart LR
+  accTitle: The CLI, the TUI and the MCP server send requests to the daemon, which holds the processes, the proxy, the state and the logs
   subgraph daemon["devlanes daemon"]
     procs["The processes of each lane"]
     proxy["The proxy for hostnames over HTTPS"]

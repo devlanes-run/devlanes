@@ -141,13 +141,15 @@ A live TUI on the page. `view` is `lanes`, `monitor`, `daemon` or `boxes`. It re
 ````markdown
 ```mermaid
 flowchart LR
+  accTitle: A browser request goes through the proxy to the api of lane 1
   browser["Browser"] --> proxy["Proxy in the daemon"] --> api["api of lane 1"]
 ```
 ````
 
 A diagram is a Mermaid block in the page, so it is text that shows in a diff and that an agent can read and edit. No image files.
 
-- `flowchart` for boxes and arrows, with `subgraph` for one thing inside another. `stateDiagram-v2` for states.
+- The line after the diagram type is `accTitle:` with one sentence on what the diagram shows. The website reads it to screen readers, and a diagram without it fails the website build.
+- `flowchart` for boxes and arrows, with `subgraph` for one thing inside another. `stateDiagram-v2` for states. The website also draws sequence, class, ER and XY chart diagrams, and any other type fails its build.
 - Put every label in double quotes. Break a line with `<br/>`.
 - No colours or styles: the website themes the diagram.
 - Declare a `subgraph` before an arrow points at it.

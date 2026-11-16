@@ -12,6 +12,7 @@ Unless you name a file with `--file`, devlanes loads the nearest `devlanes.yaml`
 
 ```mermaid
 flowchart LR
+  accTitle: The project file and the local file merge into the lane's config, and a reload applies what differs from what runs
   a["devlanes.yaml"] --> c["The lane's config"]
   b["devlanes.local.yaml<br/>wins where both set a key"] --> c
   c -- "differs from what runs: drift" --> r["devlanes reload applies it"]

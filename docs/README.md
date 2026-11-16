@@ -24,6 +24,7 @@ To do it by hand, start with [Install devlanes](install.md).
 
 ```mermaid
 flowchart TB
+  accTitle: A browser request goes through the proxy in the daemon to the api of lane 1
   browser["Browser<br/>https://api.myapp1.localhost"]
   subgraph daemon["devlanes daemon"]
     proxy["Proxy: HTTPS for each hostname"]

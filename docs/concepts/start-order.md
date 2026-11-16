@@ -12,6 +12,7 @@ Containers are the databases and other programs a project runs in Docker, such a
 
 ```mermaid
 flowchart LR
+  accTitle: A start runs containers, setup, tasks, services, then the tasks that wait for services
   c["Containers<br/>postgres"] --> s["Setup<br/>create the database"]
   s --> t["Tasks<br/>install, then migrate"]
   t --> sv["Services<br/>api and web, in no order"]

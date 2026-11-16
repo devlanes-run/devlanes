@@ -12,6 +12,7 @@ Each machine runs its own daemon. The daemon on your machine owns the connection
 
 ```mermaid
 flowchart LR
+  accTitle: A browser and a tool on your machine reach a service on the box through a mirrored port and one connection
   subgraph you["Your machine"]
     browser["Browser"]
     proxy["Your proxy"]

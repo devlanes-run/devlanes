@@ -12,6 +12,7 @@ The daemon listens on a socket, a named pipe on Windows, that only your account 
 
 ```mermaid
 flowchart LR
+  accTitle: Processes running as you reach the daemon and the CA key, and the daemon reaches a box after the pairing check
   subgraph you["Your account on your machine"]
     procs["Anything running as you"]
     sandbox["A process in a sandbox"]
