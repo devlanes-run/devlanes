@@ -32,7 +32,7 @@ The words the devlanes docs use, in alphabetical order, each with the page that 
 | Lane event | A point in a lane's life that runs tasks: `lane.create`, `lane.start`, `lane.stop` and `lane.clean`, set in a task's `when`. | [Run installs, migrations and seeds](../how-to/services/tasks.md) |
 | Lane id | A number the daemon gives a lane when it creates it. It names the lane's data folder and stays the same when the lane number changes. | [Files and folders](files.md#lane-data-folder) |
 | Lane name | `main` for lane 0 and `lane<N>` for lane N. A lane added with `devlanes lane new --name` is also reached by that name; its `lane.name` stays `lane<N>`. | [Lanes and projects](../concepts/lanes-and-projects.md) |
-| Lane number | A lane's index: `0` for the primary worktree, then `1`, `2` and so on. In CI, the clone the job made is lane 0. | [Lanes and projects](../concepts/lanes-and-projects.md) |
+| Lane number | A lane's index: `0` for the primary worktree, then `1`, `2` and so on. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Lane reference | How a command names a lane, such as `1`, `feat/checkout` or `myapp@1`. | [Lane and unit references](lane-and-unit-references.md) |
 | Lane vars | `lanes.vars` in the project file: values computed once per lane and read as `lane.<name>`. | [Expressions](expressions.md#lane) |
 | Local file | `devlanes.local.yaml`: one developer's changes to the project file, kept out of Git. | [Keep personal changes out of Git](../how-to/projects/local-overrides.md) |
@@ -48,7 +48,7 @@ The words the devlanes docs use, in alphabetical order, each with the page that 
 | Port block | The range of consecutive ports each lane gets from the port pool. | [Ports](../concepts/ports.md) |
 | Port pool | The range all port blocks of the machine come from, `ports.range` in the user config. | [Ports](../concepts/ports.md) |
 | Preset | A service setting, such as `preset: vite`, that passes a framework its port and other per-lane settings. | [Services that find each other](../learn/connecting-services.md) |
-| Primary worktree | The worktree that has the project's primary branch, such as `main`, checked out, or else the repository's main worktree. Its lane is lane 0. | [Lanes and projects](../concepts/lanes-and-projects.md) |
+| Primary worktree | The worktree that has the project's primary branch, such as `main`, checked out. Its lane is lane 0. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Profile | A named set of services, and their settings, that a start can select. | [Share settings and choose which services start](../how-to/projects/templates-and-profiles.md) |
 | Project | What one project file describes, named by its `project` key. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Project file | `devlanes.yaml`, the file that describes a project. A second one, such as `devlanes.prod.yaml`, is named with `--file`. | [A service, a port and a hostname](../learn/first-service.md) |
