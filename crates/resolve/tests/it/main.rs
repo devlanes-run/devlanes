@@ -120,6 +120,58 @@ profiles:
 }
 
 #[tokio::test]
+/// Units from the project file run the same whoever started the lane: the
+/// client layer loses every agent marker, and only those, while `${{ env.X }}`
+/// still reads them for a project that sets one back.
+async fn units_do_not_inherit_agent_markers() {
+    let config = parse(
+        r#"
+project: demo
+global_env: { CLAUDECODE: "${{ env.CLAUDECODE }}" }
+services:
+  api: { run: server }
+tasks:
+  reset-db: { run: pnpm db-reset }
+"#,
+    );
+    let facts = facts("demo", 1, Some("x"));
+    let (block, offsets) = allocation(&config, 21_000, &[]);
+    let mut client = client_env();
+    for (key, value) in [
+        ("AI_AGENT", "claude-code_2-1-201_agent"),
+        ("CLAUDECODE", "1"),
+        ("CLAUDE_CODE_ENTRYPOINT", "cli"),
+        ("CODEX_SANDBOX", "seatbelt"),
+        ("AGENT", "1"),
+        ("OPENCODE", "1"),
+        ("PS1", "###PS1JSON###{}###PS1END###"),
+    ] {
+        client.insert(key.into(), value.into());
+    }
+    let mut input = ResolveInput::new(&config, &facts, block, &offsets);
+    input.client_env = &client;
+    let lane = resolve_lane(input).await.expect("resolves");
+    assert!(lane.errors.is_empty(), "{:?}", lane.errors);
+    let task = lane.tasks["reset-db"].launch.as_ref().expect("task launch");
+    for env in [&lane.services["api"].launch.env, &task.env] {
+        for marker in [
+            "AI_AGENT",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CODEX_SANDBOX",
+            "AGENT",
+            "OPENCODE",
+        ] {
+            assert!(!env.values.contains_key(marker), "{marker}");
+        }
+        assert_eq!(env.values["CLAUDECODE"], "1");
+        assert_eq!(env.sources["CLAUDECODE"], EnvLayer::Global);
+        for kept in ["PATH", "PS1"] {
+            assert_eq!(env.values[kept], client[kept], "{kept}");
+        }
+    }
+}
+
+#[tokio::test]
 /// Windows folds variable names where layers merge and in `${{ env.X }}`, so
 /// a client's `Path` and a service's `PATH` are one variable there; Unix keeps
 /// both.

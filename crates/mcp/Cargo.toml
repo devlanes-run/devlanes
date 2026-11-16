@@ -29,7 +29,7 @@ devlanes-sys-windows = { path = "../sys-windows" }
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
-is-ai-agent = "0.7"
+is-ai-agent.workspace = true
 rmcp = { workspace = true, features = ["client"] }
 
 [lints]
