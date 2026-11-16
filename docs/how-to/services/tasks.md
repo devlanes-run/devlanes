@@ -57,6 +57,7 @@ Tasks on `lane.stop` run when you stop the whole lane or the daemon, and tasks o
 
 ## Related
 
+- [Run a command with a lane's environment](one-off-commands.md)
 - [A database for each lane](../../learn/databases.md)
 - [Share one database server between lanes](../infra/shared-database.md)
 - [Start order and readiness](../../concepts/start-order.md)

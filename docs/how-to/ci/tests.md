@@ -57,6 +57,7 @@ $ devlanes with --profile e2e -- npm test
 ## Related
 
 - [Run tests in CI](ci.md)
+- [Run a command with a lane's environment](../services/one-off-commands.md)
 - [A coding agent runs the lane](../../learn/coding-agents.md)
 - [States and exit codes](../../reference/states-and-exit-codes.md)
 - [`devlanes with`](../../reference/cli/with.md)

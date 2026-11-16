@@ -6,7 +6,7 @@ kind: how-to
 
 devlanes keeps itself up to date. It installs patch releases in the background and they apply the next time you start devlanes at a terminal. Use this for a release that waits for you, to change how devlanes updates, or to remove it.
 
-An install made with cargo, or as a dependency of a project, does not update itself. `devlanes update` prints the command to run.
+An install made with cargo, or as a dependency of a project, does not update itself. `devlanes update` says what to run or change instead.
 
 ## Update
 

@@ -39,6 +39,17 @@ services:
         path: /up
 ```
 
+## Stop the old reverse proxy
+
+If Caddy, nginx or Traefik served the project until now, the devlanes proxy takes its place, and the old one has to let go of ports 443 and 80. While its container runs, lane URLs carry port 8443, and an app that builds its URLs without a port gets them wrong. Remove the container, then restart the daemon so its proxy takes the ports:
+
+```console title="~/dev/myapp"
+$ docker compose rm -sf caddy
+$ devlanes daemon restart
+```
+
+[Choose the proxy's ports](../hostnames/proxy-ports.md) shows how to check which ports the proxy has.
+
 ## Settings that do not carry over
 
 The agent lists the ones your setup had:

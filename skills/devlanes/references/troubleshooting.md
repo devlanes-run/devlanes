@@ -20,6 +20,7 @@ devlanes debug errors --since 15m
 | `exited with code N`, `killed by signal N` | The process ended. | The log shows why. Fix the code, then `devlanes restart UNIT`. |
 | `task TASK failed with exit code N` | A task of the lane failed; services after it may not have started. | `devlanes logs TASK --tail 200`, fix, then `devlanes run TASK` or `devlanes start`. |
 | `infra setup failed: ...` | An `infra.setup` entry failed. | `devlanes logs setup.NAME`, fix, then `devlanes run infra.setup.NAME`. |
+| `global_env.NAME has no value in lane LANE`, on every service and task | The entry reads a shell variable that is unset, or `infra.*` while that container is down: the lane's profile has `infra: false`, or `devlanes run` ran before the containers were up. | For a missing container, `devlanes infra up`. Under an `infra: false` profile, move the entry from `global_env` into the `env` of the services that need it ([configuration.md](configuration.md)). |
 | `Docker isn't running or can't be reached` | The project has containers and Docker is down. | Ask the user to start Docker, then `devlanes start`. |
 | `UNIT is still running from a previous daemon (pid N); start does not take it over` | An `orphaned` unit. | `devlanes stop UNIT --lane LANE`, then start it. |
 | `NAME is a configured service of LANE; give exec another --name, or run the configured service` | `exec` reused a unit name. | Pick another `--name`. |
@@ -48,7 +49,7 @@ After the fix, `devlanes restart UNIT` runs it with the edited check.
 | `port PORT is mirrored from BOX for UNIT` | A box's mirror holds the port; [remote.md](remote.md). |
 | `the port pool has no free block of N ports for another lane`, a lane `unassigned` | Every block of `ports.range` belongs to a lane. `devlanes lane ls` lists them; with the user's agreement, `devlanes lane gc --yes` cleans lanes whose worktree is gone, and `devlanes lane clean LANE --yes` cleans one. |
 | `config changed ports; devlanes reload --lane LANE restarts the lane with them` | An edit needs ports the running lane lacks. Run the reload; it restarts the whole lane. |
-| `doctor`: `port PORT is held by PROGRAM (pid N); the LISTENER proxy will fall back to another port` | Another program holds 443 or 80, so URLs carry 8443 or 8080. Pass the URLs on as printed, or tell the user. |
+| `doctor`: `port PORT is held by PROGRAM (pid N); the LISTENER proxy will fall back to another port`, or `warn proxy: https on fallback port 8443: Port 443 is in use by another process; using 8443.` | Another program holds 443 or 80, so URLs carry 8443 or 8080. Pass the URLs on as printed, or tell the user. When the holder is the reverse proxy the project used before devlanes (a Caddy, nginx or Traefik container), see "Containers are infra" in [migration.md](migration.md). |
 
 ## The daemon
 
@@ -57,7 +58,9 @@ After the fix, `devlanes restart UNIT` runs it with the edited check.
 | `auto-spawn refused in sandbox (REASON); run devlanes daemon install outside the sandbox, then retry`, exit 4 | Your shell is sandboxed. | "When the shell cannot reach the daemon" in [setup.md](setup.md). |
 | `daemon is unreachable: ...`, exit 4 | The daemon does not answer on its socket or pipe. | `devlanes doctor`, then `devlanes daemon logs --tail 100`. |
 | `the daemon has not finished starting: step "STEP" made no progress for Ns` | A starting daemon is stuck on one step. | `devlanes daemon logs --tail 100`; report it to the user. |
-| `the running daemon is devlanes VERSION ... and cannot serve this CLI`, `protocol_mismatch` | The daemon runs another release than the CLI. | The hint is `devlanes daemon restart`, which restarts every service on the machine. Ask the user first. |
+| `the running daemon is devlanes VERSION ... and cannot serve this CLI`, `protocol_mismatch`, exit 4 | The daemon runs a release whose protocol differs from the CLI's. | The hint is `devlanes daemon restart`, which restarts every service on the machine. Ask the user first. |
+| `doctor`: `warn release: the daemon runs X, this CLI is Y` | The daemon runs another release than the CLI, as when the project pins devlanes in `package.json` and a global install started the daemon. Commands work. | Nothing. `devlanes daemon restart` moves the daemon to this CLI's release and restarts every service, so only when the user asks. |
+| `devlanes: command not found`, and `package.json` lists `devlanes` | The project pins devlanes. | Call it through the package manager, such as `npx devlanes` ([setup.md](setup.md), step 1). |
 | `doctor`: `terminal: this terminal ends the processes it started when it closes` (Windows) | A daemon started from this shell ends with the terminal. | Ask the user to run `devlanes daemon install` and `devlanes daemon start` in their own terminal. |
 | `doctor`: `daemon` not running | No daemon yet. | Nothing; the next command that needs it starts it. |
 | `doctor`: `user config PATH:LINE: MESSAGE` | The user config does not load, and the daemon will not start with it. | Show the user the line; `devlanes config unset KEY` restores a default. |

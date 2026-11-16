@@ -7,14 +7,14 @@ Read this when the user asks to move an existing setup (mprocs, dekit, process-c
 1. Find every setup in the repository root: the file names are listed in each section below. Several setups merge into one `devlanes.yaml`; when two define the same process differently, ask the user which one wins.
 2. Read each command to its end. Open the `package.json` scripts, Makefile targets and entrypoints the setup runs: they tell you which port a process listens on, whether it has a health route, what it logs once it is up, and whether it ends by itself.
 3. Write `devlanes.yaml` with the rules below. Keep the old files; delete them only when the user asks.
-4. Run `devlanes config check`, then `devlanes start`, and fix what fails (`devlanes debug why UNIT`, `devlanes logs UNIT --tail 200`). Check that `devlanes status --mine` shows each service ready on its hostname.
+4. Run `devlanes config check`, then `devlanes start`, and fix what fails (`devlanes debug why UNIT`, `devlanes logs UNIT --tail 200`). Check that `devlanes status --mine` shows each service ready on its hostname, and that no URL carries `:8443` when the old setup had a reverse proxy.
 5. Tell the user what did not carry over (the "not mapped" rows that apply) and what they need to do: `devlanes setup` once, a ready log line to add to a worker.
 
 ## Rules for every source
 
 Services and tasks. A process that keeps running is a service. A command that ends by itself (install, build, codegen, migrate, seed, reset, a test run, `docker compose up -d`) is a task: `when: lane.create` when it runs once per lane, such as an install in a new worktree, `when: lane.start` when it runs before every start, no `when` when the user runs it on demand. Add `after: services` when it needs a running service, and `confirm` when it destroys data. A source that marks processes as one-shot says so directly: dekit `type: job`, process-compose `process_completed` dependencies, overmind `OVERMIND_CAN_DIE`, the Heroku `release` type.
 
-Containers are infra. Processes that run `docker compose up`, `docker run`, a local database or a broker become `infra.compose` or `infra.containers`, with per-lane databases, vhosts and buckets created in `infra.setup` from `lanes.vars`. A local reverse proxy (Caddy, nginx, Traefik) goes in `infra.exclude`: the devlanes proxy serves `hosts` over HTTPS.
+Containers are infra. Processes that run `docker compose up`, `docker run`, a local database or a broker become `infra.compose` or `infra.containers`, with per-lane databases, vhosts and buckets created in `infra.setup` from `lanes.vars`. A local reverse proxy (Caddy, nginx, Traefik) goes in `infra.exclude`: the devlanes proxy serves `hosts` over HTTPS. `infra.exclude` only keeps devlanes from starting it. A proxy container left running from the old setup still holds 443 and 80, so the devlanes proxy falls back to 8443 and 8080, and an app whose `.env` builds URLs without a port then points at the old proxy. Check with `devlanes doctor` (`warn proxy: https on fallback port 8443`), and with the user's agreement remove the container (`docker compose rm -sf caddy`) and run `devlanes daemon restart`: the proxy takes its ports only when the daemon starts, and the restart restarts every service the daemon runs. On Windows the proxy can get 443 next to the old one; doctor then says the other program `listens too`, and the fix is the same.
 
 Ports. Each lane gives each service its own port in `PORT` and `${{ self.port }}`. Replace a literal port in a command (`--port 3000`, `-p 3000`, `PORT=3000`, `localhost:3000`) with `${{ self.port }}`, or use a preset that adds the flag. Drop a literal `PORT` from env. Never write `env: { PORT: "${{ self.port }}" }`: devlanes rejects it as a cycle and `PORT` already has that value. Where another process reached this one at `localhost:3000`, use `${{ services.<name>.port }}`, `${{ services.<name>.url }}` or `${{ services.<name>.public_url }}`. Pass an app that reads its port from its own variable `MY_PORT: ${{ self.port }}`. When a command has several literal ports, find out which one the process listens on before replacing anything.
 
@@ -506,7 +506,7 @@ tasks:
 | the file | `infra.compose:`, or a list with override files |
 | services every lane can share (Postgres, Redis, RabbitMQ, S3 mocks) | shared by default; per-lane databases, vhosts and buckets through `infra.setup` and `lanes.vars` |
 | services each lane needs its own copy of (mail catchers) | `infra.per_lane:` |
-| a reverse proxy (Caddy, nginx, Traefik) | `infra.exclude:`; give the services `hosts` instead |
+| a reverse proxy (Caddy, nginx, Traefik) | `infra.exclude:` with its Compose service name; give the services `hosts` instead, and remove its running container ("Containers are infra" above) |
 | an HTTP container users open in the browser | `infra.hosts: { s3mock: "s3.${{ lane.domain }}" }` |
 | `${VAR}` in the file | `infra.env:` (Compose interpolation only) |
 | `profiles:` | `infra.profiles:` |
