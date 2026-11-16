@@ -48,7 +48,7 @@ $ devlanes setup
 
 ## Open a lane from Windows
 
-Start a lane in the distribution and open its URL in your Windows browser. The proxy in the distribution cannot have ports 443 and 80, so lane URLs carry 8443, such as https://myapp.localhost:8443; [Choose the proxy's ports](hostnames/proxy-ports.md) changes that.
+Start a lane in the distribution and open its URL in your Windows browser. The proxy in the distribution cannot have ports 443 and 80, so lane URLs carry 8443, such as `https://myapp.localhost:8443`; [Choose the proxy's ports](hostnames/proxy-ports.md) changes that.
 
 ```console
 $ devlanes start

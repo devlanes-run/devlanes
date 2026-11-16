@@ -40,7 +40,7 @@ proxy:
 $ devlanes daemon restart
 ```
 
-Lane URLs then read https://myapp.localhost:9443. [`proxy.https_port`](/docs/reference/config/user/proxy/#proxy-https_port) and [`proxy.http_port`](/docs/reference/config/user/proxy/#proxy-http_port) have the details.
+Lane URLs then read `https://myapp.localhost:9443`. [`proxy.https_port`](/docs/reference/config/user/proxy/#proxy-https_port) and [`proxy.http_port`](/docs/reference/config/user/proxy/#proxy-http_port) have the details.
 
 ## If another device should reach a lane
 

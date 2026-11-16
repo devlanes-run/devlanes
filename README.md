@@ -46,7 +46,7 @@ It runs on macOS, Linux and Windows 11, and it is in beta.
 
 ## Why devlanes
 
-- [A lane per worktree](https://devlanes.run/docs/learn/worktrees/): the main branch at `https://myapp.localhost`, a feature branch at `https://myapp1.localhost`, each on its own ports.
+- [A lane per worktree](https://devlanes.run/docs/learn/worktrees/): the main branch at `myapp.localhost`, a feature branch at `myapp1.localhost`, each on its own ports.
 - [HTTPS hostnames](https://devlanes.run/docs/concepts/hostnames-and-https/) with certificates your browser trusts, and no port to remember.
 - [A database per lane](https://devlanes.run/docs/learn/databases/): one Postgres container, and a database in it for each lane.
 - [Coding agents](https://devlanes.run/docs/how-to/agents/set-up/) start, test and stop their own lane through a skill or an MCP server, and leave yours alone.
@@ -115,7 +115,7 @@ services:
 devlanes start
 ```
 
-In the main worktree this serves `https://myapp.localhost` and `https://api.myapp.localhost`. In a second worktree the same file serves `https://myapp1.localhost` and `https://api.myapp1.localhost`, on other ports.
+In the main worktree this serves `myapp.localhost` and `api.myapp.localhost` over HTTPS. In a second worktree the same file serves `myapp1.localhost` and `api.myapp1.localhost`, on other ports.
 
 ## Documentation
 
