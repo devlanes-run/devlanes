@@ -159,13 +159,13 @@ The rule, for a user named `alice`:
 # Installed by `devlanes setup`; remove with `devlanes setup --remove`.
 # Lets alice run the devlanes /etc/hosts helper as root without a password.
 # The helper only edits the block between `# devlanes begin` and `# devlanes end`.
-Defaults!/usr/local/libexec/devlanes-hosts !requiretty
 alice ALL=(root) NOPASSWD: /usr/local/libexec/devlanes-hosts
 ```
 
 The user name comes from `id -un` and may only contain letters, digits, `_`,
-`-` and `.`, so it cannot carry sudoers syntax. `!requiretty` lets the daemon
-run the helper without a terminal on systems that still set `requiretty`.
+`-` and `.`, so it cannot carry sudoers syntax. The rule sets no `Defaults`:
+sudo-rs, the default `sudo` on Ubuntu 25.10 and later, rejects settings it does
+not implement, such as `requiretty`.
 
 ## The block
 
@@ -332,10 +332,18 @@ refusing to run it.
 sudo asked for a password or refused. Check with
 `sudo -n -k /usr/local/libexec/devlanes-hosts version`. If that fails right
 after an install, `/etc/sudoers` probably does not read `/etc/sudoers.d`; it
-needs `#includedir /etc/sudoers.d` or `@includedir /etc/sudoers.d`. After a
-denial the daemon waits five minutes before trying sudo again, so a missing
-rule does not fill the auth log. Running `devlanes setup` makes it retry at
-once.
+needs `#includedir /etc/sudoers.d` or `@includedir /etc/sudoers.d`.
+
+If that command works in a terminal but the daemon's error says
+`sorry, you must have a tty to run sudo`, the sudo configuration sets
+`Defaults requiretty`, which the daemon has no terminal for. Remove that
+setting, or, with classic sudo, add
+`Defaults!/usr/local/libexec/devlanes-hosts !requiretty` in a file of your own
+under `/etc/sudoers.d`. sudo-rs has no `requiretty`.
+
+After a denial the daemon waits five minutes before trying sudo again, so a
+missing rule does not fill the auth log. Running `devlanes setup` makes it
+retry at once.
 
 ### `helper_outdated`
 
