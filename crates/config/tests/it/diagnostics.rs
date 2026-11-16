@@ -637,6 +637,25 @@ fn preset_with_run_is_refused() {
     );
 }
 
+/// JVM presets suggest a Maven goal and their own docs page instead of a package.json script.
+#[test]
+fn jvm_preset_with_run_shows_a_maven_example() {
+    for (preset, goal) in [
+        ("spring-boot", "spring-boot:run"),
+        ("quarkus", "quarkus:dev"),
+    ] {
+        assert_project_error(
+            &format!(
+                "project: demo\nservices:\n  api:\n    preset: {preset}\n    run: java -jar app.jar\n"
+            ),
+            "run:",
+            &format!(
+                "services.api.run: `preset: {preset}` needs run_script, such as `run_script: {{ file: pom.xml, name: {goal} }}`, so the preset can pass its settings to the build tool; to keep this command, remove `preset` and set the preset's variables in `env` yourself (https://devlanes.run/docs/how-to/projects/spring-boot-and-quarkus/ lists them)"
+            ),
+        );
+    }
+}
+
 /// Infra commands take only `run`, written out in full.
 #[test]
 fn infra_commands_take_only_run() {

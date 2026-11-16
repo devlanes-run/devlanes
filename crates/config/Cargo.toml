@@ -34,6 +34,8 @@ devlanes-preset-vite = { path = "../preset-vite" }
 devlanes-preset-next = { path = "../preset-next" }
 devlanes-preset-wrangler = { path = "../preset-wrangler" }
 devlanes-preset-tauri = { path = "../preset-tauri" }
+devlanes-preset-spring-boot = { path = "../preset-spring-boot" }
+devlanes-preset-quarkus = { path = "../preset-quarkus" }
 tempfile.workspace = true
 insta = { version = "1", features = ["json"] }
 jsonschema = { version = "0.59", default-features = false }

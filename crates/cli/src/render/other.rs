@@ -1752,6 +1752,21 @@ fn tls_and_hosts_checks(data: &Value, running: bool) -> Vec<Check> {
                 None => check,
             });
         }
+        // Written by the daemon next to bundle.pem when it starts; only JVMs lose
+        // the devlanes root.
+        if let Some(error) = ca.get("truststore_error").and_then(Value::as_str) {
+            checks.push(
+                Check::new(
+                    "tls",
+                    Outcome::Skip,
+                    format!(
+                        "no Java trust store, so JVMs do not trust the CA: {}",
+                        clean(error)
+                    ),
+                )
+                .fix("devlanes daemon restart"),
+            );
+        }
     } else if ca.is_object() {
         checks.push(
             Check::new(

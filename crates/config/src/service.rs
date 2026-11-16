@@ -235,10 +235,13 @@ service_fields! {
     /// Script to run from a project file, as `{ file, name }`, such as
     /// `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file
     /// name (`package.json`, `Makefile`, `justfile`, `Taskfile.yml`, `deno.json`,
-    /// `pyproject.toml`, `Cargo.toml`, `go.mod`), runs the script in that file's directory and
-    /// checks that it exists before starting. Presets need it to place their flags, and a
-    /// profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script`
-    /// is required after templates are applied.
+    /// `pyproject.toml`, `Cargo.toml`, `go.mod`, `pom.xml`, `build.gradle(.kts)`,
+    /// `settings.gradle(.kts)`), runs the script in that file's directory and checks that it
+    /// exists before starting. For Maven and Gradle, `name` is the arguments as typed after
+    /// `mvn` or `gradle`, and Maven or Gradle reports a goal or task that does not exist.
+    /// Presets need it to place their flags, and a profile's `run_scripts` can swap the
+    /// script name. Exactly one of `run` and `run_script` is required after templates are
+    /// applied.
     run_script: RunScript,
     /// Directory `run` starts in, relative to the project file's directory in the lane's
     /// worktree; defaults to that directory. Platform detection also looks here. Cannot be combined with `run_script`, which
@@ -246,19 +249,22 @@ service_fields! {
     /// including a `cwd` inherited through `extends`.
     #[schemars(extend("examples" = ["apps/api"]))]
     cwd: Templated<String>,
-    /// Runtime of the service: `node`, `bun`, `deno`, `python`, `rust` or `go`. It decides
-    /// which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`,
-    /// `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working
-    /// directory when omitted; set it only when detection is wrong. `none` skips detection
-    /// and adds no platform variables.
-    #[schemars(extend("examples" = ["node","bun","deno","python","rust","go","none"]))]
+    /// Runtime of the service: `node`, `bun`, `deno`, `python`, `rust`, `go` or `java`. It
+    /// decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`,
+    /// `SSL_CERT_FILE`, a trust store in `JAVA_TOOL_OPTIONS`) and color settings. Detected
+    /// from the `run_script` file or the working directory when omitted; set it only when
+    /// detection is wrong, such as `java` for a `java -jar` command in a folder without a
+    /// `pom.xml` or Gradle file. `none` skips detection and adds no platform variables.
+    #[schemars(extend("examples" = ["node","bun","deno","python","rust","go","java","none"]))]
     platform: String,
     /// Framework integration that adds the flags and variables a dev server needs to run in
-    /// a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite`, so you do
-    /// not pass them yourself. Requires `run_script`; with a hand-written `run`, drop the
-    /// preset and pass its flags yourself. Its options go under a sibling key with the
-    /// preset's name, for example `vite: { args: [--open] }`.
-    #[schemars(extend("examples" = ["vite","next","wrangler","tauri"]))]
+    /// a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite` or
+    /// `SERVER_PORT` for `spring-boot`, so you do not pass them yourself. One of `vite`,
+    /// `next`, `wrangler`, `tauri`, `spring-boot` or `quarkus`. Requires `run_script`
+    /// (`quarkus` needs a `pom.xml` or `build.gradle(.kts)` one); with a hand-written `run`,
+    /// drop the preset and pass its flags yourself. Its options go under a sibling key with
+    /// the preset's name, for example `vite: { args: [--open] }`.
+    #[schemars(extend("examples" = ["vite","next","wrangler","tauri","spring-boot","quarkus"]))]
     preset: String,
     /// Hostnames the devlanes HTTPS proxy routes to this service, so `https://<host>` reaches
     /// it. One entry or a list; an entry is a hostname or a mapping with `host` and optional

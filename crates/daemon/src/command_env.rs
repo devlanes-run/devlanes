@@ -132,7 +132,11 @@ impl Inner {
         }
         let shell = request.shell.cloned().unwrap_or_default();
         let runtime_ca = runtime_ca_env(&layers.devlanes, |name| {
-            shell.contains_key(name) || request.overrides.contains_key(name)
+            request
+                .overrides
+                .get(name)
+                .or_else(|| shell.get(name))
+                .map(String::as_str)
         });
         let env = assemble([
             (EnvLayer::Client, shell),

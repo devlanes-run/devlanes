@@ -1,10 +1,10 @@
 ---
-title: Run Node, Bun, Deno, Python, Rust and Go services
-description: The lines a Node, Bun, Deno, Python, Rust or Go service needs to listen where devlanes tells it, reload when you edit it and trust the devlanes CA.
+title: Run a service in its runtime
+description: The lines a Node, Bun, Deno, Python, Rust, Go or Java service needs to listen where devlanes tells it, reload when you edit it and trust the devlanes CA.
 kind: how-to
 ---
 
-Use this guide when you put a Node, Bun, Deno, Python, Rust or Go service on devlanes and want the lines its code and command need.
+Use this guide when you put a Node, Bun, Deno, Python, Rust, Go or Java service on devlanes and want the lines its code and command need.
 
 ## Listen on the port and host
 
@@ -61,6 +61,14 @@ port := cmp.Or(os.Getenv("PORT"), "8080")
 log.Fatal(http.ListenAndServe(net.JoinHostPort(host, port), mux))
 ```
 :::
+:::tab[Java]
+```java
+int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
+String host = System.getenv().getOrDefault("HOST", "127.0.0.1");
+```
+
+Spring Boot and Quarkus take the port from a preset instead, as [Run Spring Boot and Quarkus](spring-boot-and-quarkus.md) shows.
+:::
 ::::
 
 ## Reload on change
@@ -71,6 +79,7 @@ devlanes leaves watching files to the runtime, so use its watch mode in the comm
 - Bun: `bun --watch`.
 - Deno: `deno run --watch`, as in the task above.
 - Python: uvicorn's `--reload`.
+- Java: Quarkus dev mode (`quarkus:dev`, `quarkusDev`), or Spring Boot DevTools, which restarts the app when your IDE or a `mvn compile` writes new classes.
 - Go: [air](https://github.com/air-verse/air), building into the lane's data folder so two lanes never run one binary. On Windows, end both paths in `api.exe`.
 
 ```yaml devlanes
@@ -84,7 +93,7 @@ services:
       - ${{ lane.data_path }}/api
 ```
 
-A Rust service, or a Go service run with `go run`, rebuilds when you restart it:
+A Rust service, a Go service run with `go run`, or a Java service without dev mode or DevTools rebuilds when you restart it:
 
 ```console
 $ devlanes restart api
@@ -100,6 +109,8 @@ services:
     platform: python
 ```
 
+A service counts as Java when its script is in, or its folder holds, a `pom.xml` or Gradle file. One that runs `java -jar` from a folder without either needs `platform: java`.
+
 ## If a service calls another hostname over HTTPS
 
 devlanes points these runtimes at its CA, so remove any setting that turns certificate checks off. [Trust the devlanes CA](../hostnames/trust-the-ca.md) covers other runtimes.
@@ -109,5 +120,6 @@ Go programs built without cgo look lane hostnames up in DNS; [Fix programs that 
 ## Related
 
 - [Run scripts your project already has](run-scripts.md)
+- [Run Spring Boot and Quarkus](spring-boot-and-quarkus.md)
 - [Wait until a service is ready](../services/ready-checks.md)
 - [`services.<name>.platform`](/docs/reference/config/project/services/#services-name-platform)

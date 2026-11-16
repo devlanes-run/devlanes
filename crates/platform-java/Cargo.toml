@@ -1,0 +1,20 @@
+[package]
+name = "devlanes-platform-java"
+description = "Java launch contributor for devlanes"
+version = "0.7.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+devlanes-core = { path = "../core" }
+shell-words.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

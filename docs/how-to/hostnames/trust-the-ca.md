@@ -46,7 +46,7 @@ $ devlanes doctor
 
 ## Give your own commands the CA
 
-Node, Bun, Deno, Python, Rust and Go services that devlanes starts already trust the CA. For commands you start yourself, open a shell with the same variables from the worktree:
+Node, Bun, Deno, Python, Rust, Go and Java services that devlanes starts already trust the CA. For commands you start yourself, open a shell with the same variables from the worktree:
 
 ```console
 $ devlanes env shell
@@ -61,6 +61,7 @@ export NODE_EXTRA_CA_CERTS="$HOME/.devlanes/ca/ca.pem"
 export DENO_CERT="$HOME/.devlanes/ca/ca.pem"
 export SSL_CERT_FILE="$HOME/.devlanes/ca/bundle.pem"
 export REQUESTS_CA_BUNDLE="$HOME/.devlanes/ca/bundle.pem"
+export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Djavax.net.ssl.trustStore=\"$HOME/.devlanes/ca/truststore.p12\" -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit"
 ```
 :::
 :::tab[zsh]
@@ -69,6 +70,7 @@ export NODE_EXTRA_CA_CERTS="$HOME/.devlanes/ca/ca.pem"
 export DENO_CERT="$HOME/.devlanes/ca/ca.pem"
 export SSL_CERT_FILE="$HOME/.devlanes/ca/bundle.pem"
 export REQUESTS_CA_BUNDLE="$HOME/.devlanes/ca/bundle.pem"
+export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Djavax.net.ssl.trustStore=\"$HOME/.devlanes/ca/truststore.p12\" -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit"
 ```
 :::
 :::tab[PowerShell]
@@ -77,11 +79,18 @@ $env:NODE_EXTRA_CA_CERTS = "$env:USERPROFILE\.devlanes\ca\ca.pem"
 $env:DENO_CERT = "$env:USERPROFILE\.devlanes\ca\ca.pem"
 $env:SSL_CERT_FILE = "$env:USERPROFILE\.devlanes\ca\bundle.pem"
 $env:REQUESTS_CA_BUNDLE = "$env:USERPROFILE\.devlanes\ca\bundle.pem"
+$env:JAVA_TOOL_OPTIONS = "$env:JAVA_TOOL_OPTIONS -Djavax.net.ssl.trustStore=`"$env:USERPROFILE\.devlanes\ca\truststore.p12`" -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit".Trim()
 ```
 :::
 ::::
 
-`bundle.pem` holds the system's root certificates plus the devlanes CA. Go programs read `SSL_CERT_FILE` on Linux and the system store on macOS and Windows. The curl of macOS and Linux uses the system store and needs nothing.
+`bundle.pem` holds the system's root certificates plus the devlanes CA, and `truststore.p12` holds the same certificates for Java. Every JVM prints a `Picked up JAVA_TOOL_OPTIONS` line when it starts. Go programs read `SSL_CERT_FILE` on Linux and the system store on macOS and Windows. The curl of macOS and Linux uses the system store and needs nothing.
+
+## Pass JVM flags without losing the CA
+
+devlanes adds its trust store to `JAVA_TOOL_OPTIONS` after the value from your shell, mise or direnv. A `JAVA_TOOL_OPTIONS` in the project file's `env`, `global_env` or a profile replaces it, and the start shows a note. Put JVM flags in the command itself, in `-Dspring-boot.run.jvmArguments` for `spring-boot:run`, or in `MAVEN_OPTS` or `JAVA_OPTS` where your build reads them.
+
+A `JAVA_TOOL_OPTIONS` that sets `javax.net.ssl.trustStore` itself is kept as it is. Use that for a program that needs its own trust store, such as one that relies on roots someone imported into the JDK's `cacerts`, which the devlanes trust store does not hold.
 
 ## If curl.exe rejects the certificate on Windows
 

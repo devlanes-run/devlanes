@@ -291,6 +291,115 @@ fn imports_mkcert_layout() -> Result {
     Ok(())
 }
 
+/// Two roots plus a duplicate, a block that is not base64 and one that is not a
+/// certificate, in the shape of `bundle.pem`.
+fn mixed_roots(directory: &std::path::Path) -> Result<(String, [CertificateAuthority; 2])> {
+    let first = CertificateAuthority::load_or_create(&directory.join("first"))?;
+    let second = CertificateAuthority::load_or_create(&directory.join("second"))?;
+    let roots = format!(
+        "{}\n-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n\
+         -----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n{}",
+        first.certificate_pem(),
+        first.combined_bundle(second.certificate_pem()),
+    );
+    Ok((roots, [first, second]))
+}
+
+/// Every readable root becomes one trusted entry with its own alias; unreadable
+/// blocks are reported, not fatal.
+#[test]
+fn trust_store_holds_each_root_as_trusted() -> Result {
+    let directory = tempfile::tempdir()?;
+    let (roots, cas) = mixed_roots(directory.path())?;
+    let store = devlanes_pki::pkcs12_trust_store(&roots, "changeit")?;
+    assert_eq!(store.problems.len(), 2, "{:?}", store.problems);
+
+    let archive = p12_keystore::Pkcs12Archive::from_pkcs12(&store.pkcs12, "changeit")?;
+    assert_eq!(archive.certs.len(), 2);
+    assert!(archive.certs.iter().all(|bag| bag.trusted));
+    for ca in &cas {
+        assert!(
+            archive
+                .certs
+                .iter()
+                .any(|bag| bag.cert.as_der() == ca.certificate_der().as_ref())
+        );
+    }
+    let mut aliases: Vec<_> = archive
+        .certs
+        .iter()
+        .map(|bag| bag.friendly_name.clone())
+        .collect();
+    aliases.sort();
+    aliases.dedup();
+    assert_eq!(aliases.len(), 2, "aliases must differ: {aliases:?}");
+    assert!(
+        p12_keystore::Pkcs12Archive::from_pkcs12(&store.pkcs12, "wrong").is_err(),
+        "the MAC checks the password"
+    );
+    Ok(())
+}
+
+/// A store with no root would make every JVM TLS handshake fail, so it is refused.
+#[test]
+fn empty_trust_store_is_refused() {
+    assert!(matches!(
+        devlanes_pki::pkcs12_trust_store("no certificates here", "changeit"),
+        Err(devlanes_pki::Error::EmptyTrustStore)
+    ));
+}
+
+/// `keytool` from `JAVA_HOME`, else the one on `PATH`.
+fn keytool() -> std::path::PathBuf {
+    let name = if cfg!(windows) {
+        "keytool.exe"
+    } else {
+        "keytool"
+    };
+    std::env::var_os("JAVA_HOME").map_or_else(
+        || name.into(),
+        |home| std::path::Path::new(&home).join("bin").join(name),
+    )
+}
+
+/// The JDK lists every root as a `trustedCertEntry`, which is what makes
+/// `javax.net.ssl.trustStore` trust it.
+#[test]
+#[ignore = "needs a JDK"]
+fn keytool_lists_trusted_cert_entries() -> Result {
+    let directory = tempfile::tempdir()?;
+    let (roots, _) = mixed_roots(directory.path())?;
+    let store = devlanes_pki::pkcs12_trust_store(&roots, "changeit")?;
+    let path = directory.path().join("truststore.p12");
+    fs::write(&path, &store.pkcs12)?;
+    let mut child = std::process::Command::new(keytool())
+        .args(["-list", "-storepass", "changeit", "-storetype", "PKCS12"])
+        .arg("-keystore")
+        .arg(&path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while child.try_wait()?.is_none() {
+        if std::time::Instant::now() > deadline {
+            child.kill()?;
+            child.wait()?;
+            return Err("keytool timed out".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let output = child.wait_with_output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(stdout.matches("trustedCertEntry").count(), 2, "{stdout}");
+    Ok(())
+}
+
 /// A root without name constraints (what mkcert makes) permits any name.
 #[test]
 fn unconstrained_roots_report_no_permitted_names() -> Result {

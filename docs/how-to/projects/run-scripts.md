@@ -1,6 +1,6 @@
 ---
 title: Run scripts your project already has
-description: Start a service or a task from a script in package.json, a Makefile, a justfile, a Taskfile, Cargo.toml, pyproject.toml, deno.json or go.mod, and know when a plain command fits better.
+description: Start a service or a task from a script in package.json, a Makefile, a justfile, a Taskfile, Cargo.toml, pyproject.toml, deno.json or go.mod, or from Maven goals and Gradle tasks, and know when a plain command fits better.
 kind: how-to
 ---
 
@@ -28,8 +28,24 @@ The file name picks the tool:
 - `pyproject.toml`: an entry under `[project.scripts]`, run with uv or Poetry.
 - `deno.json`: `deno task <name>`.
 - `go.mod`: `go run ./cmd/<name>`, where the name is a folder under `cmd`. `.` or a name with a `/`, such as `tools/seed`, is a package path from the go.mod folder.
+- `pom.xml`: Maven, with the name as the goals and options you would type after `mvn`, such as `spring-boot:run -Pdev`.
+- `build.gradle`, `build.gradle.kts`, `settings.gradle` or `settings.gradle.kts`: Gradle, with the name as the tasks and options you would type after `gradle`, such as `:web:bootRun`.
 
-A start checks that the script exists and lists the names the file has when it does not.
+A start checks that the script exists and lists the names the file has when it does not. Maven and Gradle report a goal or task that does not exist themselves, and the service shows as failed.
+
+## Run Maven goals and Gradle tasks
+
+devlanes runs the nearest `mvnw` or `gradlew` between the file's folder and the worktree's root, and `mvn` or `gradle` when there is none. Quote an argument that contains spaces, as in a shell:
+
+```yaml devlanes
+services:
+  api:
+    run_script:
+      file: pom.xml
+      name: spring-boot:run "-Dspring-boot.run.jvmArguments=-Xmx1g -Dacme.mode=dev"
+```
+
+A profile that swaps a Maven or Gradle name has to repeat the whole name, options included. To run one module of a multi-module Maven build from the root pom, see [Run Spring Boot and Quarkus](spring-boot-and-quarkus.md#run-one-module-of-a-multi-module-build).
 
 ## Use a plain command for the rest
 
@@ -52,6 +68,7 @@ Your local file, the `devlanes.local.yaml` that stays out of Git, can change the
 ## Related
 
 - [Add devlanes to a project](add-devlanes.md)
-- [Run Node, Bun, Deno, Python, Rust and Go services](runtimes.md)
+- [Run a service in its runtime](runtimes.md)
 - [Run Vite and Next.js](vite-and-next.md)
+- [Run Spring Boot and Quarkus](spring-boot-and-quarkus.md)
 - [`services.<name>.run_script`](/docs/reference/config/project/services/#services-name-run_script)

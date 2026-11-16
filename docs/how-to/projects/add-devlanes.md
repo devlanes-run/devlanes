@@ -42,7 +42,7 @@ const host = process.env.HOST ?? "127.0.0.1";
 server.listen(port, host);
 ```
 
-[Run Node, Bun, Deno, Python, Rust and Go services](runtimes.md) has the same lines for other runtimes.
+[Run a service in its runtime](runtimes.md) has the same lines for other runtimes.
 
 ## Check and start
 
@@ -55,7 +55,7 @@ The check points at the line of any mistake. The start runs the script, waits fo
 
 ## If the command takes its port as a flag
 
-Pass the port with an expression. For Vite and Next.js a preset adds the flags, as [Run Vite and Next.js](vite-and-next.md) shows.
+Pass the port with an expression. For Vite and Next.js a preset adds the flags, as [Run Vite and Next.js](vite-and-next.md) shows, and for Spring Boot and Quarkus a preset sets the variables, as [Run Spring Boot and Quarkus](spring-boot-and-quarkus.md) shows.
 
 ```yaml devlanes
 services:

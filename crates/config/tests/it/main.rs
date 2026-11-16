@@ -39,6 +39,14 @@ fn registered_schema() -> serde_json::Value {
             devlanes_preset_tauri::NAME,
             devlanes_preset_tauri::options_schema(),
         ),
+        (
+            devlanes_preset_spring_boot::NAME,
+            devlanes_preset_spring_boot::options_schema(),
+        ),
+        (
+            devlanes_preset_quarkus::NAME,
+            devlanes_preset_quarkus::options_schema(),
+        ),
     ])
 }
 
@@ -55,6 +63,12 @@ fn registered_validator(name: &str, options: Option<&serde_json::Value>) -> Resu
             .map(|_| ())
             .map_err(|e| e.to_string()),
         devlanes_preset_tauri::NAME => devlanes_preset_tauri::parse_options(options)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        devlanes_preset_spring_boot::NAME => devlanes_preset_spring_boot::parse_options(options)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        devlanes_preset_quarkus::NAME => devlanes_preset_quarkus::parse_options(options)
             .map(|_| ())
             .map_err(|e| e.to_string()),
         _ => Err(format!("unregistered preset `{name}`")),
@@ -402,6 +416,8 @@ fn schemas_are_strict_and_include_extensions() {
         .1;
     assert!(service["properties"].get("wrangler").is_some());
     assert!(service["properties"].get("tauri").is_some());
+    assert!(service["properties"].get("spring-boot").is_some());
+    assert!(service["properties"].get("quarkus").is_some());
     assert_eq!(service["additionalProperties"], false);
     assert!(user_schema()["properties"].get("ports").is_some());
 }
@@ -1163,6 +1179,8 @@ fn schema_parser_type_agreement() {
         json!({"services":{"api":{"run":"server","autostart":true,"replicas":2}}}),
         json!({"services":{"api":{"run":"server","autostart":"${{ lane.index == 0 }}"}}}),
         json!({"services":{"api":{"preset":"wrangler","wrangler":{"vars":{"COUNT":3},"args":["--local"]}}}}),
+        json!({"services":{"api":{"preset":"spring-boot","spring-boot":{"docker_compose":true}}}}),
+        json!({"services":{"api":{"preset":"quarkus","quarkus":{}}}}),
     ] {
         assert!(validator.is_valid(&value), "schema rejected {value}");
     }
@@ -1170,6 +1188,8 @@ fn schema_parser_type_agreement() {
         json!({"unknown":true}),
         json!({"services":{"api":{"unknown":true}}}),
         json!({"services":{"api":{"wrangler":{"unknown":true}}}}),
+        json!({"services":{"api":{"spring-boot":{"docker_compose":"yes"}}}}),
+        json!({"services":{"api":{"quarkus":{"debug":false}}}}),
         json!({"services":{"api":{"tauri":{"identifier":42}}}}),
         json!({"services":{"api":{"replicas":false}}}),
         json!({"services":{"api":{"replicas":"${{ lane.index + 1 }}"}}}),
@@ -1300,8 +1320,12 @@ fn profile_script_remapping() {
 /// Integration-owned fields survive loading, merging, and evaluation as JSON objects.
 #[test]
 fn opaque_preset_options_and_registry_validation() {
-    let source = "project: demo\nservices:\n  worker:\n    preset: wrangler\n    run_script: { file: package.json, name: dev }\n    wrangler:\n      isolate_registry: false\n      vars: { COUNT: '${{ lane.index }}' }\n  desktop:\n    preset: tauri\n    run_script: { file: package.json, name: dev }\n    tauri: { product_name: Demo, before_dev_command: '' }\n  web:\n    preset: vite\n    run_script: { file: package.json, name: dev }\n    vite: { args: [--open] }\n  next:\n    preset: next\n    run_script: { file: package.json, name: dev }\n    next: { args: [--turbo] }\n";
+    let source = "project: demo\nservices:\n  worker:\n    preset: wrangler\n    run_script: { file: package.json, name: dev }\n    wrangler:\n      isolate_registry: false\n      vars: { COUNT: '${{ lane.index }}' }\n  desktop:\n    preset: tauri\n    run_script: { file: package.json, name: dev }\n    tauri: { product_name: Demo, before_dev_command: '' }\n  web:\n    preset: vite\n    run_script: { file: package.json, name: dev }\n    vite: { args: [--open] }\n  next:\n    preset: next\n    run_script: { file: package.json, name: dev }\n    next: { args: [--turbo] }\n  boot:\n    preset: spring-boot\n    run_script: { file: pom.xml, name: spring-boot:run }\n    spring-boot: { docker_compose: true }\n";
     let config = parse_project(source, None).expect("opaque options");
+    assert_eq!(
+        config.services["boot"].preset_options["spring-boot"]["docker_compose"],
+        true
+    );
     assert_eq!(
         config.services["worker"].preset_options["wrangler"]["isolate_registry"],
         false

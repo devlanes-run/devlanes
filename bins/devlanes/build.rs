@@ -23,6 +23,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             devlanes_preset_tauri::NAME,
             devlanes_preset_tauri::options_schema(),
         ),
+        (
+            devlanes_preset_spring_boot::NAME,
+            devlanes_preset_spring_boot::options_schema(),
+        ),
+        (
+            devlanes_preset_quarkus::NAME,
+            devlanes_preset_quarkus::options_schema(),
+        ),
     ]);
     // These publish=false workspace packages keep served artifacts in the source tree.
     // The JSON $comment marks them as generated; do not edit them by hand.
