@@ -1,7 +1,8 @@
 //! What the daemon's release check reports. The daemon reads the latest
 //! version from the registry devlanes was installed from and, with
-//! `updates.mode: auto`, installs patch releases in the background. Version
-//! ordering, sources, release notes and installing live in `devlanes-update`.
+//! `updates.mode: auto` (the default), installs patch releases in the
+//! background. Version ordering, sources, release notes and installing live
+//! in `devlanes-update`.
 
 use serde::{Deserialize, Serialize};
 

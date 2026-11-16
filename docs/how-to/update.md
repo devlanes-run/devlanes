@@ -4,9 +4,13 @@ description: Install new devlanes releases, choose how devlanes checks for them,
 kind: how-to
 ---
 
-devlanes tells you when a newer release is out. Use this to install it, to stop the checks, or to remove devlanes.
+devlanes keeps itself up to date. It installs patch releases in the background and they apply the next time you start devlanes at a terminal. Use this for a release that waits for you, to change how devlanes updates, or to remove it.
+
+An install made with cargo, or as a dependency of a project, does not update itself. `devlanes update` prints the command to run.
 
 ## Update
+
+A minor release can change how things work, so it waits for you. devlanes tells you when one is out.
 
 ```console
 $ devlanes update
@@ -16,28 +20,13 @@ The command asks once, installs the latest release the way you installed devlane
 
 A box, a machine whose lanes are mirrored to yours, needs its own update: run the same command there. Two machines on releases with different protocols do not connect.
 
-## Let devlanes update itself
+## Change how devlanes updates
 
-Set [`updates.mode`](/docs/reference/config/user/updates/#updates-mode) to `auto` in the user config, then restart the daemon:
-
-```yaml devlanes-user
-updates:
-  mode: auto
-```
-
-```console
-$ devlanes daemon restart
-```
-
-Patch releases then install in the background, with nothing to confirm, where the way you installed devlanes allows it. They apply the next time you start devlanes at a terminal. A minor release still waits for `devlanes update`.
-
-## Turn the update check off
-
-Set [`updates.mode`](/docs/reference/config/user/updates/) in the user config, then restart the daemon:
+Set [`updates.mode`](/docs/reference/config/user/updates/#updates-mode) in the user config, then restart the daemon. With `notify` devlanes only tells you about a new release, and with `disable` it never checks.
 
 ```yaml devlanes-user
 updates:
-  mode: disable
+  mode: notify
 ```
 
 ```console

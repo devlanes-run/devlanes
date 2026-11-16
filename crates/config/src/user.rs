@@ -377,10 +377,11 @@ fn below_home(dir: &str) -> Option<&str> {
 #[serde(default, deny_unknown_fields)]
 #[schemars(extend("examples" = [{"mode":"disable"},{"mode":"auto"},{"highlights":false}]))]
 pub struct UpdatesConfig {
-    /// What devlanes does about newer releases: `notify` (the default) checks every 4
-    /// hours and when the TUI opens, and shows the new version; `auto` also installs patch
-    /// releases in the background where the install method allows it; `disable` never
-    /// checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off.
+    /// What devlanes does about newer releases: `auto` (the default) checks every 4 hours
+    /// and when the TUI opens, shows the new version and installs patch releases in the
+    /// background where the install method allows it; `notify` only shows the new
+    /// version; `disable` never checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment
+    /// also turns checks off.
     pub mode: UpdateMode,
     /// Show the release highlights dialog the first time the TUI opens after an update;
     /// defaults to true. Set false to skip the dialog. The new version still counts as
@@ -391,7 +392,7 @@ pub struct UpdatesConfig {
 }
 
 impl Default for UpdatesConfig {
-    /// Notifies about releases and shows their highlights.
+    /// Installs patch releases in the background and shows release highlights.
     fn default() -> Self {
         Self {
             mode: UpdateMode::default(),
@@ -409,13 +410,16 @@ pub enum UpdateMode {
     #[schemars(extend("examples" = ["disable"]))]
     Disable,
     /// Read the latest version from the registry devlanes was installed from, and show it
-    /// in the TUI and in command output when it is newer. Nothing is installed.
-    #[default]
+    /// in the TUI and in command output when it is newer. Nothing is installed; run
+    /// `devlanes update` to install it.
     #[schemars(extend("examples" = ["notify"]))]
     Notify,
-    /// Like `notify`, and also install patch releases in the background where the install
-    /// method allows it; they apply the next time you start devlanes at a terminal. Minor
-    /// releases, which can break things before 1.0, still wait for you to update.
+    /// The default. Read the latest version from the registry devlanes was installed from,
+    /// show it in the TUI and in command output when it is newer, and install patch
+    /// releases in the background where the install method allows it; they apply the next
+    /// time you start devlanes at a terminal. Minor releases, which can break things
+    /// before 1.0, still wait for `devlanes update`.
+    #[default]
     #[schemars(extend("examples" = ["auto"]))]
     Auto,
 }

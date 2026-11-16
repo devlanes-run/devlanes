@@ -46,6 +46,8 @@ $ cargo binstall --git https://github.com/devlanes-run/devlanes devlanes-hosts-h
 :::
 ::::
 
+You install it once. devlanes then keeps itself on the latest patch release in the background, and [Update and uninstall](how-to/update.md) covers the rest.
+
 ## Or use the install script
 
 ::::tabs{sync="os"}

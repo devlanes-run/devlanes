@@ -443,8 +443,9 @@ history:
         assert_eq!(text, "updates:\n  mode: auto");
     }
 
-    /// `updates.highlights` defaults to true, parses from the file, and survives
-    /// `config set` and `config unset` next to `updates.mode`.
+    /// `updates.highlights` defaults to true, parses from the file without moving
+    /// `updates.mode` off its default (`auto`), and survives `config set` and
+    /// `config unset` next to `updates.mode`.
     #[test]
     fn updates_highlights_defaults_on_and_round_trips() {
         assert!(crate::parse_user("").expect("valid").updates.highlights);
@@ -456,20 +457,21 @@ history:
         );
         let off = crate::parse_user("updates:\n  highlights: false\n").expect("valid");
         assert!(!off.updates.highlights);
-        assert_eq!(off.updates.mode, crate::UpdateMode::Notify);
+        assert_eq!(off.updates.mode, crate::UpdateMode::Auto);
 
+        // `notify`, not the default, so the assertions show the file's mode survived.
         let text = set(
-            "updates:\n  mode: auto # background\n",
+            "updates:\n  mode: notify # no installs\n",
             "updates.highlights",
             json!(false),
         );
-        assert!(text.contains("mode: auto # background"), "{text}");
+        assert!(text.contains("mode: notify # no installs"), "{text}");
         let config = crate::parse_user(&text).expect("valid");
         assert!(!config.updates.highlights);
-        assert_eq!(config.updates.mode, crate::UpdateMode::Auto);
+        assert_eq!(config.updates.mode, crate::UpdateMode::Notify);
 
         let text = edit_user_source(&text, "updates.highlights", None).expect("edit");
-        assert_eq!(text, "updates:\n  mode: auto # background\n");
+        assert_eq!(text, "updates:\n  mode: notify # no installs\n");
         assert!(crate::parse_user(&text).expect("valid").updates.highlights);
 
         let refused = edit_user_source("", "updates.highlights", Some(&json!("later")));

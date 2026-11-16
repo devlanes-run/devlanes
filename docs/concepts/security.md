@@ -57,7 +57,7 @@ A box's services see your connections as coming from the box itself. A service t
 
 ## The daemon looks for new releases
 
-The daemon reads the latest version from the registry devlanes was installed from. The request carries nothing that identifies your machine or your projects. [Update and uninstall](../how-to/update.md) says how to turn the check off.
+The daemon reads the latest version from the registry devlanes was installed from, and installs patch releases from there in the background. The request carries nothing that identifies your machine or your projects. [Update and uninstall](../how-to/update.md) says how to turn this off.
 
 ## Related
 

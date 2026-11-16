@@ -397,6 +397,22 @@ Don't edit versions or `CHANGELOG.md` files by hand; the release pull request do
 
 Merging the release pull request, which `.github/workflows/sampo.yml` keeps up to date on every push to `main`, releases everything; `packaging/README.md` describes the workflow and the Homebrew and npm packages.
 
+### Using a merged change before it is released
+
+Every commit on `main` that passes CI is built and published as the `next` build (`.github/workflows/next.yml`). Once your pull request is merged and its checks on `main` are green, install that build to use the change without waiting for a release. On macOS and Linux:
+
+```sh
+curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
+```
+
+On Windows 11:
+
+```powershell
+iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
+```
+
+`devlanes --version` then reads `X.Y.Z-next.N`, where N counts the commits since the last release, and `devlanes update` moves the install to the latest build of `main`. Only the install scripts carry `next` builds: npm, PyPI and Homebrew get releases only. [Update and uninstall](https://devlanes.run/docs/how-to/update/) says how to go back to releases.
+
 ## License
 
 Contributions are licensed under Apache-2.0, the license of this repository.

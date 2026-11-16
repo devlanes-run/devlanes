@@ -87,7 +87,7 @@ irm https://devlanes.run/install.ps1 | iex
 
 [Install devlanes](https://devlanes.run/docs/install/) has the steps that follow the install.
 
-devlanes tells you when a newer release is out, and `devlanes update` installs it the way you installed devlanes. With `updates.mode: auto` in your user config, patch releases install in the background with nothing to confirm, and apply the next time you start devlanes.
+You install it once. devlanes then keeps itself up to date in the background, without interrupting your work.
 
 ## A project in one file
 
@@ -124,6 +124,20 @@ The [docs](https://devlanes.run/docs/) start with a [tour](https://devlanes.run/
 ## Contributing
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers building, testing and the design notes, and [AGENTS.md](AGENTS.md) has the conventions for people and agents working on the code.
+
+Every commit on `main` that passes CI is published as the `next` build, so once your pull request is merged you can use it without waiting for a release. On macOS and Linux:
+
+```sh
+curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
+```
+
+On Windows 11:
+
+```powershell
+iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
+```
+
+`devlanes update` then moves a `next` install to the latest build of `main`.
 
 mprocs and dekit informed the terminal interaction. pitchfork, process-compose, devenv, Coasts, portless, kache, overmind and Conductor informed the process and worktree workflows.
 

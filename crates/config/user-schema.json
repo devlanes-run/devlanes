@@ -1267,8 +1267,8 @@
       ],
       "enumDescriptions": [
         "Never look for releases; nothing is read from the network.",
-        "Read the latest version from the registry devlanes was installed from, and show it in the TUI and in command output when it is newer. Nothing is installed.",
-        "Like `notify`, and also install patch releases in the background where the install method allows it; they apply the next time you start devlanes at a terminal. Minor releases, which can break things before 1.0, still wait for you to update."
+        "Read the latest version from the registry devlanes was installed from, and show it in the TUI and in command output when it is newer. Nothing is installed; run `devlanes update` to install it.",
+        "The default. Read the latest version from the registry devlanes was installed from, show it in the TUI and in command output when it is newer, and install patch releases in the background where the install method allows it; they apply the next time you start devlanes at a terminal. Minor releases, which can break things before 1.0, still wait for `devlanes update`."
       ],
       "examples": [
         "disable",
@@ -1278,8 +1278,8 @@
       "markdownDescription": "What devlanes does about newer releases.",
       "markdownEnumDescriptions": [
         "Never look for releases; nothing is read from the network.",
-        "Read the latest version from the registry devlanes was installed from, and show it in the TUI and in command output when it is newer. Nothing is installed.",
-        "Like `notify`, and also install patch releases in the background where the install method allows it; they apply the next time you start devlanes at a terminal. Minor releases, which can break things before 1.0, still wait for you to update."
+        "Read the latest version from the registry devlanes was installed from, and show it in the TUI and in command output when it is newer. Nothing is installed; run `devlanes update` to install it.",
+        "The default. Read the latest version from the registry devlanes was installed from, show it in the TUI and in command output when it is newer, and install patch releases in the background where the install method allows it; they apply the next time you start devlanes at a terminal. Minor releases, which can break things before 1.0, still wait for `devlanes update`."
       ],
       "type": "string"
     },
@@ -1311,14 +1311,14 @@
         },
         "mode": {
           "$ref": "#/$defs/UpdateMode",
-          "default": "notify",
-          "description": "What devlanes does about newer releases: `notify` (the default) checks every 4 hours and when the TUI opens, and shows the new version; `auto` also installs patch releases in the background where the install method allows it; `disable` never checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off.",
+          "default": "auto",
+          "description": "What devlanes does about newer releases: `auto` (the default) checks every 4 hours and when the TUI opens, shows the new version and installs patch releases in the background where the install method allows it; `notify` only shows the new version; `disable` never checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off.",
           "examples": [
             "disable",
             "notify",
             "auto"
           ],
-          "markdownDescription": "What devlanes does about newer releases: `notify` (the default) checks every 4 hours and when the TUI opens, and shows the new version; `auto` also installs patch releases in the background where the install method allows it; `disable` never checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off."
+          "markdownDescription": "What devlanes does about newer releases: `auto` (the default) checks every 4 hours and when the TUI opens, shows the new version and installs patch releases in the background where the install method allows it; `notify` only shows the new version; `disable` never checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off."
         }
       },
       "type": "object"
@@ -1696,7 +1696,7 @@
       "$ref": "#/$defs/UpdatesConfig",
       "default": {
         "highlights": true,
-        "mode": "notify"
+        "mode": "auto"
       },
       "description": "Release checks: whether the daemon looks for newer devlanes releases (`mode`), and whether the TUI shows release highlights after an update (`highlights`).",
       "examples": [
