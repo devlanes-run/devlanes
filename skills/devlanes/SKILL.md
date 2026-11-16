@@ -32,7 +32,9 @@ Open a reference when the task calls for it:
 - The services in `devlanes.yaml`: `devlanes start`, or `devlanes start api web`.
 - Anything else that keeps running (a watcher, storybook, a tunnel): `devlanes exec --name storybook -- pnpm storybook`.
 
-Never run these with `&`, `nohup`, `setsid`, `Start-Process` or a background shell, and never track their PIDs. Commands that end by themselves (builds, tests, git, scripts) run in your shell as usual; when one needs the lane running, run it with `devlanes with -- COMMAND`.
+Never run these with `&`, `nohup`, `setsid`, `Start-Process` or a background shell, and never track their PIDs. Commands that end by themselves (builds, tests, git, scripts) run in your shell as usual. When one needs the lane's services running, run it with `devlanes with -- COMMAND`. When it needs only the lane's variables, such as a database reset, see "One-off commands with the lane's environment".
+
+When `devlanes` is not found and the project's `package.json` lists `devlanes`, the project pins it: after the package manager's install, run every command as `npx devlanes`, `pnpm devlanes`, `yarn devlanes` or `bunx devlanes`.
 
 ## Run this worktree's lane
 
@@ -112,6 +114,22 @@ devlanes with api --logs-dir devlanes-logs -- cargo test --test api
 - Otherwise it exits with the command's code: 127 when the command was not found or could not start, 128+N when signal N ended it.
 - On a running lane it starts only the selected services the lane lacks, runs no tasks and afterwards stops only those. When `--profile` would give the running services other settings (a script, `env`, `infra`), it exits 1 before it starts anything: stop the lane, run in another worktree, or name the services instead of the profile.
 - `--keep` leaves what it started running. `--logs-dir DIR` writes the log of each unit and task it started to DIR.
+
+## One-off commands with the lane's environment
+
+A command that needs the lane's variables but not its services (a database reset, a seed, a script that reads `DATABASE_URL`) does not go through `devlanes with`, which starts services first.
+
+| Case | Command |
+|---|---|
+| A task in `devlanes.yaml` | `devlanes run reset-db` |
+| Any other command | `devlanes exec --name reset -- pnpm db-reset`, then `devlanes wait reset` |
+
+Both start no service and no container, and work on a lane that is stopped or never started. Start the containers the command reads with `devlanes infra up`.
+
+- `devlanes run` streams the task's output and exits with its code. It passes no extra arguments to the task's command. When a `global_env` entry reads a container that is down, it fails with `global_env.NAME has no value in lane LANE`.
+- `devlanes exec` returns once the process runs. The command gets your shell's environment, then the devlanes variables, `DEVLANES_PUBLIC_URL_<SERVICE>` and the `global_env` and active profile `env` entries that read neither `self` nor `replica`. No service's own `env` reaches it. An entry that reads a container that is down is left out and named, as in `DATABASE_URL left out: infra postgres is not up; devlanes infra up`: run the hint, then the command again.
+- `devlanes wait reset` exits 0 when the command exited 0 and 1 otherwise, never with the command's own code. Its output has the code (`failed myapp@2:reset exit=1`), `--json` has it as `exit_code`, and `devlanes logs reset` has the command's output. The name is free again once the command ended.
+- In a POSIX shell, `eval "$(devlanes env export)"` puts the lane's variables into your shell instead. It drops an entry whose container is down without naming it.
 
 ## Ad-hoc long-running commands
 

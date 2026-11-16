@@ -10,6 +10,12 @@ devlanes --version
 
 A version line means it is installed; go to step 3. A command that is not found means it is not, or the shell has not picked up its folder yet.
 
+A project can pin devlanes instead: `devlanes` under `devDependencies` of its `package.json`. Then the command is not on `PATH`. Run the package manager's install and call it as `npx devlanes`, `pnpm devlanes`, `yarn devlanes` or `bunx devlanes`, in every command of this skill. One daemon per user serves every project, so a pinned CLI can meet a daemon of another release, started by a global install or by another project:
+
+- `devlanes doctor` prints `warn release: the daemon runs X, this CLI is Y` with `fix: devlanes daemon restart when convenient (it stops services)`. Commands work; leave it.
+- A command that fails with `the running daemon is devlanes X (protocol N, this CLI speaks M) and cannot serve this CLI`, exit 4, cannot work until the daemon restarts. `devlanes daemon restart` from the project moves the daemon to the pinned release and restarts every service on the machine, so ask the user first.
+- A pinned devlanes does not update itself. `devlanes update` fails with `error: devlanes cannot update this install (a project dependency) itself` and `hint: update devlanes in PATH/package.json`: change the version there when the user asks.
+
 ## 2. Install the command
 
 Install only when the user asked for devlanes on this machine. Both scripts install the latest release and check the download against its published checksums.

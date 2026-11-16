@@ -61,7 +61,10 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     /// Variables for every service and task of the lane, above devlanes' own variables
     /// (`PORT`, `DEVLANES_*`) and below each unit's `env` and the profile's `env`. Use it for
     /// values many units share, such as a database URL built from `${{ infra.postgres.port }}`.
-    /// Never set `PORT` here: it would replace every service's own port.
+    /// An entry without a value, such as one that reads a container a profile with
+    /// `infra: false` left stopped, fails every service and task of the lane, so a value only
+    /// some services need belongs in their `env`. `devlanes exec` leaves such an entry out and
+    /// names it. Never set `PORT` here: it would replace every service's own port.
     #[serde(default)]
     #[schemars(extend("examples" = [{"API_URL":"${{ services.api.url }}"}]))]
     pub global_env: Env,
@@ -127,7 +130,9 @@ pub struct LanesConfig {
     /// and only exact names are written, never wildcards.
     pub hosts_file: Option<HostsFile>,
     /// Values computed for each lane and read as `${{ lane.<name> }}`, such as a database
-    /// name, vhost, bucket or Redis index per lane. A var named `domain` replaces the
+    /// name, vhost, bucket or Redis index per lane. Build names from `${{ lane.name }}`, which
+    /// is `main` in lane 0 and `lane<N>` in lane N whatever the branch, and numbers from
+    /// `${{ lane.index }}`. A var named `domain` replaces the
     /// default lane domain, and one named `port` fixes where the lane's port block starts.
     /// `${{ domain('pages') }}` gives a name a site of its own in each lane, such as
     /// `pages2.localhost` in lane 2. Cannot be combined with `matrix`.
@@ -379,9 +384,11 @@ pub struct ProfileOptions {
     #[schemars(extend("examples" = [["+desktop","sms-stub"]]))]
     pub exclude: Option<Vec<String>>,
     /// Set false to skip containers and `infra.setup`, for example to run only a frontend
-    /// against another lane's backend. Services that reference `infra.*` then fail to
-    /// resolve. With several profiles active, infra is skipped only when all of them set
-    /// false. Defaults to true.
+    /// against another lane's backend. A value that reads `infra.*` then resolves only while
+    /// its container already runs, as a shared one another lane started does. Otherwise a
+    /// service or task whose `env` reads it fails to start, and so does every service and
+    /// task of the lane when `global_env` or a profile's `env` reads it. With several
+    /// profiles active, infra is skipped only when all of them set false. Defaults to true.
     #[schemars(extend("examples" = [false,true]))]
     pub infra: Option<Templated<bool>>,
     /// Variables for the services, tasks and `infra.setup` and `infra.teardown` commands of a

@@ -44,7 +44,7 @@ services:
     hosts: "catalog.${{ lane.domain }}"
 ```
 
-Keep the `dev` script a plain `wrangler dev`, since the preset passes the ports itself. `--persist-to` keeps each lane's KV, D1 and R2 data in the lane data folder, a folder only that lane uses. A Worker does not see the process environment, so lane values reach it through [`services.<name>.wrangler.vars`](/docs/reference/config/project/services/#services-name-wrangler-vars). The inspector hostname needs `host_header: upstream`, because the inspector accepts only its own address.
+Keep the `dev` script a plain `wrangler dev`, since the preset passes the ports itself. `--persist-to` keeps each lane's KV, D1 and R2 data in the lane data folder, a folder only that lane uses. Here each Worker has a folder of its own. Workers that bind the same KV namespace, D1 database or R2 bucket see the same local data only through one folder, so for those leave `${{ self.name }}` out of the path. A Worker does not see the process environment, so lane values reach it through [`services.<name>.wrangler.vars`](/docs/reference/config/project/services/#services-name-wrangler-vars). The inspector hostname needs `host_header: upstream`, because the inspector accepts only its own address.
 
 ## Start the lane
 

@@ -63,7 +63,20 @@ profiles:
 
 ## If a profile should skip the containers
 
-Set `infra: false` on the profile. [Point a frontend at another lane's backend](../lanes/attach-to-another-lane.md) builds on that.
+Set `infra: false` on the profile. A value that reads a container, such as a database URL, then has a value only while that container already runs, as a shared one another lane started does. Without it, each service the value reaches fails to start, and a value in `global_env` reaches all of them. So keep such a value with the services that use it:
+
+```yaml devlanes
+services:
+  api:
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/${{ lane.db_name }}
+profiles:
+  frontend:
+    include: [web]
+    infra: false
+```
+
+[Point a frontend at another lane's backend](../lanes/attach-to-another-lane.md) builds on such a profile.
 
 ## Related
 

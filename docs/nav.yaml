@@ -38,6 +38,7 @@
         - how-to/services/ports-and-hostnames
         - how-to/services/on-demand
         - how-to/services/tasks
+        - how-to/services/one-off-commands
         - how-to/services/external
         - how-to/services/sync-build-output
     - label: Hostnames and HTTPS

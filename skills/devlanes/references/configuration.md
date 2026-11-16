@@ -172,7 +172,7 @@ lanes:
 
 `lane.data_path` (`DEVLANES_LANE_DATA` in processes) is a folder only this lane uses, outside the worktree. devlanes creates it with the lane and deletes it when the lane is cleaned. Put what a lane writes while it runs there (SQLite files, `wrangler dev --persist-to`, generated configs), never at a fixed path in the worktree: several lanes can run from one folder (`devlanes lane new --name review`).
 
-`vars` are per-lane values read as `lane.<name>`: database names, vhosts, buckets, Redis database numbers. A var named `domain` replaces the lane domain and one named `port` fixes the block start; set them only when the default is wrong. `new_worktrees` (`register`, `setup`, `start`) and `removed_worktrees` (`stop`, `clean`) default to `register` and `stop`; leave them out unless the user wants another policy.
+`vars` are per-lane values read as `lane.<name>`: database names, vhosts, buckets, Redis database numbers. Build names from `lane.name`, which is `main` in lane 0 and `lane1`, `lane2` and so on in the others, whatever the branch and whatever name `devlanes lane new --name review` gave the lane. `lane.label` is the branch with each `/` as `-`, and `lane.index` the number. All three can be read inside `vars`. A var named `domain` replaces the lane domain and one named `port` fixes the block start; set them only when the default is wrong. `new_worktrees` (`register`, `setup`, `start`) and `removed_worktrees` (`stop`, `clean`) default to `register` and `stop`; leave them out unless the user wants another policy.
 
 ## Infra
 
@@ -195,7 +195,7 @@ infra:
       per_lane: true
 ```
 
-Processes reach a container through `${{ infra.postgres.port }}`. Keep databases, brokers and object stores in infra, not as services. A shared container keeps one copy of the data, so give each lane its own database, vhost or bucket with `setup` and `lanes.vars`.
+`exclude` takes names of services in the Compose file, and a name the file lacks fails `devlanes config check`. Processes reach a container through `${{ infra.postgres.port }}`. Keep databases, brokers and object stores in infra, not as services. A shared container keeps one copy of the data, so give each lane its own database, vhost or bucket with `setup` and `lanes.vars`.
 
 A server devlanes does not run, such as a pgAdmin the developer starts by hand or a server started with `devlanes exec`, goes under `infra.external` with its loopback address. Every lane lists it as a unit of kind `external`, the proxy routes its `hosts` to the port, and connected machines mirror it. Only `127.0.0.1:<port>` and `[::1]:<port>` are accepted. Use a port outside `ports.range` of the user config (20000-32767 by default) and a name no `exec` command uses. `start`, `stop` and `logs` do not apply to it. Put an entry only one developer needs in `devlanes.local.yaml`.
 
@@ -279,7 +279,7 @@ profiles:
     infra: false
 ```
 
-Profiles select services by name, glob or `+tag`, and `exclude` removes some again. Globs skip `autostart: false` services; names and tags include them. When a `default` profile exists, a plain `devlanes start` of a new or stopped lane starts exactly its selection, so use either a `default` profile or `autostart: false`, not both. Without one, a plain start brings back the services the lane ran and nobody stopped. Tags are any names in a service's `tags`; declaring one under `tags` only sets its color or description. Put a category tag such as `api`, `web` or `worker` first, so colors follow it.
+Profiles select services by name, glob or `+tag`, and `exclude` removes some again. Globs skip `autostart: false` services; names and tags include them. When a `default` profile exists, a plain `devlanes start` of a new or stopped lane starts exactly its selection, so use either a `default` profile or `autostart: false`, not both. Without one, a plain start brings back the services the lane ran and nobody stopped. Under a profile with `infra: false`, a value that reads `infra.*` resolves only while that container already runs, as a shared one another lane started does. Otherwise a service or task whose `env` reads it fails with `... has no value in lane ...`, and a `global_env` or profile `env` entry that reads it fails every service and task of the lane. So when the project has such a profile, put `DATABASE_URL` and the like in the `env` of the services that use them, not in `global_env`. `devlanes exec` leaves the entry out and names it. Tags are any names in a service's `tags`; declaring one under `tags` only sets its color or description. Put a category tag such as `api`, `web` or `worker` first, so colors follow it.
 
 ## Templates
 
@@ -312,7 +312,7 @@ A service's `extends` names a template; a file's `extends` names project files. 
 | `wrangler` | `--port`, `--inspector-port` (a port named `inspector`), `--var` per var, and a registry path per lane | `wrangler: { vars, args, isolate_registry }` |
 | `tauri` | A per-lane, per-replica identifier and dev URL, through an overlay in the lane data folder | `tauri: { identifier, dev_url, product_name, before_dev_command }` |
 
-A preset needs `run_script`; with `run`, devlanes refuses the preset, so drop it and write its flags into `run`. With `run_script`, the flags are passed to the script, so the framework command must be the script's last command. The wrangler preset refuses a script or `wrangler.args` that already passes `--port` or `--inspector-port`. Do not set `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` or `MINIFLARE_REGISTRY_PATH`; devlanes sets them per lane for every unit. Wrangler keeps its local state in the worktree's `.wrangler/`, so give each lane its own with `wrangler: { args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"] }`.
+A preset needs `run_script`; with `run`, devlanes refuses the preset, so drop it and write its flags into `run`. With `run_script`, the flags are passed to the script, so the framework command must be the script's last command. The wrangler preset refuses a script or `wrangler.args` that already passes `--port` or `--inspector-port`. Do not set `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` or `MINIFLARE_REGISTRY_PATH`; devlanes sets them per lane for every unit. Wrangler keeps its local state in the worktree's `.wrangler/`, so give each lane its own with `wrangler: { args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"] }`. Workers that bind the same KV namespace, D1 database or R2 bucket id see the same local data only through one folder: give those `${{ lane.data_path }}/wrangler` without the service name. devlanes starts them at the same time and cannot start one after another.
 
 ## Local file and user config
 

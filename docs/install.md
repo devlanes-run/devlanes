@@ -90,6 +90,23 @@ $ devlanes doctor
 
 The doctor checks what a first start depends on and prints a fix under each line that is off. A project with containers also needs Docker running.
 
+## If a project pins devlanes
+
+A JavaScript project can list devlanes as a dependency, so everyone who works on it runs the same release:
+
+```console title="~/dev/myapp"
+$ npm install --save-dev devlanes
+$ npx devlanes start
+```
+
+The command is then not on your `PATH`, so you run it through the package manager, as the second line does; pnpm, Yarn and Bun have their own form, such as `pnpm devlanes`.
+
+One daemon serves every project on the machine, so it can run another release than the one the project pins. The doctor shows both versions when they differ. To move the daemon to the pinned release, restart it from the project, which stops your running services and starts them again:
+
+```console title="~/dev/myapp"
+$ npx devlanes daemon restart
+```
+
 ## If you want shell completions
 
 Add the line for your shell to its startup file.

@@ -17,7 +17,10 @@ What devlanes does not do, with the issue that tracks each limit. An empty Issue
 | Go has no platform or script runner, and `Taskfile.yml` is not supported. | [#138](https://github.com/devlanes-run/devlanes/issues/138) |
 | JVM projects have no platform, Maven or Gradle runner, or presets. | [#136](https://github.com/devlanes-run/devlanes/issues/136) |
 | A service has no built-in debug port. | [#139](https://github.com/devlanes-run/devlanes/issues/139) |
+| The services of a lane start at the same time; a start cannot bring them up one after another. | [#197](https://github.com/devlanes-run/devlanes/issues/197) |
 | Resources outside Docker, such as a hosted database branch, cannot be created per lane. | [#59](https://github.com/devlanes-run/devlanes/issues/59) |
+| `devlanes run` passes no extra arguments to a task's command. | |
+| `devlanes wait` exits with 1 for a command that failed, not with the command's own exit code. | |
 | The daemon has no public API for other programs. | [#29](https://github.com/devlanes-run/devlanes/issues/29) |
 
 ## Hostnames, HTTPS and the proxy

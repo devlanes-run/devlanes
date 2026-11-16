@@ -16,6 +16,7 @@ kind: reference
 | A service crashed, and `status` still shows it `ready` | A watcher such as `node --watch` keeps the process alive | Read `devlanes logs` for the service and run `devlanes restart` on it ([When a service fails](learn/failures.md)) |
 | `port PORT is taken by pid N` | Another program holds a port of the lane | Stop that program, then start again |
 | `PATH has no value in LANE` | An expression such as `${{ env.API_KEY }}` has no value, often a missing `.env` | [Read .env values and pin tool versions](how-to/projects/env-files-and-tools.md) |
+| `global_env.NAME has no value in LANE` on each service, under a profile with `infra: false` | The value reads a container the profile did not start | [Share settings and choose which services start](how-to/projects/templates-and-profiles.md#if-a-profile-should-skip-the-containers) |
 | `Docker isn't running or can't be reached` | The project has containers and Docker is down | Start Docker |
 
 ## Lanes and the daemon
@@ -24,6 +25,7 @@ kind: reference
 |---|---|---|
 | Lanes are `idle` with `needs start from a shell` | The daemon restarted, or ended with the terminal | [Bring lanes back after a reboot](how-to/lanes/after-a-reboot.md) |
 | The daemon stops when you close a terminal on Windows | That terminal ends the processes it started | [Windows](reference/windows.md) |
+| `devlanes: command not found` in a project whose `package.json` lists devlanes | The project pins devlanes, so the command is not on your `PATH` | Run it as `npx devlanes` ([Install devlanes](install.md#if-a-project-pins-devlanes)) |
 | `no devlanes.yaml in DIR or its parents` | The command ran outside a project | [Add devlanes to a project](how-to/projects/add-devlanes.md) |
 | `the running daemon is devlanes VERSION ... and cannot serve this CLI` | The daemon runs another release than the CLI | `devlanes daemon restart` ([Update and uninstall](how-to/update.md)) |
 | `the port pool has no free block of N ports for another lane` | Old lanes hold every port block | [Remove lanes](how-to/lanes/clean-up.md) |

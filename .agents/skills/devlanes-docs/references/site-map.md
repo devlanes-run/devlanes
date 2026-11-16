@@ -51,6 +51,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | `ports-and-hostnames.md` | Give a service several ports and hostnames | Named ports and extra hostnames. |
 | `on-demand.md` | Start a service only on demand | Keep a service stopped until someone asks for it. |
 | `tasks.md` | Run installs, migrations and seeds | One-off commands at the right lane event. |
+| `one-off-commands.md` (skill) | Run a command with a lane's environment | A reset, a seed or a script with the lane's variables and without its services: a task run by hand, `exec` with `wait`, or a shell. |
 | `external.md` | Give a server you run yourself a hostname | A hostname and HTTPS for a server devlanes does not start. |
 | `sync-build-output.md` | Copy build output to a fixed folder | A folder a service builds, copied on this machine or from a box. |
 | `gui-tools.md` | Open a GUI tool as a service | A simulator or a remote desktop that serves HTTP or TCP. |
