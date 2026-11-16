@@ -40,6 +40,10 @@ The token is a bearer secret: any process running as you on the paired machine c
 
 A box's services see your connections as coming from the box itself. A service there that trusts local connections without a password, such as an admin page or a database, trusts every machine the box serves.
 
+## The daemon looks for new releases
+
+The daemon reads the latest version from the registry devlanes was installed from. The request carries nothing that identifies your machine or your projects. [Update and uninstall](../how-to/update.md) says how to turn the check off.
+
 ## Related
 
 - [Use devlanes from an agent sandbox](../how-to/agents/sandboxes.md)
