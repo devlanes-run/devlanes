@@ -1,5 +1,23 @@
 # devlanes-config
 
+## 0.13.0 — 2026-11-16
+
+### Patch changes
+
+- [a54919df](https://github.com/devlanes-run/devlanes/commit/a54919df3b992916a3eb01acee5aba909120d678) Added `run_script` support for `go.mod`, which runs a main package with `go run`.
+- [a45c6921](https://github.com/devlanes-run/devlanes/commit/a45c69214d7111c1497394380bf4100e9458f27e) Added `preset: spring-boot`, which runs a Spring Boot app on its lane's port and hostname.
+  
+  It also turns off Spring's own Docker Compose support, since devlanes runs the containers; `spring-boot: { docker_compose: true }` turns it back on.
+- [a45c6921](https://github.com/devlanes-run/devlanes/commit/a45c69214d7111c1497394380bf4100e9458f27e) Added Maven and Gradle to `run_script`: a `pom.xml` runs Maven goals and a Gradle file runs Gradle tasks.
+  
+  `name` holds the arguments as typed after `mvn` or `gradle`, and devlanes uses the project's `mvnw` or `gradlew` when there is one:
+  
+  ```yaml
+  run_script: { file: pom.xml, name: spring-boot:run -Pdev }
+  ```
+- [a45c6921](https://github.com/devlanes-run/devlanes/commit/a45c69214d7111c1497394380bf4100e9458f27e) Added `preset: quarkus`, which runs Quarkus dev mode on its lane's port and hostname, with a debugger port per lane.
+- [76c3033f](https://github.com/devlanes-run/devlanes/commit/76c3033f53429c723ea83b5361b7281e863e4f51) Added `run_script` support for Taskfiles, run with `task`.
+
 ## 0.12.2 — 2026-11-16
 
 ### Patch changes

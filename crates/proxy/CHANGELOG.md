@@ -1,5 +1,9 @@
 # devlanes-proxy
 
+## 0.10.0 — 2026-11-16
+
+Version bump only, to follow other packages.
+
 ## 0.9.2 — 2026-11-16
 
 ### Patch changes
