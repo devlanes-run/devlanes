@@ -18,7 +18,20 @@ To do it by hand, start with [Install devlanes](install.md).
 
 ## A daemon and a proxy do the work
 
-![A browser on your machine asks for api.myapp1.localhost; the proxy inside the daemon passes the request to the api of lane 1 of myapp, next to lane 0](overview.svg)
+```mermaid
+flowchart TB
+  browser["Browser<br/>https://api.myapp1.localhost"]
+  subgraph daemon["devlanes daemon"]
+    proxy["Proxy: HTTPS for each hostname"]
+    subgraph lane0["myapp lane 0, main"]
+      api0["api"]
+    end
+    subgraph lane1["myapp lane 1, feat/checkout"]
+      api1["api"]
+    end
+  end
+  browser --> proxy --> api1
+```
 
 A daemon in the background runs the processes of each lane, so they keep running after you close the terminal. Its proxy answers each hostname over HTTPS and passes the request to the lane the hostname belongs to.
 

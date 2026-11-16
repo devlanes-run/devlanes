@@ -12,7 +12,21 @@ The pool runs from 20000 to 32767 by default, below the range Linux usually pick
 
 A new lane takes the lowest free block of consecutive ports, and no two blocks overlap, whatever project they belong to. A block holds the ports the project needs with room to spare, at least ten, so adding a service usually fits in the block the lane already has.
 
-![The port pool from 20000 to 32767 holds a block for each lane of myapp; in both blocks api has the first port and web the second, and the rest of the block is spare](ports.svg)
+```mermaid
+flowchart LR
+  subgraph pool["The port pool, 20000 to 32767"]
+    subgraph b0["Block of lane 0"]
+      a0["api: first port"]
+      w0["web: second port"]
+      s0["spare"]
+    end
+    subgraph b1["Block of lane 1"]
+      a1["api: first port"]
+      w1["web: second port"]
+      s1["spare"]
+    end
+  end
+```
 
 ## A service has the same place in every lane
 

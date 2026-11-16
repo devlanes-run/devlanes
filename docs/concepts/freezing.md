@@ -10,7 +10,14 @@ A machine with several lanes runs several copies of each dev server and watcher,
 
 By default a lane is throttled after 5 minutes without activity: its processes run at background priority and keep serving requests. By default it is frozen 15 minutes after its last activity: its processes are suspended, and the containers that belong to the lane alone are paused. Both apply to the whole lane, so activity on one service thaws all of them.
 
-![An unused lane goes from running to throttled after the throttle time and to frozen once the freeze time has passed since its last activity; activity thaws it back to running](freezing.svg)
+```mermaid
+stateDiagram-v2
+  direction LR
+  running --> throttled: unused for the throttle time
+  throttled --> frozen: unused for the freeze time
+  throttled --> running: activity
+  frozen --> running: activity thaws it
+```
 
 Shared containers, such as one Postgres for every lane, are not paused, since other lanes use them. Linux lanes are not throttled and go straight to frozen. The two times are [`lanes.throttle_after`](/docs/reference/config/user/lanes/) and [`lanes.freeze_after`](/docs/reference/config/user/lanes/) in the user config, and [Run many lanes on one machine](../how-to/lanes/many-lanes.md) changes them.
 

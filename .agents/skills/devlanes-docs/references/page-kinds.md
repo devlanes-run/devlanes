@@ -103,7 +103,7 @@ No two lanes can listen on the same port, so devlanes hands the ports out. You n
 
 (two or three short paragraphs)
 
-![The port pool with the blocks of lane 0 and lane 1 of myapp](ports.svg)
+(a Mermaid block of the pool with the blocks of lane 0 and lane 1)
 
 ## A service has the same place in every block
 

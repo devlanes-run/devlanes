@@ -10,7 +10,17 @@ One background process per user, the daemon, runs the lanes of all your projects
 
 The daemon starts and stops each unit of a lane, a service or task for example ([Glossary](../reference/glossary.md)). It hands out the ports, runs the proxy that answers the hostnames, keeps the state of each lane and writes the logs. A client holds none of this, so a terminal and an agent looking at the same lane see the same thing.
 
-![The CLI, the TUI and the MCP server send requests to the daemon, which holds the processes of each lane, the proxy for hostnames over HTTPS, the state and the logs](daemon.svg)
+```mermaid
+flowchart LR
+  subgraph daemon["devlanes daemon"]
+    procs["The processes of each lane"]
+    proxy["The proxy for hostnames over HTTPS"]
+    state["State and logs"]
+  end
+  cli["CLI"] --> daemon
+  tui["TUI"] --> daemon
+  mcp["MCP server"] --> daemon
+```
 
 The daemon measures the CPU and memory of each lane and shows them in status, and it does not limit them. A lane nobody uses is throttled and then frozen instead of stopped ([Throttling and freezing](freezing.md)).
 

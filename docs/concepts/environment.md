@@ -18,8 +18,6 @@ A unit, a service or task of a lane for example ([Glossary](../reference/glossar
 6. profile: the env of the profiles, named selections of services, that the start selected.
 7. override: values given with `--env` on the command line.
 
-![Seven layers of a unit's environment, from the shell that ran the start at the bottom to --env on the command line at the top, each with the name env show gives it; the higher layer wins](environment.svg)
-
 Because devlanes' own variables sit above the shell, a `PORT` left in your shell cannot move a service. `global_env` sits above them, so do not set the port there: every service would get the same one. To see where each variable of a unit came from:
 
 ```console

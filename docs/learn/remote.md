@@ -51,7 +51,20 @@ From then on, the hostnames of myapp's lane 0 lead to devbox. A lane on your own
 
 You open `https://myapp.localhost` in the browser on your machine. Your daemon answers it with a certificate from the devlanes CA, a certificate authority devlanes creates on your machine, and sends the request over the connection to the web app on the box. The box's ports are mirrored on your machine under the same numbers, so a tool on your machine reaches them on `127.0.0.1` as well.
 
-![The browser on your machine opens https://myapp.localhost; your daemon sends the request over one connection to devbox, where web in myapp lane 0 answers](remote.svg)
+```mermaid
+flowchart LR
+  subgraph you["Your machine"]
+    browser["Browser<br/>https://myapp.localhost"]
+    daemon["devlanes daemon"]
+  end
+  subgraph box["devbox, the box"]
+    boxdaemon["devlanes daemon"]
+    web["myapp lane 0: web"]
+  end
+  browser --> daemon
+  daemon -- "one connection" --> boxdaemon
+  boxdaemon --> web
+```
 
 You start and stop the box's lane in a shell on the box, and work with it from your machine as if it ran here.
 

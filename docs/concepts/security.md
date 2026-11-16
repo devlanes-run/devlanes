@@ -10,7 +10,22 @@ devlanes runs as your user. Its daemon answers processes of your account and no 
 
 The daemon listens on a socket, a named pipe on Windows, that only your account can open, and it turns away callers from other accounts. There is no token or password: the account check is the whole of it.
 
-![Who is checked where: processes running as you reach the daemon's socket or pipe and the CA key, which admit your account only; a sandbox's edge decides whether a process inside it gets through; SSH or a command decides who reaches a box, and the pairing check decides which machines see the box daemon's lanes](security.svg)
+```mermaid
+flowchart LR
+  subgraph you["Your account on your machine"]
+    procs["Anything running as you"]
+    sandbox["A process in a sandbox"]
+    daemon["devlanes daemon"]
+    key["CA key"]
+  end
+  subgraph box["A box"]
+    boxdaemon["devlanes daemon on the box"]
+  end
+  procs --> daemon
+  procs --> key
+  sandbox -. "only if the sandbox lets it out" .-> daemon
+  daemon -- "SSH or a command, then the pairing check" --> boxdaemon
+```
 
 So any process running as you can do what you can through the daemon: start and stop services, run commands in a lane, read logs and a lane's environment, your shell's secrets included. A dev server, or a dependency's install script, runs as you too and can do the same. A sandboxed process that is allowed to reach the daemon gets the daemon's rights, outside its sandbox; [Use devlanes from an agent sandbox](../how-to/agents/sandboxes.md) covers that case.
 

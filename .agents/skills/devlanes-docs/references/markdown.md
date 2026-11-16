@@ -134,11 +134,20 @@ A live TUI on the page. `view` is `lanes`, `monitor`, `daemon` or `boxes`. It re
 
 ## Diagrams
 
-```markdown
-![A box and your machine, joined by one SSH session](remote-mirroring.svg)
+````markdown
+```mermaid
+flowchart LR
+  browser["Browser"] --> proxy["Proxy in the daemon"] --> api["api of lane 1"]
 ```
+````
 
-An SVG file next to the page. The website puts it inline, so it can follow the theme: its only colours are `currentColor` and the variables `--dl-diagram-line`, `--dl-diagram-fill` and `--dl-diagram-accent`, with `currentColor` or `transparent` as the fallback and no colour written as a hex value. The accent is for one highlighted path, and a diagram without one leaves it out. A number in a diagram that is a default says so. Give it a `<title>` that matches the alt text. The alt text says what the diagram shows, and the diagram contains every word the alt text names.
+A diagram is a Mermaid block in the page, so it is text that shows in a diff and that an agent can read and edit. No image files.
+
+- `flowchart` for boxes and arrows, with `subgraph` for one thing inside another. `stateDiagram-v2` for states.
+- Put every label in double quotes. Break a line with `<br/>`.
+- No colours or styles: the website themes the diagram.
+- Declare a `subgraph` before an arrow points at it.
+- A diagram shows the model in a handful of boxes. When a list or a small table says the same thing, use that.
 
 ## Asides
 

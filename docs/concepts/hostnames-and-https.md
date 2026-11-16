@@ -30,7 +30,21 @@ That is why the number goes into the name. A domain such as lane1.myapp.localhos
 
 All hostnames arrive at the proxy on one port, 443 by default. The browser names the host it wants, the proxy finds the lane and service that route it, and passes the request on to that service's port on 127.0.0.1 over plain HTTP. Your service needs no TLS of its own. A name no lane routes is refused.
 
-![A browser asks for https://api.myapp1.localhost; the name resolves to 127.0.0.1; the proxy in the daemon finds the route, signs a certificate with the devlanes CA and forwards the request to api in lane 1, the site myapp1.localhost; lane 0 is the site myapp.localhost](hostnames-and-https.svg)
+```mermaid
+flowchart TB
+  browser["Browser<br/>https://api.myapp1.localhost"]
+  dns["The name resolves to 127.0.0.1"]
+  proxy["Proxy in the daemon<br/>finds the route and signs a certificate with the devlanes CA"]
+  subgraph site0["Lane 0, the site myapp.localhost"]
+    web0["web"]
+    api0["api"]
+  end
+  subgraph site1["Lane 1, the site myapp1.localhost"]
+    web1["web"]
+    api1["api"]
+  end
+  browser --> dns --> proxy --> api1
+```
 
 When the proxy cannot have port 443, it uses another one and the URLs carry that port; [Choose the proxy's ports](../how-to/hostnames/proxy-ports.md) covers it. Plain http on port 80 redirects to HTTPS.
 

@@ -10,7 +10,22 @@ A box is a machine that runs devlanes for its own lanes, such as a server that h
 
 Each machine runs its own daemon. The daemon on your machine owns the connection: it opens one session to the box, over SSH or a command that reaches a container, listens on the box's ports, adds the box's hostnames to its proxy and writes the folders the box syncs. The daemon on the box runs the box's lanes as it would with nobody connected.
 
-![Your browser's request goes through your proxy and a mirrored port, or a relay port when that number stays local, over one session by SSH or a command, to the devlanes tunnel on the box and the lane's service; a client such as psql uses the mirrored port directly, and a synced folder copies the box's build output to your machine. Environments, secrets, logs, commands and either CA never cross](remote-mirroring.svg)
+```mermaid
+flowchart LR
+  subgraph you["Your machine"]
+    browser["Browser"]
+    proxy["Your proxy"]
+    tool["A tool such as psql"]
+    port["Mirrored port"]
+  end
+  subgraph box["The box"]
+    boxdaemon["devlanes on the box"]
+    svc["The lane's service"]
+  end
+  browser --> proxy --> port
+  tool --> port
+  port -- "one connection, by SSH or a command" --> boxdaemon --> svc
+```
 
 The session belongs to your daemon and not to a terminal, so it outlives the terminal that opened it and reconnects on its own after the network drops. Run the same devlanes release on both machines; [Prepare a box](../how-to/remote/prepare-a-box.md) covers installing one.
 

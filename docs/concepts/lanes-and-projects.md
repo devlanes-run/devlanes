@@ -12,7 +12,15 @@ A worktree is a folder with one branch checked out. Each lane belongs to one wor
 
 What a lane runs are its units, mostly the services and tasks of the project file, next to the containers the project declares, such as a database ([Glossary](../reference/glossary.md)).
 
-![Two worktrees of myapp: ~/dev/myapp on main is lane 0 at myapp.localhost, ~/dev/myapp-checkout on feat/checkout is lane 1 at myapp1.localhost](lanes-and-projects.svg)
+```mermaid
+flowchart LR
+  subgraph repo["The worktrees of myapp"]
+    wt0["~/dev/myapp<br/>branch main"]
+    wt1["~/dev/myapp-checkout<br/>branch feat/checkout"]
+  end
+  wt0 --> lane0["Lane 0<br/>myapp.localhost"]
+  wt1 --> lane1["Lane 1<br/>myapp1.localhost"]
+```
 
 ## Lanes are numbered
 

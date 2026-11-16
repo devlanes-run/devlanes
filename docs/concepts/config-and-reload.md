@@ -10,7 +10,12 @@ A lane reads its config from the project file and from the local file next to it
 
 Unless you name a file with `--file`, devlanes loads the nearest `devlanes.yaml` in the folder you are in or one above it, up to the repository root. Next to it sits the local file, `devlanes.local.yaml`, which holds what you want on your machine only and wins where both set the same thing.
 
-![In the usual case devlanes.yaml and devlanes.local.yaml merge into one config; with extends, devlanes.yaml, devlanes.local.yaml, devlanes.prod.yaml and devlanes.prod.local.yaml merge in that order, a later file winning. Drift is the difference between what runs and what the config would start, and a reload applies it](config-and-reload.svg)
+```mermaid
+flowchart LR
+  a["devlanes.yaml"] --> c["The lane's config"]
+  b["devlanes.local.yaml<br/>wins where both set a key"] --> c
+  c -- "differs from what runs: drift" --> r["devlanes reload applies it"]
+```
 
 Settings merge by key, so a local file that sets one variable of a service keeps the others; a list in the local file replaces the whole list. A project file can also build on another project file, as a production file builds on the development one, and then the files merge in the order the diagram shows.
 

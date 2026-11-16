@@ -10,7 +10,13 @@ When you start a lane, devlanes brings up its parts in a fixed order: the contai
 
 Containers are the databases and other programs a project runs in Docker, such as one Postgres; [Glossary](../reference/glossary.md) has the other terms. Each phase begins once the one before it has ended, so a service finds its containers up and the work of setup and tasks done.
 
-![A start of myapp runs postgres in containers, then setup creates the database, then the install and migrate tasks one after the other, then api and web start together through the start gate with no order between them, then the seed task after services](start-order.svg)
+```mermaid
+flowchart LR
+  c["Containers<br/>postgres"] --> s["Setup<br/>create the database"]
+  s --> t["Tasks<br/>install, then migrate"]
+  t --> sv["Services<br/>api and web, in no order"]
+  sv --> a["Tasks that wait for services"]
+```
 
 These phases run when a start brings the lane up from nothing running. A start in a lane that already runs only adds the services it is missing, such as one you just added to the project file.
 
