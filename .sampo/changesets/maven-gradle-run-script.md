@@ -12,8 +12,3 @@ Added Maven and Gradle to `run_script`: a `pom.xml` runs Maven goals and a Gradl
 ```yaml
 run_script: { file: pom.xml, name: spring-boot:run -Pdev }
 ```
-
-<!-- highlight
-title: Run Java services
-body: Point `run_script` at a `pom.xml` or Gradle file, and add `preset: spring-boot` or `preset: quarkus` to give each lane its own ports. JVMs that devlanes starts trust its CA.
--->
