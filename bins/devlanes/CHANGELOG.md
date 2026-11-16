@@ -1,5 +1,42 @@
 # devlanes
 
+## 0.14.0 — 2026-11-16
+
+### Minor changes
+
+- [a45c6921](https://github.com/devlanes-run/devlanes/commit/a45c69214d7111c1497394380bf4100e9458f27e) Added `platform: java`, so JVMs that devlanes starts, `devlanes exec` and `devlanes with` trust the devlanes CA.
+  
+  devlanes detects it from a `pom.xml` or Gradle file and adds a trust store to `JAVA_TOOL_OPTIONS`. Keep JVM flags out of a `JAVA_TOOL_OPTIONS` in the project file, which would replace it: https://devlanes.run/docs/how-to/hostnames/trust-the-ca/
+  
+  `devlanes env shell`, `env export`, `exec` and `with` now set `JAVA_TOOL_OPTIONS` with the devlanes trust store in every project, and keep a `javax.net.ssl.trustStore` you set yourself.
+  
+  <!-- highlight
+  title: Run Java services
+  body: Point `run_script` at a `pom.xml` or Gradle file, and add `preset: spring-boot` or `preset: quarkus` to give each lane its own ports. JVMs that devlanes starts trust its CA.
+  -->
+- [a54919df](https://github.com/devlanes-run/devlanes/commit/a54919df3b992916a3eb01acee5aba909120d678) Added `platform: go`, detected from `go.mod` or `go.work`, which gives Go services the devlanes CA on Linux.
+  
+  <!-- highlight
+  title: Run Go services
+  body: Point `run_script` at a `go.mod` to run a main package with `go run`. Go services that devlanes starts trust its CA on Linux.
+  -->
+
+### Patch changes
+
+- [a54919df](https://github.com/devlanes-run/devlanes/commit/a54919df3b992916a3eb01acee5aba909120d678) Added `run_script` support for `go.mod`, which runs a main package with `go run`.
+- [a45c6921](https://github.com/devlanes-run/devlanes/commit/a45c69214d7111c1497394380bf4100e9458f27e) Added `preset: spring-boot`, which runs a Spring Boot app on its lane's port and hostname.
+  
+  It also turns off Spring's own Docker Compose support, since devlanes runs the containers; `spring-boot: { docker_compose: true }` turns it back on.
+- [a45c6921](https://github.com/devlanes-run/devlanes/commit/a45c69214d7111c1497394380bf4100e9458f27e) Added Maven and Gradle to `run_script`: a `pom.xml` runs Maven goals and a Gradle file runs Gradle tasks.
+  
+  `name` holds the arguments as typed after `mvn` or `gradle`, and devlanes uses the project's `mvnw` or `gradlew` when there is one:
+  
+  ```yaml
+  run_script: { file: pom.xml, name: spring-boot:run -Pdev }
+  ```
+- [a45c6921](https://github.com/devlanes-run/devlanes/commit/a45c69214d7111c1497394380bf4100e9458f27e) Added `preset: quarkus`, which runs Quarkus dev mode on its lane's port and hostname, with a debugger port per lane.
+- [76c3033f](https://github.com/devlanes-run/devlanes/commit/76c3033f53429c723ea83b5361b7281e863e4f51) Added `run_script` support for Taskfiles, run with `task`.
+
 ## 0.13.3 — 2026-11-16
 
 ### Patch changes
