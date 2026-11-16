@@ -1,6 +1,6 @@
 ---
 title: Run scripts your project already has
-description: Start a service or a task from a script in package.json, a Makefile, a justfile, Cargo.toml, pyproject.toml, deno.json or go.mod, and know when a plain command fits better.
+description: Start a service or a task from a script in package.json, a Makefile, a justfile, a Taskfile, Cargo.toml, pyproject.toml, deno.json or go.mod, and know when a plain command fits better.
 kind: how-to
 ---
 
@@ -23,6 +23,7 @@ The file name picks the tool:
 - `package.json`: the script, with the package manager the project declares in `packageManager` or its lockfile.
 - A Makefile: `make <target>`.
 - A justfile: `just <recipe>`.
+- A Taskfile, such as `Taskfile.yml`: `task <name>`. The task gets a preset's flags in `{{.CLI_ARGS}}`.
 - `Cargo.toml`: `cargo run --bin <name>`, where the name is a binary.
 - `pyproject.toml`: an entry under `[project.scripts]`, run with uv or Poetry.
 - `deno.json`: `deno task <name>`.

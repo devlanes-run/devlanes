@@ -112,6 +112,7 @@ devlanes-resolver-hosts = { path = "../../crates/resolver-hosts" }
 devlanes-run-script-just = { path = "../../crates/run-script-just" }
 devlanes-run-script-make = { path = "../../crates/run-script-make" }
 devlanes-run-script-npm = { path = "../../crates/run-script-npm" }
+devlanes-run-script-task = { path = "../../crates/run-script-task" }
 devlanes-start-gate = { path = "../../crates/start-gate" }
 devlanes-state = { path = "../../crates/state" }
 devlanes-sys = { path = "../../crates/sys" }
