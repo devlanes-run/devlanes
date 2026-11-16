@@ -18,7 +18,7 @@ Each home has its own daemon, lanes and port pool, and is private to your accoun
 
 | Path in the home | Contents |
 |---|---|
-| `config.yaml` | The user config ([user config reference](/docs/reference/config/user/)). |
+| `config.yaml` | The user config. |
 | `state.db` | The daemon's database: projects, lanes, port blocks, run history and the boxes this machine connected to. It holds no environment variables. |
 | `logs/daemon.log` | The daemon's log. |
 | `logs/<project>/<lane number>/<unit>/` | The output of each unit. |

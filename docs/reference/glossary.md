@@ -26,7 +26,7 @@ The words the devlanes docs use, in alphabetical order, each with the page that 
 | Hosts helper | `devlanes-hosts`, a small program that writes the routed hostnames into `/etc/hosts` for programs that cannot resolve `*.localhost`. On macOS and Linux. | [Fix programs that cannot resolve *.localhost](../how-to/hostnames/resolve-localhost.md) |
 | Keep awake | `keep_awake: true` on a service: while it runs, its lane is not throttled or frozen. | [Run many lanes on one machine](../how-to/lanes/many-lanes.md) |
 | Lane | One worktree's place to run the project: a number with ports, hostnames and data of its own, which it keeps whether its services run or not. | [Lanes and projects](../concepts/lanes-and-projects.md) |
-| Lane 0 | The lane of the primary worktree. In CI, the clone the job made is lane 0, whatever its branch. | [Lanes and projects](../concepts/lanes-and-projects.md) |
+| Lane 0 | The lane of the primary worktree. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Lane data folder | A folder of each lane outside its worktree, for files no other lane may share. | [Files and folders](files.md#lane-data-folder) |
 | Lane domain | The domain the hostnames of a lane end in: `myapp.localhost` in lane 0, `myapp1.localhost` in lane 1. | [Hostnames and HTTPS](../concepts/hostnames-and-https.md) |
 | Lane event | A point in a lane's life that runs tasks: `lane.create`, `lane.start`, `lane.stop` and `lane.clean`, set in a task's `when`. | [Run installs, migrations and seeds](../how-to/services/tasks.md) |
@@ -74,6 +74,6 @@ The words the devlanes docs use, in alphabetical order, each with the page that 
 | Unit | Something a lane runs or routes: a service, task, exec command, setup or teardown entry, or external port. Containers are listed next to units. | [Lane and unit references](lane-and-unit-references.md#unit-references) |
 | Unit reference | How a command names a unit, such as `api`, `1:api` or `myapp@1:api`. | [Lane and unit references](lane-and-unit-references.md#unit-references) |
 | Unused lane | A lane with no activity for a while. devlanes throttles it, then freezes it. | [Throttling and freezing](../concepts/freezing.md) |
-| User config | `~/.devlanes/config.yaml`: your settings for every project on the machine. | [Files and folders](files.md#the-devlanes-home), and the [user config reference](/docs/reference/config/user/) |
+| User config | `~/.devlanes/config.yaml`: your settings for every project on the machine. | [Files and folders](files.md#the-devlanes-home) |
 | Worktree | A Git worktree: a folder with one branch of the repository checked out. Each worktree of a project runs as a lane. | [Every worktree gets a lane](../learn/worktrees.md) |
 | Your machine | The machine where the browser runs, when a box is involved. | [Remote mirroring](../concepts/remote-mirroring.md) |
