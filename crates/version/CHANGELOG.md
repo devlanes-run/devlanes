@@ -1,5 +1,11 @@
 # devlanes-version
 
+## 0.4.1 — 2026-11-16
+
+### Patch changes
+
+- [9f3f2500](https://github.com/devlanes-run/devlanes/commit/9f3f2500338b7170deeb1ae232b9c92eb6099b17) Changed the hint for a missing `devlanes.yaml` to link the docs page on adding devlanes to a project.
+
 ## 0.4.0 — 2026-10-28
 
 ### Minor changes

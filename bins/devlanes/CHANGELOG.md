@@ -1,5 +1,15 @@
 # devlanes
 
+## 0.13.1 — 2026-11-16
+
+### Patch changes
+
+- [9f3f2500](https://github.com/devlanes-run/devlanes/commit/9f3f2500338b7170deeb1ae232b9c92eb6099b17) Changed the hint for a missing `devlanes.yaml` to link the docs page on adding devlanes to a project.
+- [9f3f2500](https://github.com/devlanes-run/devlanes/commit/9f3f2500338b7170deeb1ae232b9c92eb6099b17) Fixed the OpenCode and Cursor registration lines that `devlanes mcp --help` prints.
+- [9f3f2500](https://github.com/devlanes-run/devlanes/commit/9f3f2500338b7170deeb1ae232b9c92eb6099b17) Changed the default `updates.mode` to `auto`, so devlanes installs patch releases in the background.
+  
+  To only see new releases and install them yourself, set `updates.mode: notify` in the user config.
+
 ## 0.13.0 — 2026-11-09
 
 ### Minor changes
