@@ -123,7 +123,7 @@ The [docs](https://devlanes.run/docs/) start with a [tour](https://devlanes.run/
 
 ## Contributing
 
-[CONTRIBUTING.md](CONTRIBUTING.md) covers building, testing and the design notes, and [AGENTS.md](AGENTS.md) has the conventions for people and agents working on the code.
+[CONTRIBUTING.md](https://github.com/devlanes-run/devlanes/blob/main/CONTRIBUTING.md) covers building, testing and the design notes, and [AGENTS.md](https://github.com/devlanes-run/devlanes/blob/main/AGENTS.md) has the conventions for people and agents working on the code.
 
 Every commit on `main` that passes CI is published as the `next` build, so once your pull request is merged you can use it without waiting for a release. On macOS and Linux:
 
@@ -143,4 +143,4 @@ mprocs and dekit informed the terminal interaction. pitchfork, process-compose, 
 
 ## License
 
-Licensed under the **Apache-2.0 License**. See [`LICENSE`](LICENSE) for more information.
+Licensed under the **Apache-2.0 License**. See [`LICENSE`](https://github.com/devlanes-run/devlanes/blob/main/LICENSE) for more information.

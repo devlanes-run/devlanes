@@ -23,6 +23,12 @@ from pathlib import Path
 NAME = "devlanes"
 HERE = Path(__file__).resolve().parent
 
+# readme.py sits with the other packaging scripts, since the npm build runs it too.
+# Importing it must not leave a __pycache__ in the checkout the release is built from.
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(HERE.parent / "scripts"))
+from readme import package_readme  # noqa: E402
+
 # Release target, wheel platform tag. The macOS tags are Rust's default deployment
 # targets; the Linux ones match the glibc 2.35 baseline of the Ubuntu 22.04 runners,
 # which also keeps pip from picking them on musl.
@@ -96,7 +102,7 @@ def record_hash(data):
 
 
 def metadata(version):
-    """The wheel's METADATA, with the PyPI README as its description."""
+    """The wheel's METADATA, with the repository README and the PyPI notes as its description."""
     lines = [
         "Metadata-Version: 2.4",
         f"Name: {NAME}",
@@ -111,8 +117,7 @@ def metadata(version):
         *(f"Classifier: {classifier}" for classifier in CLASSIFIERS),
         "Description-Content-Type: text/markdown",
     ]
-    readme = (HERE / "README.md").read_text(encoding="utf-8")
-    return ("\n".join(lines) + "\n\n" + readme).encode()
+    return ("\n".join(lines) + "\n\n" + package_readme(HERE / "notes.md")).encode()
 
 
 def build_wheel(version, files, mtime, platform, out):

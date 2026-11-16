@@ -80,6 +80,9 @@ for cpu in x64 arm64; do
 	jq -e '.os == ["win32"] and .cpu == ["'"$cpu"'"]' "$work/npm/devlanes-win32-$cpu/package.json" >/dev/null
 done
 jq -e '.optionalDependencies | all(. == "'"$version"'")' "$work/npm/devlanes/package.json" >/dev/null
+# The launcher's README is the repository's with the npm notes in it.
+grep -q 'devlanes.run/assets/banner.png' "$work/npm/devlanes/README.md"
+grep -q '^## The npm package$' "$work/npm/devlanes/README.md"
 mkdir "$work/tgz"
 for dir in "$work"/npm/*/; do
 	jq -e .name "$dir/package.json" >/dev/null
@@ -153,6 +156,10 @@ listed=$(unzip -Z1 "$work/wheels/devlanes-$wheel_version-py3-none-win_arm64.whl"
 	echo "unexpected entries in the Windows wheel: $listed" >&2
 	exit 1
 }
+# The project description is the repository's README with the PyPI notes in it.
+unzip -p "$work/wheels/devlanes-$wheel_version-py3-none-win_arm64.whl" "$info/METADATA" >"$work/METADATA"
+grep -q 'devlanes.run/assets/banner.png' "$work/METADATA"
+grep -q '^## The PyPI package$' "$work/METADATA"
 # Every file is in RECORD with its hash and size, as installers expect.
 python3 - "$work"/wheels/*.whl <<'EOF'
 import base64, csv, hashlib, io, sys, zipfile
