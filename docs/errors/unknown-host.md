@@ -36,4 +36,4 @@ To hand ports 80 and 443 to another server, stop the daemon, which stops every s
 devlanes daemon stop
 ```
 
-[Hostnames and HTTPS](../guides/https.md) explains how hostnames are built.
+[Hostnames and HTTPS](../concepts/hostnames-and-https.md) explains how hostnames are built.

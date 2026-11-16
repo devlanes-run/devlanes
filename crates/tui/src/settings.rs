@@ -2089,8 +2089,9 @@ mod tests {
         press(&mut settings, KeyCode::Enter, &mut theme);
         assert!(settings.edit.is_some());
         assert_eq!(settings.index, row);
+        // From the default, `auto`, → wraps to the first value.
         press(&mut settings, KeyCode::Right, &mut theme);
-        assert_eq!(settings.file_value("updates.mode"), Some(json!("auto")));
+        assert_eq!(settings.file_value("updates.mode"), Some(json!("disable")));
         press(&mut settings, KeyCode::Enter, &mut theme);
         assert!(settings.edit.is_none());
         assert_eq!(settings.index, row);
@@ -2334,7 +2335,7 @@ mod tests {
         assert_eq!(gone, Outcome::Menu);
         assert_eq!(
             saved(&effects),
-            [("updates.mode".to_owned(), Some(json!("auto")))]
+            [("updates.mode".to_owned(), Some(json!("disable")))]
         );
         assert_eq!(settings.restart, ["updates.mode"]);
         // Discard: nothing is written.

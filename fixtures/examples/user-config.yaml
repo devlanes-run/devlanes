@@ -1,0 +1,133 @@
+# Per-user settings, normally at ~/.devlanes/config.yaml.
+# devlanes refuses a home other users can read: if you create ~/.devlanes
+# yourself, use `mkdir -m 700 ~/.devlanes` (or `chmod 700 ~/.devlanes`).
+# An unknown key or invalid value stops the daemon from starting, with the
+# file and line to fix; `devlanes doctor` checks the file without restarting.
+
+# How lane hostnames resolve on this machine.
+hostnames:
+  # localhost uses *.localhost names, which most resolvers answer with loopback.
+  resolver: localhost
+  # Write exact hostnames to /etc/hosts: auto only when the system resolver fails a probe.
+  hosts_file: auto
+  # Custom TLD alternative: resolver: resolver, tld: test.
+  # Public DNS resolution is outside v1.
+# Machine-wide pool that every lane's port block comes from.
+ports:
+  range: 20000-32767
+# Root of the lane data folders (${{ lane.data_path }}, DEVLANES_LANE_DATA):
+# <data_dir>/<project>/<lane id>. Absolute or starting with ~/; default ~/.devlanes/data.
+lanes:
+  data_dir: ~/.devlanes/data
+  # Lower the priority of a lane's processes after this long without activity
+  # (macOS and Windows only). Must be shorter than freeze_after; 0s turns it off.
+  throttle_after: 5m
+  # Suspend a lane's processes and pause its own containers after this long without
+  # activity; the next request, connection or command resumes them. 0s turns it off.
+  # A service with keep_awake: true keeps its lane awake.
+  freeze_after: 15m
+tls:
+  # Certificate authority: devlanes keeps its own under ~/.devlanes/ca; mkcert reuses mkcert's.
+  ca: devlanes
+  # Stores that devlanes setup installs the CA into.
+  trust: [system, firefox]
+# Ports the HTTPS proxy listens on; lan: true also accepts other machines.
+proxy:
+  https_port: 443
+  http_port: 80
+  lan: false
+  # Via: 1.1 devlanes.run on forwarded responses.
+  via: true
+# How many services start at once, across all lanes and projects.
+startup:
+  # adaptive (default): start at `initial`, slow down under CPU or memory pressure.
+  # fixed: always `max` at a time. all: everything at once.
+  mode: adaptive
+  # Default: `max`. Lower it to ramp up from a few starts instead.
+  initial: 2
+  # Default: CPU cores.
+  max: 8
+  # Grow the window while system CPU stays below this.
+  target_cpu: 75%
+  # Services with a ready check keep their slot until it passes. One without
+  # (`ready: started`) is done starting once it stays below this share of one core for 2s.
+  settle_cpu: 10%
+  # Give the slot back after this even if the service isn't ready.
+  slot_timeout: 20s
+  # Free memory a new start must leave, beyond what starting services still need.
+  # Default: 10% of RAM, at most 2GiB; 0B turns it off.
+  reserve_memory: 2GiB
+# What a plain `devlanes start` brings up.
+start:
+  # Bring back the services the lane ran before (default). After `devlanes stop`
+  # there is nothing to bring back. false: always the default profile.
+  restore: true
+# Service output kept on disk, by age and total size; days also bounds database log metadata.
+logs:
+  retention:
+    days: 7
+    max_size: 5GiB
+# How long CPU and memory history is kept, including database aggregates and run summaries.
+metrics:
+  retention: 7d
+# Finished unit/task history and disconnected remote-host records in the database.
+history:
+  retention: 7d
+  # Age since the host's last successful connection.
+  remote_hosts_retention: 90d
+# Soft database budget, including SQLite WAL and shared-memory files.
+# Old metrics and history are pruned first; live registry and completion records are preserved.
+state:
+  max_size: 512MiB
+# progress shows start progress in the terminal tab's progress bar, title says what
+# devlanes is doing in the tab's title, links makes service URLs and file locations
+# clickable, notifications reports long starts and crashes while the terminal is not
+# focused, and marks lets the terminal jump between sections of long output. Each is
+# auto (terminals known to support it), always or never; DEVLANES_TERM_PROGRESS,
+# DEVLANES_TERM_TITLE, DEVLANES_TERM_LINKS, DEVLANES_TERM_NOTIFICATIONS and
+# DEVLANES_TERM_MARKS set to 0 or 1 override them.
+terminal:
+  progress: auto
+  title: auto
+  links: auto
+  notifications: auto
+  marks: auto
+# Every 4 hours and when the TUI opens, the daemon reads the latest devlanes version from
+# the registry devlanes was installed from. mode: auto shows a newer release and installs
+# patch releases in the background where it can, notify only shows it, and disable (or
+# DEVLANES_NO_UPDATE_CHECK=1) turns checks off.
+updates:
+  mode: auto
+# On a terminal, start, restart, lane resume and lane new --start run inside the TUI.
+# false prints them as text instead, like --no-ui or DEVLANES_NO_UI=1.
+# theme: auto uses the terminal's 16 colors, or a true-color palette when the
+# terminal says it supports one and reports its background; dark, light or ansi pick one.
+# glyphs: auto draws Unicode on a UTF-8 locale and ASCII otherwise.
+# on_quit: what q does while lanes of the project on screen run: ask, keep
+# (they keep running) or stop (they stop, then the TUI closes).
+tui:
+  open_on_start: true
+  theme: auto
+  glyphs: auto
+  on_quit: ask
+# A daemon a command started on demand stops about 15 seconds after the last TUI
+# (or command showing progress) closes while nothing runs, or after about 5 minutes
+# when nothing ever watched it; the next command starts it again. false keeps it up.
+# A daemon installed with `devlanes daemon install` never stops on its own.
+daemon:
+  exit_when_idle: true
+# On a box: devlanes remote connect from another machine starts this machine's daemon
+# when none runs. false leaves that to you; the client then reports the stopped daemon
+# and retries until it runs. Run `devlanes daemon install` (or `devlanes daemon start`
+# with daemon.exit_when_idle: false) so the daemon keeps running between connections.
+remote:
+  start_daemon: true
+  # On a box: serve only machines paired with `devlanes daemon pair` (the default).
+  require_pairing: true
+  # Boxes devlanes remote connect reaches by running a command here instead of SSH,
+  # by the name you connect with: `devlanes remote connect acme` runs this command.
+  # It must run `devlanes tunnel --stdio` in the box with stdin and stdout passed
+  # through; see docs/how-to/remote/connect-by-command.md.
+  # boxes:
+  #   acme:
+  #     command: [docker, exec, -i, acme, devlanes, tunnel, --stdio]

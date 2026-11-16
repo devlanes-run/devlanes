@@ -23,7 +23,7 @@ On a terminal, `start`, `restart`, `reload`, `lane resume` and `lane new --start
 
 `devlanes with` starts the lane, waits until it is ready, runs the command with the lane's env and `DEVLANES_PUBLIC_URL_<SERVICE>` variables, stops what it started and exits with the command's code.
 
-Configuration examples and design notes are in `docs/` at the repository root. The agent skill is in `skills/devlanes/`.
+The user docs are in `docs/` at the repository root, configuration examples in `fixtures/examples/` and design notes in `CONTRIBUTING.md`. The agent skill is in `skills/devlanes/`.
 
 ## Config example
 
@@ -38,7 +38,7 @@ terminal:
   progress: auto
 ```
 
-Project settings live in each repository's `devlanes.yaml`; `docs/examples/user-config.yaml` lists every user setting. `devlanes config get [KEY]`, `config set KEY VALUE` and `config unset KEY` read and change `config.yaml` without the daemon, keeping its comments.
+Project settings live in each repository's `devlanes.yaml`; `fixtures/examples/user-config.yaml` lists every user setting. `devlanes config get [KEY]`, `config set KEY VALUE` and `config unset KEY` read and change `config.yaml` without the daemon, keeping its comments.
 
 ## Behaviour
 
@@ -71,7 +71,7 @@ devlanes debug bundle -- start api
 
 ## Updates
 
-The daemon checks for new releases every 4 hours and when the TUI opens (`updates.mode` in `config.yaml`: `disable`, `notify` or `auto`). `devlanes update`, or `U` in the TUI, installs the latest release the way devlanes was installed and restarts the daemon; it never installs an older one, and `install.sh` and `install.ps1` take no version either (npm and PyPI install a given release: `npm install -g devlanes@X.Y.Z`, `uv tool install devlanes==X.Y.Z`). A build of `main`, installed with `install.sh --channel next` or `install.ps1 -Channel next`, updates to the latest build of `main`. `devlanes uninstall` removes devlanes. [Updates](../../docs/guides/updates.md) covers builds of `main`, background installs, Windows and the install scripts.
+The daemon checks for new releases every 4 hours and when the TUI opens (`updates.mode` in `config.yaml`: `auto`, the default, also installs patch releases in the background; `notify` only shows them; `disable` turns checks off). `devlanes update`, or `U` in the TUI, installs the latest release the way devlanes was installed and restarts the daemon; it never installs an older one, and `install.sh` and `install.ps1` take no version either (npm and PyPI install a given release: `npm install -g devlanes@X.Y.Z`, `uv tool install devlanes==X.Y.Z`). A build of `main`, installed with `install.sh --channel next` or `install.ps1 -Channel next`, updates to the latest build of `main`. `devlanes uninstall` removes devlanes. [Update and uninstall](../../docs/how-to/update.md) covers builds of `main`, background installs, Windows and the install scripts.
 
 ## License
 

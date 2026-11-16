@@ -4,7 +4,7 @@ expression: output
 ---
 --- url open plain (exit 3)
 error: no devlanes.yaml in /work/empty or its parents
-hint: create devlanes.yaml at the repository root; a minimal one: https://github.com/devlanes-run/devlanes/blob/main/docs/examples/minimal.yaml
+hint: create devlanes.yaml at the repository root; a minimal one: https://devlanes.run/docs/how-to/projects/add-devlanes/
 --- url open json (exit 3)
 {"error":{"code":"argument_missing","exit_code":3,"data":{"command":"url open","description":"Open a service's URL in the browser; agent mode only prints it","argument":"service","options":[],"total":0,"reason":"no_config","message":"no devlanes.yaml in /work/empty or its parents"}}}
 --- attach plain (exit 3)

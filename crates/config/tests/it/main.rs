@@ -5,7 +5,6 @@ mod diagnostics;
 mod external;
 mod merging;
 mod project_files;
-mod reference_docs;
 mod references;
 mod retention;
 mod schema_docs;
@@ -15,11 +14,11 @@ mod tags;
 use devlanes_config::*;
 use serde_json::json;
 
-const FULL: &str = include_str!("../../../../docs/examples/devlanes.yaml");
-const MINIMAL: &str = include_str!("../../../../docs/examples/minimal.yaml");
-const LOCAL: &str = include_str!("../../../../docs/examples/devlanes.local.yaml");
-const PROD: &str = include_str!("../../../../docs/examples/devlanes.prod.yaml");
-const USER: &str = include_str!("../../../../docs/examples/user-config.yaml");
+const FULL: &str = include_str!("../../../../fixtures/examples/devlanes.yaml");
+const MINIMAL: &str = include_str!("../../../../fixtures/examples/minimal.yaml");
+const LOCAL: &str = include_str!("../../../../fixtures/examples/devlanes.local.yaml");
+const PROD: &str = include_str!("../../../../fixtures/examples/devlanes.prod.yaml");
+const USER: &str = include_str!("../../../../fixtures/examples/user-config.yaml");
 
 /// Exercise the same runtime registration the composition root supplies.
 fn registered_schema() -> serde_json::Value {
@@ -449,11 +448,11 @@ fn yaml_language_server_schemas() {
     assert_eq!(config.tasks["build"].when, Some(TaskWhen::Start));
 }
 
-/// The prod example loads from `docs/examples` over `devlanes.yaml` and its local
+/// The prod example loads from `fixtures/examples` over `devlanes.yaml` and its local
 /// overlay. Compose files are not checked: the examples ship none.
 #[test]
 fn prod_example_extends_the_reference() {
-    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/examples");
     let load = load_project_files::<OpaqueExtensions>(&examples.join("devlanes.prod.yaml"), None);
     let (config, _) = load.result.expect("prod example");
     assert_eq!(config.project, "acme-prod");

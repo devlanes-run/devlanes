@@ -1,6 +1,6 @@
 # Contributing
 
-devlanes is a Cargo workspace: one binary (`bins/devlanes`) built from small crates under `crates/`. Each crate has a README saying what it does, and `AGENTS.md` has the code conventions. This file covers setting up, running the CLI from a checkout and testing each area.
+devlanes is a Cargo workspace: one binary (`bins/devlanes`) built from small crates under `crates/`. Each crate has a README saying what it does, and `AGENTS.md` has the code conventions. This file covers setting up, running the CLI from a checkout, testing each area, the design and observability.
 
 ## Setup
 
@@ -108,7 +108,7 @@ dl setup --remove             # removes both
 dl setup --remove --keep-ca   # removes only the helper
 ```
 
-`crates/hosts-helper/README.md` explains what that installs and why. On Windows there is no helper: `*.localhost` resolves natively on Windows 11 (not on Windows Server), `setup` shows a Windows security warning instead of a password prompt, `curl.exe` needs `--ssl-revoke-best-effort`, and with the resolver strategy `setup` writes an NRPT rule after a UAC prompt ([Windows](docs/guides/windows.md)).
+`crates/hosts-helper/README.md` explains what that installs and why. On Windows there is no helper: `*.localhost` resolves natively on Windows 11 (not on Windows Server), `setup` shows a Windows security warning instead of a password prompt, `curl.exe` needs `--ssl-revoke-best-effort`, and with the resolver strategy `setup` writes an NRPT rule after a UAC prompt ([Windows](docs/reference/windows.md)).
 
 ## Docker and compose
 
@@ -118,7 +118,7 @@ Docker tests are ignored by default and named `docker_*`:
 cargo nextest run --workspace --run-ignored only -E 'test(/^docker_/)'
 ```
 
-They create containers labelled `dev.devlanes.*` and remove them afterwards. To try infra by hand, add an `infra:` section to a fixture copy (see `docs/examples/devlanes.yaml`) and use `dl infra up`, `dl infra status` and `dl lane clean <lane> --yes`.
+They create containers labelled `dev.devlanes.*` and remove them afterwards. To try infra by hand, add an `infra:` section to a fixture copy (see `fixtures/examples/devlanes.yaml`) and use `dl infra up`, `dl infra status` and `dl lane clean <lane> --yes`.
 
 ## Remote and SSH
 
@@ -173,6 +173,85 @@ Run a crate's ignored tests with `cargo nextest run -p <crate> --run-ignored onl
 | `devlanes-resolver-nrpt` | a desktop session to approve two UAC prompts, and nothing (no devlanes daemon) on `127.53.0.1:53`; it writes a rule under `HKEY_LOCAL_MACHINE` and removes it |
 | `devlanes-resolver-dns` | dig |
 | `devlanes-daemon` | `DEVLANES_FIXTURE_SERVER=$PWD/target/debug/fixture-server` |
+
+## Design
+
+A lane corresponds to a Git worktree. Lane 0 follows the primary branch, except under CI, where the checkout takes lane 0 on any branch when lane 0 is free; other worktrees keep persisted indexes. A worktree other than the primary one gets its lane the first time a command that acts on lanes (`start`, `status`, `env` and the like, not reads such as `logs`) runs in it, and a lane whose folder is gone stays until `lane gc` cleans it, unless `lanes.removed_worktrees: clean` has the daemon clean it once nothing runs in it. Worktree identity uses the Git common directory and worktree administration entry, so moving a worktree preserves its identity. `lane new --name` adds another lane for one folder: a worktree row whose identity is the folder's plus `#lane=<name>`, which follows that folder and never takes lane 0. Non-Git projects have one lane per folder unless extra lanes are added.
+
+A project is identified by its `project:` name, and a name belongs to one repository. One repository can hold several projects, each read from its own project file: the nearest `devlanes.yaml` above the current directory, up to the repository root, or a file registered once with `--file` and stored with the project relative to the repository root. A worktree has a lane in a project while its copy of that file names the project, so a rename or a branch switch leaves the old lane in place until `lane gc` collects it, once nothing runs there.
+
+The daemon owns processes, ports, proxy routes and SQLite. CLI and TUI clients exchange structured requests and events with it. Closing a client does not stop services. Integration crates implement core traits and are registered by the binary; Docker containers belong to infrastructure adapters rather than process runners.
+
+Each lane receives a non-overlapping block from the machine-wide port pool. Named service offsets persist within that block. A service must accept its assigned port; listening-socket inspection is diagnostic only. Hostnames put the lane in the registrable label, such as `api.acme2.localhost`.
+
+Startup orders infrastructure, per-lane setup, lifecycle tasks, concurrent services, then after-services tasks. There is no service dependency graph or automatic restart: a failed unit stays failed. Each lane saves the services it runs and its profiles (never the environment), so a plain start, `lane resume` or `daemon restart` from a shell brings back what ran after the daemon stopped; a whole-lane `stop` clears that. A restart starts the new daemon before it stops the old one: the new one waits for the singleton lock, with the lanes to start again and the restarting client's environment handed over in memory on its stdin, so the restart finishes even when that client goes away. Monitoring reports resource use without enforcing limits. Throttling and freezing an idle lane is neither automatic restart nor enforcement: its processes keep their state, ports and PIDs, and activity on the lane thaws them ([Throttling and freezing](docs/concepts/freezing.md)).
+
+YAML configuration merges the files a project file `extends`, each followed by its local file, then the project file and its local file. Maps merge by key and lists/scalars replace, and templates expand after the merge. `${{ ... }}` expressions use strict undefined-variable handling. Client environments stay in daemon memory; `.env` files supply expression values, not implicit process environment injection.
+
+The daemon reloads a lane's config when any file the last load read changes, `.env` included, and never stops or restarts a unit because of it. It keeps what each running service was spawned with in memory only, since that holds environment values, and compares it with what the new config would spawn to report per-unit drift; `reload` applies that drift on request. While units run and the file does not load, the lane's routes follow the last config that loaded.
+
+The daemon's HTTPS proxy signs certificates for registered hosts with a per-user CA, devlanes' own or mkcert's (`tls.ca`). SSH transport mirrors registered, non-hidden TCP ports. HTTP-based GUI viewers can be ordinary services; built-in window streaming, relay transport, public DNS resolution and iOS/Android certificate trust are outside v1.
+
+[fixtures/examples](fixtures/examples/README.md) has commented configuration files for these contracts.
+
+## Observability
+
+How devlanes reports what it does today, how OpenTelemetry tracing could be added on top of that, and how to benchmark the CLI and daemon. Only the first section is implemented. devlanes sends nothing anywhere; anonymous usage telemetry is not planned and would be a separate decision.
+
+### Current instrumentation
+
+Both processes use `tracing`. Targets are crate paths (`devlanes_client`, `devlanes_daemon::lifecycle`, `devlanes_infra_compose::cli`), so `RUST_LOG`-style filters select them.
+
+Spans in the daemon:
+
+| Span | Where | Fields |
+| --- | --- | --- |
+| `request` | every request, in `serve_client` | `id`, `method`, `session`, `tap` when verbose |
+| `phase` | each start phase (`infra`, `resolve`, `setup`, `tasks`, `services`, `after-services`) | `name`, `lane` |
+| `unit` | one service's paced start | `unit`, `lane` |
+| `readiness` | a unit's readiness check, a child of `unit` | |
+
+The client has `spawn_daemon` around an auto-spawn, and its events carry `timing` and `elapsed_ms` where a duration matters (connect and hello, spawn until ready, each request).
+
+Outputs:
+
+- `daemon.log`, filtered by `DEVLANES_LOG` (default `info`).
+- `-v`/`-vv` on any command. The client prints its own events to stderr. Requests carry `verbose` in their `Context`; the daemon registers a tap for the request (`devlanes_daemon::diagnostics`), and a `tracing` layer sends every record and span close under that request's span back as `diagnostic` events before the response. The tap's filter passes nothing while no tap is active, so idle cost is one atomic load per debug call site.
+- The timing table at the end of a `-v` run, built from client `timing` events and the daemon's span closes.
+
+Rules that every new field follows: environment values are never recorded at any level, only variable names (`env_keys`); command lines are recorded for commands devlanes builds (Docker Compose), and only the argument count for a unit's own command, whose arguments can be interpolated secrets. The diagnostics layer also replaces fields named like `secret`, `password`, `token` or `value`.
+
+Spans only follow work across `tokio::spawn` when the spawned future is instrumented. New background work that belongs to a request (a probe, a spawned step) should use `Instrument::instrument(span)` or `.in_current_span()`.
+
+### Adding OpenTelemetry traces
+
+The spans above map one to one onto OpenTelemetry spans through `tracing-opentelemetry`; no call site changes.
+
+Daemon: add a `tracing_opentelemetry::layer()` next to the file and diagnostics layers in `init_logging`, with a tracer from `opentelemetry-otlp`. Build it only when `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) is set, and honour `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` and `OTEL_TRACES_SAMPLER` as the SDK reads them. Use the batch span processor on the daemon's runtime and shut the tracer provider down in the daemon's shutdown path so the last spans are flushed. Resource attributes: `service.name = devlanes-daemon`, `service.version` and the build id. The daemon inherits `OTEL_*` only once they are added to the auto-spawn allowlist in `devlanes-client` (`DAEMON_ENV_PREFIXES`); a daemon installed as a login service needs them in its service definition.
+
+Client: the same layer in `verbose::init`'s subscriber (or a subscriber of its own when `-v` is off), with `service.name = devlanes-cli`. A root span `command` with the subcommand path wraps `commands::dispatch`. The CLI is short-lived, so it must flush before exit with a bounded timeout (200 ms is a reasonable start) to keep commands fast when the collector is slow or down. A simple span processor with an HTTP exporter fits a process that lives for one request better than a batch processor.
+
+Linking client and daemon: add `trace: Option<String>` to `devlanes_proto::Context`, holding a W3C `traceparent` (`00-<trace id>-<span id>-<flags>`). The client injects the current span's context with the `TraceContextPropagator` before `begin_request`. The daemon extracts it in `request_span` and calls `OpenTelemetrySpanExt::set_parent` on the `request` span, so one trace shows `command` (client), `request`, `phase`, `unit` and `readiness`. The field is additive: older daemons ignore it, and a daemon that receives no `trace` starts its own root. `Context` is never logged, and `traceparent` holds no secrets.
+
+Dependency cost: `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp` and `tracing-opentelemetry`. The OTLP exporter brings either `tonic`, `prost` and `hyper` (gRPC) or an HTTP client (`reqwest` or `hyper`) with `prost` (HTTP/protobuf). The daemon already links `hyper` through the proxy, so HTTP/protobuf over the existing `hyper` adds the least. Measure before deciding: `cargo tree -e normal -p devlanes | wc -l` and the release binary size with and without the change. If the cost matters, put it behind a cargo feature (`otel`) that release builds enable, so the runtime switch stays the environment variable.
+
+Redaction does not change: the same fields become span attributes, so the rules in the previous section apply to exported spans. Log records can be exported as span events; keep that off by default, since `debug` records are numerous.
+
+### Benchmarks
+
+The end-to-end harness (`devlanes-e2e`) already gives each test an isolated home, repository and port slot and drives the real binary, so benchmarks belong there as tests named `bench_*`, marked `#[ignore = "benchmark"]` and run with `cargo nextest run --profile e2e --run-ignored only -E 'test(/^bench_/)'`.
+
+Scenarios, each repeated (10 runs, then median and p90):
+
+- Cold CLI: `devlanes --version`, which starts no daemon. Process start and argument parsing.
+- Auto-spawn: the first `devlanes status` in a fresh home. The client's `daemon spawn until ready` timing separates the spawn from the request.
+- Warm request: `devlanes status` with the daemon up, from the `request status` timing.
+- Start to ready: `devlanes start` on `fixtures/two-services` and `fixtures/many-services` (40 services), and `docker_`-prefixed variants on `fixtures/compose-pg-redis`. The daemon's `phase` span durations give infra, setup, tasks and services separately.
+- Restart of one unit in a running lane.
+
+To read timings without parsing the human table, `-v` could write them as JSON when `DEVLANES_TIMINGS_FILE` is set: one object per row with `label`, `ms` and `source` (`client` or `daemon`). The benchmark tests set it, read the file and append one JSON line per scenario and run to `target/bench/results.jsonl` with the commit, OS and fixture.
+
+In CI, a job on `main` (and on demand for pull requests) runs the benchmarks on one fixed runner type, uploads `results.jsonl` as an artifact and writes a Markdown summary to `GITHUB_STEP_SUMMARY`. Comparing with the latest `main` artifact and flagging a regression above a threshold (say 20 % on a median) can come later; shared runners are noisy, so it should warn rather than fail until the numbers prove stable. Docker scenarios run only on the Linux runners, like the other `docker_` tests.
 
 ## Generated files
 
@@ -317,6 +396,22 @@ Don't edit versions or `CHANGELOG.md` files by hand; the release pull request do
 ## Releases
 
 Merging the release pull request, which `.github/workflows/sampo.yml` keeps up to date on every push to `main`, releases everything; `packaging/README.md` describes the workflow and the Homebrew and npm packages.
+
+### Using a merged change before it is released
+
+Every commit on `main` that passes CI is built and published as the `next` build (`.github/workflows/next.yml`). Once your pull request is merged and its checks on `main` are green, install that build to use the change without waiting for a release. On macOS and Linux:
+
+```sh
+curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
+```
+
+On Windows 11:
+
+```powershell
+iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
+```
+
+`devlanes --version` then reads `X.Y.Z-next.N`, where N counts the commits since the last release, and `devlanes update` moves the install to the latest build of `main`. Only the install scripts carry `next` builds: npm, PyPI and Homebrew get releases only. [Update and uninstall](https://devlanes.run/docs/how-to/update/) says how to go back to releases.
 
 ## License
 

@@ -1,150 +1,164 @@
 # Writing devlanes.yaml
 
-Read this before you create or change a `devlanes.yaml`. It covers each area with the options that matter and the mistakes agents make. Every field, with types and examples, is in [docs/reference/config.md](https://github.com/devlanes-run/devlanes/blob/main/docs/reference/config.md); [docs/examples/devlanes.yaml](https://github.com/devlanes-run/devlanes/blob/main/docs/examples/devlanes.yaml) shows them in context.
+Read this before you create or change `devlanes.yaml` or `devlanes.local.yaml`. It covers each area with the keys that matter and the mistakes to avoid. Every key, with its default, is in the [config reference](https://devlanes.run/docs/reference/config.md); the schema is `https://devlanes.run/v1/schema.json`.
 
-After every edit run `devlanes config check`. It validates expressions, references and preset options and points at the line of a mistake. Then `devlanes start` and `devlanes status`. An edit never restarts what runs: `status` shows the lane as `config changed` with the units the edit changed, added or removed, and `devlanes reload` applies only those (it restarts the whole lane when infra or the port block changed). `devlanes debug config` prints the merged config, with `extends` and local files applied and expressions left unevaluated.
+## After every edit
+
+1. `devlanes config check`: validates keys, expressions, references and preset options, and names the file, line and column of a mistake. It does not check that a script named in `run_script` exists.
+2. An edit never restarts what runs. `devlanes status` shows the lane as `config changed` with the units the edit changed, added or removed.
+3. `devlanes reload` stops removed units, restarts changed ones and starts added ones. A change to infra or ports restarts the whole lane. `devlanes reload api` applies only that unit's change.
+4. `devlanes debug config` prints the merged config, with `extends`, templates and local files applied and expressions left unevaluated.
 
 ## File layout
 
-`devlanes.yaml` sits at the repository root (or a package root in a monorepo, as its own project) and is committed, so every worktree has it. Start it with the schema modeline so editors complete fields:
+`devlanes.yaml` sits at the repository root, or at the root of an app in a monorepo as a project of its own, and is committed so every worktree has it. Start it with the schema line so editors complete keys:
 
 ```yaml
 # yaml-language-server: $schema=https://devlanes.run/v1/schema.json
-project: acme
+project: myapp
 ```
 
-`project` is lowercase letters, digits, dots, underscores and dashes, shared by every worktree. The other top-level keys are `extends`, `lanes`, `infra`, `global_env`, `tags`, `templates`, `tasks`, `services` and `profiles`.
+`project` is lowercase letters, digits, `.`, `_` and `-`, starting with a letter or digit. The other top-level keys are `extends`, `lanes`, `infra`, `global_env`, `tags`, `templates`, `tasks`, `services` and `profiles`.
 
-The project is its name. Renaming `project` makes a new project with new lanes, ports, hostnames and containers, and the old project's lanes stay listed until `devlanes lane gc --yes`; tell the user before renaming, and run the gc only when they agree. Another repository cannot use a name already taken (`project_name_taken`).
+Commands use the nearest `devlanes.yaml` above the current directory, up to the repository root. A `devlanes.yaml` in a subdirectory is a separate project, and its relative paths (`cwd`, where `run` starts, `run_script.file`, `sync.from`, `infra.compose`) start at that subdirectory.
 
-Commands use the nearest `devlanes.yaml` above the current directory, up to the repository root. In a monorepo, a `devlanes.yaml` in a subdirectory is a separate project, and its relative paths (`cwd`, the directory `run` starts in, `run_script.file`, `sync`, `infra.compose`) start at that subdirectory.
+Renaming `project` makes a new project with new lanes, ports, hostnames and containers. The old project's lanes stay listed until `devlanes lane gc --yes` cleans them. Tell the user before renaming, and run the gc only when they agree. Another repository cannot use a name already taken (`project_name_taken`).
 
-## Several projects in one directory
+## A second project file
 
-A second file next to `devlanes.yaml` runs the same apps another way. It extends `devlanes.yaml` and sets its own `project`:
+A second file next to `devlanes.yaml` runs the same apps another way, such as a production build. It extends `devlanes.yaml` and sets its own `project`:
 
 ```yaml
 # devlanes.prod.yaml
-extends: devlanes.yaml                  # a path or a list, relative to this file
-project: acme-prod
+extends: devlanes.yaml
+project: myapp-prod
 global_env:
-  NODE_ENV: production                  # not in the profile's env, which tasks cannot override
+  NODE_ENV: production
+tasks:
+  install:
+    run: [npm, install, --include=dev]   # NODE_ENV=production reaches tasks too
 profiles:
   default:
+    include: ["*"]
     run_scripts:
       dev: start
 ```
 
-The extended files merge first, each followed by its own local file (`devlanes.local.yaml`), then this file and `devlanes.prod.local.yaml`; later files win with the local-override rules below. An extended file may be partial and its `project` is ignored. Run it with `devlanes --file devlanes.prod.yaml start` the first time and `devlanes -p acme-prod ...` after that. Both projects run side by side (`acme.localhost` and `acme-prod.localhost`), but they share the shared Compose project (`devlanes infra down` from one stops both), any value built only from `lane.name` such as a database name (put `${{ project.name }}` in it to keep data apart), a `lanes.vars.domain` that spells out the name, and build output in the worktree such as `.next`.
+- `include` is required. A `default` profile without `include` selects no services, so the start runs none, unless the extended file's `default` brings an `include`.
+- `run_scripts` swaps the script name for services whose `run_script` names `dev`. Each such `package.json` needs a `start` script; `devlanes config check` does not notice a missing one, the start fails on it.
+- The extended files merge first, each followed by its local file, then this file and `devlanes.prod.local.yaml`. Later files win: mappings merge by key, lists and single values replace. An extended file may be partial; its `project` is ignored.
+- Name it once with `devlanes --file devlanes.prod.yaml start`, then reach it with `devlanes -p myapp-prod status`.
+- Both projects run side by side (`myapp.localhost` and `myapp-prod.localhost`). They share the shared Compose project (`devlanes infra down` from one stops it for both), any value built only from `lane.name` such as a database name (put `${{ project.name }}` in it), and build output in the worktree such as `.next`.
 
 ## Services
 
-A service is a long-running process started with the lane. Exactly one of `run` or `run_script` is required, directly or through `extends`.
+A service is a long-running process started with the lane. Exactly one of `run` or `run_script` is required, directly or through a template.
 
 ```yaml
 services:
   api:
-    run_script:                               # the project's package manager runs the script
-      file: apps/api/package.json
+    run_script:                     # the project's package manager runs the script
+      file: api/package.json
       name: dev
     hosts: "api.${{ lane.domain }}"
     ready:
       http:
-        path: /-/health
+        path: /healthz
   worker:
-    run: [node, worker.mjs]                   # a list is an argv, run without a shell
-    cwd: apps/worker
+    run: [node, worker.mjs]         # a list is an argv, run without a shell
+    cwd: worker
     ready:
-      log: "consumer connected"
+      log: "worker ready"
   docs:
-    run: >-                                   # a string runs with /bin/sh -c
-      pnpm -F @acme/docs dev --port ${{ self.port }} --host 127.0.0.1
+    run: >-                         # a string runs with /bin/sh -c
+      pnpm -F docs dev --port ${{ self.port }} --host 127.0.0.1
     hosts: "docs.${{ lane.domain }}"
 ```
 
-- `run_script: { file, name }` works with `package.json` (npm, pnpm, yarn or bun, from `packageManager` or the lockfile), `Makefile`, `justfile`, `deno.json`, `pyproject.toml` (uv or poetry) and `Cargo.toml` (a bin), and runs in that file's directory, so `devlanes config check` refuses a `cwd` next to it. The `file#name` string form is refused. Prefer it to `run: pnpm -F pkg dev` whenever the command is a script in a file: the script is checked before start, profiles can remap its name, and presets require it (`preset` with `run` is refused; drop the preset and write its flags into `run` instead).
-- `infra.setup` and `infra.teardown` entries take only `run`.
-- A multi-line `run` string is a shell script. Without `cwd`, `run` starts in the project file's directory, the worktree root unless the file sits in a subdirectory.
-- `autostart: false` keeps a service out of a plain `devlanes start` when no `default` profile exists; naming the service or its tag still starts it. `autostart` also takes an expression, such as `${{ lane.index == 0 }}`, evaluated per lane.
-- `keep_awake: true` on a worker, queue consumer, scheduler or tunnel (`stripe listen`) keeps its whole lane from being throttled or frozen while it runs. Without it, a lane with no requests, connections or commands is frozen after `lanes.freeze_after` (15 minutes by default) and a waiting worker stalls until something resumes the lane.
-- `replicas: N` runs N instances (`replica.index` counts from 1), each with its own port.
-- `stop: { signal: SIGINT, timeout: 15s }` replaces the default SIGTERM and 10 s grace period before the process tree is killed.
-- `pty: false` uses pipes instead of a terminal. `hidden: true` keeps the port off machines connected with `devlanes remote connect`.
-- `name: API Admin` sets the label shown in the TUI and status, where the installed devlanes supports it (`devlanes config check` reports an unknown key otherwise). Keep the key short and dash-separated; the key is what commands and expressions use.
+- `run_script: { file, name }` works with `package.json` (npm, pnpm, yarn or bun, from `packageManager` or the lockfile), `Makefile`, `justfile`, `deno.json`, `pyproject.toml` (uv or poetry) and `Cargo.toml` (a binary). It runs in that file's directory, so `devlanes config check` refuses a `cwd` next to it. Prefer it to `run: pnpm -F pkg dev` whenever the command is a script in a file: profiles can swap its name and presets require it.
+- A `run` string is a shell script, run with `/bin/sh -c` (Git's `sh` on Windows). Without `cwd`, `run` starts in the project file's directory.
+- `autostart: false` keeps a service out of a plain `devlanes start` when no `default` profile exists, unless the lane ran it before; naming it or its tag still starts it. It also takes an expression, such as `${{ lane.index == 0 }}`.
+- `keep_awake: true` on a worker, queue consumer, scheduler or tunnel keeps its lane from being throttled or frozen while it runs. Without it, a lane with no requests, connections or devlanes commands is frozen after a while, and a worker waiting for jobs stalls until something thaws the lane.
+- `replicas: N` runs N copies, each with its own port; `replica.index` counts from 1, and `worker.2` names one.
+- `stop: { signal: SIGINT, timeout: 15s }` replaces the default SIGTERM and 10 seconds before the process tree is killed.
+- `pty: false` uses pipes instead of a terminal. `hidden: true` keeps the service away from machines connected with `devlanes remote connect`.
+- `name: API Admin` sets the label in the TUI and human output. Commands and expressions keep using the key, so keep keys short, lowercase and dash-separated.
+- `sync` copies a folder the service builds to a fixed path, for a browser extension loaded unpacked: `sync: [{ from: dist, ignore: ["*.map"] }]`, by default to `~/devlanes/sync/<project>/<lane>/<folder>`, and to a connected machine too.
 
-devlanes has no dependencies between services and never restarts a process that exits. Order comes from `tasks` with `when` and from infra; a crash shows as `failed` with its log tail.
+devlanes has no dependencies between services and does not restart a process that exits. Order comes from infra, setup and tasks; a crash shows as `failed` with its log tail.
 
 ## Readiness
 
-`devlanes start` returns once every started service is ready or one failed. Without `ready`, a service with `hosts` is ready when its port accepts TCP, and one without hosts as soon as it starts.
+`devlanes start` returns once every started service is ready or one failed. Without `ready`, a service with `hosts` is ready when its port accepts TCP, and one without hosts once its process has run half a second.
 
-Give every long-running server a check that fails when the app is broken. Dev servers under a watcher (`tsx --watch`, `nodemon`, `cargo watch`, `uvicorn --reload`) keep running after the program crashes and wait for the next file change, so `ready: started` reports them ready while nothing works. The usual gap is a worker without a port: have it print a line once it is connected and wait for that line.
+Give every server a check that fails when the app is broken. Dev servers under a watcher (`node --watch`, `tsx watch`, `nodemon`, `cargo watch`, `uvicorn --reload`) keep running after the program crashes, so `ready: started` reports them ready while nothing works. For a worker without a port, have it print a line once it is connected and wait for that line.
 
 ```yaml
-ready:                # best when the app has a health route
+ready:                # a route the app serves
   http:
-    path: /-/health
-    status: 200
+    path: /healthz
     timeout: 60s
-ready:                # the service's own port is open
+ready:                # the service's own port accepts connections
   tcp: true
 ready:                # a named port
   tcp: inspector
-ready:                # regex on output, escape codes removed
-  log: "consumer connected"
-ready:
+ready:                # a regex on its output, escape codes removed
+  log: "worker ready"
+ready:                # a command that exits 0
   cmd: "pg_isready -h 127.0.0.1 -p ${{ infra.postgres.port }}"
 ready: started        # only when there is nothing to probe
 ```
 
-Use exactly one of `tcp`, `http`, `log` or `cmd`. `http` passes on 2xx unless `status` is set; redirects are not followed. `timeout` bounds the wait; make it generous for services that compile first. A health route that checks the database beats `tcp`, which only proves the socket is open.
+Use one of `tcp`, `http`, `log` or `cmd`. `http` passes on a 2xx answer unless `status` is set, and does not follow redirects. Make `timeout` generous for services that compile first. A route the app serves beats `tcp`, which only proves the socket is open. A service that fails its ready check keeps running and holds its port.
 
 ## Ports
 
-Every lane gets a block of ports and every service one port from it: `PORT` in its environment, `${{ self.port }}` in expressions, with `HOST=127.0.0.1`. The service must listen on that port.
+Each lane gets a block of ports and each service one port from it, in `PORT` and `${{ self.port }}`, with `HOST=127.0.0.1`. The service must listen on that port.
 
-- Pass the port with a preset (`preset: vite`), with `--port ${{ self.port }}` in `run`, or let the app read `PORT`.
-- Never hardcode a port. A literal `env: { PORT: 3000 }` is the same in every lane, so two lanes collide. `env: { PORT: "${{ lane.port + 5 }}" }` pins an offset inside the lane's block.
-- Never write `env: { PORT: "${{ self.port }}" }`. `self.port` is computed from `PORT`, devlanes rejects it as a cycle, and `PORT` already holds that value.
-- Never put `PORT` in `global_env`: it overrides every service's own port.
-- A second port: reference `${{ self.ports.debug }}` anywhere in the service and devlanes allocates a port named `debug`.
-- Other services: `${{ services.api.port }}`, `${{ services.api.url }}` (`http://127.0.0.1:<port>`), `${{ services.api.public_url }}` (its `https://` hostname). Write dashes as underscores: `services.crm_api`. `devlanes with` also gives commands `DEVLANES_PUBLIC_URL_<SERVICE>`.
+- Pass the port with a preset (`preset: vite`), with `--port ${{ self.port }}` in `run`, or let the app read `PORT`. An app that reads another variable gets `MY_PORT: "${{ self.port }}"`.
+- Never write a literal port. `env: { PORT: 3000 }` is the same in every lane, so two lanes collide.
+- Never write `env: { PORT: "${{ self.port }}" }`: `self.port` comes from `PORT`, devlanes rejects the cycle, and `PORT` already holds that value.
+- Never put `PORT` in `global_env`: it sits above devlanes' own variables and gives every service the same port.
+- A second port: reference `${{ self.ports.inspector }}` in the service and devlanes gives it a port named `inspector`.
+- Other services: `${{ services.api.port }}`, `${{ services.api.url }}` (`http://127.0.0.1:<port>`), `${{ services.api.public_url }}` (its HTTPS hostname). Write dashes as underscores: `services.admin_api`.
 
 ## Hostnames and HTTPS
 
 ```yaml
 hosts:
   - api.${{ lane.domain }}
-  - host: "*.${{ lane.domain }}"      # wildcard, used only when no other host matches
+  - host: "*.${{ lane.domain }}"      # wildcard, used only when no other route matches
     fallback: true
-  - host: inspect.${{ lane.domain }}  # routes to a named port instead of the main one
+  - host: inspect.${{ lane.domain }}  # routes to a named port
     port: inspector
   - host: funnels.${{ lane.domain }}  # sends the upstream address as Host
     host_header: upstream
 ```
 
-`lane.domain` is `<project>.localhost` in lane 0 and `<project><N>.localhost` in lane N. `domain('acme-pages')` applies the same rule to another name (`acme-pages.localhost`, `acme-pages2.localhost`). Use it for names that must not share the app's cookies, with a name only this project uses. Keep every hostname under `lane.domain` or a `domain()` name, so lanes never collide. The proxy serves them over HTTPS on 443 (8443 when 443 cannot be bound). Hosts also make `ready` default to `tcp`.
+`lane.domain` is `myapp.localhost` in lane 0 and `myapp1.localhost` in lane 1. `${{ domain('myapp-pages') }}` applies the same rule to another name, for hostnames that must not share the app's cookies. Keep every hostname under `lane.domain` or a `domain()` name, so lanes never claim the same one. The proxy serves them over HTTPS on 443, or 8443 when it cannot bind 443.
 
-TLS trust is already handled. Node units get `NODE_EXTRA_CA_CERTS` and Python units `SSL_CERT_FILE` pointing at the devlanes CA, and the user runs `devlanes setup` once for browsers and the system. Do not add `NODE_OPTIONS=--use-system-ca`, `NODE_TLS_REJECT_UNAUTHORIZED=0` or your own `NODE_EXTRA_CA_CERTS`. `lanes.hosts_file: always` also writes exact hostnames to `/etc/hosts` for programs that cannot resolve `*.localhost`; wildcards cannot go there.
+The certificates are already handled. Units of a detected platform get the devlanes CA: `NODE_EXTRA_CA_CERTS` for node and bun, `DENO_CERT` for deno, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` for python, `SSL_CERT_FILE` for rust. Every unit gets the paths in `DEVLANES_CA_CERT` and `DEVLANES_CA_BUNDLE`, for a runtime devlanes does not detect, such as `run: SSL_CERT_FILE=$DEVLANES_CA_BUNDLE bin/rails server`. Do not add `NODE_OPTIONS=--use-system-ca`, `NODE_TLS_REJECT_UNAUTHORIZED=0` or your own `NODE_EXTRA_CA_CERTS`. The user runs `devlanes setup` once for browsers and the system ([setup.md](setup.md)). `lanes.hosts_file: always` also writes the exact hostnames to `/etc/hosts` on macOS and Linux, for programs that do not resolve `*.localhost`; wildcards cannot go there.
 
 ## Environment and expressions
 
-Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. Undefined names are errors; use `${{ env.X | default('') }}` for optional ones. A value that is one whole expression keeps its type. Write `${{ '${{' }}` for a literal `${{`.
+Values may contain `${{ ... }}` expressions, evaluated for each lane. An undefined name is an error; `${{ env.X | default('') }}` makes it optional. A value that is one whole expression keeps its type. Write `${{ '${{' }}` for a literal `${{`.
 
 | Namespace | Contents |
-| --- | --- |
+|---|---|
 | `project` | `name`, `primary_path` (the primary worktree, for files only it has) |
-| `lane` | `index`, `name`, `label`, `path`, `data_path` (the lane's own folder outside the worktree), `domain`, `port` (block start), plus `lanes.vars` |
+| `lane` | `index`, `name`, `label`, `path`, `data_path`, `domain`, `port` (block start), and each `lanes.vars` entry |
 | `self`, `services.<name>` | `name`, `port`, `ports.<name>`, `url`, `public_url`, `hosts` |
-| `infra.<container>` | `port` (primary published host port), `ports.<name or container port>` |
-| `env` | the shell that ran devlanes, then the lane's `.env` |
+| `infra.<container>` | `port` (its main published port), `ports.<name or container port>` |
+| `env` | The environment of the shell that started the lane, then the lane's `.env` |
 | `replica` | `index`, `count` |
-| `lanes.main.services.<name>` | services of lane 0 |
-| `projects.<project>.services.<name>` | services of another devlanes project |
+| `lanes.main.services.<name>` | Services of lane 0 |
+| `projects.<project>.services.<name>` | Services of another devlanes project |
 
-Layers, lowest first: the client's environment, contributors (mise, direnv, Node, Python), devlanes' variables (`DEVLANES=1`, `DEVLANES_LANE_PROJECT`, `DEVLANES_LANE`, `DEVLANES_LANE_NAME`, `DEVLANES_LANE_DATA`, `DEVLANES_CA_CERT`, `DEVLANES_CA_BUNDLE`, and for services `PORT`, `HOST`, `DEVLANES_SERVICE`, `DEVLANES_ORIGINS`), `global_env`, the service's `env`, the profile's `env`, `--env` on the command line.
+Layers, lowest first: the shell that started the lane, tools and runtimes (mise, direnv, the CA variables, a preset's settings), devlanes' variables (`DEVLANES_*`, and `PORT`, `HOST` for services), `global_env`, the service's `env`, the profile's `env`, `--env` on the command line. `devlanes env show api --explain` names the layer of each variable.
 
-`.env` is never injected into processes; it only feeds `${{ env.X }}`. Name what a process needs (`DB_PASSWORD: ${{ env.DB_PASSWORD }}`) or let the app load its own dotenv. mise `[env]` and an allowed `.envrc` are applied automatically, so do not copy them.
+`.env` is never put into processes; it only feeds `${{ env.X }}`. Name what a process needs (`SMTP_HOST: "${{ env.SMTP_HOST }}"`) or let the app load its own dotenv. Never copy `.env` values into the project file. mise `[env]` and an allowed `.envrc` already reach every unit.
+
+[Expressions](https://devlanes.run/docs/reference/expressions.md) lists the functions and filters, and [Environment variables](https://devlanes.run/docs/reference/environment-variables.md) every variable devlanes sets.
 
 ## Lanes
 
@@ -153,27 +167,26 @@ lanes:
   primary: main                        # branch of lane 0
   max: 6
   vars:
-    db_name: acme_${{ lane.name }}
-    redis_db: ${{ lane.index }}
+    db_name: myapp_${{ lane.name }}
 ```
 
-`lane.data_path` (also `DEVLANES_LANE_DATA`) is a folder only this lane uses, at `~/.devlanes/data/<project>/<lane id>`: devlanes creates it with the lane and `lane clean` deletes it. Put anything a lane writes while it runs there (SQLite files, `wrangler dev --persist-to`, generated configs, bind mounts), never at a fixed path in the worktree: several lanes can run from one folder (`devlanes lane new --name`) and would overwrite each other's files. Leave its `wrangler-registry`, `tauri` and `compose` folders to devlanes.
+`lane.data_path` (`DEVLANES_LANE_DATA` in processes) is a folder only this lane uses, outside the worktree. devlanes creates it with the lane and deletes it when the lane is cleaned. Put what a lane writes while it runs there (SQLite files, `wrangler dev --persist-to`, generated configs), never at a fixed path in the worktree: several lanes can run from one folder (`devlanes lane new --name review`).
 
-`vars` are per-lane values read as `lane.<name>`: database names, vhosts, buckets, Redis DB numbers. A var named `domain` replaces the default domain and `port` fixes the block start; set them only when the default is wrong. `new_worktrees` (`register`, `setup`, `start`) and `removed_worktrees` (`stop`, `clean`) default to `register` and `stop`; leave them out unless changing them.
+`vars` are per-lane values read as `lane.<name>`: database names, vhosts, buckets, Redis database numbers. A var named `domain` replaces the lane domain and one named `port` fixes the block start; set them only when the default is wrong. `new_worktrees` (`register`, `setup`, `start`) and `removed_worktrees` (`stop`, `clean`) default to `register` and `stop`; leave them out unless the user wants another policy.
 
 ## Infra
 
-Containers start before setup, tasks and services, and are healthy first. Compose services are shared by every lane unless listed in `per_lane`.
+Containers start and turn healthy before setup, tasks and services. Compose services are shared by every lane unless listed in `per_lane`.
 
 ```yaml
 infra:
   compose: docker-compose.yml          # or a list, merged like repeated -f
-  exclude: [caddy]                     # never started; the devlanes proxy replaces local reverse proxies
+  exclude: [caddy]                     # never started; the devlanes proxy replaces it
   per_lane: [mailpit]
   env:                                 # Compose interpolation only; processes do not see it
-    ACME_DB_PORT: 15432
+    POSTGRES_PORT: 15432
   hosts:
-    s3mock: "s3.${{ lane.domain }}"
+    mailpit: "mail.${{ lane.domain }}"
   containers:                          # plain Docker containers without Compose
     cerbos:
       image: ghcr.io/cerbos/cerbos:0.40.0
@@ -182,9 +195,9 @@ infra:
       per_lane: true
 ```
 
-Processes reach a container through `${{ infra.postgres.port }}`. Keep databases, brokers and object stores in infra, never as services. A shared container keeps one copy of the data, so give each lane its own database, vhost or bucket with `setup` and `lanes.vars`.
+Processes reach a container through `${{ infra.postgres.port }}`. Keep databases, brokers and object stores in infra, not as services. A shared container keeps one copy of the data, so give each lane its own database, vhost or bucket with `setup` and `lanes.vars`.
 
-A server devlanes does not run, such as a pgAdmin the developer starts by hand, goes under `infra.external` with its loopback address. Every lane lists it as a unit of kind `external`, the proxy routes its `hosts` to the port, and machines connected with `devlanes remote connect` mirror it. Only `127.0.0.1:<port>` and `[::1]:<port>` are accepted; use a port outside devlanes' `ports.range` (20000-32767 by default), since a port devlanes gave a unit is a config error.
+A server devlanes does not run, such as a pgAdmin the developer starts by hand or a server started with `devlanes exec`, goes under `infra.external` with its loopback address. Every lane lists it as a unit of kind `external`, the proxy routes its `hosts` to the port, and connected machines mirror it. Only `127.0.0.1:<port>` and `[::1]:<port>` are accepted. Use a port outside `ports.range` of the user config (20000-32767 by default) and a name no `exec` command uses. `start`, `stop` and `logs` do not apply to it. Put an entry only one developer needs in `devlanes.local.yaml`.
 
 ```yaml
 infra:
@@ -192,24 +205,23 @@ infra:
     pgadmin:
       address: 127.0.0.1:5050
       hosts: "pgadmin.${{ lane.domain }}"
-      hidden: false                       # true keeps it off connected machines
 ```
 
 ## Setup and teardown
 
-Named commands run once per lane after its containers are healthy, recorded as done and skipped on later starts. `teardown` runs on `devlanes lane clean`.
+Named commands that run once per lane after its containers are healthy, recorded as done and skipped on later starts. They run again when their declaration changes. `teardown` runs when the lane is cleaned. As units they are `setup.<name>` and `teardown.<name>`, and `devlanes run infra.setup.database` runs one by hand.
 
 ```yaml
 infra:
   setup:
-    database: psql "postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/postgres" -c "CREATE DATABASE ${{ lane.db_name }}"
+    database: docker compose exec -T postgres createdb -U postgres ${{ lane.db_name }}
     vhost:
       run: docker compose exec -T rabbitmq rabbitmqctl add_vhost ${{ lane.vhost }}
-      container: rabbitmq                # run again whenever this container restarts
+      container: rabbitmq                # run again whenever this container restarted
       ignore_errors: true
       timeout: 60s
   teardown:
-    database: psql "postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/postgres" -c "DROP DATABASE IF EXISTS ${{ lane.db_name }} WITH (FORCE)"
+    database: docker compose exec -T postgres dropdb -U postgres --if-exists ${{ lane.db_name }}
 ```
 
 ## Tasks
@@ -219,114 +231,101 @@ One-shot commands with `run`, `run_script` or `steps`, plus `cwd`, `env` and `ti
 ```yaml
 tasks:
   install:
-    run: [pnpm, install, --frozen-lockfile]
+    run: [npm, install]
     when: lane.create
     timeout: 10m
   migrate:
     run_script:
-      file: package.json
-      name: db-deploy
+      file: api/package.json
+      name: migrate
     when: lane.start
   seed:
-    run_script:
-      file: packages/seed/package.json
-      name: start
+    run: node seed.mjs
     when: lane.create
     after: services
   reset-db:
     steps: [infra.teardown.database, infra.setup.database, migrate, seed]
-    confirm: Drops ${{ lane.db_name }} and re-seeds it
+    confirm: Drops ${{ lane.db_name }} and seeds it again
   login:
-    run: pnpm prisma login
+    run: npx prisma login
     interactive: true
 ```
 
-- `when: lane.create` runs until it succeeds once for the lane (installs, codegen, a first seed). `lane.start` runs on every start before services (migrations). `lane.stop` and `lane.clean` run on those events. Without `when`, a task runs only through `devlanes run NAME`.
-- `after: services` delays a create or start task until the selected services are ready.
-- `profiles: [default, backend]` limits an automatic task to those profiles.
-- Put `confirm` on anything destructive; scripts and agents then have to pass `--yes`.
-- `interactive: true` for commands that need the user's terminal, including TUIs such as `htop`; it cannot have `when`.
-- A command that ends by itself is a task. As a service it would show as failed when it exits.
+- `when: lane.create` runs on each start until it has succeeded once for the lane, and again after its declaration changes (installs, codegen, a first seed). `lane.start` runs on every start that brings the lane up, before services (migrations). `lane.stop` runs when the whole lane stops, `lane.clean` when it is cleaned. Without `when`, a task runs only through `devlanes run NAME`.
+- Create and start tasks run in the order the file lists them. A start into a running lane runs none.
+- `after: services` runs the task once every started service is ready.
+- `profiles: [default, e2e]` runs an automatic task only under those profiles.
+- Put `confirm` on anything destructive; without a terminal, `devlanes run` then needs `--yes`.
+- `interactive: true` for commands that need the user's terminal; it cannot have `when`, and you cannot run one, so ask the user to.
+- A command that ends by itself is a task. As a service it would show as failed or stopped once it exits.
 
-## Tags, colors and profiles
+## Tags and profiles
 
 ```yaml
 tags:
   api:
     color: cyan
-    description: HTTP APIs
 profiles:
   default: [+essential]                # used when no --profile is given
-  backend: [+api, +worker]
+  backend: [+api, worker]
   e2e:
-    include: [+api, +web]
+    include: ["*"]
     run_scripts:                       # services whose run_script names dev run start
       dev: start
     env:
-      NODE_ENV: production
-  staging-web:
+      NODE_ENV: test
+  web-only:
     include: [+web]
     infra: false
 ```
 
-A unit's color is the first of: the first tag with a `color` under `tags`; the first tag naming a category; the preset's category; the category of the name's first segment (`wrk-email` reads `wrk`); a hash of the first tag, or of that segment without tags. Categories include `api`, `server`, `backend`, `gateway`: blue; `web`, `app`, `frontend`, `ui`, `vite`, `next`: green; `worker`, `wrk`, `queue`, `job`, `cron`: magenta; `db`, `postgres`, `redis`, `docs`: cyan; `admin`: bright-magenta; `desktop`, `mobile`, `tauri`: bright-cyan; `stub`, `mock`, `fake`: gray. Put the category tag first and selection tags such as `essential` after it.
+Profiles select services by name, glob or `+tag`, and `exclude` removes some again. Globs skip `autostart: false` services; names and tags include them. When a `default` profile exists, a plain `devlanes start` of a new or stopped lane starts exactly its selection, so use either a `default` profile or `autostart: false`, not both. Without one, a plain start brings back the services the lane ran and nobody stopped. Tags are any names in a service's `tags`; declaring one under `tags` only sets its color or description. Put a category tag such as `api`, `web` or `worker` first, so colors follow it.
 
-Profiles select services by name, glob or `+tag`. Globs skip `autostart: false` services; names and tags include them. When a `default` profile exists, a plain `devlanes start` of a fresh or stopped lane starts exactly its selection and `autostart` stops mattering outside globs, so use one of the two mechanisms, not both. Otherwise a plain start brings back the services the lane ran and nobody stopped; `devlanes stop` without units resets that.
-
-## Templates and extends
+## Templates
 
 ```yaml
 templates:
-  api:
+  node-api:
     tags: [api]
     ready:
       http:
-        path: /-/health
+        path: /healthz
 services:
-  crm:
-    extends: api
+  admin:
+    extends: node-api
     run_script:
-      file: apps/crm/package.json
+      file: admin/package.json
       name: dev
-    hosts: "crm.${{ lane.domain }}"
+    hosts: "admin.${{ lane.domain }}"
 ```
 
-Templates resolve after local overrides and file-level `extends`, which names project files rather than templates. Mappings (`env`, `ready`, `stop`, preset options) merge by key; lists (`tags`, `hosts`) and scalars replace. Setting `run` or `run_script`, or one `ready` check, drops the inherited alternative.
+A service's `extends` names a template; a file's `extends` names project files. Templates apply after local files and file-level `extends`. Mappings (`env`, `ready`, `stop`, preset options) merge by key; lists (`tags`, `hosts`) and single values replace. Setting `run` or `run_script`, or one `ready` check, replaces the inherited one.
 
 ## Presets and platforms
 
-`platform` (node, bun, deno, python, rust) is detected from the run_script source or the working directory; set it only when detection is wrong, or to `none` to turn detection off. It adds CA and color variables.
+`platform` (`node`, `bun`, `deno`, `python`, `rust`) is detected from the `run_script` file or the working directory. Set it only when detection is wrong, or to `none` to skip it. It adds the CA and color variables.
 
 | Preset | Adds | Options |
-| --- | --- | --- |
+|---|---|---|
 | `vite` | `--port <port> --strictPort --host 127.0.0.1` | `vite: { args }` |
 | `next` | `--port <port> --hostname 127.0.0.1` | `next: { args }` |
-| `wrangler` | `--port`, `--inspector-port` (a named `inspector` port), `--var` per var, `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH` in the lane data folder | `wrangler: { vars, args, isolate_registry }` |
-| `tauri` | a per-lane, per-replica identifier and dev URL, through an overlay in the lane data folder | `tauri: { identifier, dev_url, product_name, before_dev_command }` |
+| `wrangler` | `--port`, `--inspector-port` (a port named `inspector`), `--var` per var, and a registry path per lane | `wrangler: { vars, args, isolate_registry }` |
+| `tauri` | A per-lane, per-replica identifier and dev URL, through an overlay in the lane data folder | `tauri: { identifier, dev_url, product_name, before_dev_command }` |
 
-With `run_script`, a preset's flags are passed to the script, so the framework command must be the script's last command. The wrangler preset refuses a script or `wrangler.args` that already passes `--port` or `--inspector-port`. Without a preset, pass the flags yourself with `${{ self.port }}`. Do not set `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` or `MINIFLARE_REGISTRY_PATH`: devlanes sets all three per lane for every unit, so workers started by `wrangler dev`, the Cloudflare Vite plugin, another plugin, a script or a task use the lane's registry. Wrangler's local state (`.wrangler/`) sits in the worktree, so give each lane its own with `wrangler: { args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"] }`.
+A preset needs `run_script`; with `run`, devlanes refuses the preset, so drop it and write its flags into `run`. With `run_script`, the flags are passed to the script, so the framework command must be the script's last command. The wrangler preset refuses a script or `wrangler.args` that already passes `--port` or `--inspector-port`. Do not set `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` or `MINIFLARE_REGISTRY_PATH`; devlanes sets them per lane for every unit. Wrangler keeps its local state in the worktree's `.wrangler/`, so give each lane its own with `wrangler: { args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"] }`.
 
-## Sync
+## Local file and user config
 
-```yaml
-sync:
-  - from: apps/extension/.output/chrome-mv3   # copied under ~/devlanes/sync/<project>/<lane>/ by default
-    ignore: ["*.map"]
-```
+`devlanes.local.yaml` next to `devlanes.yaml` holds one developer's changes and stays out of Git; add it to `.gitignore`, since devlanes does not. Another project file has its own, such as `devlanes.prod.local.yaml`. It merges by key over the project file, for example `services: { web: { autostart: false } }`; lists and single values replace. It cannot set `project` or `extends`. A lane whose worktree has none reads the primary worktree's.
 
-For build output another program loads from a fixed path, such as an unpacked browser extension, locally or on a machine connected with `devlanes remote connect`.
-
-## Local overrides and user config
-
-`devlanes.local.yaml` next to `devlanes.yaml` holds personal changes and stays out of Git (add it to `.gitignore`); another project file has its own, such as `devlanes.prod.local.yaml`. It merges by key before templates, for example `services: { web: { autostart: false } }`; lists and single values replace. It cannot set `project` or `extends`. A lane whose worktree has no such file uses the primary worktree's. Declare an `infra.external` entry for a server only one developer runs here, not in `devlanes.yaml`.
-
-Machine settings live in `~/.devlanes/config.yaml` (or `$DEVLANES_HOME/config.yaml`): `ports.range`, `lanes.data_dir` (root of the lane data folders), `proxy` ports and LAN access, `startup` (how many services start at once), `tls` (devlanes or mkcert CA, trust stores), `hostnames`, `terminal`, log and history retention, `updates.mode` (release checks), `updates.highlights` (the release highlights dialog after an update). They never go in the project file. Prefer `devlanes config set proxy.https_port 8443` over editing the file: it keeps comments, refuses a value that would not load and says whether the change needs `devlanes daemon restart`. `devlanes config get KEY` prints the value in effect, defaults included, and `devlanes config unset KEY` puts the default back; none of them needs the daemon. An unknown key or invalid value written by hand stops the daemon from starting, with the file and line to fix; `devlanes doctor` checks the file without restarting.
+Machine settings live in the user config, `~/.devlanes/config.yaml`, never in the project file: `ports.range`, `proxy` ports, `tls` stores, `hostnames`, `startup`, `lanes` freezing times, log retention, `updates`. Read them with `devlanes config get proxy.https_port`. Change them only when the user asks, with `devlanes config set KEY VALUE`, which keeps comments, refuses a value that would not load and says whether the change needs `devlanes daemon restart`; `devlanes config unset KEY` restores the default. None of these needs the daemon. An unknown key or invalid value written by hand keeps the daemon from starting; `devlanes doctor` reports the file and line.
 
 ## Checklist
 
-- Every service has `run_script` or `run`, listens on its own port, keeps its hosts under `lane.domain` and has a `ready` check that fails when the app is broken.
-- No literal ports, no `PORT` in `global_env`, no CA or TLS workarounds, no secrets or `.env` values in the file.
+- Each service has `run_script` or `run`, listens on its own port, keeps its hostnames under `lane.domain` and has a ready check that fails when the app is broken.
+- No literal ports, no `PORT` in `global_env`, no CA workarounds, no secrets or `.env` values in the file.
 - One-shot work is a task with the right `when`; destructive tasks have `confirm`.
-- Databases and brokers are infra, with per-lane namespaces from `setup` and `lanes.vars`.
-- Defaults are left out: a detected `platform`, default lane policies, a `lanes.vars.domain` equal to the built-in one.
+- Databases and brokers are infra, with per-lane names from `setup` and `lanes.vars`.
+- A `default` profile with options has an `include`.
+- Defaults are left out: a detected `platform`, the default lane policies, a `lanes.vars.domain` equal to the built-in one.
 - `devlanes config check` passes and `devlanes start` reaches ready.

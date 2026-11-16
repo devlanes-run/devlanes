@@ -12,7 +12,7 @@
 │ │   terminal.links                   auto│ wrong; `NO_COLOR` in the        │ │
 │ │   terminal.notifications           auto│ environment turns colors off    │a│
 │ │   terminal.marks                   auto│ whatever this says.             │ │
-│ │   updates.mode                   notify│                                 │a│
+│ │   updates.mode                     auto│                                 │a│
 │ │   updates.highlights               true│  auto   Use the true-color dark │ │
 │ │   lanes.data_dir                default│         or light palette when   │a│
 │ │   lanes.throttle_after               5m│         the terminal reports    │ │
@@ -38,7 +38,7 @@
 11: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
 12: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
 13: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
-14: 0 darkgray, 2 bold yellow, 4 bold yellow, 37-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+14: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
 15: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 45 bold yellow, 53-75 dim, 77 bold yellow, 79 darkgray
 16: 0 darkgray, 2 bold yellow, 4 bold yellow, 36-42 dim, 43 darkgray, 53-73 dim, 77 bold yellow, 79 darkgray
 17: 0 darkgray, 2 bold yellow, 4 bold yellow, 41-42 dim, 43 darkgray, 53-72 dim, 77 bold yellow, 79 darkgray

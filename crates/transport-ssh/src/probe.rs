@@ -16,8 +16,7 @@ use crate::sh_quote;
 pub const INSTALL_DIR: &str = ".devlanes/bin";
 
 /// Where the error for a box without devlanes points the user.
-pub(crate) const SETUP_GUIDE: &str =
-    "https://github.com/devlanes-run/devlanes/blob/main/docs/guides/remote-setup.md#on-the-box";
+pub(crate) const SETUP_GUIDE: &str = "https://devlanes.run/docs/how-to/remote/prepare-a-box/";
 
 /// [`RemotePlatform::os`] of a Windows box.
 pub(crate) const WINDOWS: &str = "windows";

@@ -1362,7 +1362,7 @@ services:
 }
 
 #[tokio::test]
-/// Snapshot of examples/minimal.yaml in lane 1 with fake integrations.
+/// Snapshot of fixtures/examples/minimal.yaml in lane 1 with fake integrations.
 async fn snapshot_minimal() {
     let config = parse(MINIMAL);
     let facts = facts("acme", 1, Some("feature/login"));

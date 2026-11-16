@@ -26,5 +26,5 @@ fn urls_point_at_the_repository() {
         NEXT_RELEASE_MANIFEST_URL,
         format!("{REPOSITORY}/releases/download/next/release-manifest.json")
     );
-    assert!(MINIMAL_CONFIG_URL.starts_with(REPOSITORY));
+    assert!(MINIMAL_CONFIG_URL.starts_with("https://devlanes.run/docs/"));
 }

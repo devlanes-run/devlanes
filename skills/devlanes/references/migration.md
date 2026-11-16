@@ -1,18 +1,18 @@
 # Migrating to devlanes
 
-Read this when the user asks to move an existing setup (mprocs, dekit, process-compose, a Procfile runner, pm2, tmuxinator, tmuxp, `concurrently` or `npm-run-all` scripts, mise tasks, Docker Compose) to devlanes. Write the result with [configuration.md](configuration.md); this file says how each source maps.
+Read this when the user asks to move an existing setup (mprocs, dekit, process-compose, a Procfile runner, pm2, tmuxinator, tmuxp, `concurrently` or `npm-run-all` scripts, mise tasks, Docker Compose) to devlanes. Write the result with [configuration.md](configuration.md); this file says how each source maps. When devlanes itself is not installed or set up yet, start with [setup.md](setup.md).
 
 ## Procedure
 
 1. Find every setup in the repository root: the file names are listed in each section below. Several setups merge into one `devlanes.yaml`; when two define the same process differently, ask the user which one wins.
 2. Read each command to its end. Open the `package.json` scripts, Makefile targets and entrypoints the setup runs: they tell you which port a process listens on, whether it has a health route, what it logs once it is up, and whether it ends by itself.
 3. Write `devlanes.yaml` with the rules below. Keep the old files; delete them only when the user asks.
-4. Run `devlanes config check`, then `devlanes start`, and fix what fails (`devlanes debug errors`, `devlanes logs UNIT --tail 200`). Check `devlanes status` shows each service ready on its hostname.
+4. Run `devlanes config check`, then `devlanes start`, and fix what fails (`devlanes debug why UNIT`, `devlanes logs UNIT --tail 200`). Check that `devlanes status --mine` shows each service ready on its hostname.
 5. Tell the user what did not carry over (the "not mapped" rows that apply) and what they need to do: `devlanes setup` once, a ready log line to add to a worker.
 
 ## Rules for every source
 
-Services and tasks. A process that keeps running is a service. A command that ends by itself (install, build, codegen, migrate, seed, reset, a test run, `docker compose up -d`) is a task: `when: lane.create` when it runs once per checkout, `when: lane.start` when it runs before every start, no `when` when the user runs it on demand. Add `after: services` when it needs a running service, and `confirm` when it destroys data. A source that marks processes as one-shot says so directly: dekit `type: job`, process-compose `process_completed` dependencies, overmind `OVERMIND_CAN_DIE`, the Heroku `release` type.
+Services and tasks. A process that keeps running is a service. A command that ends by itself (install, build, codegen, migrate, seed, reset, a test run, `docker compose up -d`) is a task: `when: lane.create` when it runs once per lane, such as an install in a new worktree, `when: lane.start` when it runs before every start, no `when` when the user runs it on demand. Add `after: services` when it needs a running service, and `confirm` when it destroys data. A source that marks processes as one-shot says so directly: dekit `type: job`, process-compose `process_completed` dependencies, overmind `OVERMIND_CAN_DIE`, the Heroku `release` type.
 
 Containers are infra. Processes that run `docker compose up`, `docker run`, a local database or a broker become `infra.compose` or `infra.containers`, with per-lane databases, vhosts and buckets created in `infra.setup` from `lanes.vars`. A local reverse proxy (Caddy, nginx, Traefik) goes in `infra.exclude`: the devlanes proxy serves `hosts` over HTTPS.
 
@@ -20,9 +20,9 @@ Ports. Each lane gives each service its own port in `PORT` and `${{ self.port }}
 
 Readiness. Give every service a `ready` check that fails when the app is broken: `http` on a health route, `tcp: true` for a plain server, `log` with the line a worker prints once connected. Under a watcher (`tsx --watch`, `nodemon`) a crashed process keeps running, so `ready: started` would report it ready. If a worker prints nothing usable, tell the user which line to add. Translate the source's own checks: a substring match becomes an escaped `ready.log` regex, a probe on the service's own port becomes `tcp: true` or `http: { path }`, a command becomes `ready.cmd`.
 
-Names. Unit keys are lowercase letters, digits, `-` and `_` (`API Server` becomes `api-server`). Keep the source's label as the display name with `name:` where devlanes supports it. Put the category tag first (`api`, `web`, `worker`, `queue`, `stub`), so colors follow, and selection tags such as `essential` after it.
+Names. Write unit keys in lowercase with dashes (`API Server` becomes `api-server`), since every command and expression uses the key. Keep the source's label as the display name with `name:`. Put the category tag first (`api`, `web`, `worker`, `queue`, `stub`), so colors follow, and selection tags such as `essential` after it.
 
-What is gone. devlanes never restarts a process, has no dependencies between services and stops everything with a signal. Drop autorestart, restart backoff, watch-and-restart and stop commands; mention them to the user. Drop CA and TLS workarounds (`NODE_OPTIONS=--use-system-ca`, `NODE_TLS_REJECT_UNAUTHORIZED`, a hand-set `NODE_EXTRA_CA_CERTS`) and `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` or `MINIFLARE_REGISTRY_PATH`: devlanes sets the CA for Node and Python units and the registry path itself. Drop TUI settings (keymaps, scrollback, layouts) and log-file settings; devlanes keeps every unit's output.
+What is gone. devlanes does not restart a process, has no dependencies between services and stops each service with a signal. Drop autorestart, restart backoff, watch-and-restart and stop commands; mention them to the user. Drop CA and TLS workarounds (`NODE_OPTIONS=--use-system-ca`, `NODE_TLS_REJECT_UNAUTHORIZED`, a hand-set `NODE_EXTRA_CA_CERTS`) for Node, Bun, Deno, Python and Rust services, where devlanes sets the CA variables itself. Keep or rewrite them for other runtimes, such as Ruby, which reads `SSL_CERT_FILE`: point it at `$DEVLANES_CA_BUNDLE`. Drop `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH`, which devlanes sets per lane. Drop TUI settings (keymaps, scrollback, layouts) and log-file settings; devlanes keeps every unit's output.
 
 `.env`. Never copy `.env` values into `devlanes.yaml`; they are often secrets. Tools such as foreman, honcho and process-compose load `.env` into every process, while devlanes reads it only for `${{ env.NAME }}` expressions. Either the app loads its own dotenv (keep that), or name each variable it needs: `DB_PASSWORD: ${{ env.DB_PASSWORD }}`. Variables from mise `[env]` and an allowed `.envrc` already reach every unit.
 
@@ -57,14 +57,14 @@ Before:
 ```yaml
 procs:
   'API Admin':
-    cmd: [pnpm, --silent, -F, '@acme/admin-api', dev]
+    cmd: [pnpm, --silent, -F, '@myapp/admin-api', dev]
     env:
       NODE_OPTIONS: --use-system-ca
   'WRK Mailer':
-    shell: pnpm -F @acme/mailer dev
+    shell: pnpm -F @myapp/mailer dev
     autostart: false
   'Migrate DB':
-    cmd: [pnpm, -F, '@acme/models', db-deploy]
+    cmd: [pnpm, -F, '@myapp/models', db-deploy]
     autostart: false
   'Docker Start':
     cmd: [docker, compose, up, -d, --wait]
@@ -73,7 +73,7 @@ procs:
 After:
 
 ```yaml
-project: acme
+project: myapp
 infra:
   compose: docker-compose.yml
 tasks:
@@ -84,6 +84,7 @@ tasks:
     when: lane.start
 services:
   api-admin:
+    name: API Admin
     run_script:
       file: servers/admin/package.json
       name: dev
@@ -152,7 +153,7 @@ tasks:
 After (Postgres moves to infra, so `migrate` runs before services):
 
 ```yaml
-project: acme
+project: myapp
 infra:
   compose: docker-compose.yml        # a postgres service
 tasks:
@@ -221,7 +222,7 @@ processes:
 After:
 
 ```yaml
-project: acme
+project: myapp
 tasks:
   migrate:
     run: ./scripts/migrate.sh
@@ -273,7 +274,7 @@ assets_install: yarn install
 After:
 
 ```yaml
-project: acme
+project: myapp
 tasks:
   assets-install:
     run: yarn install
@@ -327,7 +328,7 @@ Before:
 After:
 
 ```yaml
-project: acme
+project: myapp
 services:
   api:
     run: node ./api/server.js --port ${{ self.port }}
@@ -366,13 +367,13 @@ tmuxinator's project-local `.tmuxinator.yml`; tmuxp's `.tmuxp.yaml`, `.tmuxp.yml
 Before (`.tmuxinator.yml`):
 
 ```yaml
-root: ~/code/acme
+root: ~/dev/myapp
 on_project_first_start: bin/setup
 windows:
   - editor: vim
   - server: bundle exec rails s -p 3000
   - frontend:
-      root: ~/code/acme/web
+      root: ~/dev/myapp/web
       panes:
         - npm run dev
 ```
@@ -380,7 +381,7 @@ windows:
 After:
 
 ```yaml
-project: acme
+project: myapp
 tasks:
   setup:
     run: bin/setup
@@ -429,7 +430,7 @@ Before:
 After:
 
 ```yaml
-project: acme
+project: myapp
 services:
   api:
     run: pnpm exec tsx watch src/server.ts --port ${{ self.port }}
@@ -517,9 +518,9 @@ infra:
   exclude: [caddy]
   per_lane: [mailpit]
   setup:
-    database: docker compose exec -T postgres createdb -U postgres acme_${{ lane.name }}
+    database: docker compose exec -T postgres createdb -U postgres myapp_${{ lane.name }}
   teardown:
-    database: docker compose exec -T postgres dropdb -U postgres --if-exists acme_${{ lane.name }}
+    database: docker compose exec -T postgres dropdb -U postgres --if-exists myapp_${{ lane.name }}
 global_env:
-  DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/acme_${{ lane.name }}
+  DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/myapp_${{ lane.name }}
 ```

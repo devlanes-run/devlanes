@@ -1,38 +1,49 @@
-# devlanes docs
+---
+title: devlanes
+description: devlanes runs your project once per Git worktree, each on its own ports and HTTPS hostnames.
+kind: overview
+sidebar:
+  label: Overview
+---
 
-Start with [getting started](getting-started.md). The two references are generated from the code and are the authority on fields and flags; the guides explain how the pieces fit and show configurations that work.
+devlanes runs your dev stack once per Git worktree, so two branches of the same project can be up at the same time. Each worktree gets a lane with ports and HTTPS hostnames of its own: the main branch at `https://myapp.localhost`, a feature branch at `https://myapp1.localhost`. Your project needs one small file, and each service has to listen on the port devlanes hands it.
 
-## Reference
+Your coding agent can set it up for you.
 
-- [CLI](reference/cli.md): every command and option.
-- [Config](reference/config.md): every field of `devlanes.yaml` and the user `config.yaml`.
-- [Examples](examples/README.md): commented configuration files.
-- [Proxy errors](errors/README.md): every error page the proxy serves, its causes and fixes.
+```prompt
+Install the devlanes skill:
+npx skills add devlanes-run/devlanes --skill devlanes
 
-## Guides
+Then install devlanes on this machine, set up everything it needs,
+and help me port this project to devlanes from whatever runs it today.
+```
 
-- [Run and run_script](guides/run-scripts.md): the six script runners, which file picks which, and how presets pass their flags.
-- [Languages](guides/languages.md): Node, Bun, Deno, Python and Rust services, mise and direnv.
-- [Framework presets](guides/presets.md): Vite, Next, Wrangler and Tauri.
-- [Ports and environment](guides/ports-and-env.md): port blocks, named ports, `PORT`, expressions, env layers, `.env`, local overrides and `extends`.
-- [Hostnames and HTTPS](guides/https.md): the proxy, the CA, trusting it per OS and runtime, resolver strategies, LAN access.
-- [Infra](guides/infra.md): Compose and plain containers, shared versus per-lane, recipes for Postgres, MySQL, Redis, RabbitMQ, MinIO and Mailpit.
-- [Service patterns](guides/services.md): APIs behind a frontend, workers, several ports, wildcards, replicas, monorepos, several projects in one repository, CI.
-- [Lane lifecycle](guides/lifecycle.md): start, stop, what a plain start brings back, `lane resume`, `reload` after a config edit, project renames, on-demand services, lifecycle tasks, and idle lanes that are throttled and frozen.
-- [Terminals](guides/terminals.md): tab progress bars, clipboard.
-- [Coding agents](guides/mcp.md): the devlanes skill, agent output, `devlanes mcp` for each agent host, tool call timeouts, `exec`, consent prompts, the environment of MCP calls, `--mine`, Codex on Windows, the Claude Code status line and MCP Apps cards.
-- [Updates](guides/updates.md): release checks and notices, `devlanes update` per install method, builds of `main`, background installs, release highlights, the install scripts and `devlanes uninstall`.
-- [Remote setup](guides/remote-setup.md): preparing a box and a client for `devlanes remote connect`.
-- [Remote boxes over Tailscale](guides/remote-tailscale.md): MagicDNS names, OpenSSH keys or Tailscale SSH, check mode, Headscale.
-- [Remote boxes through Cloudflare](guides/remote-cloudflare.md): Cloudflare Tunnel with Access and `cloudflared` as `ProxyCommand`, the Cloudflare One Client, session expiry.
-- [Several boxes with the same project](guides/remote-multiple-boxes.md): forks of one image, which lane this machine mirrors, `devlanes remote use` and `m` in the TUI.
-- [Boxes reached by a command](guides/remote-command.md): containers, pods, WSL distributions and codespaces through `docker exec`, `kubectl exec`, `wsl.exe` or `gh codespace ssh` instead of SSH.
-- [Windows](guides/windows.md): requirements, Git for Windows' shell, stops, ports, HTTPS, hostnames and logon start on Windows 11.
-- [WSL](guides/wsl.md): devlanes inside a WSL distro with the browser on Windows: trusting the CA in Windows, opening URLs, systemd, worktrees on Windows drives.
+To do it by hand, start with [Install devlanes](install.md).
 
-## Other
+## A daemon and a proxy do the work
 
-- [Remote boxes](remote.md): what mirroring does once connected.
-- [Security](security.md): who can reach the daemon, what the CA signs, what crosses a remote connection and what pairing protects.
-- [Design](design.md): lanes, ports, the daemon and startup order.
-- [Observability](observability.md): spans, diagnostics and plans for tracing.
+```mermaid
+flowchart TB
+  accTitle: A browser request goes through the proxy in the daemon to the api of lane 1
+  browser["Browser<br/>https://api.myapp1.localhost"]
+  subgraph daemon["devlanes daemon"]
+    proxy["Proxy: HTTPS for each hostname"]
+    subgraph lane0["myapp lane 0, main"]
+      api0["api"]
+    end
+    subgraph lane1["myapp lane 1, feat/checkout"]
+      api1["api"]
+    end
+  end
+  browser --> proxy --> api1
+```
+
+A daemon in the background runs the processes of each lane, so they keep running after you close the terminal. Its proxy answers each hostname over HTTPS and passes the request to the lane the hostname belongs to.
+
+## Starting points
+
+- To see how the pieces fit, read Learn from its first page, [A service, a port and a hostname](learn/first-service.md).
+- To put your own project on devlanes, see [Add devlanes to a project](how-to/projects/add-devlanes.md), or [Migrate from another process manager](how-to/projects/migrate.md).
+- To let a coding agent start and test the project, see [Set up a coding agent](how-to/agents/set-up.md).
+- To run lanes on another machine and open them in your own browser, see [Prepare a box](how-to/remote/prepare-a-box.md).
+- For a hostname and HTTPS in front of a server you already run, see [Give a server you run yourself a hostname](how-to/services/external.md).

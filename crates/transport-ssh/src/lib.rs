@@ -71,7 +71,7 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains("docs/guides/remote-setup.md#on-the-box"),
+            message.contains("https://devlanes.run/docs/how-to/remote/prepare-a-box/"),
             "{message}"
         );
         assert!(TransportError::from(error).is_permanent());

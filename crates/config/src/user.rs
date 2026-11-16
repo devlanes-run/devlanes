@@ -106,8 +106,8 @@ impl Default for StartConfig {
 #[serde(default, deny_unknown_fields)]
 #[schemars(extend("examples" = [{"open_on_start":false},{"theme":"light","glyphs":"ascii"},{"on_quit":"keep"}]))]
 pub struct TuiConfig {
-    /// Open the TUI for `start`, `restart`, `lane resume` and `lane new --start` when they
-    /// run at a terminal; defaults to true. Set false to have them print text instead, as
+    /// Open the TUI for `start`, `restart`, `reload`, `lane resume` and `lane new --start`
+    /// when they run at a terminal; defaults to true. Set false to have them print text instead, as
     /// `--no-ui` or `DEVLANES_NO_UI=1` do.
     #[schemars(extend("examples" = [true,false]))]
     pub open_on_start: bool,
@@ -257,9 +257,10 @@ pub struct UserLanesConfig {
     /// After this long without activity, devlanes freezes a lane: it suspends every
     /// process of the lane and pauses the lane's own containers. Shared infra is never
     /// paused. Ports and process state are kept, so a frozen lane still counts as running.
-    /// Activity is a request through the proxy, a new connection to one of the lane's
-    /// ports, the lane's services using CPU, or a devlanes command on the lane; any of it
-    /// resumes a frozen lane and restarts the timer. A request through the proxy resumes
+    /// A request through the proxy, a new connection to one of the lane's ports, or a
+    /// devlanes command on the lane resumes a frozen lane and restarts the timer. The
+    /// lane's services using CPU keep a running lane from freezing, but cannot resume a
+    /// frozen one, since its processes are suspended. A request through the proxy resumes
     /// the lane at once and then goes through; a direct connection to a port is noticed
     /// within about half a second. When both are set above `0s`, it must be longer than
     /// `throttle_after` (`5m` unless set). A running service with
@@ -376,10 +377,11 @@ fn below_home(dir: &str) -> Option<&str> {
 #[serde(default, deny_unknown_fields)]
 #[schemars(extend("examples" = [{"mode":"disable"},{"mode":"auto"},{"highlights":false}]))]
 pub struct UpdatesConfig {
-    /// What devlanes does about newer releases: `notify` (the default) checks every 4
-    /// hours and when the TUI opens, and shows the new version; `auto` also installs patch
-    /// releases in the background where the install method allows it; `disable` never
-    /// checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off.
+    /// What devlanes does about newer releases: `auto` (the default) checks every 4 hours
+    /// and when the TUI opens, shows the new version and installs patch releases in the
+    /// background where the install method allows it; `notify` only shows the new
+    /// version; `disable` never checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment
+    /// also turns checks off.
     pub mode: UpdateMode,
     /// Show the release highlights dialog the first time the TUI opens after an update;
     /// defaults to true. Set false to skip the dialog. The new version still counts as
@@ -390,7 +392,7 @@ pub struct UpdatesConfig {
 }
 
 impl Default for UpdatesConfig {
-    /// Notifies about releases and shows their highlights.
+    /// Installs patch releases in the background and shows release highlights.
     fn default() -> Self {
         Self {
             mode: UpdateMode::default(),
@@ -408,13 +410,16 @@ pub enum UpdateMode {
     #[schemars(extend("examples" = ["disable"]))]
     Disable,
     /// Read the latest version from the registry devlanes was installed from, and show it
-    /// in the TUI and in command output when it is newer. Nothing is installed.
-    #[default]
+    /// in the TUI and in command output when it is newer. Nothing is installed; run
+    /// `devlanes update` to install it.
     #[schemars(extend("examples" = ["notify"]))]
     Notify,
-    /// Like `notify`, and also install patch releases in the background where the install
-    /// method allows it; they apply the next time you start devlanes at a terminal. Minor
-    /// releases, which can break things before 1.0, still wait for you to update.
+    /// The default. Read the latest version from the registry devlanes was installed from,
+    /// show it in the TUI and in command output when it is newer, and install patch
+    /// releases in the background where the install method allows it; they apply the next
+    /// time you start devlanes at a terminal. Minor releases, which can break things
+    /// before 1.0, still wait for `devlanes update`.
+    #[default]
     #[schemars(extend("examples" = ["auto"]))]
     Auto,
 }

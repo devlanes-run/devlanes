@@ -24,4 +24,4 @@ devlanes logs acme@2:web --tail 100
 devlanes debug why acme@2:web
 ```
 
-The [framework presets](../guides/presets.md) pass the port and a loopback host to Vite, Next.js and Wrangler.
+The [framework presets](../how-to/projects/vite-and-next.md) pass the port and a loopback host to Vite, Next.js and Wrangler.

@@ -1,0 +1,1795 @@
+{
+  "commands": [
+    {
+      "path": [],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--version",
+        "--yes",
+        "-V",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "start"
+      ],
+      "flags": [
+        "--all-at-once",
+        "--attach",
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--no-ui",
+        "--output",
+        "--profile",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "stop"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--logs-dir",
+        "--mine",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "restart"
+      ],
+      "flags": [
+        "--all-at-once",
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--no-ui",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "reload"
+      ],
+      "flags": [
+        "--all-at-once",
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--no-ui",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "status"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--mine",
+        "--output",
+        "--project",
+        "--quiet",
+        "--statusline",
+        "--timeout",
+        "--verbose",
+        "--watch",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "logs"
+      ],
+      "flags": [
+        "--all",
+        "--around",
+        "--budget",
+        "--context",
+        "--cursor",
+        "--env",
+        "--file",
+        "--follow",
+        "--grep",
+        "--head",
+        "--help",
+        "--json",
+        "--lane",
+        "--level",
+        "--mine",
+        "--output",
+        "--project",
+        "--quiet",
+        "--since",
+        "--tail",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-C",
+        "-f",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "wait"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "with"
+      ],
+      "flags": [
+        "--all-at-once",
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--keep",
+        "--lane",
+        "--logs-dir",
+        "--output",
+        "--profile",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "run"
+      ],
+      "flags": [
+        "--budget",
+        "--detach",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--list",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "exec"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--name",
+        "--no-pty",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "attach"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "ui"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "lane"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "lane",
+        "ls"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "lane",
+        "new"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--name",
+        "--no-ui",
+        "--output",
+        "--project",
+        "--quiet",
+        "--start",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "lane",
+        "clean"
+      ],
+      "flags": [
+        "--budget",
+        "--dry-run",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "lane",
+        "gc"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "lane",
+        "resume"
+      ],
+      "flags": [
+        "--all-at-once",
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--no-ui",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "debug"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "debug",
+        "why"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "debug",
+        "errors"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--since",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "debug",
+        "events"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--follow",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-f",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "debug",
+        "top"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "debug",
+        "freeze"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "debug",
+        "thaw"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "debug",
+        "config"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "debug",
+        "bundle"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--log-lines",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--to",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "env"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "env",
+        "show"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--explain",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "env",
+        "export"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--shell",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "env",
+        "shell"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "url"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "url",
+        "print"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "url",
+        "open"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "url",
+        "ls"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "infra"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "infra",
+        "up"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "infra",
+        "down"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "infra",
+        "status"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "infra",
+        "logs"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--follow",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--tail",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-f",
+        "-h",
+        "-n",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "config"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "config",
+        "check"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "config",
+        "get"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "config",
+        "set"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "config",
+        "unset"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "setup"
+      ],
+      "flags": [
+        "--budget",
+        "--check",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--keep-ca",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--remove",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "update"
+      ],
+      "flags": [
+        "--budget",
+        "--check",
+        "--env",
+        "--file",
+        "--finish",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "uninstall"
+      ],
+      "flags": [
+        "--budget",
+        "--dry-run",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--keep-data",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--remove-data",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "remote"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "remote",
+        "connect"
+      ],
+      "flags": [
+        "--background",
+        "--budget",
+        "--code",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "remote",
+        "disconnect"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "remote",
+        "ls"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "remote",
+        "sync"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "remote",
+        "use"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--local",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "start"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "status"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "stop"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "restart"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "logs"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--follow",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--tail",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-f",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "install"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "uninstall"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "reset-state"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "pair"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "clients"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "revoke"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "daemon",
+        "run"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "doctor"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "completions"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "mcp"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--path",
+        "--project",
+        "--quiet",
+        "--read-only",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "tunnel"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--stdio",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    },
+    {
+      "path": [
+        "askpass"
+      ],
+      "flags": [
+        "--budget",
+        "--env",
+        "--file",
+        "--help",
+        "--json",
+        "--lane",
+        "--output",
+        "--project",
+        "--quiet",
+        "--timeout",
+        "--verbose",
+        "--yes",
+        "-h",
+        "-p",
+        "-v"
+      ],
+      "aliases": []
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # devlanes-version
 
-What identifies a devlanes release: the version, the build ID and the repository URLs. Crates that report the product version (the client/daemon handshake, update checks, the remote tunnel, the TUI) use it instead of their own `CARGO_PKG_VERSION`, because each crate keeps its own version.
+What identifies a devlanes release: the version, the build ID and the URLs devlanes links to. Crates that report the product version (the client/daemon handshake, update checks, the remote tunnel, the TUI) use it instead of their own `CARGO_PKG_VERSION`, because each crate keeps its own version.
 
 ## Usage
 
@@ -15,7 +15,7 @@ let manifest = devlanes_version::LATEST_RELEASE_MANIFEST_URL;
 - `BUILD_ID`: `DEVLANES_BUILD_ID` at compile time (the release tag in official builds), else `local`.
 - `REPOSITORY`: the GitHub repository releases come from.
 - `LATEST_RELEASE_MANIFEST_URL` and `NEXT_RELEASE_MANIFEST_URL`: the manifests of the latest stable and `next` releases, which the update check reads for `install.sh` and standalone installs: `next` for a `next` build, the stable one otherwise.
-- `MINIMAL_CONFIG_URL`: the minimal example config on the default branch.
+- `MINIMAL_CONFIG_URL`: the docs page that starts from a minimal `devlanes.yaml`.
 
 ## Versioning
 

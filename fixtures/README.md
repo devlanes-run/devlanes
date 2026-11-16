@@ -7,6 +7,7 @@ Native service configurations for integration tests. They use `fixture-server` w
 - `full/`: shared Postgres through Compose, a database per lane in `infra.setup`, a `migrate` task on every start, a `seed` task after the services, and two services. Needs Docker; the `docker_*` tests of `devlanes-e2e` run it. Set `FULL_PG_PORT` in the primary worktree's `.env` to move Postgres off 25432.
 - `compose-pg-redis/`: a Postgres per lane (`infra.per_lane`) with a table from `infra.setup`, and one Redis shared by every lane. Needs Docker; `docker_pg_redis` in `devlanes-e2e` checks that each lane has its own data and that `lane clean` removes only that lane's container and volume.
 - `dogfood-monorepo/devlanes.yaml` and `dogfood-desktop/devlanes.yaml`: config-check shapes of a pnpm monorepo and a Tauri desktop app, loaded and validated by `devlanes-config` tests. Their commands are not runnable.
+- `examples/`: commented configuration examples for a made-up `acme` project, parsed by the `devlanes-config` and `devlanes-resolve` tests. Not runnable; [examples/README.md](examples/README.md) lists the files.
 
 ## Usage
 

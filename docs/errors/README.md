@@ -1,3 +1,8 @@
+---
+sidebar:
+  label: Overview
+---
+
 # Proxy errors
 
 While the daemon runs, its proxy answers every request to this machine's HTTP and HTTPS ports: 80 and 443, or 8080 and 8443 when those were taken. When it does not forward a request to a service, it answers with an error page that names one of these errors.

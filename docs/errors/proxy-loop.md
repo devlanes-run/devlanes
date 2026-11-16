@@ -28,4 +28,4 @@ services:
 server: { proxy: { '/api': process.env.API_URL } }
 ```
 
-If the target has to stay a devlanes hostname, rewrite `Host` to it (Vite `changeOrigin: true`). See [ports and environment](../guides/ports-and-env.md).
+If the target has to stay a devlanes hostname, rewrite `Host` to it (Vite `changeOrigin: true`). See [ports and environment](../how-to/projects/vite-and-next.md#if-the-dev-server-proxies-api-calls).

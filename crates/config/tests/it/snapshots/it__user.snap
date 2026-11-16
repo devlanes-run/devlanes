@@ -67,7 +67,7 @@ expression: user
     "marks": "auto"
   },
   "updates": {
-    "mode": "notify",
+    "mode": "auto",
     "highlights": true
   },
   "tui": {
