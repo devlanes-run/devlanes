@@ -52,6 +52,22 @@ The daemon owns managed resources and SQLite. Clients own rendering and actor de
 - One page owns the details of a fact, and other pages link to it. Do not add to the end of the nearest page.
 - Contributor material goes in `CONTRIBUTING.md`, not in `docs/`.
 
+## Skills
+
+`skills/` holds the skills users install with `npx skills add devlanes-run/devlanes`. `.agents/skills/` holds the skills for people and agents working on this repository.
+
+- Every skill under `.agents/skills/` has `metadata.internal: true` in its frontmatter. Without it, `npx skills add` offers the skill to users next to the public one.
+- No skill under `skills/` has it.
+
+```yaml
+---
+name: devlanes-docs
+description: ...
+metadata:
+  internal: true
+---
+```
+
 ## Crate READMEs
 
 Every crate (and `bins/devlanes`) has a `README.md`. It is for a person deciding what the crate is for, not a replacement for the code or a changelog. Keep it short and in this order:

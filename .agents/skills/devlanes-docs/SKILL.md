@@ -1,6 +1,8 @@
 ---
 name: devlanes-docs
 description: Rules for the public documentation in docs/ and the agent skill in skills/devlanes/. Load before creating, editing, moving, deleting or reviewing any file under docs/ or skills/, and before finishing any change to a command, flag, config key or behaviour a devlanes user can notice, to decide whether the docs change and on which page.
+metadata:
+  internal: true
 ---
 
 # Writing the devlanes docs
