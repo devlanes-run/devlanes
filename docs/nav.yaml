@@ -25,7 +25,6 @@
         - how-to/projects/runtimes
         - how-to/projects/vite-and-next
         - how-to/projects/cloudflare-workers
-        - how-to/projects/tauri
         - how-to/projects/monorepo
         - how-to/projects/dev-and-prod
         - how-to/projects/local-overrides
@@ -41,7 +40,6 @@
         - how-to/services/tasks
         - how-to/services/external
         - how-to/services/sync-build-output
-        - how-to/services/gui-tools
     - label: Hostnames and HTTPS
       collapsed: true
       items:
@@ -85,7 +83,6 @@
         - how-to/remote/cloudflare
         - how-to/remote/several-boxes
         - how-to/remote/what-a-box-shares
-    - how-to/wsl
     - how-to/update
     - how-to/report-a-bug
 - label: Concepts
