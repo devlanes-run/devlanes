@@ -106,8 +106,8 @@ impl Default for StartConfig {
 #[serde(default, deny_unknown_fields)]
 #[schemars(extend("examples" = [{"open_on_start":false},{"theme":"light","glyphs":"ascii"},{"on_quit":"keep"}]))]
 pub struct TuiConfig {
-    /// Open the TUI for `start`, `restart`, `lane resume` and `lane new --start` when they
-    /// run at a terminal; defaults to true. Set false to have them print text instead, as
+    /// Open the TUI for `start`, `restart`, `reload`, `lane resume` and `lane new --start`
+    /// when they run at a terminal; defaults to true. Set false to have them print text instead, as
     /// `--no-ui` or `DEVLANES_NO_UI=1` do.
     #[schemars(extend("examples" = [true,false]))]
     pub open_on_start: bool,
@@ -257,9 +257,10 @@ pub struct UserLanesConfig {
     /// After this long without activity, devlanes freezes a lane: it suspends every
     /// process of the lane and pauses the lane's own containers. Shared infra is never
     /// paused. Ports and process state are kept, so a frozen lane still counts as running.
-    /// Activity is a request through the proxy, a new connection to one of the lane's
-    /// ports, the lane's services using CPU, or a devlanes command on the lane; any of it
-    /// resumes a frozen lane and restarts the timer. A request through the proxy resumes
+    /// A request through the proxy, a new connection to one of the lane's ports, or a
+    /// devlanes command on the lane resumes a frozen lane and restarts the timer. The
+    /// lane's services using CPU keep a running lane from freezing, but cannot resume a
+    /// frozen one, since its processes are suspended. A request through the proxy resumes
     /// the lane at once and then goes through; a direct connection to a port is noticed
     /// within about half a second. When both are set above `0s`, it must be longer than
     /// `throttle_after` (`5m` unless set). A running service with

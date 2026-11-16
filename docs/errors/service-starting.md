@@ -21,4 +21,4 @@ devlanes debug why acme@2:web
 devlanes logs acme@2:web --tail 100
 ```
 
-The `ready` options are in the [config reference](../reference/config.md).
+The options of a ready check are under [`services.<name>.ready`](/docs/reference/config/project/services/#services-name-ready).

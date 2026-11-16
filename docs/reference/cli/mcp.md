@@ -24,9 +24,9 @@ Register it with your agent:
   Claude Code     claude mcp add devlanes -- devlanes mcp
   Codex           codex mcp add devlanes -- devlanes mcp
   OpenCode        in opencode.json:
-                  "mcp": {"devlanes": {"type": "local", "command": ["devlanes", "mcp"]}}
+                  "mcp": {"servers": {"devlanes": {"type": "local", "command": ["devlanes", "mcp"]}}}
   Cursor          in ~/.cursor/mcp.json or .cursor/mcp.json:
-                  "mcpServers": {"devlanes": {"command": "devlanes", "args": ["mcp"]}}
+                  "mcpServers": {"devlanes": {"type": "stdio", "command": "devlanes", "args": ["mcp"]}}
   VS Code         code --add-mcp '{"name":"devlanes","command":"devlanes","args":["mcp"]}'
   Claude Desktop  in claude_desktop_config.json, with the full path (the app does not read your shell's PATH):
                   "mcpServers": {"devlanes": {"command": "/path/to/devlanes", "args": ["mcp"]}}

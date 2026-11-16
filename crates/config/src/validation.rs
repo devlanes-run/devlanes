@@ -189,7 +189,7 @@ fn preset_script(
     Err(fail(
         &format!("{path}.run"),
         format!(
-            "`preset: {preset}` needs run_script, such as `run_script: {{ file: apps/web/package.json, name: dev }}`, so the preset can place its flags; to keep this command, remove `preset` and add the preset's flags to `run` yourself (docs/guides/presets.md lists them){inherited}"
+            "`preset: {preset}` needs run_script, such as `run_script: {{ file: apps/web/package.json, name: dev }}`, so the preset can place its flags; to keep this command, remove `preset` and add the preset's flags to `run` yourself (https://devlanes.run/docs/how-to/projects/vite-and-next/ lists them){inherited}"
         ),
     ))
 }

@@ -77,9 +77,9 @@ A command names lanes and units with references such as `2`, `feat/checkout` or 
 
 ## Hidden commands
 
-Hidden from `--help` because you rarely type them. A `remote.<box>.command` must end with `devlanes tunnel --stdio` ([connect to a box by command](../../how-to/remote/connect-by-command.md)); devlanes, ssh and the install scripts run the others.
+Hidden from `--help` because you rarely type them. A `remote.boxes.<name>.command` must end with `devlanes tunnel --stdio` ([Connect to a box without SSH](../../how-to/remote/connect-by-command.md)); devlanes, ssh and the install scripts run the others.
 
 - `devlanes update --finish`: Restart the daemon into this binary after an update (run by devlanes update and the install scripts).
 - `devlanes daemon run [OPTIONS]`: Run the daemon in this process (spawned by the client).
-- `devlanes tunnel [OPTIONS] --stdio`: Serve a connecting client over stdin and stdout (run by remote connect over SSH, or by a remote.\<box>.command).
+- `devlanes tunnel [OPTIONS] --stdio`: Serve a connecting client over stdin and stdout (run by remote connect over SSH, or by a remote.boxes.\<name>.command).
 - `devlanes askpass [OPTIONS] [PROMPT]`: Answer an ssh prompt through the connected client (SSH_ASKPASS).

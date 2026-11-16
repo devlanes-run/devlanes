@@ -19,8 +19,8 @@ devlanes never edits a host's config. Registering the server changes the user's 
 |---|---|
 | Claude Code | `claude mcp add devlanes -- devlanes mcp` for the current project; `claude mcp add --scope user devlanes -- devlanes mcp` for every project. |
 | Codex | `codex mcp add devlanes -- devlanes mcp` |
-| OpenCode | In the project's `opencode.json` or `~/.config/opencode/opencode.json`: `{"mcp": {"devlanes": {"type": "local", "command": ["devlanes", "mcp"]}}}` |
-| Cursor | In the project's `.cursor/mcp.json` or `~/.cursor/mcp.json`: `{"mcpServers": {"devlanes": {"command": "devlanes", "args": ["mcp"]}}}` |
+| OpenCode | `opencode mcp add devlanes -- devlanes mcp` for the current project; add `--global` for every project. By hand, in `opencode.json`: `{"mcp": {"servers": {"devlanes": {"type": "local", "command": ["devlanes", "mcp"]}}}}` |
+| Cursor | In the project's `.cursor/mcp.json` or `~/.cursor/mcp.json`: `{"mcpServers": {"devlanes": {"type": "stdio", "command": "devlanes", "args": ["mcp"]}}}` |
 | VS Code (GitHub Copilot agent mode) | `code --add-mcp '{"name":"devlanes","command":"devlanes","args":["mcp"]}'`, or in `.vscode/mcp.json`: `{"servers": {"devlanes": {"type": "stdio", "command": "devlanes", "args": ["mcp"]}}}` |
 | Claude Desktop | In `claude_desktop_config.json`, with the full path of the binary, since the app does not read the shell's `PATH`: `{"mcpServers": {"devlanes": {"command": "/path/to/devlanes", "args": ["mcp"]}}}`. `command -v devlanes`, or `(Get-Command devlanes).Source` in PowerShell, prints the path; in JSON on Windows, double each backslash. |
 | Goose | `goose session --with-extension 'devlanes mcp'` for one session, or under `extensions` in Goose's `config.yaml`: `devlanes: {type: stdio, name: devlanes, cmd: devlanes, args: [mcp], enabled: true}` |

@@ -1,7 +1,7 @@
-//! `docs/reference/cli/`, one page per top-level command plus `README.md`, generated
-//! from the clap command tree. The test fails when a page is stale or missing, or
-//! when the folder holds a page the generator no longer writes; `DEVLANES_BLESS=1`
-//! rewrites the pages and deletes the leftovers.
+//! `docs/reference/cli/`, one page per top-level command plus `README.md` and
+//! `commands.json`, generated from the clap command tree. The test fails when a
+//! file is stale or missing, or when the folder holds a page the generator no
+//! longer writes; `DEVLANES_BLESS=1` rewrites the files and deletes the leftovers.
 
 use std::path::Path;
 
@@ -25,6 +25,7 @@ fn cli_reference_is_current() {
     for sub in visible(&root) {
         pages.push((format!("{}.md", sub.get_name()), page(sub)));
     }
+    pages.push(("commands.json".to_owned(), commands(&root)));
     check_or_bless(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/cli"),
         &pages,
@@ -131,8 +132,8 @@ fn index(root: &Command) -> String {
     );
     page.push_str(
         "\n## Hidden commands\n\nHidden from `--help` because you rarely type them. A \
-         `remote.<box>.command` must end with `devlanes tunnel --stdio` \
-         ([connect to a box by command](../../how-to/remote/connect-by-command.md)); \
+         `remote.boxes.<name>.command` must end with `devlanes tunnel --stdio` \
+         ([Connect to a box without SSH](../../how-to/remote/connect-by-command.md)); \
          devlanes, ssh and the install scripts run the others.\n\n",
     );
     let mut found = Vec::new();
@@ -155,6 +156,56 @@ fn page(command: &Command) -> String {
     page.truncate(page.trim_end().len());
     page.push_str("\n\nEvery command also takes the [global options](README.md#global-options).\n");
     page
+}
+
+/// `commands.json`: every command path with its flags and aliases, for the
+/// website to check the `$ devlanes ...` lines in the docs. Hidden commands are
+/// in it, since pages name some of them; clap's `help` subcommands are not.
+fn commands(root: &Command) -> String {
+    let mut entries = Vec::new();
+    command_entries(root, &mut Vec::new(), &mut entries);
+    let mut text = serde_json::to_string_pretty(&serde_json::json!({ "commands": entries }))
+        .expect("serialize commands.json");
+    text.push('\n');
+    text
+}
+
+/// The entry of `command` at `path`, then those of its subcommands in clap's
+/// order. Global options are listed on every entry, since they are accepted after
+/// any command name.
+fn command_entries(
+    command: &Command,
+    path: &mut Vec<String>,
+    entries: &mut Vec<serde_json::Value>,
+) {
+    let mut flags: Vec<String> = command
+        .get_arguments()
+        .flat_map(|arg| {
+            let longs = arg
+                .get_long()
+                .into_iter()
+                .chain(arg.get_all_aliases().unwrap_or_default())
+                .map(|long| format!("--{long}"));
+            let shorts = arg
+                .get_short()
+                .into_iter()
+                .chain(arg.get_all_short_aliases().unwrap_or_default())
+                .map(|short| format!("-{short}"));
+            longs.chain(shorts).collect::<Vec<_>>()
+        })
+        .collect();
+    flags.sort();
+    flags.dedup();
+    let aliases: Vec<&str> = command.get_all_aliases().collect();
+    entries.push(serde_json::json!({ "path": path, "flags": flags, "aliases": aliases }));
+    for sub in command
+        .get_subcommands()
+        .filter(|sub| sub.get_name() != "help")
+    {
+        path.push(sub.get_name().to_owned());
+        command_entries(sub, path, entries);
+        path.pop();
+    }
 }
 
 /// The frontmatter and the generated-file comment.

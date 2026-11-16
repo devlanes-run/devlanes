@@ -303,7 +303,7 @@ without the daemon.",
     /// Serve devlanes to an AI agent as an MCP server on stdin and stdout
     #[command(long_about = MCP_ABOUT, after_help = MCP_AFTER)]
     Mcp(McpArgs),
-    /// Serve a connecting client over stdin and stdout (run by remote connect over SSH, or by a remote.<box>.command)
+    /// Serve a connecting client over stdin and stdout (run by remote connect over SSH, or by a remote.boxes.<name>.command)
     #[command(hide = true)]
     Tunnel {
         /// Speak the mux protocol on stdin and stdout
@@ -505,9 +505,9 @@ Register it with your agent:
   Claude Code     claude mcp add devlanes -- devlanes mcp
   Codex           codex mcp add devlanes -- devlanes mcp
   OpenCode        in opencode.json:
-                  \"mcp\": {\"devlanes\": {\"type\": \"local\", \"command\": [\"devlanes\", \"mcp\"]}}
+                  \"mcp\": {\"servers\": {\"devlanes\": {\"type\": \"local\", \"command\": [\"devlanes\", \"mcp\"]}}}
   Cursor          in ~/.cursor/mcp.json or .cursor/mcp.json:
-                  \"mcpServers\": {\"devlanes\": {\"command\": \"devlanes\", \"args\": [\"mcp\"]}}
+                  \"mcpServers\": {\"devlanes\": {\"type\": \"stdio\", \"command\": \"devlanes\", \"args\": [\"mcp\"]}}
   VS Code         code --add-mcp '{\"name\":\"devlanes\",\"command\":\"devlanes\",\"args\":[\"mcp\"]}'
   Claude Desktop  in claude_desktop_config.json, with the full path (the app does not read your shell's PATH):
                   \"mcpServers\": {\"devlanes\": {\"command\": \"/path/to/devlanes\", \"args\": [\"mcp\"]}}
@@ -1005,7 +1005,7 @@ pub enum DaemonCommand {
     },
     /// Install a login service so the daemon starts at login and outside agent sandboxes
     Install,
-    /// Remove the login service; a running daemon keeps running
+    /// Remove the login service; a running daemon keeps running, except on macOS, where launchd stops the one it started
     Uninstall,
     /// Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
     ResetState,
@@ -1019,7 +1019,7 @@ pub enum DaemonCommand {
     Clients,
     /// Disconnect a client and delete its pairing
     Revoke {
-        /// Client name or id, as devlanes daemon clients shows it
+        /// Client name, id, or a unique start of an id, as devlanes daemon clients shows them
         #[arg(value_name = "CLIENT")]
         client: String,
     },

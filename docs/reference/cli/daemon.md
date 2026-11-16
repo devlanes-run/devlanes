@@ -63,7 +63,7 @@ devlanes daemon install [OPTIONS]
 
 ## devlanes daemon uninstall
 
-Remove the login service; a running daemon keeps running.
+Remove the login service; a running daemon keeps running, except on macOS, where launchd stops the one it started.
 
 ```text
 devlanes daemon uninstall [OPTIONS]
@@ -103,6 +103,6 @@ Disconnect a client and delete its pairing.
 devlanes daemon revoke [OPTIONS] <CLIENT>
 ```
 
-- `<CLIENT>`: Client name or id, as devlanes daemon clients shows it.
+- `<CLIENT>`: Client name, id, or a unique start of an id, as devlanes daemon clients shows them.
 
 Every command also takes the [global options](README.md#global-options).

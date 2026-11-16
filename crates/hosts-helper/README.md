@@ -260,7 +260,7 @@ Limits of this model:
   by hand: behind the rule, that flag would let the user overwrite any file as
   root.
 
-[Security](../../docs/security.md) covers the rest of devlanes: the daemon's
+[Security](../../docs/concepts/security.md) covers the rest of devlanes: the daemon's
 socket, the CA and remote connections.
 
 ## Inspecting

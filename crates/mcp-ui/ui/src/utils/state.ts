@@ -65,7 +65,7 @@ export function words(state: string): string {
 }
 
 /**
- * What a lane's power state means, from "Idle lanes" in docs/guides/lifecycle.md, for
+ * What a lane's power state means, from docs/concepts/freezing.md, for
  * the hover and screen readers; undefined for every other state.
  */
 export function powerHint(state: string): string | undefined {

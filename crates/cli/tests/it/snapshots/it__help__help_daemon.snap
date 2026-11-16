@@ -13,7 +13,7 @@ Commands:
   restart      Restart the daemon and start again, with this shell's environment, the services that ran; asks first when processes are running
   logs         Print the daemon's own log file
   install      Install a login service so the daemon starts at login and outside agent sandboxes
-  uninstall    Remove the login service; a running daemon keeps running
+  uninstall    Remove the login service; a running daemon keeps running, except on macOS, where launchd stops the one it started
   reset-state  Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
   pair         Print a one-time code that pairs another machine with this one
   clients      List the machines paired or connected to this one
