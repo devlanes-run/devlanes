@@ -37,8 +37,10 @@ Commands that take several units, such as `start`, `stop`, `restart` and `logs`,
 | Form | Matches | Example |
 |---|---|---|
 | `service` | Every replica of a service with replicas. | `worker` |
-| A glob | Every unit whose name matches. Quote it in a shell. | `"api-*"` |
+| A glob | Every unit whose name matches. | `"api-*"` |
 | `+tag` | Every unit with that tag. | `+backend` |
+
+A shell expands a glob without quotes before devlanes sees it.
 
 ## Picking the project
 
@@ -57,7 +59,7 @@ A project from another file, such as `devlanes.prod.yaml`, is known once a comma
 | A unit reference with `lane:` | That lane. |
 | `--lane LANE` | That lane. |
 | Nothing, inside a worktree | The lane of that worktree. |
-| `--project` or `--file`, outside the repository | Lane 0. |
+| `--project` or `--file`, outside the repository | Lane 0. `run`, `exec`, `lane new` and `lane clean` need `--lane` there. |
 
 ## When a reference matches nothing
 

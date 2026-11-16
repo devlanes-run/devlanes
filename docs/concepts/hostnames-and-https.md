@@ -4,11 +4,11 @@ description: Each lane has a domain of its own and is a separate site in the bro
 kind: concept
 ---
 
-A service with a hostname is reached over HTTPS through a proxy inside the daemon, which signs a certificate for each name it serves. The lane's number is part of the domain, so each lane has hostnames of its own.
+A service with a hostname is reached over HTTPS through a proxy inside the daemon. The lane's number is part of the domain, so each lane has hostnames of its own, and you write a hostname once in the project file for every lane.
 
 ## The lane number is part of the domain
 
-By default a lane's domain is the project name under localhost, with the lane number joined to the name: `myapp.localhost` for lane 0 and `myapp1.localhost` for lane 1. A hostname in the project file is written once under that domain, and each lane gets its own.
+A lane's domain is the project name under localhost, with the lane number joined to the name: `myapp.localhost` for lane 0 and `myapp1.localhost` for lane 1. Hostnames in the project file are written under that domain:
 
 ```yaml devlanes
 services:
@@ -18,63 +18,29 @@ services:
     hosts: "${{ lane.domain }}"
 ```
 
-A project can replace the domain with a value of its own in [`lanes.vars.domain`](/docs/reference/config/project/lanes/). Under the resolver strategy, where the daemon answers one top-level domain you choose with a DNS server of its own, the domains end in that domain, such as myapp1.test.
-
-Joining the number to the name means two project names can meet: lane 1 of a project called myapp2 and lane 0 of one called myapp21 are both myapp21.localhost. Both lanes then get a warning, and one keeps the hostname: a lane that runs something wins over one that does not, and otherwise the first by project name and lane number.
+In lane 1 that gives `api.myapp1.localhost` for the API and `myapp1.localhost` for the web service.
 
 ## Each lane is a site of its own
 
-A browser keeps cookies per site, and under localhost a site is the label just before it. The web service at `myapp1.localhost` and the API at `api.myapp1.localhost` are one site, so a cookie the web service sets for the domain reaches the API, while lane 0 is another site and does not get it. That is why the number goes into the name: a domain such as lane1.myapp.localhost would put every lane under the one site myapp.localhost, and a cookie set for it would reach all of them.
+A browser keeps cookies per site, and under localhost a site is the label just before it. The web service at `myapp1.localhost` and the API at `api.myapp1.localhost` are one site, so a cookie the web service sets for its domain reaches the API. Lane 0 is another site and does not get it, so logging in on one branch does not log you in on another.
 
-Opening a lane as localhost with a port gives the opposite. Cookies ignore the port, so every lane opened that way would share them, and none would get the proxy's HTTPS.
-
-Names that serve content the app does not control, such as pages its users write, can get a site of their own in each lane from `domain()`, a function you call in an expression, a value the project file works out for each lane ([Environment and expressions](environment.md)).
-
-```yaml devlanes
-lanes:
-  vars:
-    pages_domain: ${{ domain('myapp-pages') }}
-```
-
-That gives myapp-pages.localhost in lane 0 and myapp-pages1.localhost in lane 1, apart from the app's cookies. [Serve wildcard and tenant subdomains](../how-to/hostnames/wildcards.md) and [Set CORS and cookies for each lane](../how-to/hostnames/cors-and-cookies.md) build on it.
+That is why the number goes into the name. A domain such as lane1.myapp.localhost would put every lane under the one site myapp.localhost, and opening lanes as localhost with a port would be worse, since cookies ignore the port. [Set CORS and cookies for each lane](../how-to/hostnames/cors-and-cookies.md) builds on this.
 
 ## The proxy finds the lane by the hostname
 
-The hostnames of all lanes arrive on one port, 443 by default. The browser sends the name it wants at the start of the TLS handshake, the proxy looks it up among its routes, and only then hands over a certificate signed for that name. When no lane routes the name, the handshake is refused and the browser shows its own connection error, not a page from devlanes.
+All hostnames arrive at the proxy on one port, 443 by default. The browser names the host it wants, the proxy finds the lane and service that route it, and passes the request on to that service's port on 127.0.0.1 over plain HTTP. Your service needs no TLS of its own. A name no lane routes is refused.
 
 ![A browser asks for https://api.myapp1.localhost; the name resolves to 127.0.0.1; the proxy in the daemon finds the route, signs a certificate with the devlanes CA and forwards the request to api in lane 1, the site myapp1.localhost; lane 0 is the site myapp.localhost](hostnames-and-https.svg)
 
-The proxy forwards the request to the service on 127.0.0.1 over plain HTTP. By default the service sees the hostname the browser asked for in the Host header, along with the usual forwarded headers. WebSockets and server-sent events pass through without an idle timeout. A request to a service that is still starting waits for it, for up to half a minute, and then gets [DL202 Service starting](../errors/service-starting.md).
-
-When the proxy cannot have port 443, it uses another one and the URLs carry that port. On Linux that is the usual case, unless the daemon is allowed to bind the low ports ([Choose the proxy's ports](../how-to/hostnames/proxy-ports.md)).
+When the proxy cannot have port 443, it uses another one and the URLs carry that port; [Choose the proxy's ports](../how-to/hostnames/proxy-ports.md) covers it. Plain http on port 80 redirects to HTTPS.
 
 ## The devlanes CA signs each hostname
 
-The certificates come from an authority, the devlanes CA, that devlanes creates on your machine for your user, and it is constrained to names meant for local development. [Security](security.md) lists those names, says where its key is and what a leaked key could do.
+The certificates come from an authority, the devlanes CA, that devlanes creates on your machine for your user, constrained to names meant for local development ([Security](security.md)). Your browser accepts them once the CA is trusted, which `devlanes setup` does ([Trust the devlanes CA](../how-to/hostnames/trust-the-ca.md)). Services that devlanes starts in Node, Bun, Deno, Python and Rust trust it without any setup.
 
-The daemon does not add the CA to a trust store. `devlanes setup` does that in your terminal, where your operating system asks you to confirm the change or enter your password, and [Trust the devlanes CA](../how-to/hostnames/trust-the-ca.md) covers browsers, tools and runtimes. Node, Bun, Deno, Python and Rust processes that devlanes starts get variables that point their runtime at the CA. An existing mkcert root can sign instead, through [`tls.ca`](/docs/reference/config/user/tls/).
+## Hostnames under localhost resolve to your machine
 
-## Hostnames under localhost resolve to loopback
-
-Names ending in `.localhost` are reserved for the machine itself, so they need no DNS server. Chrome and Firefox answer them with 127.0.0.1 by themselves, and so do the system resolvers of Windows 11 and of many Linux and macOS systems.
-
-Some programs on macOS and Linux send the name to DNS instead, such as Wrangler's workerd and musl or pure-Go binaries. For those, devlanes can write the exact hostnames to the hosts file through a small helper that `devlanes setup` installs. Windows 11 answers these names for every program that asks the system, so devlanes does not write the hosts file there. A hosts file cannot hold a wildcard, which is what the resolver strategy is for.
-
-A program inside a container resolves names in the container, so it sees none of this and reaches a lane through the host's address and the port instead. [Fix programs that cannot resolve *.localhost](../how-to/hostnames/resolve-localhost.md) covers each case.
-
-## Plain http redirects to HTTPS
-
-On port 80 the proxy answers a hostname a lane routes with a permanent redirect to the same URL over HTTPS.
-
-```console title="on Windows 11"
-$ curl.exe -s -i http://api.myapp.localhost/
-HTTP/1.1 308 Permanent Redirect
-cache-control: no-store
-location: https://api.myapp.localhost/
-content-length: 0
-```
-
-The redirect is sent only while HTTPS is up. When the proxy runs without it, as when the CA could not be loaded, plain http serves the request instead. A name no lane routes gets [DL101 Unknown host](../errors/unknown-host.md) over plain http.
+Names ending in `.localhost` are reserved for the machine itself, so they need no DNS server. Browsers and most systems answer them with 127.0.0.1 by themselves. A few programs ask DNS instead, and for those devlanes can write the names to the hosts file or answer them itself; [Fix programs that cannot resolve *.localhost](../how-to/hostnames/resolve-localhost.md) covers it.
 
 ## Related
 

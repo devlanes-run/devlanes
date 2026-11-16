@@ -27,7 +27,7 @@ An update replaces the binary and drops that right, so run both commands again a
 
 ## Move the proxy to other ports
 
-Caddy, nginx or Traefik on the same machine competes with devlanes for 443 and 80, and on macOS and Linux the one that starts second does not get them. To leave them to the other program, give the proxy ports of its own:
+Caddy, nginx or Traefik on the same machine competes with devlanes for 443 and 80, and on Linux the one that starts second does not get them. To leave them to the other program, give the proxy ports of its own:
 
 ```yaml devlanes-user
 # ~/.devlanes/config.yaml

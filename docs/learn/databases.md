@@ -31,7 +31,7 @@ The port mapping leaves the host port to Docker, and devlanes reads back the one
 
 ## Each lane computes the name of its database
 
-You add these lines to the project file on the main branch. Under `infra` the file names the Compose file and fixes the Compose project's name, so `docker compose -p myapp` reaches the same container from any terminal.
+You add these lines to the project file on the main branch. Under `infra` they name the Compose file and its project.
 
 ```yaml devlanes
 lanes:
@@ -89,7 +89,7 @@ Each start brings up Postgres if it is not running yet, runs the lane's setup, w
 $ devlanes env show api
 ```
 
-The API of lane 1 gets `DATABASE_URL` ending in myapp_lane1, on the port Docker chose for the container; the API of lane 0 gets myapp_main in the same container.
+The API of lane 1 gets a `DATABASE_URL` ending in myapp_lane1; the API of lane 0 gets myapp_main in the same container.
 
 A stopped lane keeps its database. `devlanes lane clean` deletes a lane and runs its teardown, so cleaning lane 1 drops myapp_lane1 while lane 0 keeps myapp_main.
 
