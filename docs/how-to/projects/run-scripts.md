@@ -1,6 +1,6 @@
 ---
 title: Run scripts your project already has
-description: Start a service or a task from a script in package.json, a Makefile, a justfile, Cargo.toml, pyproject.toml or deno.json, and know when a plain command fits better.
+description: Start a service or a task from a script in package.json, a Makefile, a justfile, Cargo.toml, pyproject.toml, deno.json or go.mod, and know when a plain command fits better.
 kind: how-to
 ---
 
@@ -26,6 +26,7 @@ The file name picks the tool:
 - `Cargo.toml`: `cargo run --bin <name>`, where the name is a binary.
 - `pyproject.toml`: an entry under `[project.scripts]`, run with uv or Poetry.
 - `deno.json`: `deno task <name>`.
+- `go.mod`: `go run ./cmd/<name>`, where the name is a folder under `cmd`. `.` or a name with a `/`, such as `tools/seed`, is a package path from the go.mod folder.
 
 A start checks that the script exists and lists the names the file has when it does not.
 
@@ -50,6 +51,6 @@ Your local file, the `devlanes.local.yaml` that stays out of Git, can change the
 ## Related
 
 - [Add devlanes to a project](add-devlanes.md)
-- [Run Node, Bun, Deno, Python and Rust services](runtimes.md)
+- [Run Node, Bun, Deno, Python, Rust and Go services](runtimes.md)
 - [Run Vite and Next.js](vite-and-next.md)
 - [`services.<name>.run_script`](/docs/reference/config/project/services/#services-name-run_script)

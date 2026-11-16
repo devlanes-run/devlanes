@@ -1,0 +1,19 @@
+[package]
+name = "devlanes-platform-go"
+description = "Go launch contributor for devlanes"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+devlanes-core = { path = "../core" }
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

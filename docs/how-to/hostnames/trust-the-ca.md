@@ -46,7 +46,7 @@ $ devlanes doctor
 
 ## Give your own commands the CA
 
-Node, Bun, Deno, Python and Rust services that devlanes starts already trust the CA. For commands you start yourself, open a shell with the same variables from the worktree:
+Node, Bun, Deno, Python, Rust and Go services that devlanes starts already trust the CA. For commands you start yourself, open a shell with the same variables from the worktree:
 
 ```console
 $ devlanes env shell
@@ -81,7 +81,7 @@ $env:REQUESTS_CA_BUNDLE = "$env:USERPROFILE\.devlanes\ca\bundle.pem"
 :::
 ::::
 
-`bundle.pem` holds the system's root certificates plus the devlanes CA. Go programs, and the curl of macOS and Linux, use the system store and need nothing.
+`bundle.pem` holds the system's root certificates plus the devlanes CA. Go programs read `SSL_CERT_FILE` on Linux and the system store on macOS and Windows. The curl of macOS and Linux uses the system store and needs nothing.
 
 ## If curl.exe rejects the certificate on Windows
 

@@ -1130,6 +1130,7 @@ dependencies = [
  "devlanes-pki",
  "devlanes-platform-bun",
  "devlanes-platform-deno",
+ "devlanes-platform-go",
  "devlanes-platform-node",
  "devlanes-platform-python",
  "devlanes-platform-rust",
@@ -1144,6 +1145,7 @@ dependencies = [
  "devlanes-resolver-nrpt",
  "devlanes-run-script-cargo",
  "devlanes-run-script-deno",
+ "devlanes-run-script-go",
  "devlanes-run-script-just",
  "devlanes-run-script-make",
  "devlanes-run-script-npm",
@@ -1621,6 +1623,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "devlanes-platform-go"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "devlanes-core",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "devlanes-platform-node"
 version = "0.8.0"
 dependencies = [
@@ -1755,6 +1767,7 @@ dependencies = [
  "devlanes-core",
  "devlanes-platform-bun",
  "devlanes-platform-deno",
+ "devlanes-platform-go",
  "devlanes-platform-node",
  "devlanes-platform-python",
  "devlanes-platform-rust",
@@ -1828,6 +1841,18 @@ dependencies = [
  "insta",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "devlanes-run-script-go"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "devlanes-core",
+ "insta",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

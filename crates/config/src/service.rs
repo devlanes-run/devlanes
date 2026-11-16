@@ -235,10 +235,10 @@ service_fields! {
     /// Script to run from a project file, as `{ file, name }`, such as
     /// `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file
     /// name (`package.json`, `Makefile`, `justfile`, `deno.json`, `pyproject.toml`,
-    /// `Cargo.toml`), runs the script in that file's directory and checks that it exists
-    /// before starting. Presets need it to place their flags, and a profile's `run_scripts`
-    /// can swap the script name. Exactly one of `run` and `run_script` is required after
-    /// templates are applied.
+    /// `Cargo.toml`, `go.mod`), runs the script in that file's directory and checks that it
+    /// exists before starting. Presets need it to place their flags, and a profile's
+    /// `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is
+    /// required after templates are applied.
     run_script: RunScript,
     /// Directory `run` starts in, relative to the project file's directory in the lane's
     /// worktree; defaults to that directory. Platform detection also looks here. Cannot be combined with `run_script`, which
@@ -246,12 +246,12 @@ service_fields! {
     /// including a `cwd` inherited through `extends`.
     #[schemars(extend("examples" = ["apps/api"]))]
     cwd: Templated<String>,
-    /// Runtime of the service: `node`, `bun`, `deno`, `python` or `rust`. It decides which
-    /// variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`,
+    /// Runtime of the service: `node`, `bun`, `deno`, `python`, `rust` or `go`. It decides
+    /// which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`,
     /// `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working
     /// directory when omitted; set it only when detection is wrong. `none` skips detection
     /// and adds no platform variables.
-    #[schemars(extend("examples" = ["node","bun","deno","python","rust","none"]))]
+    #[schemars(extend("examples" = ["node","bun","deno","python","rust","go","none"]))]
     platform: String,
     /// Framework integration that adds the flags and variables a dev server needs to run in
     /// a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite`, so you do

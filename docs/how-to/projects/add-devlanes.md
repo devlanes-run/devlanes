@@ -42,7 +42,7 @@ const host = process.env.HOST ?? "127.0.0.1";
 server.listen(port, host);
 ```
 
-[Run Node, Bun, Deno, Python and Rust services](runtimes.md) has the same lines for other runtimes.
+[Run Node, Bun, Deno, Python, Rust and Go services](runtimes.md) has the same lines for other runtimes.
 
 ## Check and start
 

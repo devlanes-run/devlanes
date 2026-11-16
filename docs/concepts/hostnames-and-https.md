@@ -51,7 +51,7 @@ When the proxy cannot have port 443, it uses another one and the URLs carry that
 
 ## The devlanes CA signs each hostname
 
-The certificates come from an authority, the devlanes CA, that devlanes creates on your machine for your user, constrained to names meant for local development ([Security](security.md)). Your browser accepts them once the CA is trusted, which `devlanes setup` does ([Trust the devlanes CA](../how-to/hostnames/trust-the-ca.md)). Services that devlanes starts in Node, Bun, Deno, Python and Rust trust it without any setup.
+The certificates come from an authority, the devlanes CA, that devlanes creates on your machine for your user, constrained to names meant for local development ([Security](security.md)). Your browser accepts them once the CA is trusted, which `devlanes setup` does ([Trust the devlanes CA](../how-to/hostnames/trust-the-ca.md)). Services that devlanes starts in Node, Bun, Deno, Python, Rust and Go trust it, though [Go on macOS and Windows](../how-to/hostnames/trust-the-ca.md#give-your-own-commands-the-ca) relies on `devlanes setup`.
 
 ## Hostnames under localhost resolve to your machine
 

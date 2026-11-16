@@ -1953,7 +1953,7 @@
     },
     "RunScript": {
       "additionalProperties": false,
-      "description": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, deno.json, pyproject.toml (uv or poetry) and Cargo.toml (a binary). In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
+      "description": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, deno.json, pyproject.toml (uv or poetry), Cargo.toml (a binary) and go.mod (a main package). In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
       "examples": [
         {
           "file": "apps/api/package.json",
@@ -1964,7 +1964,7 @@
           "name": "fixtures"
         }
       ],
-      "markdownDescription": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, deno.json, pyproject.toml (uv or poetry) and Cargo.toml (a binary). In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
+      "markdownDescription": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, deno.json, pyproject.toml (uv or poetry), Cargo.toml (a binary) and go.mod (a main package). In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
       "properties": {
         "file": {
           "description": "File that defines the script, relative to the project file's directory, such as `apps/api/package.json`. The script runs in this file's directory. Required unless an override or `extends` child keeps the inherited file.",
@@ -1977,12 +1977,12 @@
           "type": "string"
         },
         "name": {
-          "description": "Script, target, recipe, task or binary name in that file. Required unless an override or `extends` child keeps the inherited name.",
+          "description": "Script, target, recipe, task, binary or package name in that file. For go.mod, a bare name such as `api` means `./cmd/api`, and `.` or a path with `/` is relative to go.mod. Required unless an override or `extends` child keeps the inherited name.",
           "examples": [
             "dev",
             "fixtures"
           ],
-          "markdownDescription": "Script, target, recipe, task or binary name in that file. Required unless an override or `extends` child keeps the inherited name.",
+          "markdownDescription": "Script, target, recipe, task, binary or package name in that file. For go.mod, a bare name such as `api` means `./cmd/api`, and `.` or a path with `/` is relative to go.mod. Required unless an override or `extends` child keeps the inherited name.",
           "type": "string"
         }
       },
@@ -2265,16 +2265,17 @@
           "markdownDescription": "Options for `preset: next`, which adds `--port <self.port> --hostname 127.0.0.1` to the `next dev` command. Without the hostname flag Next listens on `0.0.0.0` instead of loopback."
         },
         "platform": {
-          "description": "Runtime of the service: `node`, `bun`, `deno`, `python` or `rust`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong. `none` skips detection and adds no platform variables.",
+          "description": "Runtime of the service: `node`, `bun`, `deno`, `python`, `rust` or `go`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong. `none` skips detection and adds no platform variables.",
           "examples": [
             "node",
             "bun",
             "deno",
             "python",
             "rust",
+            "go",
             "none"
           ],
-          "markdownDescription": "Runtime of the service: `node`, `bun`, `deno`, `python` or `rust`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong. `none` skips detection and adds no platform variables.",
+          "markdownDescription": "Runtime of the service: `node`, `bun`, `deno`, `python`, `rust` or `go`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong. `none` skips detection and adds no platform variables.",
           "type": [
             "string",
             "null"
@@ -2396,7 +2397,7 @@
               "type": "null"
             }
           ],
-          "description": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file name (`package.json`, `Makefile`, `justfile`, `deno.json`, `pyproject.toml`, `Cargo.toml`), runs the script in that file's directory and checks that it exists before starting. Presets need it to place their flags, and a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied.",
+          "description": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file name (`package.json`, `Makefile`, `justfile`, `deno.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`), runs the script in that file's directory and checks that it exists before starting. Presets need it to place their flags, and a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied.",
           "examples": [
             {
               "file": "apps/api/package.json",
@@ -2407,7 +2408,7 @@
               "name": "fixtures"
             }
           ],
-          "markdownDescription": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file name (`package.json`, `Makefile`, `justfile`, `deno.json`, `pyproject.toml`, `Cargo.toml`), runs the script in that file's directory and checks that it exists before starting. Presets need it to place their flags, and a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied."
+          "markdownDescription": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file name (`package.json`, `Makefile`, `justfile`, `deno.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`), runs the script in that file's directory and checks that it exists before starting. Presets need it to place their flags, and a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied."
         },
         "stop": {
           "anyOf": [
