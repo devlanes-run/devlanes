@@ -75,7 +75,7 @@ services:
     hosts: "docs.${{ lane.domain }}"
 ```
 
-- `run_script: { file, name }` works with `package.json` (npm, pnpm, yarn or bun, from `packageManager` or the lockfile), `Makefile`, `justfile`, `deno.json`, `pyproject.toml` (uv or poetry) and `Cargo.toml` (a binary). It runs in that file's directory, so `devlanes config check` refuses a `cwd` next to it. Prefer it to `run: pnpm -F pkg dev` whenever the command is a script in a file: profiles can swap its name and presets require it.
+- `run_script: { file, name }` works with `package.json` (npm, pnpm, yarn or bun, from `packageManager` or the lockfile), `Makefile`, `justfile`, `deno.json`, `pyproject.toml` (uv or poetry), `Cargo.toml` (a binary) and `go.mod` (`go run`; `api` means `./cmd/api`, and `.` or a path with `/` is relative to `go.mod`). It runs in that file's directory, so `devlanes config check` refuses a `cwd` next to it. Prefer it to `run: pnpm -F pkg dev` whenever the command is a script in a file: profiles can swap its name and presets require it.
 - A `run` string is a shell script, run with `/bin/sh -c` (Git's `sh` on Windows). Without `cwd`, `run` starts in the project file's directory.
 - `autostart: false` keeps a service out of a plain `devlanes start` when no `default` profile exists, unless the lane ran it before; naming it or its tag still starts it. It also takes an expression, such as `${{ lane.index == 0 }}`.
 - `keep_awake: true` on a worker, queue consumer, scheduler or tunnel keeps its lane from being throttled or frozen while it runs. Without it, a lane with no requests, connections or devlanes commands is frozen after a while, and a worker waiting for jobs stalls until something thaws the lane.
@@ -137,7 +137,7 @@ hosts:
 
 `lane.domain` is `myapp.localhost` in lane 0 and `myapp1.localhost` in lane 1. `${{ domain('myapp-pages') }}` applies the same rule to another name, for hostnames that must not share the app's cookies. Keep every hostname under `lane.domain` or a `domain()` name, so lanes never claim the same one. The proxy serves them over HTTPS on 443, or 8443 when it cannot bind 443.
 
-The certificates are already handled. Units of a detected platform get the devlanes CA: `NODE_EXTRA_CA_CERTS` for node and bun, `DENO_CERT` for deno, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` for python, `SSL_CERT_FILE` for rust. Every unit gets the paths in `DEVLANES_CA_CERT` and `DEVLANES_CA_BUNDLE`, for a runtime devlanes does not detect, such as `run: SSL_CERT_FILE=$DEVLANES_CA_BUNDLE bin/rails server`. Do not add `NODE_OPTIONS=--use-system-ca`, `NODE_TLS_REJECT_UNAUTHORIZED=0` or your own `NODE_EXTRA_CA_CERTS`. The user runs `devlanes setup` once for browsers and the system ([setup.md](setup.md)). `lanes.hosts_file: always` also writes the exact hostnames to `/etc/hosts` on macOS and Linux, for programs that do not resolve `*.localhost`; wildcards cannot go there.
+The certificates are already handled. Units of a detected platform get the devlanes CA: `NODE_EXTRA_CA_CERTS` for node and bun, `DENO_CERT` for deno, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` for python, `SSL_CERT_FILE` for rust and go (Go reads it on Linux and uses the system store on macOS and Windows). Every unit gets the paths in `DEVLANES_CA_CERT` and `DEVLANES_CA_BUNDLE`, for a runtime devlanes does not detect, such as `run: SSL_CERT_FILE=$DEVLANES_CA_BUNDLE bin/rails server`. Do not add `NODE_OPTIONS=--use-system-ca`, `NODE_TLS_REJECT_UNAUTHORIZED=0` or your own `NODE_EXTRA_CA_CERTS`. The user runs `devlanes setup` once for browsers and the system ([setup.md](setup.md)). `lanes.hosts_file: always` also writes the exact hostnames to `/etc/hosts` on macOS and Linux, for programs that do not resolve `*.localhost`; wildcards cannot go there.
 
 ## Environment and expressions
 
@@ -303,7 +303,7 @@ A service's `extends` names a template; a file's `extends` names project files. 
 
 ## Presets and platforms
 
-`platform` (`node`, `bun`, `deno`, `python`, `rust`) is detected from the `run_script` file or the working directory. Set it only when detection is wrong, or to `none` to skip it. It adds the CA and color variables.
+`platform` (`node`, `bun`, `deno`, `python`, `rust`, `go`) is detected from the `run_script` file or the working directory. Set it only when detection is wrong, or to `none` to skip it. It adds the CA and color variables.
 
 | Preset | Adds | Options |
 |---|---|---|

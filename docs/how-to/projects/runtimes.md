@@ -1,10 +1,10 @@
 ---
-title: Run Node, Bun, Deno, Python and Rust services
-description: The lines a Node, Bun, Deno, Python or Rust service needs to listen where devlanes tells it, reload when you edit it and trust the devlanes CA.
+title: Run Node, Bun, Deno, Python, Rust and Go services
+description: The lines a Node, Bun, Deno, Python, Rust or Go service needs to listen where devlanes tells it, reload when you edit it and trust the devlanes CA.
 kind: how-to
 ---
 
-Use this guide when you put a Node, Bun, Deno, Python or Rust service on devlanes and want the lines its code and command need.
+Use this guide when you put a Node, Bun, Deno, Python, Rust or Go service on devlanes and want the lines its code and command need.
 
 ## Listen on the port and host
 
@@ -54,6 +54,13 @@ let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".into());
 let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
 ```
 :::
+:::tab[Go]
+```go
+host := cmp.Or(os.Getenv("HOST"), "127.0.0.1")
+port := cmp.Or(os.Getenv("PORT"), "8080")
+log.Fatal(http.ListenAndServe(net.JoinHostPort(host, port), mux))
+```
+:::
 ::::
 
 ## Reload on change
@@ -64,16 +71,30 @@ devlanes leaves watching files to the runtime, so use its watch mode in the comm
 - Bun: `bun --watch`.
 - Deno: `deno run --watch`, as in the task above.
 - Python: uvicorn's `--reload`.
+- Go: [air](https://github.com/air-verse/air), building into the lane's data folder so two lanes never run one binary. On Windows, end both paths in `api.exe`.
 
-A Rust service rebuilds when you restart it:
+```yaml devlanes
+services:
+  api:
+    run:
+      - air
+      - --build.cmd
+      - go build -o ${{ lane.data_path }}/api ./cmd/api
+      - --build.entrypoint
+      - ${{ lane.data_path }}/api
+```
+
+A Rust service, or a Go service run with `go run`, rebuilds when you restart it:
 
 ```console
 $ devlanes restart api
 ```
 
+Go's build cache and module cache are shared by every worktree, and Go keeps them correct when lanes build at the same time.
+
 ## If devlanes picks the wrong runtime
 
-devlanes tells the runtime from the script's file or the service's folder. A folder with a package.json counts as Node, so set the runtime on a Python or Rust service there:
+devlanes tells the runtime from the script's file or the service's folder. A folder with a package.json counts as Node, and one with a Cargo.toml as Rust, so set the runtime on another service there:
 
 ```yaml devlanes
 services:
@@ -83,7 +104,9 @@ services:
 
 ## If a service calls another hostname over HTTPS
 
-devlanes points these runtimes at its CA, so remove any setting that turns certificate checks off. [Trust the devlanes CA](../hostnames/trust-the-ca.md) covers other runtimes.
+devlanes points these runtimes at its CA, so remove any setting that turns certificate checks off. Go on macOS and Windows reads the system store, which `devlanes setup` fills. [Trust the devlanes CA](../hostnames/trust-the-ca.md) covers other runtimes.
+
+Go programs built without cgo look lane hostnames up in DNS; [Fix programs that cannot resolve *.localhost](../hostnames/resolve-localhost.md) makes them resolve.
 
 ## Related
 

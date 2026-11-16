@@ -23,6 +23,7 @@ tracing.workspace = true
 async-trait.workspace = true
 devlanes-platform-bun = { path = "../platform-bun" }
 devlanes-platform-deno = { path = "../platform-deno" }
+devlanes-platform-go = { path = "../platform-go" }
 devlanes-platform-node = { path = "../platform-node" }
 devlanes-platform-python = { path = "../platform-python" }
 devlanes-platform-rust = { path = "../platform-rust" }

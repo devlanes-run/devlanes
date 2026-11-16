@@ -14,7 +14,7 @@ What devlanes does not do, with the issue that tracks each limit. An empty Issue
 | A variable cannot be unset. | |
 | A service has no `env_file`; `.env` values reach it only through `${{ env.NAME }}`. | [#186](https://github.com/devlanes-run/devlanes/issues/186) |
 | The user config has no values or secrets shared by every project. | [#137](https://github.com/devlanes-run/devlanes/issues/137) |
-| Go has no platform or script runner, and `Taskfile.yml` is not supported. | [#138](https://github.com/devlanes-run/devlanes/issues/138) |
+| `Taskfile.yml` is not supported. | [#138](https://github.com/devlanes-run/devlanes/issues/138) |
 | JVM projects have no platform, Maven or Gradle runner, or presets. | [#136](https://github.com/devlanes-run/devlanes/issues/136) |
 | A service has no built-in debug port. | [#139](https://github.com/devlanes-run/devlanes/issues/139) |
 | Resources outside Docker, such as a hosted database branch, cannot be created per lane. | [#59](https://github.com/devlanes-run/devlanes/issues/59) |

@@ -358,6 +358,7 @@ fn contributors() -> Vec<Arc<dyn Contributor>> {
         Arc::new(devlanes_platform_bun::BunContributor),
         Arc::new(devlanes_platform_deno::DenoContributor),
         Arc::new(devlanes_platform_rust::RustContributor),
+        Arc::new(devlanes_platform_go::GoContributor),
         Arc::new(devlanes_preset_vite::VitePreset),
         Arc::new(devlanes_preset_next::NextPreset),
         Arc::new(devlanes_preset_wrangler::WranglerPreset),
@@ -365,7 +366,8 @@ fn contributors() -> Vec<Arc<dyn Contributor>> {
     ]
 }
 
-/// `run_script` sources: package.json, Makefile, justfile.
+/// `run_script` sources: package.json, Makefile, justfile, deno.json,
+/// Cargo.toml, pyproject.toml and go.mod.
 fn script_runners() -> Vec<Arc<dyn ScriptRunner>> {
     vec![
         Arc::new(devlanes_run_script_npm::NpmScripts),
@@ -374,6 +376,7 @@ fn script_runners() -> Vec<Arc<dyn ScriptRunner>> {
         Arc::new(devlanes_run_script_deno::DenoTasks),
         Arc::new(devlanes_run_script_cargo::CargoBins),
         Arc::new(devlanes_run_script_python::PythonScripts),
+        Arc::new(devlanes_run_script_go::GoPackages),
     ]
 }
 

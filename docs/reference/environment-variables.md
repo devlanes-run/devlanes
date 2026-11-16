@@ -39,6 +39,7 @@ Services, tasks, and `infra.setup` and `infra.teardown` entries get these.
 | Deno | `DENO_CERT` | The path in `DEVLANES_CA_CERT`. |
 | Python | `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` | The path in `DEVLANES_CA_BUNDLE`. |
 | Rust | `SSL_CERT_FILE` | The path in `DEVLANES_CA_BUNDLE`. |
+| Go | `SSL_CERT_FILE` | The path in `DEVLANES_CA_BUNDLE`. |
 
 ### For commands run with exec and with
 

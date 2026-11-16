@@ -1277,7 +1277,7 @@ async fn detection_precedence() {
 #[tokio::test]
 /// The real platform crates together: bun beats node only with a bun marker,
 /// deno beats node with a deno config, rust yields to node in mixed directories,
-/// and `platform: bun|deno|rust` parse as explicit values.
+/// go yields to rust, and `platform: bun|deno|go` parse as explicit values.
 async fn platform_crates_together() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
@@ -1295,6 +1295,9 @@ async fn platform_crates_together() {
     write("crate/Cargo.toml", "[package]\n");
     write("mixed/package.json", "{}");
     write("mixed/Cargo.toml", "[package]\n");
+    write("gomod/go.mod", "module example.invalid/acme\n");
+    write("gocrate/go.mod", "module example.invalid/acme\n");
+    write("gocrate/Cargo.toml", "[package]\n");
     let config = parse(
         r#"
 project: demo
@@ -1307,13 +1310,17 @@ services:
   denoapp: { run: dev, cwd: denoapp }
   crate: { run: cargo run, cwd: crate }
   mixed: { run: dev, cwd: mixed }
+  gomod: { run: go run ., cwd: gomod }
+  gocrate: { run: dev, cwd: gocrate }
+  forced-go: { run: dev, platform: go }
   forced-node: { run: dev, cwd: bunlock, platform: node }
   forced-bun: { run: dev, platform: bun }
   forced-deno: { run: dev, platform: deno }
 "#,
     );
     let facts = devlanes_resolve::LaneFacts::new("demo", root, 0, root, "/data/demo/1", None);
-    let contributors: [Arc<dyn Contributor>; 5] = [
+    let contributors: [Arc<dyn Contributor>; 6] = [
+        Arc::new(devlanes_platform_go::GoContributor),
         Arc::new(devlanes_platform_rust::RustContributor),
         Arc::new(devlanes_platform_deno::DenoContributor),
         Arc::new(devlanes_platform_bun::BunContributor),
@@ -1343,6 +1350,9 @@ services:
         ("denoapp", "deno"),
         ("crate", "rust"),
         ("mixed", "node"),
+        ("gomod", "go"),
+        ("gocrate", "rust"),
+        ("forced-go", "go"),
         ("forced-node", "node"),
         ("forced-bun", "bun"),
         ("forced-deno", "deno"),

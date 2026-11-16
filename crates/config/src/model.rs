@@ -214,9 +214,9 @@ pub enum Run {
 #[schemars(extend("examples" = [{"file":"apps/api/package.json","name":"dev"},{"file":"justfile","name":"fixtures"}]))]
 /// Script from a project file, as a mapping with `file` and `name`. devlanes picks the
 /// tool from the file name: package.json (the project's package manager), Makefile or
-/// `*.mk`, justfile or `*.just`, deno.json, pyproject.toml (uv or poetry) and Cargo.toml (a
-/// binary). In `devlanes.local.yaml` or a service that `extends` a template, either key can
-/// be left out to keep the inherited one.
+/// `*.mk`, justfile or `*.just`, deno.json, pyproject.toml (uv or poetry), Cargo.toml (a
+/// binary) and go.mod (a main package). In `devlanes.local.yaml` or a service that
+/// `extends` a template, either key can be left out to keep the inherited one.
 pub struct RunScript {
     /// File that defines the script, relative to the project file's directory, such as
     /// `apps/api/package.json`. The script runs in this file's directory. Required unless
@@ -224,8 +224,9 @@ pub struct RunScript {
     #[schemars(extend("examples" = ["apps/api/package.json","Makefile","justfile"]))]
     pub file: String,
     #[schemars(extend("examples" = ["dev","fixtures"]))]
-    /// Script, target, recipe, task or binary name in that file. Required unless an
-    /// override or `extends` child keeps the inherited name.
+    /// Script, target, recipe, task, binary or package name in that file. For go.mod, a
+    /// bare name such as `api` means `./cmd/api`, and `.` or a path with `/` is relative
+    /// to go.mod. Required unless an override or `extends` child keeps the inherited name.
     pub name: String,
 }
 
