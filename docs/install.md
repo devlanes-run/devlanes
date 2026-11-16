@@ -9,7 +9,12 @@ devlanes is a single command. Its background daemon starts by itself the first t
 Your coding agent can install it for you, apart from one dialog your operating system shows you.
 
 ```prompt
-Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then install devlanes on this machine if it is missing, set up its HTTPS certificates and hostnames, check the machine with `devlanes doctor`, and tell me which steps I have to do myself.
+Install the devlanes skill:
+npx skills add devlanes-run/devlanes --skill devlanes
+
+Then install devlanes on this machine if it is missing, set up its
+HTTPS certificates and hostnames, and check the machine with
+`devlanes doctor`. Tell me which steps I have to do myself.
 ```
 
 ## Install the command

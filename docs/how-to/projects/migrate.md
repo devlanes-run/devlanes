@@ -7,7 +7,13 @@ kind: how-to
 Use this guide when mprocs, a Procfile, process-compose, pm2, tmuxinator, concurrently or Docker Compose runs your dev processes today. A coding agent with the devlanes skill does the migration; paste this into it from the repository.
 
 ```prompt
-Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then install devlanes on this machine if it is missing, and migrate this repository's dev setup to a devlanes.yaml, keeping the old files. Start the lane, give me the URL of each service, and tell me what did not carry over and what I have to do myself.
+Install the devlanes skill:
+npx skills add devlanes-run/devlanes --skill devlanes
+
+Then install devlanes on this machine if it is missing, and migrate
+this repository's dev setup to a devlanes.yaml, keeping the old files.
+Start the lane and give me the URL of each service. Tell me what did
+not carry over and what I have to do myself.
 ```
 
 ::example{slug="workflows-mprocs-migration"}

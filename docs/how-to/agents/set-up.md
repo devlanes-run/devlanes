@@ -7,7 +7,12 @@ kind: how-to
 Set this up when a coding agent works in a repository that runs on devlanes. Your agent can do it for you:
 
 ```prompt
-Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then check that your shell can run devlanes in this repository. If it cannot, register the devlanes MCP server with this agent, and tell me which steps I have to do myself, such as restarting you.
+Install the devlanes skill:
+npx skills add devlanes-run/devlanes --skill devlanes
+
+Then check that your shell can run devlanes in this repository.
+If it cannot, register the devlanes MCP server with this agent.
+Tell me which steps I have to do myself, such as restarting you.
 ```
 
 ## Install the skill

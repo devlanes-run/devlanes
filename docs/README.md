@@ -11,7 +11,11 @@ devlanes runs your dev stack once per Git worktree, so two branches of the same 
 Your coding agent can set it up for you.
 
 ```prompt
-Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then install devlanes on this machine if it is missing, set it up for this repository, start it and give me the URL of each service.
+Install the devlanes skill:
+npx skills add devlanes-run/devlanes --skill devlanes
+
+Then install devlanes on this machine if it is missing, set it up for
+this repository, start it and give me the URL of each service.
 ```
 
 To do it by hand, start with [Install devlanes](install.md).

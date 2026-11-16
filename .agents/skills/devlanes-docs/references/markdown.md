@@ -51,11 +51,15 @@ $ devlanes daemon pair
 
 ````markdown
 ```prompt
-Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then install devlanes on this machine if it is missing, set it up for this repository, start it and give me the URL of each service.
+Install the devlanes skill:
+npx skills add devlanes-run/devlanes --skill devlanes
+
+Then install devlanes on this machine if it is missing, set it up for
+this repository, start it and give me the URL of each service.
 ```
 ````
 
-Text for the reader to paste into a coding agent. A prompt says "install devlanes if it is missing" when it needs the command, because the skill installs it only when asked. It renders as a card with a copy button. Write it as one instruction a person would give, in plain sentences. Use it on the overview and the install page, and on a how-to guide when the guide, or its first step, is something an agent does.
+Text for the reader to paste into a coding agent. Break its lines by hand at about 70 characters, with the skill's install command on a line of its own, so the block needs no sideways scrolling on the website or on GitHub. A prompt says "install devlanes if it is missing" when it needs the command, because the skill installs it only when asked. It renders as a card with a copy button. Write it as one instruction a person would give, in plain sentences. Use it on the overview and the install page, and on a how-to guide when the guide, or its first step, is something an agent does.
 
 ## Config blocks
 
