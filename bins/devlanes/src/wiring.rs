@@ -377,13 +377,14 @@ fn contributors() -> Vec<Arc<dyn Contributor>> {
     ]
 }
 
-/// `run_script` sources: package.json, Makefile, justfile, deno.json,
+/// `run_script` sources: package.json, Makefile, justfile, Taskfile, deno.json,
 /// Cargo.toml, pyproject.toml and go.mod.
 fn script_runners() -> Vec<Arc<dyn ScriptRunner>> {
     vec![
         Arc::new(devlanes_run_script_npm::NpmScripts),
         Arc::new(devlanes_run_script_make::MakeTargets),
         Arc::new(devlanes_run_script_just::JustRecipes),
+        Arc::new(devlanes_run_script_task::TaskfileTasks),
         Arc::new(devlanes_run_script_deno::DenoTasks),
         Arc::new(devlanes_run_script_cargo::CargoBins),
         Arc::new(devlanes_run_script_python::PythonScripts),

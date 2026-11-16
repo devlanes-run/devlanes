@@ -67,6 +67,7 @@ linked = [[
   "cargo/devlanes-run-script-make",
   "cargo/devlanes-run-script-npm",
   "cargo/devlanes-run-script-python",
+  "cargo/devlanes-run-script-task",
   "cargo/devlanes-runner-pty",
   "cargo/devlanes-runner-windows",
   "cargo/devlanes-shell-windows",

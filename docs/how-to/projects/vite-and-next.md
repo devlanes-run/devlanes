@@ -43,7 +43,7 @@ next dev compiles a page on its first request, so the ready check waits longer t
 :::
 ::::
 
-The preset adds its flags at the end of the script, so the script's last command has to be the dev server itself, as in `"dev": "vite"` or `"dev": "next dev"`.
+The preset adds its flags at the end of the script, so the script's last command has to be the dev server itself, as in `"dev": "vite"` or `"dev": "next dev"`. In a Taskfile, end that command with `{{.CLI_ARGS}}`, as in `dev: vite {{.CLI_ARGS}}`.
 
 ## Start the lane
 

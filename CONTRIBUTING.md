@@ -165,7 +165,7 @@ Run a crate's ignored tests with `cargo nextest run -p <crate> --run-ignored onl
 | Crate | Needs |
 |---|---|
 | `devlanes-run-script-npm` | node with npm, pnpm, yarn and bun |
-| `devlanes-run-script-just`, `-cargo`, `-deno`, `-python` | just, cargo, deno, uv or poetry |
+| `devlanes-run-script-just`, `-task`, `-cargo`, `-deno`, `-python` | just, task, cargo, deno, uv or poetry |
 | `devlanes-env-mise`, `devlanes-env-direnv` | mise, direnv |
 | `devlanes-trust-macos` | someone to click the keychain password prompt |
 | `devlanes-trust-linux` | sudo and certutil |

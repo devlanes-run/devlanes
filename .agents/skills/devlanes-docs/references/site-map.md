@@ -31,7 +31,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 |---|---|---|
 | `add-devlanes.md` | Add devlanes to a project | Put a project that already runs some other way on devlanes. |
 | `migrate.md` | Migrate from another process manager | Move from mprocs, a Procfile, process-compose, pm2, tmuxinator, `concurrently` or Compose, with an agent and the skill. |
-| `run-scripts.md` | Run scripts your project already has | Run scripts from `package.json`, a Makefile, a justfile, `Cargo.toml`, `pyproject.toml`, `deno.json` or `go.mod`. |
+| `run-scripts.md` | Run scripts your project already has | Run scripts from `package.json`, a Makefile, a justfile, a Taskfile, `Cargo.toml`, `pyproject.toml`, `deno.json` or `go.mod`. |
 | `runtimes.md` | Run Node, Bun, Deno, Python, Rust and Go services | What each runtime needs, with tabs per runtime. |
 | `vite-and-next.md` | Run Vite and Next.js | The two presets and their gotchas. |
 | `cloudflare-workers.md` | Run Cloudflare Workers | Wrangler and the Cloudflare Vite plugin per lane. |
