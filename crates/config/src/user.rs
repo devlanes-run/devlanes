@@ -921,7 +921,7 @@ pub enum TrustTarget {
 #[serde(default, deny_unknown_fields)]
 /// Ports and network exposure of the daemon's proxy, which routes each lane hostname to
 /// its service.
-#[schemars(extend("examples" = [{"https_port":443,"http_port":80,"lan":false,"via":true}]))]
+#[schemars(extend("examples" = [{"https_port":443,"http_port":80,"lan":false,"via":true,"server_timing":true}]))]
 pub struct ProxyConfig {
     /// Port the HTTPS proxy listens on; defaults to 443. When the port is taken or not
     /// allowed (low ports on Linux need extra permission), the daemon falls back to 8443
@@ -944,6 +944,15 @@ pub struct ProxyConfig {
     /// response headers exactly.
     #[schemars(extend("examples" = [true,false]))]
     pub via: bool,
+    /// Add a `Server-Timing` header to every response, after any the service sent, with
+    /// the time devlanes added (`devlanes`), waits for a starting service or a frozen
+    /// lane (`devlanes-wait`), the connection to the service (`devlanes-connect`) and the
+    /// service's own time (`devlanes-upstream`). Browser dev tools show these in the
+    /// request's Timing tab. For a lane on a remote box, `devlanes-upstream` includes the
+    /// connection to the box, which `devlanes-tunnel` estimates from its latest ping.
+    /// Defaults to true; set false if a client or test compares response headers exactly.
+    #[schemars(extend("examples" = [true,false]))]
+    pub server_timing: bool,
 }
 
 /// The port the HTTPS proxy binds when [`ProxyConfig::https_port`] is taken or not allowed.
@@ -960,6 +969,7 @@ impl Default for ProxyConfig {
             http_port: 80,
             lan: false,
             via: true,
+            server_timing: true,
         }
     }
 }

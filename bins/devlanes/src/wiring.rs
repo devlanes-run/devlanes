@@ -183,7 +183,17 @@ pub async fn engine(
     let ca_permitted = ca.as_ref().and_then(|ca| ca.permitted_dns_names());
     step("proxy");
     let idle = Arc::new(devlanes_daemon::idle::IdleBoard::default());
-    let routes = Arc::new(proxy(&user, ca, idle.clone(), shutdown.clone()).await);
+    let round_trips = Arc::new(devlanes_daemon::BoxRoundTrips::default());
+    let routes = Arc::new(
+        proxy(
+            &user,
+            ca,
+            idle.clone(),
+            round_trips.clone(),
+            shutdown.clone(),
+        )
+        .await,
+    );
     step("docker");
     let infra = Arc::new(ContainerInfra::new());
     #[cfg(unix)]
@@ -255,6 +265,7 @@ pub async fn engine(
     options.idle_exit = (spawned && user.daemon.exit_when_idle).then_some(IDLE_EXIT_GRACE);
     options.resume = resume;
     options.idle = idle;
+    options.round_trips = round_trips;
     options.ci = devlanes_daemon::update::ci_detected(|name| std::env::var(name).ok());
     options.user = user;
     let engine: Arc<dyn Handler> = Arc::new(Engine::new(options, store, integ, shutdown));
@@ -718,6 +729,7 @@ async fn proxy(
     user: &devlanes_config::UserConfig,
     ca: Option<Arc<devlanes_pki::CertificateAuthority>>,
     idle: Arc<devlanes_daemon::idle::IdleBoard>,
+    round_trips: Arc<devlanes_daemon::BoxRoundTrips>,
     shutdown: CancellationToken,
 ) -> ProxyRoutes {
     let lan = user.proxy.lan;
@@ -746,7 +758,9 @@ async fn proxy(
         lan,
         https_redirect_port: https.as_ref().map(|l| l.port),
         via: user.proxy.via,
+        server_timing: user.proxy.server_timing,
         activity: Some(Arc::new(LaneActivity(idle))),
+        latency: Some(Arc::new(BoxLatency(round_trips))),
         ..devlanes_proxy::ProxyConfig::default()
     };
     let proxy = devlanes_proxy::Proxy::new(config, devlanes_proxy::RouteTable::default());
@@ -827,6 +841,16 @@ impl devlanes_proxy::LaneActivity for LaneActivity {
     /// Records client bytes on an upgraded stream.
     fn stream(&self, owner: &str) {
         self.0.stream(owner);
+    }
+}
+
+/// Gives the proxy the box round trips the engine keeps.
+struct BoxLatency(Arc<devlanes_daemon::BoxRoundTrips>);
+
+impl devlanes_proxy::BoxLatency for BoxLatency {
+    /// The latest ping round trip to the box that mirrors lane `owner`.
+    fn round_trip(&self, owner: &str) -> Option<Duration> {
+        self.0.get(owner)
     }
 }
 

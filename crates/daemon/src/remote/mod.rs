@@ -97,6 +97,34 @@ const RECORD_WAIT: Duration = Duration::from_secs(10);
 /// can share one client connection.
 static NEXT_STREAM: AtomicU64 = AtomicU64::new(1 << 40);
 
+/// The latest ping round trip to the box that mirrors a lane, for the proxy's
+/// `Server-Timing`. Like the idle board, the proxy gets it before the engine
+/// exists; [`crate::Engine::new`] binds it.
+#[derive(Default)]
+pub struct BoxRoundTrips(std::sync::OnceLock<std::sync::Weak<Inner>>);
+
+impl BoxRoundTrips {
+    /// The round trip to the box that mirrors lane `lane` (`acme@0`); `None`
+    /// when no connected box mirrors it or its box answered no ping yet.
+    pub fn get(&self, lane: &str) -> Option<Duration> {
+        self.0.get()?.upgrade()?.remote.round_trip(lane)
+    }
+
+    /// Points the lookups at `engine`; only the first engine counts.
+    pub(crate) fn bind(&self, engine: std::sync::Weak<Inner>) {
+        let _ = self.0.set(engine);
+    }
+}
+
+impl std::fmt::Debug for BoxRoundTrips {
+    /// Shows whether an engine is bound, since the engine has no `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("BoxRoundTrips")
+            .field(&self.0.get().is_some())
+            .finish()
+    }
+}
+
 /// Remote state owned by the engine.
 #[derive(Default)]
 pub(crate) struct Remotes {
@@ -224,6 +252,18 @@ impl Remotes {
                     .collect::<Vec<_>>()
             })
             .collect()
+    }
+
+    /// The latest ping round trip of the box that mirrors `lane`. The
+    /// assignment mirrors one lane reference from one box at most.
+    fn round_trip(&self, lane: &str) -> Option<Duration> {
+        let assignment = lock(&self.assignment).1.clone();
+        let (host, _) = assignment
+            .mirrored
+            .iter()
+            .find(|(_, mirrored)| mirrored == lane)?;
+        let conn = lock(&self.hosts).get(host).cloned()?;
+        conn.session()?.round_trip()
     }
 
     /// The live connection of `owner`'s box as a listener target.

@@ -21,16 +21,16 @@
 │   ◉ wrk-billing                           │   proxy.http_port                       8080│                                                                │                                           │
 │   ◉ wrk-index                             │   proxy.lan                            false│ proxy.https_port                                               │                                           │
 │   ◉ wrk-thumbs                            │   proxy.via                             true│ Port the HTTPS proxy listens on; defaults to 443. When the     │                                           │
-│   ✕ wrk-export               failed · exit│   hostnames.resolver               localhost│ port is taken or not allowed (low ports on Linux need extra    │                                           │
-│   ◉ wrk-cron                              │   hostnames.hosts_file               default│ permission), the daemon falls back to 8443 and service URLs    │                                           │
-│   ◉ wrk-webhooks                          │   hostnames.tld                      default│ carry the port.                                                │                                           │
-│   ◉ wrk-ledger                            │   ports.range                    20000-32767│                                                                │                                           │
-│   ● stub-stripe                           │   tls.ca                            devlanes│ default  443                                                   │                                           │
-│   ● stub-s3                               │   tls.trust                             none│ example  443, 8443                                             │                                           │
-│   ◆ stub-twilio         orphaned · pid 482│   remote.allow_connections              true│                                                                │                                           │
-│   ● stub-sendgrid                         │   remote.start_daemon                   true│ Applies after saving and a daemon restart.                     │                                           │
-│   ● stub-segment                          │   remote.require_pairing                true│                                                                │                                           │
-│   ● stub-auth0                            │                                             │                                                                │                                           │
+│   ✕ wrk-export               failed · exit│   proxy.server_timing                   true│ port is taken or not allowed (low ports on Linux need extra    │                                           │
+│   ◉ wrk-cron                              │   hostnames.resolver               localhost│ permission), the daemon falls back to 8443 and service URLs    │                                           │
+│   ◉ wrk-webhooks                          │   hostnames.hosts_file               default│ carry the port.                                                │                                           │
+│   ◉ wrk-ledger                            │   hostnames.tld                      default│                                                                │                                           │
+│   ● stub-stripe                           │   ports.range                    20000-32767│ default  443                                                   │                                           │
+│   ● stub-s3                               │   tls.ca                            devlanes│ example  443, 8443                                             │                                           │
+│   ◆ stub-twilio         orphaned · pid 482│   tls.trust                             none│                                                                │                                           │
+│   ● stub-sendgrid                         │   remote.allow_connections              true│ Applies after saving and a daemon restart.                     │                                           │
+│   ● stub-segment                          │   remote.start_daemon                   true│                                                                │                                           │
+│   ● stub-auth0                            │   remote.require_pairing                true│                                                                │                                           │
 │   ● proxy-edge                            │                                             │                                                                │                                           │
 │   ● docs-search                           │                                             │                                                                │                                           │
 │   ● ml-ranker                             │                                             │                                                                │                                           │
@@ -83,16 +83,16 @@
 20: 0 darkgray, 4-5 green, 6-16 magenta, 44 bold yellow, 46 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
 21: 0 darkgray, 4-5 green, 6-14 magenta, 44 bold yellow, 46 bold yellow, 85-89 dim, 90 darkgray, 92-107 bold, 155 bold yellow, 199 darkgray
 22: 0 darkgray, 4-5 green, 6-15 magenta, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
-23: 0 darkgray, 1-43 reversed, 44 bold yellow, 46 bold yellow, 81-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
-24: 0 darkgray, 4-5 green, 6-13 magenta, 44 bold yellow, 46 bold yellow, 83-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
+23: 0 darkgray, 1-43 reversed, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
+24: 0 darkgray, 4-5 green, 6-13 magenta, 44 bold yellow, 46 bold yellow, 81-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
 25: 0 darkgray, 4-5 green, 6-17 magenta, 44 bold yellow, 46 bold yellow, 83-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
-26: 0 darkgray, 4-5 green, 6-15 magenta, 44 bold yellow, 46 bold yellow, 79-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
-27: 0 darkgray, 4-5 green, 6-16 darkgray, 44 bold yellow, 46 bold yellow, 82-89 dim, 90 darkgray, 92-100 dim, 155 bold yellow, 199 darkgray
-28: 0 darkgray, 4-5 green, 6-12 darkgray, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 92-100 dim, 155 bold yellow, 199 darkgray
+26: 0 darkgray, 4-5 green, 6-15 magenta, 44 bold yellow, 46 bold yellow, 83-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
+27: 0 darkgray, 4-5 green, 6-16 darkgray, 44 bold yellow, 46 bold yellow, 79-89 dim, 90 darkgray, 92-100 dim, 155 bold yellow, 199 darkgray
+28: 0 darkgray, 4-5 green, 6-12 darkgray, 44 bold yellow, 46 bold yellow, 82-89 dim, 90 darkgray, 92-100 dim, 155 bold yellow, 199 darkgray
 29: 0 darkgray, 4-5 yellow, 6-16 darkgray, 26-33 yellow, 34-43 dim, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
 30: 0 darkgray, 4-5 green, 6-18 darkgray, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 92-133 dim, 155 bold yellow, 199 darkgray
 31: 0 darkgray, 4-5 green, 6-17 darkgray, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
-32: 0 darkgray, 4-5 green, 6-15 darkgray, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
+32: 0 darkgray, 4-5 green, 6-15 darkgray, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
 33: 0 darkgray, 4-5 green, 6-15 cyan, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
 34: 0 darkgray, 4-5 green, 6-16 cyan, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
 35: 0 darkgray, 4-14 green, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray

@@ -7,16 +7,16 @@
 │ │   proxy.http_port                  8080│ proxy.http_port                 │ │
 │ │   proxy.lan                       false│                                 │─┤
 │ │   proxy.via                        true│ proxy.https_port                │a│
-│ │   hostnames.resolver          localhost│ Port the HTTPS proxy listens    │ │
-│ │   hostnames.hosts_fi…           default│ on; defaults to 443. When the   │a│
-│ │   hostnames.tld                 default│ port is taken or not allowed    │ │
-│ │   ports.range               20000-32767│ (low ports on Linux need extra  │a│
-│ │   tls.ca                       devlanes│ permission), the daemon falls   │ │
-│ │   tls.trust                        none│ back to 8443 and service URLs   │a│
-│ │   remote.allow_conne…              true│ carry the port.                 │ │
-│ │   remote.start_daemon              true│                                 │a│
-│ │   remote.require_pai…              true│ default  443                    │ │
-│ │                                        │ example  443, 8443              │a│
+│ │   proxy.server_timing              true│ Port the HTTPS proxy listens    │ │
+│ │   hostnames.resolver          localhost│ on; defaults to 443. When the   │a│
+│ │   hostnames.hosts_fi…           default│ port is taken or not allowed    │ │
+│ │   hostnames.tld                 default│ (low ports on Linux need extra  │a│
+│ │   ports.range               20000-32767│ permission), the daemon falls   │ │
+│ │   tls.ca                       devlanes│ back to 8443 and service URLs   │a│
+│ │   tls.trust                        none│ carry the port.                 │ │
+│ │   remote.allow_conne…              true│                                 │a│
+│ │   remote.start_daemon              true│ default  443                    │ │
+│ │   remote.require_pai…              true│ example  443, 8443              │a│
 │ │                                        │                                 │ │
 │ │                                                                          │a│
 │ └ ←→ step  enter done  esc undo  d default ─────────────────────────[save] ┘ │
@@ -33,16 +33,16 @@
 6: 0 darkgray, 2 bold yellow, 4 bold yellow, 43 darkgray, 45-59 red, 77 bold yellow, 79 darkgray
 7: 0 darkgray, 2 bold yellow, 4 bold yellow, 38-42 dim, 43 darkgray, 77 bold yellow, 78-79 darkgray
 8: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 45-60 bold, 77 bold yellow, 79 darkgray
-9: 0 darkgray, 2 bold yellow, 4 bold yellow, 34-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
-10: 0 darkgray, 2 bold yellow, 4 bold yellow, 36-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+9: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+10: 0 darkgray, 2 bold yellow, 4 bold yellow, 34-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
 11: 0 darkgray, 2 bold yellow, 4 bold yellow, 36-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
-12: 0 darkgray, 2 bold yellow, 4 bold yellow, 32-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
-13: 0 darkgray, 2 bold yellow, 4 bold yellow, 35-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
-14: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+12: 0 darkgray, 2 bold yellow, 4 bold yellow, 36-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+13: 0 darkgray, 2 bold yellow, 4 bold yellow, 32-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+14: 0 darkgray, 2 bold yellow, 4 bold yellow, 35-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
 15: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
 16: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
 17: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 45-53 dim, 77 bold yellow, 79 darkgray
-18: 0 darkgray, 2 bold yellow, 43 darkgray, 45-53 dim, 77 bold yellow, 79 darkgray
+18: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 45-53 dim, 77 bold yellow, 79 darkgray
 19: 0 darkgray, 2 bold yellow, 43 darkgray, 77 bold yellow, 79 darkgray
 20: 0 darkgray, 2 bold yellow, 77 bold yellow, 79 darkgray
 21: 0 darkgray, 1 reversed, 2-5 bold yellow, 6-10 bold dim yellow, 11-17 bold yellow, 18-22 bold dim yellow, 23-27 bold yellow, 28-32 bold dim yellow, 33-35 bold yellow, 36-43 bold dim yellow, 44-69 bold yellow, 70-75 bold dim yellow, 76-77 bold yellow, 79 darkgray

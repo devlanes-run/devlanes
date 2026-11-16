@@ -62,7 +62,7 @@ Publish changes with `registry.publish(event)`. A daemon that only has full snap
 
 - `Transport`: produces one duplex byte stream per `connect`.
 - `read_preamble`: skips output before the tunnel's `TUNNEL_PREAMBLE` line, keeping it for errors.
-- `Session`: one connection; `open`, `subscribe_sync`, `report` (what the client mirrors, with `mirror_report`), `features`, `has_feature`, `box_info`, `closed`.
+- `Session`: one connection; `open`, `subscribe_sync`, `report` (what the client mirrors, with `mirror_report`), `features`, `has_feature`, `box_info`, `round_trip` (the latest ping's), `closed`.
 - `Link`: keeps a session alive and shares one `ClientRegistry` across reconnects. A transport error classified `TransportError::NeedsAuth` parks it in `LinkState::NeedsAuth` without retrying until `Link::resume`, and a session that needs pairing (`SessionError::is_needs_pairing`) in `LinkState::NeedsPairing`. `TransportError::AuthFailed`, rejected credentials on a box that never connected, stops it like `Permanent`, unless the caller knows a prompt went unanswered and turns it into `NeedsAuth` with `into_needs_auth`.
 - `Registry`: snapshot plus events; `mirrored_ports`, `advertised_ports`, `authorize`, `diff`.
 - `serve` with `BoxServices`: `RegistrySource` (told each client's `ClientInfo`, and handed its mirror reports), `Dialer`, `SyncSource`, `PairingGate`.

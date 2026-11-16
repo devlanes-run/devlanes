@@ -402,6 +402,7 @@
           "http_port": 80,
           "https_port": 443,
           "lan": false,
+          "server_timing": true,
           "via": true
         }
       ],
@@ -441,6 +442,16 @@
             true
           ],
           "markdownDescription": "Accept connections from other devices on the network; defaults to false, which refuses every peer that is not this machine. Those devices must still resolve the hostnames to this machine and trust the CA.",
+          "type": "boolean"
+        },
+        "server_timing": {
+          "default": true,
+          "description": "Add a `Server-Timing` header to every response, after any the service sent, with the time devlanes added (`devlanes`), waits for a starting service or a frozen lane (`devlanes-wait`), the connection to the service (`devlanes-connect`) and the service's own time (`devlanes-upstream`). Browser dev tools show these in the request's Timing tab. For a lane on a remote box, `devlanes-upstream` includes the connection to the box, which `devlanes-tunnel` estimates from its latest ping. Defaults to true; set false if a client or test compares response headers exactly.",
+          "examples": [
+            true,
+            false
+          ],
+          "markdownDescription": "Add a `Server-Timing` header to every response, after any the service sent, with the time devlanes added (`devlanes`), waits for a starting service or a frozen lane (`devlanes-wait`), the connection to the service (`devlanes-connect`) and the service's own time (`devlanes-upstream`). Browser dev tools show these in the request's Timing tab. For a lane on a remote box, `devlanes-upstream` includes the connection to the box, which `devlanes-tunnel` estimates from its latest ping. Defaults to true; set false if a client or test compares response headers exactly.",
           "type": "boolean"
         },
         "via": {
@@ -1522,6 +1533,7 @@
         "http_port": 80,
         "https_port": 443,
         "lan": false,
+        "server_timing": true,
         "via": true
       },
       "description": "Ports of the daemon's HTTP/HTTPS proxy, which serves every `hosts` entry, and whether other devices on the network may connect to it.",
@@ -1530,6 +1542,7 @@
           "http_port": 80,
           "https_port": 443,
           "lan": false,
+          "server_timing": true,
           "via": true
         }
       ],

@@ -76,7 +76,8 @@ async fn fixture(ipv6: bool, websocket: bool) -> Result<Running> {
                                 // The body never ends. Receiving this frame proves the proxy does not collect it.
                                 std::future::pending::<()>().await;
                             } else {
-                                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", request.len());
+                                let timing = if request.starts_with(b"GET /timed ") { "Server-Timing: app;dur=7\r\n" } else { "" };
+                                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n{timing}\r\n", request.len());
                                 socket.write_all(head.as_bytes()).await?;
                                 socket.write_all(&request).await?;
                             }
@@ -484,40 +485,83 @@ async fn unknown_host_suggests_routes() -> Result {
     .await?
 }
 
-/// Forwarded responses name devlanes in `Via`, marked for box routes, unless turned off.
+/// A fixed round trip for the box of lane `acme@0`.
+struct FixedLatency;
+
+impl devlanes_proxy::BoxLatency for FixedLatency {
+    /// 25 ms for `acme@0`, unknown for other lanes.
+    fn round_trip(&self, owner: &str) -> Option<Duration> {
+        (owner == "acme@0").then_some(Duration::from_millis(25))
+    }
+}
+
+/// The `Server-Timing` field values of a response, in order.
+fn server_timing(response: &hyper::Response<Incoming>) -> Vec<&str> {
+    response
+        .headers()
+        .get_all("server-timing")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .collect()
+}
+
+/// Forwarded responses name devlanes in `Via`, marked for box routes, and carry
+/// devlanes' `Server-Timing` after the service's own, unless both are turned off.
 #[tokio::test]
-async fn via_header() -> Result {
+async fn via_and_server_timing_headers() -> Result {
     tokio::time::timeout(Duration::from_secs(10), async {
         let upstream = fixture(false, false).await?;
         let mut remote = Route::new("box.lane.localhost", upstream.address);
         remote.remote = true;
+        remote.owner = Some("acme@0".into());
         let table = RouteTable::new(vec![
             Route::new("app.lane.localhost", upstream.address),
             remote,
         ])?;
-        let running = run_proxy(Proxy::new(ProxyConfig::default(), table.clone()), None).await?;
+        let config = ProxyConfig {
+            latency: Some(Arc::new(FixedLatency)),
+            ..ProxyConfig::default()
+        };
+        let running = run_proxy(Proxy::new(config, table.clone()), None).await?;
         for (host, via) in [
             ("app.lane.localhost", "1.1 devlanes.run"),
             ("box.lane.localhost", "1.1 devlanes.run (remote)"),
         ] {
-            let response =
-                request(TcpStream::connect(running.address).await?, host, "/", &[]).await?;
+            let response = request(
+                TcpStream::connect(running.address).await?,
+                host,
+                "/timed",
+                &[],
+            )
+            .await?;
             assert_eq!(response.status(), 200);
             assert_eq!(response.headers()["via"], via);
+            let timing = server_timing(&response);
+            assert_eq!(timing.len(), 2, "{timing:?}");
+            assert_eq!(timing[0], "app;dur=7");
+            assert!(timing[1].starts_with("devlanes;dur="), "{timing:?}");
+            for metric in ["devlanes-connect;dur=", "devlanes-upstream;dur="] {
+                assert!(timing[1].contains(metric), "{metric} in {timing:?}");
+            }
+            let tunnel = timing[1].contains("devlanes-tunnel;dur=25.0;");
+            assert_eq!(tunnel, host.starts_with("box."), "{timing:?}");
         }
         let config = ProxyConfig {
             via: false,
+            server_timing: false,
             ..ProxyConfig::default()
         };
         let quiet = run_proxy(Proxy::new(config, table), None).await?;
         let response = request(
             TcpStream::connect(quiet.address).await?,
             "app.lane.localhost",
-            "/",
+            "/timed",
             &[],
         )
         .await?;
+        assert_eq!(response.status(), 200);
         assert!(!response.headers().contains_key("via"));
+        assert_eq!(server_timing(&response), ["app;dur=7"]);
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await?
@@ -552,7 +596,16 @@ async fn starting_requests_wait_for_ready() -> Result {
         let mut ready = route.clone();
         ready.state = RouteState::Ready;
         proxy.replace_routes(RouteTable::new(vec![ready])?);
-        assert_eq!(pending.await??.status(), 200);
+        let response = pending.await??;
+        assert_eq!(response.status(), 200);
+        // The wait is the proxy's, not the service's.
+        let timing = server_timing(&response).join(", ");
+        let waited: f64 = timing
+            .split(", ")
+            .find_map(|metric| metric.strip_prefix("devlanes-wait;dur="))
+            .ok_or_else(|| format!("no wait in {timing}"))?
+            .parse()?;
+        assert!(waited >= 200.0, "{timing}");
 
         let limits = ProxyLimits {
             start_wait: Duration::from_millis(100),
