@@ -1,107 +1,118 @@
+<p align="center">
+   <b>Using devlanes?</b> Please consider <a href="https://github.com/sponsors/arthurfiorette" target="_blank">donating</a> to support my open source work ❤️
+  <br />
+  <sup>
+   Help devlanes grow! Star and share this amazing repository with your friends and co-workers!
+  </sup>
+</p>
+
+<br />
+
+<p align="center" title="devlanes">
+  <a href="https://devlanes.run" target="_blank" rel="noopener noreferrer">
+    <img src="https://devlanes.run/assets/banner.png" alt="devlanes: Sandboxes for your agents. localhost for you." />
+  </a>
+</p>
+
+<br />
+
+<p align="center">
+  <a title="Apache-2.0 license" target="_blank" href="https://github.com/devlanes-run/devlanes/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/devlanes-run/devlanes"></a>
+  <a title="Latest release" target="_blank" href="https://github.com/devlanes-run/devlanes/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/devlanes-run/devlanes"></a>
+  <a title="CI" target="_blank" href="https://github.com/devlanes-run/devlanes/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/devlanes-run/devlanes/ci.yml?branch=main&label=ci"></a>
+  <a title="npm package" target="_blank" href="https://www.npmjs.com/package/devlanes"><img alt="Downloads" src="https://img.shields.io/npm/dw/devlanes?style=flat"></a>
+  <a title="Last commit" target="_blank" href="https://github.com/devlanes-run/devlanes/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/devlanes-run/devlanes"></a>
+</p>
+
+<br />
+<br />
+
 # devlanes
 
-devlanes runs a project's dev environment once per Git worktree on macOS, Linux and Windows 11. Each worktree is a lane with its own ports, hostnames and data; a per-user daemon owns the processes and the CLI and TUI are its clients. devlanes is in beta.
+> Sandboxes for your agents. localhost for you.
 
-## Install
+<br />
+
+devlanes runs your dev stack once per Git worktree, so you and your coding agents can work on different branches at the same time. Each worktree gets a lane with its own ports, HTTPS hostnames and data. Lanes run on your machine or on a remote one, and open in your browser either way.
+
+It runs on macOS, Linux and Windows 11, and it is in beta.
+
+<br />
+
+- [Read the docs.](https://devlanes.run/docs/)
+- [Browse the examples.](https://devlanes.run/examples/)
+
+<br />
+
+## Why devlanes
+
+- [A lane per worktree](https://devlanes.run/docs/learn/worktrees/): the main branch at `https://myapp.localhost`, a feature branch at `https://myapp1.localhost`, each on its own ports.
+- [HTTPS hostnames](https://devlanes.run/docs/concepts/hostnames-and-https/) with certificates your browser trusts, and no port to remember.
+- [A database per lane](https://devlanes.run/docs/learn/databases/): one Postgres container, and a database in it for each lane.
+- [Coding agents](https://devlanes.run/docs/how-to/agents/set-up/) start, test and stop their own lane through a skill or an MCP server, and leave yours alone.
+- [Remote boxes](https://devlanes.run/docs/learn/remote/): run the lanes on a VPS, a container or a codespace, and open them under the same hostnames.
+- [One daemon](https://devlanes.run/docs/concepts/daemon/) runs the processes, so they keep running after you close the terminal. A CLI and a TUI talk to it.
+
+## Get started
+
+Paste this into your coding agent:
+
+```text
+Install the devlanes skill with `npx skills add devlanes-run/devlanes --skill devlanes`. Then install devlanes on this machine if it is missing, set it up for this repository, start it and give me the URL of each service.
+```
+
+Or install it yourself, on macOS and Linux:
 
 ```sh
-brew install devlanes-run/tap/devlanes
-npm install -g devlanes
-uv tool install devlanes
-cargo binstall --git https://github.com/devlanes-run/devlanes devlanes
 curl -fsSL https://devlanes.run/install.sh | sh
 ```
 
-These install release builds for macOS or Linux (glibc), arm64 or x86_64. `pipx install devlanes` works like uv, and `pip install devlanes` installs into a virtual environment; the update notice recognises pip only there, not in `pip install --user` or a system Python. Homebrew, npm, PyPI and `install.sh` install both `devlanes` and the `devlanes-hosts` helper; cargo binstall installs `devlanes`, and `cargo binstall --git https://github.com/devlanes-run/devlanes devlanes-hosts-helper` adds the helper. To build from source instead:
-
-```sh
-cargo install --locked --git https://github.com/devlanes-run/devlanes devlanes devlanes-hosts-helper
-```
-
-On Windows 11 24H2 or later, x64 or arm64, install from PowerShell; npm, uv and cargo binstall work there too. [Windows](https://devlanes.run/docs/reference/windows/) lists the requirements and what differs:
+On Windows 11:
 
 ```powershell
 irm https://devlanes.run/install.ps1 | iex
 ```
 
-Both scripts install the latest release and verify the archive against the release's `SHA256SUMS`. `install.sh` installs to `~/.local/bin`; `DEVLANES_INSTALL_SUDO=1` allows sudo for a directory you can't write. They take a channel and a directory, and hand an existing install there to `devlanes update`:
+Homebrew, npm, uv and cargo work too. [Install devlanes](https://devlanes.run/docs/install/) has them, along with the steps that follow the install.
 
-```sh
-curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next    # latest build of main
-curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir ~/bin
-```
-
-```powershell
-iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
-iex "& {$(irm https://devlanes.run/install.ps1)} -Dir C:\tools\devlanes"
-```
-
-`devlanes update` installs new releases the way devlanes was installed, and a build of `main` updates to the latest build of `main`. devlanes installs and updates to the latest release only. Installing an older release is not recommended; if you need one, use the npm or PyPI package with that version (`npm install -g devlanes@X.Y.Z`, `uv tool install devlanes==X.Y.Z` or `pipx install devlanes==X.Y.Z`). [Update and uninstall](https://devlanes.run/docs/how-to/update/) has the details.
-
-[packaging](packaging/README.md) describes the release pipeline.
-
-`devlanes uninstall` stops the daemon, removes its login service and what `devlanes setup` changed, removes devlanes the way it was installed, and asks before deleting `~/.devlanes`; `--dry-run` shows the plan first.
-
-### Shorter name
-
-devlanes ships no `dl` command. To type `dl`, add an alias to your shell config, after the line that loads devlanes completions, so the alias completes like `devlanes`:
-
-```sh
-# zsh, ~/.zshrc
-alias dl=devlanes
-compdef dl=devlanes
-
-# bash, ~/.bashrc
-alias dl=devlanes
-complete -o nospace -o bashdefault -F _clap_complete_devlanes dl
-
-# fish, ~/.config/fish/config.fish (fish aliases inherit the command's completions)
-alias dl devlanes
-```
-
-## Usage
-
-```sh
-devlanes start              # infra, setup, tasks, then services of this worktree's lane
-devlanes status
-devlanes logs api -f
-devlanes                    # the TUI
-```
-
-[Install devlanes](https://devlanes.run/docs/install/) and [the first lesson](https://devlanes.run/docs/learn/first-service/) walk from install to two lanes. The [CLI reference](https://devlanes.run/docs/reference/cli/) and the [config reference](https://devlanes.run/docs/reference/config/) are generated from the code, and tests fail when they fall behind.
-
-[Set up a coding agent](https://devlanes.run/docs/how-to/agents/set-up/) covers the devlanes skill for agents and `devlanes mcp`, an MCP server for Claude Code, Codex, OpenCode, Cursor, VS Code, Claude Desktop and Goose.
-
-`devlanes --help` lists the commands, and `devlanes <command> --help` describes each one. See [design](CONTRIBUTING.md#design), [development conventions](AGENTS.md) and [fixtures](fixtures/README.md). mprocs and dekit informed terminal interaction; pitchfork, process-compose, devenv, Coasts, portless, kache, overmind and Conductor informed process and worktree workflows.
-
-## Config example
+## A project in one file
 
 ```yaml
-# Project name shared by every worktree of this repository.
-project: acme
-# Long-running processes, started together after infra and setup.
+# devlanes.yaml
+project: myapp
+
 services:
   api:
-    # Runs a script from package.json with the project's package manager.
     run_script:
       file: api/package.json
       name: dev
-    # HTTPS hostnames routed by the proxy. lane.domain is acme.localhost or acme<N>.localhost.
     hosts: "api.${{ lane.domain }}"
   web:
-    # Adds Vite's port and host flags to the command.
     preset: vite
     run_script:
       file: web/package.json
       name: dev
-    # Extra variables for this service; public_url is the API's https:// address in this lane.
     env:
       VITE_API_URL: "${{ services.api.public_url }}"
     hosts: "${{ lane.domain }}"
 ```
 
-In the worktree of lane 2 this serves `https://api.acme2.localhost` and `https://acme2.localhost`, each on its own allocated port. The excerpt comes from [minimal.yaml](fixtures/examples/minimal.yaml), which also has shared Postgres and a database per lane; [devlanes.yaml](fixtures/examples/devlanes.yaml) shows every form.
+```sh
+devlanes start
+```
+
+In the main worktree this serves `https://myapp.localhost` and `https://api.myapp.localhost`. In a second worktree the same file serves `https://myapp1.localhost` and `https://api.myapp1.localhost`, on other ports.
+
+## Documentation
+
+The [docs](https://devlanes.run/docs/) start with a [tour](https://devlanes.run/docs/learn/first-service/) that follows one project from a single service to lanes on another machine. `devlanes --help` lists the commands.
+
+## Contributing
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers building, testing and the design notes, and [AGENTS.md](AGENTS.md) has the conventions for people and agents working on the code.
+
+mprocs and dekit informed the terminal interaction. pitchfork, process-compose, devenv, Coasts, portless, kache, overmind and Conductor informed the process and worktree workflows.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Licensed under the **Apache-2.0 License**. See [`LICENSE`](LICENSE) for more information.
