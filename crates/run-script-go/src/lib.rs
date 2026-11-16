@@ -8,8 +8,9 @@
 //! everything after the package to the program, so no `--` is added. Running in
 //! the module's directory makes Go pick that `go.mod`, and any `go.work` above it.
 //!
-//! The package check ignores build constraints: a directory counts as a main
-//! package when one of its non-test `.go` files declares `package main`.
+//! A directory counts as a main package when one of its non-test `.go` files
+//! declares `package main`. Files marked `//go:build ignore` are skipped; other
+//! build constraints are not evaluated.
 //!
 //! [`GoPackages`] adapts [`plan`] to `devlanes_core::contrib::ScriptRunner`.
 
@@ -118,7 +119,7 @@ pub fn plan(request: &PackageRequest<'_>) -> Result<LaunchPlan, GoError> {
         return Err(GoError::NoMainPackage {
             file,
             package,
-            available: main_packages(&cwd)?,
+            available: main_packages(&cwd),
         });
     }
     let mut argv = vec!["go".to_owned(), "run".to_owned(), package.clone()];
@@ -149,6 +150,10 @@ fn package_segments(name: &str) -> Result<Vec<&str>, GoError> {
     }
     if name.contains('\\') {
         return invalid("use `/` to separate directories");
+    }
+    // On Windows `c:api` joins as a drive-relative path outside the module.
+    if name.contains(':') {
+        return invalid("`:` is not allowed in a package path");
     }
     if name.starts_with('/')
         || matches!(
@@ -226,35 +231,30 @@ fn is_main_package(dir: &Path) -> Result<bool, GoError> {
 }
 
 /// Main packages at the module root and directly under `cmd/`, for the error.
-fn main_packages(module: &Path) -> Result<Vec<String>, GoError> {
+/// Best effort: unreadable entries are left out so the hint never hides the
+/// missing package.
+fn main_packages(module: &Path) -> Vec<String> {
     let mut found = Vec::new();
-    if is_main_package(module)? {
+    if is_main_package(module).unwrap_or_default() {
         found.push(".".to_owned());
     }
-    let cmd = module.join(CMD_DIR);
-    let Ok(entries) = std::fs::read_dir(&cmd) else {
-        return Ok(found);
+    let Ok(entries) = std::fs::read_dir(module.join(CMD_DIR)) else {
+        return found;
     };
-    let mut names = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| GoError::Read {
-            path: cmd.clone(),
-            error,
-        })?;
-        if let Some(name) = entry.file_name().to_str()
-            && is_main_package(&entry.path())?
-        {
-            names.push(name.to_owned());
-        }
-    }
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|entry| is_main_package(&entry.path()).unwrap_or_default())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+        .collect();
     names.sort();
     found.extend(names.iter().map(|name| render_package(&[CMD_DIR, name])));
-    Ok(found)
+    found
 }
 
 /// Reads the package name of a Go file: the first token after blank lines,
 /// `//` comments and `/* */` comments must be `package <name>`. Stops at the
-/// clause, so large files are not read whole.
+/// clause, so large files are not read whole. `None` for a file with a
+/// `//go:build ignore` line before the clause.
 fn package_clause(path: &Path) -> Result<Option<String>, GoError> {
     let read = |error| GoError::Read {
         path: path.to_path_buf(),
@@ -286,7 +286,15 @@ fn package_clause(path: &Path) -> Result<Option<String>, GoError> {
                 }
             }
             line = line.trim_start();
-            if line.is_empty() || line.starts_with("//") {
+            if line.is_empty() {
+                break;
+            }
+            if line.starts_with("//") {
+                // Generators run by `go generate` carry this and are never built.
+                let comment = line.trim_end();
+                if comment == "//go:build ignore" || comment.starts_with("//go:build ignore ") {
+                    return Ok(None);
+                }
                 break;
             }
             if let Some(rest) = line.strip_prefix("/*") {

@@ -31,7 +31,7 @@ Go reads `SSL_CERT_FILE` on Linux and the other Unix systems except macOS. macOS
 
 ## Behaviour
 
-Without `platform`, Go claims a unit whose `run_script` source is `go.mod`, or whose working directory contains `go.mod` or `go.work`. The claim sits below node's and rust's, so a directory that also has `package.json` or `Cargo.toml` stays with that platform.
+Without `platform`, Go claims a unit whose `run_script` source is `go.mod`, or whose working directory contains `go.mod` or `go.work`. Only the working directory itself is checked; parent directories are not searched. The claim sits below node's and rust's, so a directory that also has `package.json` or `Cargo.toml` stays with that platform. It sits above python's, so a directory with both `pyproject.toml` and `go.mod` is Go.
 
 ## License
 

@@ -1277,7 +1277,7 @@ async fn detection_precedence() {
 #[tokio::test]
 /// The real platform crates together: bun beats node only with a bun marker,
 /// deno beats node with a deno config, rust yields to node in mixed directories,
-/// go yields to rust, and `platform: bun|deno|go` parse as explicit values.
+/// go yields to rust and beats python, and `platform: bun|deno|go` parse as explicit values.
 async fn platform_crates_together() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
@@ -1298,6 +1298,8 @@ async fn platform_crates_together() {
     write("gomod/go.mod", "module example.invalid/acme\n");
     write("gocrate/go.mod", "module example.invalid/acme\n");
     write("gocrate/Cargo.toml", "[package]\n");
+    write("gopy/go.mod", "module example.invalid/acme\n");
+    write("gopy/pyproject.toml", "[project]\n");
     let config = parse(
         r#"
 project: demo
@@ -1312,6 +1314,7 @@ services:
   mixed: { run: dev, cwd: mixed }
   gomod: { run: go run ., cwd: gomod }
   gocrate: { run: dev, cwd: gocrate }
+  gopy: { run: dev, cwd: gopy }
   forced-go: { run: dev, platform: go }
   forced-node: { run: dev, cwd: bunlock, platform: node }
   forced-bun: { run: dev, platform: bun }
@@ -1352,6 +1355,7 @@ services:
         ("mixed", "node"),
         ("gomod", "go"),
         ("gocrate", "rust"),
+        ("gopy", "go"),
         ("forced-go", "go"),
         ("forced-node", "node"),
         ("forced-bun", "bun"),

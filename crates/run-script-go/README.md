@@ -40,7 +40,7 @@ A bare name is a directory under `cmd/`. `.` or a name with a `/` (`cmd/api`, `.
 
 ## Behaviour
 
-A package is a main package when one of its `.go` files, other than `_test.go` files, declares `package main`. Build constraints are not evaluated. Arguments follow the package without `--`, because `go run` hands everything after the package to the program. `go.work` is not a `run_script` file: `go run` finds it by walking up from the module's directory.
+A package is a main package when one of its `.go` files, other than `_test.go` files, declares `package main`. Files marked `//go:build ignore`, such as `go generate` programs, do not count; other build constraints are not evaluated. Arguments follow the package without `--`, because `go run` hands everything after the package to the program. `go.work` is not a `run_script` file: `go run` finds it by walking up from the module's directory.
 
 `go run` exits with status 1 when the program fails, so the unit's exit code is not the program's own. The first `go run` in a lane compiles the program and can be slow; raise the service's ready timeout if it fails before the build finishes.
 

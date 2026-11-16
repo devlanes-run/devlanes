@@ -79,7 +79,7 @@ services:
     run:
       - air
       - --build.cmd
-      - go build -o ${{ lane.data_path }}/api ./cmd/api
+      - go build -o "${{ lane.data_path }}/api" ./cmd/api
       - --build.entrypoint
       - ${{ lane.data_path }}/api
 ```
@@ -89,8 +89,6 @@ A Rust service, or a Go service run with `go run`, rebuilds when you restart it:
 ```console
 $ devlanes restart api
 ```
-
-Go's build cache and module cache are shared by every worktree, and Go keeps them correct when lanes build at the same time.
 
 ## If devlanes picks the wrong runtime
 
@@ -104,7 +102,7 @@ services:
 
 ## If a service calls another hostname over HTTPS
 
-devlanes points these runtimes at its CA, so remove any setting that turns certificate checks off. Go on macOS and Windows reads the system store, which `devlanes setup` fills. [Trust the devlanes CA](../hostnames/trust-the-ca.md) covers other runtimes.
+devlanes points these runtimes at its CA, so remove any setting that turns certificate checks off. [Trust the devlanes CA](../hostnames/trust-the-ca.md) covers other runtimes.
 
 Go programs built without cgo look lane hostnames up in DNS; [Fix programs that cannot resolve *.localhost](../hostnames/resolve-localhost.md) makes them resolve.
 

@@ -30,14 +30,20 @@ fn request<'a>(
     }
 }
 
-/// A module with a root program, programs under `cmd/` whose package clause
-/// follows comments, a library and a module nested in a subdirectory.
+/// A library module with a `go generate` program at the root, programs under
+/// `cmd/` whose package clause follows comments, and a program module nested
+/// in a subdirectory.
 fn fixture(root: &Path) {
     write_files(
         root,
         &[
             ("go.mod", "module example.invalid/acme\n\ngo 1.22\n"),
-            ("main.go", "package main\n\nfunc main() {}\n"),
+            ("acme.go", "package acme\n"),
+            (
+                "gen.go",
+                "// Code generator.\r\n\r\n//go:build ignore\r\n\r\npackage main\r\n",
+            ),
+            ("cmd/README.md", "# Programs\n"),
             (
                 "cmd/api/main.go",
                 "\u{feff}// Copyright Acme.\n/* Licensed under\n   Apache-2.0. */ /* x */\n\n//go:build !windows\n\npackage main // the server\n",
@@ -64,7 +70,6 @@ fn renders_go_run() {
     let mut rendered = String::new();
     for (source, name, args) in [
         ("go.mod", "api", &args[..]),
-        ("go.mod", ".", &[][..]),
         ("go.mod", "cmd/web", &[][..]),
         ("./go.mod", "./cmd/api/", &[][..]),
         ("go.mod", "cmd/../cmd/web", &[][..]),
@@ -85,7 +90,6 @@ fn renders_go_run() {
     }
     insta::assert_snapshot!(rendered, @r#"
     go.mod#api: cwd="" argv=go run ./cmd/api --port 20010
-    go.mod#.: cwd="" argv=go run .
     go.mod#cmd/web: cwd="" argv=go run ./cmd/web
     ./go.mod#./cmd/api/: cwd="" argv=go run ./cmd/api
     go.mod#cmd/../cmd/web: cwd="" argv=go run ./cmd/web
@@ -115,6 +119,7 @@ fn missing_main_package() {
     };
     insta::assert_snapshot!(
         [
+            message("go.mod", "."),
             message("go.mod", "worker"),
             message("go.mod", "tool"),
             message("go.mod", "internal/store"),
@@ -122,9 +127,10 @@ fn missing_main_package() {
         ]
         .join("\n"),
         @r"
-    `<lane>/go.mod` has no main package `./cmd/worker` (main packages: ., ./cmd/api, ./cmd/web)
-    `<lane>/go.mod` has no main package `./cmd/tool` (main packages: ., ./cmd/api, ./cmd/web)
-    `<lane>/go.mod` has no main package `./internal/store` (main packages: ., ./cmd/api, ./cmd/web)
+    `<lane>/go.mod` has no main package `.` (main packages: ./cmd/api, ./cmd/web)
+    `<lane>/go.mod` has no main package `./cmd/worker` (main packages: ./cmd/api, ./cmd/web)
+    `<lane>/go.mod` has no main package `./cmd/tool` (main packages: ./cmd/api, ./cmd/web)
+    `<lane>/go.mod` has no main package `./internal/store` (main packages: ./cmd/api, ./cmd/web)
     `<lane>/lib/go.mod` has no main package `.` (no main package at the module root or under cmd/)
     "
     );
@@ -144,6 +150,8 @@ fn rejects_names() {
         "..",
         "cmd/../../api",
         "cmd\\api",
+        "c:api",
+        "cmd/c:api",
     ] {
         assert!(
             matches!(

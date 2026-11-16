@@ -113,5 +113,11 @@ async fn env() {
     let draft = apply("go", &shell, &ca).await;
     assert_eq!(draft.env["SSL_CERT_FILE"], "/ca/bundle.pem");
     assert_eq!(draft.notes.len(), 1);
+    assert!(draft.notes[0].contains("/corp.pem"), "{:?}", draft.notes);
+
+    let same = BTreeMap::from([("SSL_CERT_FILE".to_owned(), "/ca/bundle.pem".to_owned())]);
+    let draft = apply("go", &same, &ca).await;
+    assert_eq!(draft.env["SSL_CERT_FILE"], "/ca/bundle.pem");
+    assert!(draft.notes.is_empty());
     assert!(apply("rust", &BTreeMap::new(), &ca).await.env.is_empty());
 }

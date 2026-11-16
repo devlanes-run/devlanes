@@ -3,4 +3,4 @@ cargo/devlanes: patch
 cargo/devlanes-platform-go: patch
 ---
 
-Added the `go` platform, which gives Go services the devlanes CA through `SSL_CERT_FILE`.
+Added `platform: go`, detected from `go.mod` or `go.work`, which gives Go services the devlanes CA on Linux.
