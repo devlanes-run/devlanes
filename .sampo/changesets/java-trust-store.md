@@ -1,11 +1,11 @@
 ---
-cargo/devlanes: patch
-cargo/devlanes-platform-java: patch
-cargo/devlanes-pki: patch
-cargo/devlanes-core: patch
-cargo/devlanes-resolve: patch
-cargo/devlanes-daemon: patch
-cargo/devlanes-cli: patch
+cargo/devlanes: minor
+cargo/devlanes-platform-java: minor
+cargo/devlanes-pki: minor
+cargo/devlanes-core: minor
+cargo/devlanes-resolve: minor
+cargo/devlanes-daemon: minor
+cargo/devlanes-cli: minor
 ---
 
 Added `platform: java`, so JVMs that devlanes starts, `devlanes exec` and `devlanes with` trust the devlanes CA.
