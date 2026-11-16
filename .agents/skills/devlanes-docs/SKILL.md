@@ -45,7 +45,8 @@ That splits the writing into two registers. Prose pages (Learn, how-to guides, c
 | A changed behaviour | The sentence that describes it, on the page that owns it. Capture any output it changes again. |
 | A limit, a timing, a format, an error message | Reference or a row in `troubleshooting.md`. A concept page may state the scale of a timing it owns, once. |
 | Something devlanes leaves out by design | The concept page of that subject, with the reason. |
-| A feature devlanes lacks | One entry on `reference/limits.md` with its issue. |
+| A feature devlanes lacks | One entry on `reference/limits.md` with its issue. When it is an option missing from a design choice, the concept page explains the choice and the limits page lists only the missing option. |
+| Something one OS cannot do | The OS tab of the page that owns the behaviour, and `reference/windows.md` when the OS is Windows. |
 | A change in how devlanes is built or reasons | A concept page. |
 | A removed feature | Delete every mention. Do not say it was removed. |
 | A bug fix | Nothing, unless a page described the bug. |
@@ -66,7 +67,7 @@ Every page has one kind, set in its frontmatter as `kind`.
 
 **Reference** (`docs/reference/`, `docs/errors/`). Description only, in the same layout for every entry, complete and without advice. Tables and lists are fine here.
 
-`troubleshooting.md` is one page indexed by the symptom or message a reader sees, each row linking the page that fixes it.
+`troubleshooting.md` is one page indexed by the symptom or message a reader sees, each row linking the page that fixes it. A row links a how-to guide, a reference entry or the config reference, whichever holds the fix. A row whose message already names the fix links nothing; it never links a page that does not cover it.
 
 A page that mixes kinds is the main way these docs went wrong before. Explanation inside a how-to guide, steps inside a concept and option lists inside a Learn page each move to the page of their kind, with a link left behind.
 
@@ -147,7 +148,7 @@ The docs describe devlanes as it is in the release they ship with.
 
 - No history: no "now", "no longer", "new", "previously", "as of version", and no mention of a feature, command, key or file that was removed or renamed.
 - No plans. What devlanes does not do is one entry on `reference/limits.md` with its issue link, and nothing more.
-- No internals: crate names, protocol details, database tables, span names. A concept page explains behaviour a user can observe. Which data leaves a machine is such behaviour; the names of messages and fields are not.
+- No internals: crate names, protocol details, database tables, span names. A concept page explains behaviour a user can observe. Which data leaves a machine is such behaviour; the names of messages and fields that devlanes' processes send each other are not. The fields of `--json` output and of what a command prints are output, and reference pages list them.
 - No contributor material. That goes in `CONTRIBUTING.md`.
 - No account of how a page came to be, and no notes to other writers. A page is not a changelog.
 

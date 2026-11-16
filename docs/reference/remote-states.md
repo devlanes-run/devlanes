@@ -4,20 +4,41 @@ description: The states and warnings of a connection to a box, its timings, the 
 kind: reference
 ---
 
-`devlanes remote ls` lists each box this machine knows, with the state of its connection, what it mirrors and its warnings. `--json` prints the same fields. [Remote mirroring](../concepts/remote-mirroring.md) explains the connection, and [Security](../concepts/security.md) what pairing protects.
+`devlanes remote ls` lists each box this machine knows, with the state of its connection, what it mirrors and its warnings. `--json` prints the same entries; where its field names differ, the tables give both. [Remote mirroring](../concepts/remote-mirroring.md) explains the connection, and [Security](../concepts/security.md) what pairing protects.
+
+## Fields of a box
+
+| Field | Content |
+|---|---|
+| `host` | The name the box was connected by. |
+| `state` | The connection state, below. |
+| `transport` | `ssh`, or `command` for a box reached by a command. |
+| `address` | The name the box was last reached by. |
+| `version` | The box's release, as `devlanes VERSION`. In `--json`, `box.version`. |
+| `daemon_version` | The box's release label from its latest handshake, with `(linger off)` or `(daemon stops with the session)` when those apply. |
+| `connected_since` | How long the session has been up. In `--json`, `connected_since_ms`, a time in milliseconds. |
+| `last_connected_ms` | When the box last connected, in milliseconds. |
+| `https_port` | The port the box's proxy serves HTTPS on. |
+| `lanes` | How many lanes the box reports. |
+| `ports` | The mirrored ports, under [Mirrored ports](#mirrored-ports). |
+| `routes` | The hostnames routed to the box, under [Routes, skipped lanes and hostnames](#routes-skipped-lanes-and-hostnames). |
+| `skipped_lanes`, `skipped_hosts`, `chosen` | Under [Routes, skipped lanes and hostnames](#routes-skipped-lanes-and-hostnames). |
+| `syncs` | The synced folders, under [Synced folders](#synced-folders). |
+| `warnings` | Under [Warnings](#warnings). |
+| `box`, `registry`, `proxy`, `suffixes` | In `--json` only: what the box said about itself (`version`, `label`, `https_port`, `ports_range`), its lanes and units with their states, ports and hostnames, this machine's proxy ports for the box, and the name suffixes box hostnames must end in. |
 
 ## Connection states
 
 | State | Meaning | What follows it |
 |---|---|---|
 | `connecting` | An attempt to reach the box runs. `attempt` counts the attempts since the last connection. | `connected`, or one of the states below when the attempt fails. |
-| `connected` | A session with the box is up. `server` is the box's release. | `reconnecting` when the session ends. |
+| `connected` | A session with the box is up. `server` is the box's release label, with `(linger off)` or `(daemon stops with the session)` when the warnings below apply. | `reconnecting` when the session ends. |
 | `reconnecting` | The last attempt or session ended, and the next attempt waits `retry_in_ms`. `error` says why. Mirrored ports stay bound and hostnames stay routed. | The next attempt, on its own. |
-| `needs_auth` | Reconnecting needs a person: SSH asked for a password, a passphrase or a host key confirmation with no `devlanes remote connect` attached, or rejected credentials or a host key of a box that connected before. Nothing is retried. Mirrored ports and hostnames stay while the daemon runs. | `fix`: `devlanes remote connect BOX`, which shows the prompts. |
-| `needs_pairing` | The box serves only paired machines and has no pairing for this one: no code was given, the box refused the code, or it no longer accepts this machine's token. Nothing is retried. Mirrored ports and hostnames stay while the daemon runs. `pairing_paused` says when the box takes codes again, after too many wrong ones. | `fix`: `devlanes daemon pair` on the box, then `devlanes remote connect BOX --code CODE`. |
-| `failed` | Retrying cannot help: the release on the box speaks another protocol, the box takes no connections, SSH rejected credentials or a host key of a box that never connected, the box's host name did not resolve or devlanes is missing there before a first connection, or a starting daemon could not reconnect it. `error` says which. Mirrored ports and hostnames are removed. | `devlanes remote connect BOX` after the cause is fixed. |
-| `stopped` | The connection is being closed by `devlanes remote disconnect`. | The box leaves the list, or shows as `disconnected`. |
-| `disconnected` | A box that connected before and has no connection now. `last_connected_ms` says when it last did. | `devlanes remote connect BOX`. |
+| `needs_auth` | Reconnecting needs a person: SSH asked for a password, a passphrase or a host key confirmation with no `devlanes remote connect` attached, or rejected credentials or a host key of a box that connected before. Nothing is retried. Mirrored ports and hostnames stay while the daemon runs. `fix` reads `devlanes remote connect BOX`. | `connecting`, after the command in `fix`. |
+| `needs_pairing` | The box serves only paired machines and has no pairing for this one: no code was given, the box refused the code, or it no longer accepts this machine's token. Nothing is retried. Mirrored ports and hostnames stay while the daemon runs. `fix` reads `devlanes daemon pair on BOX, then devlanes remote connect BOX --code <code>`. After too many wrong codes, `pairing_paused` says `the box takes codes again in TIME`; in `--json`, `pairing_retry_at_ms` gives that time in milliseconds. | `connecting`, after the command in `fix`. |
+| `failed` | Retrying cannot help: the release on the box speaks another protocol, the box takes no connections ([`remote.allow_connections`](/docs/reference/config/user/remote/) is false there), SSH rejected credentials or a host key of a box that never connected, the box's host name did not resolve or devlanes is missing there before a first connection, or a starting daemon could not reconnect it. `error` says which. Mirrored ports and hostnames are removed. | `connecting`, after `devlanes remote connect BOX`. |
+| `stopped` | The connection is being closed by `devlanes remote disconnect`. | `disconnected`. |
+| `disconnected` | A box this machine knows with no connection now: one disconnected with `devlanes remote disconnect`, or a wanted box a starting daemon has not opened yet. | `connecting`, after `devlanes remote connect BOX`. |
 
 A box stays wanted from its first connection until `devlanes remote disconnect`. A starting daemon connects every wanted box again in the background, with no terminal attached, so a prompt there leaves it in `needs_auth` or `needs_pairing`.
 
@@ -77,7 +98,7 @@ Each entry of `routes` is a hostname this machine routes to the box, with the `u
 | `sign_in_needed` | The connection is in `needs_auth`. | [DL205 Box sign-in needed](../errors/box-sign-in-needed.md) |
 | `pairing_needed` | The connection is in `needs_pairing`. | [DL206 Box pairing needed](../errors/box-pairing-needed.md) |
 
-`skipped_lanes` lists the box's lanes that this machine does not mirror because another lane serves the same hostnames. Each has a `note` that names the lane in use and the command that switches. In `--json`, `cause` says which lane won:
+`skipped_lanes` lists the box's lanes that this machine does not mirror because another lane serves the same hostnames. In the list, each has a `note` that names the lane in use and the command that switches. In `--json`, each has `reason`, `cause`, `winner`, `winner_lane` and `can_use` instead, and `cause` says which lane won:
 
 | Cause | Lane in use |
 |---|---|
@@ -86,7 +107,30 @@ Each entry of `routes` is a hostname this machine routes to the box, with the `u
 | `local_stopped` | A stopped lane of this machine. |
 | `box_earlier` | The same lane of a box that connected earlier. |
 
-`chosen` lists the lanes `devlanes remote use` chose from this box. `local_lanes_not_in_use` lists this machine's stopped lanes whose hostnames a box's lane serves, with the command that switches back. `skipped_hosts` lists the box's hostnames this machine does not route: hostnames that are not valid, or not strictly below `localhost` or the configured [`hostnames.tld`](/docs/reference/config/user/hostnames/).
+| In the list | In `--json` | Content |
+|---|---|---|
+| `chosen` | `chosen_lanes` | The lanes `devlanes remote use` chose from this box. |
+| `local_lanes_not_in_use` | `yielded_local_lanes`, at the top level, each with `lane` and `winner` | This machine's stopped lanes whose hostnames a box's lane serves. The list adds the command that switches back. |
+| `skipped_hosts` | `skipped_hosts` | The box's hostnames this machine does not route: hostnames that are not valid, or not strictly below `localhost` or the configured [`hostnames.tld`](/docs/reference/config/user/hostnames/). |
+
+## Synced folders
+
+Each entry of `syncs` is one synced folder of a box unit, with its `lane`, `unit`, `from` on the box, `to` on this machine, counts of files `written`, `removed`, `pruned` and `compared`, the last 16 per-file `errors`, `error`, `updated_ms` and a `state`:
+
+| State | Meaning |
+|---|---|
+| `comparing` | Your machine sent its file list and the box compares it. |
+| `syncing` | The box sends the files that differ. |
+| `watching` | The folder matches the box and follows its changes. |
+| `interrupted` | The session ended during a pass. The next session starts it again. |
+| `stopped` | The box ended the folder's stream, and the folder is no longer followed. |
+| `failed` | Following the folder failed; `error` says why. It is tried again after 1 second, doubling up to 60 seconds. |
+
+Your machine follows at most 16 synced folders per box, and the box keeps its own limit too.
+
+## Machines connected to a box
+
+On the box, `devlanes daemon clients` lists each machine that is paired with it or connected now, connected ones first: its name and id, whether it is paired, how many pairings it has, when it paired and was last seen, and for each connection the address it comes from, since when, the machine's devlanes release, and how many ports it mirrors, how many of them it has bound and how many lanes it skips.
 
 ## Timings
 
@@ -96,7 +140,7 @@ Each entry of `routes` is a hostname this machine routes to the box, with the `u
 | A ping without an answer ends the session | After 20 seconds |
 | Handshake, and the first message of each new connection through the session | 15 seconds |
 | SSH connect timeout | 15 seconds |
-| One connection attempt, including the time a person takes to answer prompts | 3 minutes |
+| One connection attempt, including the time a person takes to answer prompts | 3 minutes. Then the prompt is dropped and the next attempt waits its turn, as after any failed attempt. |
 | An SSH or pairing code prompt nobody answers is cancelled | After 2 minutes |
 | `devlanes remote connect --background` returns | Once connected or failed, at most after 150 seconds |
 | Wait before the next attempt | 0.5 seconds, doubled after each failure up to 30 seconds, back to 0.5 seconds after a connection |
@@ -112,16 +156,19 @@ Each entry of `routes` is a hostname this machine routes to the box, with the `u
 
 | Rule | Value |
 |---|---|
+| Pairing off | With [`remote.require_pairing`](/docs/reference/config/user/remote/) set to false on the box, a machine needs no code or token. |
+| Connections off | With [`remote.allow_connections`](/docs/reference/config/user/remote/) set to false on the box, every machine is turned away and `devlanes daemon pair` gives no code. |
 | Code | 8 characters, shown as `XXXX-XXXX`, from digits and the letters A to Z without I, L, O and U |
-| Typing a code | Case and the dash do not matter. O reads as 0, I and L as 1. |
+| Typing a code | Case, spaces and the dash do not matter. O reads as 0, I and L as 1. |
 | Lifetime of a code | 10 minutes, and one use |
 | Codes valid at once | 16. Another code drops the oldest. |
 | A wrong, expired or used code | Voids every code that is still valid. |
 | Wrong codes | After 5 within 10 minutes, the box refuses every code and hands out none until the oldest of the 5 is 10 minutes old. |
+| A refused code or token | Logged in the box's daemon log with the machine's id, name and the address it came from. |
 | Token | `dl_rt_` and 256 random bits as hex, given to your machine for the code |
-| Token on your machine | Kept per box name in the state database of the devlanes home |
+| Token on your machine | Kept per box name in the state database of the devlanes home ([Files and folders](files.md)) |
 | Token on the box | Only its SHA-256 is stored, in the box's state database |
-| Pairings per machine on one box | 8, one per box name the machine connects by. A ninth drops the oldest. |
+| Pairings per machine on one box | 8, one per box name the machine connects by. A ninth drops the oldest, which the box logs. |
 | Machine id | `dl_cid_` and 256 random bits as hex, kept in the devlanes home across restarts |
 | `devlanes daemon revoke CLIENT` | Takes the id, the name, or a start of the id of at least `dl_cid_` and 4 hex digits that matches one machine. Deletes every pairing of that machine and ends its sessions. |
 | `devlanes daemon reset-state` on the box | Deletes every pairing, voids every code and ends every session. Wrong codes still count. |
@@ -132,7 +179,7 @@ A daemon with a code still valid does not exit when idle. [Connect to a box](../
 
 Your machine sends the box:
 
-- Its devlanes release and the protocol features it has.
+- Its devlanes release and which parts of the protocol it supports.
 - Its machine id and its host name.
 - The token the box gave it, or once a pairing code.
 - A ping every 10 seconds.
@@ -142,13 +189,14 @@ Your machine sends the box:
 
 The box sends your machine:
 
-- Its devlanes release, whether linger is off or its daemon ends with the SSH session, and the protocol features it has.
+- Before it accepts the token or a code: whether it takes connections, whether it needs a pairing code and why, and, when the protocols differ, its protocol version.
+- Once it accepts them: its devlanes release, whether linger is off or its daemon ends with the SSH session, and which parts of the protocol it supports.
 - The port its proxy serves HTTPS on and its [`ports.range`](/docs/reference/config/user/ports/).
-- A request for a pairing code, the token when it accepts the code, or the reason it refuses the code or the connection.
+- The token when it accepts a code, or the reason it refuses the code.
 - Its lanes, each with project name, lane name, number and domain, and every change to them.
 - Each unit of those lanes that is not hidden: its kind (service, container, task or external port), name and state, its ports with names and numbers, and its hostnames with the port each routes to.
 - An answer to each ping.
 - Whether it accepts each connection to a port, and the bytes of that connection.
 - For each synced folder: the service, the source folder's path on the box, its name and its ignore patterns, then the files that differ from your machine's copy, and deletions.
 
-Over SSH, the box also sees the address the connection comes from. Neither machine sends the other environments, variables, commands to run or the units marked hidden.
+Over SSH, the box also sees the address the connection comes from. Neither machine sends the other environments, variables, logs, commands to run, its CA or the units marked hidden.

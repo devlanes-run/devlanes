@@ -30,7 +30,7 @@ Lowercase words joined by hyphens. No page is named `agents.md` or `claude.md`: 
 - Link another docs page by its relative path with the `.md` extension: `[Throttling and freezing](../concepts/freezing.md)`. The website turns it into the route.
 - Link a heading with `#` and its slug: `../concepts/ports.md#named-ports`.
 - Link text names the page or the thing. Never "here" or "this page".
-- The config reference is generated on the website, so link it by route. A project file key lives at `/docs/reference/config/project/<top-level key>/`, such as `/docs/reference/config/project/services/` or `/docs/reference/config/project/infra/`, and a user config key at `/docs/reference/config/user/<top-level key>/`. The link text is the full dotted key in code, never its last part alone: [`services.<name>.ready`](/docs/reference/config/project/services/).
+- The config reference is generated on the website, so link it by route. A project file key lives at `/docs/reference/config/project/<top-level key>/`, such as `/docs/reference/config/project/services/` or `/docs/reference/config/project/infra/`, and a user config key at `/docs/reference/config/user/<top-level key>/`. The link text is the full dotted key in code, never its last part alone: [`services.<name>.ready`](/docs/reference/config/project/services/). A link to a whole reference uses its title: [Project file reference](/docs/reference/config/project/) or [User config reference](/docs/reference/config/user/).
 - A proxy error page is linked by its own title, such as [DL201 Service not running](../errors/service-idle.md).
 
 ## Terminal blocks

@@ -12,7 +12,7 @@ kind: reference
 |---|---|
 | `--read-only` | Offers only the tools of commands that change nothing. The `devlanes` tool refuses the other commands. |
 | `--path DIR` | Calls that name no `cwd` run in DIR. |
-| `--lane LANE` | The global option. Calls that name no `cwd` and no lane get `--lane LANE`. It has no effect together with `--path`. |
+| `--lane LANE` | The global option. Calls that name no `cwd` and no lane get `--lane LANE`. Ignored when `--path` is set. |
 
 A call runs in the first of these directories:
 
@@ -24,6 +24,10 @@ A call runs in the first of these directories:
 | 4 | The directory the agent host started the server in. |
 
 The server connects to no daemon itself. Each call runs the devlanes binary as a separate process with `--output agent`, in the call's directory, and that process starts the daemon as the CLI would. The server ends when the host closes its standard input, or on SIGTERM, SIGINT or SIGHUP; on Windows, when its console closes or the system shuts down.
+
+## Instructions
+
+When a host connects, the server sends instructions that hosts put in the agent's context. They say that a lane is a dev environment per worktree, that the common commands have tools and the `devlanes` tool runs the others, that dev servers, watchers, workers and tunnels run with `exec` and never with `&`, `nohup` or a background shell, that `start`, `restart`, `reload` and `wait` block and return what is ready at their timeout so `wait` continues, which tools read logs, status, failures, resource use and setup problems, that builds and tests run in the agent's own shell or with `with`, that `stop` with `mine` stops what the agent started, that `lane_clean`, `daemon_pair` and commands that delete data or reach other machines ask the user, and that `cwd` picks the worktree. With `--read-only`, the server sends instructions for the read-only tool set.
 
 ## Tools
 
@@ -102,20 +106,20 @@ The tools leave out `--output`, `--json`, `--quiet`, `--verbose`, `--budget`, `-
 
 ### Read-only tools
 
-Tools of commands that change nothing carry `readOnlyHint`. The others carry `destructiveHint`, and `start`, `stop` and `reload` also `idempotentHint`. With `--read-only` the server offers `status`, `logs`, `wait`, `debug_why`, `debug_errors`, `debug_top`, `url_print`, `url_ls`, `env_show`, `lane_ls`, `doctor` and the `devlanes` tool, which then runs only these commands:
+Every tool carries a `title` of `devlanes COMMAND` and `openWorldHint: false`. Tools of commands that change nothing carry `readOnlyHint`. The others carry `destructiveHint`, and `start`, `stop` and `reload` also `idempotentHint`. With `--read-only` the server offers `status`, `logs`, `wait`, `debug_why`, `debug_errors`, `debug_top`, `url_print`, `url_ls`, `env_show`, `lane_ls`, `doctor`, to a host with MCP Apps `app_snapshot` and `app_logs`, and the `devlanes` tool, which then runs only these commands:
 
 - `status`, `logs`, `wait`, `doctor`
 - `run --list`
 - `lane ls`, `lane clean --dry-run`
 - `debug why`, `debug errors`, `debug events`, `debug top`, `debug config`
-- `env show`, `env export`
+- `env show`
 - `url print`, `url open`, `url ls`
 - `infra status`, `infra logs`
 - `config check`, `config get`
 - `remote ls`, `remote sync`
-- `daemon status`, `daemon logs`, `daemon clients`
+- `daemon status`, `daemon logs` without `--follow`, `daemon clients`
 
-A refused command returns an error that tells the agent to ask the user to run it.
+`env export` counts as read-only too, and every tool refuses it ([Refused commands](#refused-commands)). A refused command returns an error that tells the agent to ask the user to run it.
 
 ### Refused commands
 
@@ -196,13 +200,15 @@ These commands ask the user through the host before they run:
 | `config set` of a `remote.*` key | `Set KEY to VALUE in the user config?` |
 | `config unset` of a `remote.*` key | `Remove KEY from the user config?` |
 
-A command that stops to ask for confirmation, such as `run` of a task with `confirm`, is asked about after its first run, and runs again with the flag it named when the user accepts. A read-only tool never confirms for the user.
+Each question ends, after a blank line, with the command line that will run. A command that stops to ask for confirmation, such as `run` of a task with `confirm`, is asked about after its first run: the question is the command line followed by the command's own message, and the command runs again with the flag it named when the user accepts. A read-only tool, and every tool of a server with `--read-only`, never answers a command's own question with yes.
+
+A host on MCP protocol 2026-07-28 or later gets the question as a result that asks for input, and sends the answer with a second call. Older hosts get it as an elicitation request.
 
 | Answer | Result |
 |---|---|
 | Accepted | The command runs with `--yes`. |
-| Declined | Nothing runs. The error reads `the user declined; devlanes COMMAND did not run`. |
-| Dismissed, or the call cancelled | Nothing runs. The error reads `the question to the user was cancelled; devlanes COMMAND did not run`. |
+| Declined | Nothing runs. The error reads `the user declined; devlanes ARGS did not run`, with the command line that would have run. |
+| Dismissed, or the call cancelled | Nothing runs. The error reads `the question to the user was cancelled; devlanes ARGS did not run`. |
 | The host cannot ask | Nothing runs. The error holds the question and tells the agent to ask the user, then call the tool again with `yes: true`, or with `--yes` through the `devlanes` tool. |
 
 A call with `yes` set, or with `--yes` in `args`, is not asked about.
@@ -213,7 +219,7 @@ A call first runs without sending an environment, so a lane that a shell started
 
 | OS | Environment |
 |---|---|
-| macOS, Linux | The login shell's, read once per server process. Skipped when `SHLVL` is above 0. |
+| macOS, Linux | The login shell's, read once per server process. Skipped when `SHLVL` is above 0, unless `DEVLANES_SHELL_ENV` is `1`; `DEVLANES_SHELL_ENV=0` skips it always. |
 | Windows | The server's own. With `DEVLANES_SHELL_ENV` set to `pwsh` or `powershell`, that PowerShell's, with its profile, except `PSModulePath`. |
 
 When the login shell's environment cannot be read, the lane gets the server's environment, and a unit that fails with `command not found on PATH` adds a line with the reason. [Environment variables](environment-variables.md) lists `DEVLANES_SHELL_ENV` and `DEVLANES_SHELL_ENV_TIMEOUT`.
@@ -232,7 +238,7 @@ When the server's environment names no coding agent, the commands get `AI_AGENT`
 
 ## MCP Apps
 
-A host that shows MCP Apps in the `text/html;profile=mcp-app` type gets a cards resource, `ui://devlanes/lane.html`, which the tools whose results can have a card name. The `view` of a result picks the card:
+A host that shows MCP Apps in the `text/html;profile=mcp-app` type gets a cards resource, `ui://devlanes/lane.html`, which the tools whose results can have a card name, the `devlanes` tool included. The `view` of a result picks the card:
 
 | Command | Card |
 |---|---|
