@@ -1,5 +1,11 @@
 # devlanes-resolve
 
+## 0.13.3 — 2026-11-16
+
+### Patch changes
+
+- [a8d1224a](https://github.com/devlanes-run/devlanes/commit/a8d1224ad8b106502f064e6ccdc45d5e4f8ae03b) Changed services and tasks to run without coding agents' markers such as `CLAUDECODE` and `AI_AGENT`.
+
 ## 0.13.1 ... 0.13.2 — 2026-11-16
 
 Version bump only, to follow other packages.
