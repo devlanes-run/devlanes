@@ -664,7 +664,9 @@ pub fn log_filename(unit: &str) -> String {
 }
 
 /// Atomically replaces each unit's artifact, so a rerun leaves no stale lines in
-/// it. Other files in `directory` stay: it is the user's folder.
+/// it. A unit with no lines gets no file, and its artifact from an earlier run is
+/// removed. Other files in `directory` stay: it is the user's folder. Returns the
+/// files written.
 #[cfg(not(target_family = "wasm"))]
 pub async fn write_log_artifacts(
     directory: &Path,
@@ -675,6 +677,19 @@ pub async fn write_log_artifacts(
     let mut first_error = None;
     for unit in logs {
         let path = directory.join(log_filename(&unit.unit));
+        if unit.lines.is_empty() {
+            // Removes a symlink itself, never its target.
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+            continue;
+        }
         let lines = unit.lines.clone();
         let target = path.clone();
         let parent = directory.to_path_buf();

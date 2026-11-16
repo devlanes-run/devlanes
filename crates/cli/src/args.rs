@@ -346,7 +346,7 @@ pub struct StopArgs {
     /// Only stop units this agent session started; with no units, those in the current project, or in every project outside one
     #[arg(long)]
     pub mine: bool,
-    /// Write each unit's log of this run to DIR as text files, for CI artifacts
+    /// Write each unit's log of this run to DIR as text files, for CI artifacts; a unit with no output gets no file
     #[arg(long, value_name = "DIR")]
     pub logs_dir: Option<PathBuf>,
 }
@@ -359,7 +359,7 @@ pub struct WithArgs {
     /// Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
     #[arg(long = "profile", value_name = "PROFILE")]
     pub profiles: Vec<String>,
-    /// Write the log of every unit and task the run started to DIR as text files, for CI artifacts; other files in DIR stay
+    /// Write the log of every unit and task the run started to DIR as text files, for CI artifacts; a unit with no output gets no file, and other files in DIR stay
     #[arg(long, value_name = "DIR")]
     pub logs_dir: Option<PathBuf>,
     /// Leave the lane running afterwards, for debugging

@@ -14,7 +14,7 @@ devlanes with [OPTIONS] [UNIT]... -- <COMMAND>...
 
 - `[UNIT]...`: Units to start ([lane:]unit, a glob or +tag, such as api, 2:web, api-\* or +backend) [default: what the lane ran before, else its default profile].
 - `--profile <PROFILE>`: Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env).
-- `--logs-dir <DIR>`: Write the log of every unit and task the run started to DIR as text files, for CI artifacts; other files in DIR stay.
+- `--logs-dir <DIR>`: Write the log of every unit and task the run started to DIR as text files, for CI artifacts; a unit with no output gets no file, and other files in DIR stay.
 - `--keep`: Leave the lane running afterwards, for debugging.
 - `--all-at-once`: Start every selected service immediately, bypassing the machine-wide start gate for this run.
 - `<COMMAND>...`: Command and arguments to run once the lane is ready.

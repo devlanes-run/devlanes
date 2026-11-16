@@ -52,7 +52,7 @@ $ devlanes with --profile e2e -- npm test
 
 ## If you need the logs afterwards
 
-`--logs-dir` writes one log file per service and task the run started, such as `unit-api.log`, into the folder you name. [Run tests in CI](ci.md) keeps that folder.
+`--logs-dir` writes one log file per service and task the run started, such as `unit-api.log`, into the folder you name. A unit that printed nothing gets no file. [Run tests in CI](ci.md) keeps that folder.
 
 ## Related
 
