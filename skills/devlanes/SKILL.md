@@ -113,7 +113,7 @@ devlanes with api --logs-dir devlanes-logs -- cargo test --test api
 - When a unit fails to start, it prints the failure and exits 1 without running the command.
 - Otherwise it exits with the command's code: 127 when the command was not found or could not start, 128+N when signal N ended it.
 - On a running lane it starts only the selected services the lane lacks, runs no tasks and afterwards stops only those. When `--profile` would give the running services other settings (a script, `env`, `infra`), it exits 1 before it starts anything: stop the lane, run in another worktree, or name the services instead of the profile.
-- `--keep` leaves what it started running. `--logs-dir DIR` writes the log of each unit and task it started to DIR.
+- `--keep` leaves what it started running. `--logs-dir DIR` writes the log of each unit and task it started to DIR; a unit with no output gets no file.
 
 ## One-off commands with the lane's environment
 

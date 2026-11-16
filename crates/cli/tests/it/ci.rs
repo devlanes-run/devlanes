@@ -1075,6 +1075,21 @@ async fn with_interrupted_start_and_missing_command() {
     );
 }
 
+/// One log line of `unit`, for artifact fixtures.
+fn logged(unit: &str, text: &str) -> UnitLogs {
+    UnitLogs {
+        unit: unit.into(),
+        lines: vec![LogLine {
+            unit: unit.into(),
+            seq: 1,
+            timestamp_ms: 1,
+            text: text.into(),
+            level: None,
+            styled: None,
+        }],
+    }
+}
+
 #[tokio::test]
 async fn artifact_names_are_safe_and_collision_free() {
     assert_ne!(log_filename("api/web"), log_filename("api_web"));
@@ -1082,29 +1097,49 @@ async fn artifact_names_are_safe_and_collision_free() {
     let temp = tempfile::tempdir().expect("tempdir");
     let files = write_log_artifacts(
         temp.path(),
+        &[logged("../../outside", "a"), logged("api_web", "b")],
+    )
+    .await
+    .expect("artifacts");
+    assert_eq!(files.len(), 2);
+    assert!(files.iter().all(|path| path.parent() == Some(temp.path())));
+    write_log_artifacts(temp.path(), &[logged("../../outside", "c")])
+        .await
+        .expect("repeat artifact write");
+}
+
+/// A unit that never printed (one that never started) gets no file, and a rerun
+/// removes the file an earlier run wrote for it.
+#[tokio::test]
+async fn artifacts_skip_units_without_lines() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let stale = temp.path().join(log_filename("worker"));
+    tokio::fs::write(&stale, "old run\n")
+        .await
+        .expect("fixture");
+    let files = write_log_artifacts(
+        temp.path(),
         &[
+            logged("api", "listening"),
             UnitLogs {
-                unit: "../../outside".into(),
+                unit: "worker".into(),
                 lines: vec![],
             },
             UnitLogs {
-                unit: "api_web".into(),
+                unit: "idle".into(),
                 lines: vec![],
             },
         ],
     )
     .await
     .expect("artifacts");
-    assert!(files.iter().all(|path| path.parent() == Some(temp.path())));
-    write_log_artifacts(
-        temp.path(),
-        &[UnitLogs {
-            unit: "../../outside".into(),
-            lines: vec![],
-        }],
-    )
-    .await
-    .expect("repeat artifact write");
+    assert_eq!(files, [temp.path().join(log_filename("api"))]);
+    assert_eq!(
+        tokio::fs::read_to_string(&files[0]).await.expect("log"),
+        "listening\n"
+    );
+    assert!(!stale.exists());
+    assert!(!temp.path().join(log_filename("idle")).exists());
 }
 
 #[tokio::test]
@@ -1164,7 +1199,7 @@ async fn stop_artifacts_and_summary_do_not_stop_daemon() {
         ),
         "{output}"
     );
-    // Every unit of the lane: `stop --logs-dir` saves the lane, not one invocation's units.
+    // Every unit of the lane with output: `stop --logs-dir` saves the lane, not one invocation's units.
     assert_eq!(outcome.log_files.len(), 3);
     assert_eq!(driver.calls, ["logs", "metrics", "stop"]);
 }

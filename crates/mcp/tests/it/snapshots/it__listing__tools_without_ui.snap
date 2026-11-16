@@ -231,7 +231,7 @@ expression: tools(&harness).await
         },
         "logs_dir": {
           "type": "string",
-          "description": "Write each unit's log of this run to DIR as text files, for CI artifacts"
+          "description": "Write each unit's log of this run to DIR as text files, for CI artifacts; a unit with no output gets no file"
         },
         "lane": {
           "type": "string",
@@ -391,7 +391,7 @@ expression: tools(&harness).await
         },
         "logs_dir": {
           "type": "string",
-          "description": "Write the log of every unit and task the run started to DIR as text files, for CI artifacts; other files in DIR stay"
+          "description": "Write the log of every unit and task the run started to DIR as text files, for CI artifacts; a unit with no output gets no file, and other files in DIR stay"
         },
         "keep": {
           "type": "boolean",

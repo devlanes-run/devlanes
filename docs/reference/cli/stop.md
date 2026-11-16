@@ -18,6 +18,6 @@ devlanes stop [OPTIONS] [UNIT]...
 
 - `[UNIT]...`: Units to stop ([lane:]unit, a glob or +tag, such as api, 2:web, api-\* or +backend) [default: the whole lane].
 - `--mine`: Only stop units this agent session started; with no units, those in the current project, or in every project outside one.
-- `--logs-dir <DIR>`: Write each unit's log of this run to DIR as text files, for CI artifacts.
+- `--logs-dir <DIR>`: Write each unit's log of this run to DIR as text files, for CI artifacts; a unit with no output gets no file.
 
 Every command also takes the [global options](README.md#global-options).
