@@ -2,7 +2,7 @@
 # Generates the npm packages for VERSION from the release archives in DIST_DIR:
 # OUT_DIR/devlanes-<platform>-<arch>/ (published as @devlanes/<platform>-<arch>)
 # and OUT_DIR/devlanes/ (the launcher). Publish the platform packages first.
-# Needs tar and, for the Windows archives, unzip.
+# Needs tar, python3 for the README and, for the Windows archives, unzip.
 set -eu
 
 if [ $# -ne 3 ]; then
@@ -76,7 +76,8 @@ done
 
 mkdir -p "$out/devlanes/bin"
 sed "s/\"0\.0\.0\"/\"$version\"/" "$here/devlanes/package.json" >"$out/devlanes/package.json"
-cp "$here/devlanes/README.md" "$out/devlanes/README.md"
+# The repository's README with the npm notes in it, so the npm page shows what GitHub does.
+python3 "$root/packaging/scripts/readme.py" "$here/notes.md" >"$out/devlanes/README.md"
 cp "$here/devlanes/bin/devlanes" "$out/devlanes/bin/devlanes"
 chmod 755 "$out/devlanes/bin/devlanes"
 cp "$here/devlanes/install.js" "$out/devlanes/install.js"
