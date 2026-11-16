@@ -14,7 +14,9 @@ Git's worktree command checks the branch out into a second folder next to the fi
 $ git worktree add ../myapp-checkout -b feat/checkout
 Preparing worktree (new branch 'feat/checkout')
 HEAD is now at 4e4341c Add api service
-$ cd ../myapp-checkout
+```
+
+```console title="~/dev/myapp-checkout"
 $ devlanes start --no-ui
 ✓ services ready
 myapp@1 · feat/checkout
@@ -22,11 +24,11 @@ myapp@1 · feat/checkout
   ✓  api  https://api.myapp1.localhost
 ```
 
-The worktree of the main branch is lane 0. This one became lane 1 when the start ran in it. The API has no dependencies to install, so the folder runs as it is; a project that has them can have devlanes install them when a lane starts, as [Services that find each other](connecting-services.md) shows.
+The primary worktree, here the one on the main branch, is lane 0. This one became lane 1 when the start ran in it. The API has no dependencies to install, so the folder runs as it is; a project that has them can have devlanes install them when a lane starts, as [Services that find each other](connecting-services.md) shows.
 
 ## Both lanes run at once
 
-The two lanes share no process and no folder. Each runs its own API from its own worktree.
+Each lane runs its own API from its own worktree, and the status lists every lane of the project from whichever worktree it runs in.
 
 ```console title="~/dev/myapp-checkout"
 $ devlanes status

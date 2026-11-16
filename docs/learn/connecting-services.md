@@ -8,7 +8,7 @@ myapp gains a web app: a page served by Vite that asks the API which lane it bel
 
 ## The web app takes the lane's domain
 
-The project file gains the web service and a task, a unit that runs a command to the end where a service keeps running. Where the web app needs the API's URL, the file holds an expression that reads the API's public URL. Like the expression in each hostname, devlanes works it out for each lane before a unit starts. [Expressions](../reference/expressions.md) lists what else an expression can read.
+The project file gains the web service and an install step for the packages. Where the web app needs the API's URL, the file holds an expression that reads the API's public URL. Like the expression in each hostname, devlanes works it out for each lane before the service starts. [Expressions](../reference/expressions.md) lists what else an expression can read.
 
 ```yaml devlanes
 # devlanes.yaml
@@ -43,11 +43,9 @@ The web service takes the lane's domain itself as its hostname. That domain has 
 
 ## A start that brings a lane up runs its tasks
 
-Both lanes were stopped the evening before, while they still ran the API alone. Then the web app was added on the main branch and merged into the checkout branch, and each lane was started again.
+Both lanes have been stopped since the evening before, when they still ran the API alone. That matters, because a start into a running lane adds the services it lacks and runs no tasks. The web app lands on the main branch and is merged into the checkout branch, and each lane starts again.
 
 ```console title="~/dev/myapp"
-$ devlanes stop
-stopped myapp@0:api
 $ devlanes start --no-ui
 ✓ install
 ✓ services ready
@@ -57,9 +55,7 @@ myapp@0 · main
   ✓  web  https://myapp.localhost
 ```
 
-The install is a `lane.create` task. It runs at each start that brings the lane up until it has succeeded once in that lane, and again after its entry in the file changes. Lane 0 had never run it, so it runs now, before any service starts, and one install at the root of the npm workspace covers the API and the web app.
-
-Here the start brings a stopped lane up. A start into a running lane adds the services it lacks, such as one just added to the file, and runs no tasks, so the web app would have started without its packages.
+The install is a task: a unit that runs a command and ends, where a service keeps running. As a `lane.create` task it runs at each start that brings the lane up until it has succeeded once in that lane, and again after its entry in the file changes. The task is new to the file, so lane 0 has never run it, and this start runs it before any service. One install at the root of the npm workspace covers the API and the web app.
 
 ## Each lane hands the web app its own API
 
@@ -79,7 +75,7 @@ That is the URL for a browser: the API's hostname, over HTTPS, through the proxy
 
 ## The page calls the URL it is handed
 
-Vite passes variables whose names start with `VITE_` to the page code, so the web app fetches whatever URL the lane gave it. The page and the API have different hostnames, so the browser reads the API's answer only if the API allows the page's origin. The API reads the list of its lane's origins from `DEVLANES_ORIGINS`, shown above, and checks each request against it.
+Vite passes variables whose names start with `VITE_` to the page code, so the web app fetches whatever URL its lane gives it. The page and the API have different hostnames, so the browser reads the API's answer only if the API allows the page's origin. The API reads its lane's origins from `DEVLANES_ORIGINS`, shown above, and checks each request against them.
 
 ```js
 // web/main.js
@@ -90,6 +86,9 @@ fetch(apiUrl)
   .then((res) => res.json())
   .then((body) => {
     el.textContent = `The API at ${apiUrl} answers from lane ${body.lane} (${body.lane_name}).`;
+  })
+  .catch((err) => {
+    el.textContent = `Could not reach the API at ${apiUrl}: ${err}`;
   });
 
 // api/server.mjs
@@ -107,16 +106,34 @@ The list holds the lane's hostnames over HTTPS and each of its ports at localhos
 
 ## A preset hands Vite its port as a flag
 
-Vite takes its port on its command line and ignores `PORT`. The preset line in the project file adds the flags to the dev script: the lane's port, a flag that makes Vite exit when that port is taken instead of moving to another one, and the loopback address.
+A preset is a set of flags and settings devlanes adds for a dev server it knows. Vite takes its port on its command line and ignores `PORT`, so the web service's preset adds the lane's port, a flag that makes Vite exit when that port is taken instead of moving to another one, and the loopback address.
 
-```console title="~/dev/myapp, on Windows 11"
-$ devlanes env show web
-DEVLANES_NPM_SCRIPT="vite --port 20062 --strictPort --host 127.0.0.1"
-PORT=20062
-VITE_API_URL=https://api.myapp.localhost
+```yaml devlanes
+services:
+  web:
+    preset: vite
+    run_script:
+      file: web/package.json
+      name: dev
 ```
 
-On Windows, `DEVLANES_NPM_SCRIPT` holds the script as devlanes runs it, which is where the flags show. The web app's package file still says plain vite. In lane 0 the web app has a port of its own and the API URL of lane 0.
+The web app's package file keeps its plain `vite` script; devlanes adds the flags when it runs it.
+
+## Both lanes stop before the database arrives
+
+The next change brings a task that has to run at each start, and only a start that brings a lane up runs tasks, so both lanes stop first.
+
+```console title="~/dev/myapp"
+$ devlanes stop
+stopped myapp@0:api
+stopped myapp@0:web
+```
+
+```console title="~/dev/myapp-checkout"
+$ devlanes stop
+stopped myapp@1:api
+stopped myapp@1:web
+```
 
 The API is about to keep data in Postgres, and [A database for each lane](databases.md) gives each lane a database of its own, so that a migration on one branch leaves the other's data alone.
 

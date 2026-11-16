@@ -57,7 +57,7 @@ myapp@0 · main
 
 The second line reads as lane 0 of myapp, on the main branch. A lane is one worktree's place to run the project, with a number, ports and hostnames of its own; [Every worktree gets a lane](worktrees.md) adds another.
 
-On an interactive terminal the start runs inside the TUI, a full-screen view of each lane and its output. The `--no-ui` flag prints the same start as text, which is the form these pages show.
+On an interactive terminal the start runs inside the TUI, a full-screen view of each lane and its output. The `--no-ui` flag prints the same start as text, which is the form these pages show. Starting again is safe: a second start finds the API running and starts nothing.
 
 ## The daemon owns the process, not the terminal
 
@@ -73,7 +73,7 @@ myapp
   api   ready  20060  0.0%  38.6 MiB  https://api.myapp.localhost
 ```
 
-The first table is the lane. Its URL is the lane's domain, which nothing answers on yet, since the API has a hostname under it. The second table lists the lane's units, which is what devlanes calls each service or command it runs in a lane: here only the API, ready on port 20060 behind the hostname the project file asked for. A stop ends the process and keeps both the port and the hostname for the next start.
+The first table is the lane. Its URL is the lane's domain, where nothing answers yet: the API asked for a hostname under it, not for the domain itself. The second table lists the lane's units, the things devlanes runs in a lane, of which a service is one kind: here only the API, ready on port 20060 behind the hostname the project file asked for. A stop ends the process and keeps both the port and the hostname for the next start.
 
 ## The output is kept
 
@@ -84,7 +84,7 @@ $ devlanes logs api --tail 10
 api#1 api listening on http://127.0.0.1:20060
 ```
 
-The prefix `api#1` marks the first line the API printed, and a later read can pick up after that line with `--cursor api#1`.
+The prefix `api#1` is the unit's name and the number of the line in its log, here the first, and a later read can pick up after that line with `--cursor api#1`.
 
 When the checkout branch gets a worktree of its own, the same project file starts the API a second time, on other ports and another hostname.
 

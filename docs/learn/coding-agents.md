@@ -4,11 +4,11 @@ description: A coding agent works on a branch of myapp in its own worktree, runs
 kind: learn
 ---
 
-A person started lanes 0 and 1 of myapp. A coding agent now works on a branch of its own, agent/perf, in a third worktree. It runs its lane through the same daemon and the same commands, and devlanes keeps track of which units are the agent's.
+A person started lanes 0 and 1 of myapp. A coding agent works on a branch of its own, agent/perf, in a third worktree. It runs its lane through the same daemon and the same commands, and devlanes keeps track of which units are the agent's.
 
 ## The agent's start becomes lane 2
 
-An agent runs each command in a shell that may be gone a moment later, so a dev server it starts in that shell's background tends to die with it. A start hands the services to the daemon instead. devlanes sees from the variables the agent's host sets that an agent is running it, and answers in a terser format, with one line per service.
+An agent runs each command in a shell that may be gone a moment later, so a dev server it starts in that shell's background tends to die with it. A start hands the services to the daemon instead. devlanes sees from the variables the agent's tool sets that an agent is running it, and answers in a terser format, with one line per service.
 
 ```console title="~/dev/myapp-perf, as the agent sees it"
 $ devlanes start
@@ -30,7 +30,7 @@ running myapp@2:watch-tests actor=opencode pid=53356
   stop: devlanes stop myapp@2:watch-tests
 ```
 
-The answer gives the two commands the agent needs next. The unit gets the lane's environment, like a service. Whoever starts it, a unit runs as you, outside any sandbox the agent's shell is in; [Security](../concepts/security.md) covers what that means.
+The unit gets the lane's environment, like a service. Whoever starts it, a unit runs as you, outside any sandbox the agent's shell is in. [Security](../concepts/security.md) covers what that means.
 
 ## The person's units carry no label
 
@@ -54,11 +54,11 @@ exited myapp@0:migrate exit=0
 exited myapp@0:setup.database exit=0
 ```
 
-Lane 2 ran its install task, its setup and its migration like any new lane, and its setup created a database of its own. The field marked `default` is the service's main port. The label names the agent, so two sessions of one agent show the same one; the daemon also keeps the session that started each unit, and that is what the agent's stop matches below.
+Lane 2 has run its install task, its setup and its migration like any new lane, and its setup made it a database of its own. The field marked `default` is the service's main port. The label names the agent, here OpenCode, so two sessions of one agent show the same one. The daemon also keeps the session that started each unit, when the agent's tool reports one, and the agent's stop below matches that session.
 
 ## Tests run against the lane that is up
 
-The smoke test reads the API's URL from a variable devlanes sets for each service, so it names no port and passes in any lane.
+The smoke test reads the API's URL from a variable devlanes sets for each service, so it names no port and passes in any lane. `devlanes with` runs a command with the lane's environment, that variable included, and exits with the command's exit code.
 
 ```js
 // api/smoke.test.mjs
@@ -68,8 +68,6 @@ test("api answers /healthz", async () => {
   assert.equal(res.status, 200);
 });
 ```
-
-`devlanes with` runs a command with the lane's environment and exits with the command's exit code.
 
 ```console title="~/dev/myapp-perf, as the agent sees it"
 $ devlanes with -- node --test "api/*.test.mjs"
@@ -82,7 +80,7 @@ ready web http://127.0.0.1:20082 https://myapp2.localhost
 ℹ fail 0
 ```
 
-The lane was running, so `with` started nothing and had nothing to stop when the test ended. On a stopped lane it starts what the command needs and stops it again afterwards, which [Run tests against a lane](../how-to/ci/tests.md) shows.
+The lane runs, so `with` starts nothing and has nothing to stop when the test ends. On a stopped lane it starts the lane first and stops what it started once the command ends, which [Run tests against a lane](../how-to/ci/tests.md) shows.
 
 ## The agent stops only what it started
 
@@ -101,7 +99,7 @@ idle myapp@2 agent/perf
 
 Only lane 2's units are on the list, and the shared Postgres container is not. The person's lanes 0 and 1 keep running, and lane 2 is idle: it runs nothing and keeps its ports and its database for the next start.
 
-Every lane so far runs on this machine. Next, myapp moves to another one.
+Every lane so far runs on this machine. Next, myapp's lanes move onto a box.
 
 ## On your own project
 

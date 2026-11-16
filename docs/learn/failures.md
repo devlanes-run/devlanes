@@ -8,9 +8,15 @@ The checkout branch of myapp breaks its API while the main branch keeps running.
 
 ## A failed service stays failed
 
-On the branch, a line at the top of the API's server throws before the server listens. Node's watcher, which the API's dev script runs, keeps its process alive after the crash. So when the API is restarted, its ready check never gets an answer and gives up.
+On the branch, you add a line at the top of the API's server that throws before the server listens. The API's dev script runs Node in watch mode, which waits for the next file change after a crash instead of exiting. You restart the API to run the edited file from a fresh start, and this time its ready check gets no answer and gives up.
 
 ```console title="~/dev/myapp-checkout"
+$ devlanes restart api --no-ui
+myapp@1 · feat/checkout
+✗ services  0 of 1 ready
+  ✗  api  wasn't ready in time   Failed running 'server.mjs'. Waiting for file changes before restarting...
+
+logs: devlanes logs myapp@1:api --tail 200
 $ devlanes status
 myapp
   LANE  BRANCH         STATE    SERVICES  CPU   MEM       URL
@@ -18,7 +24,7 @@ myapp
   1     feat/checkout  failed   1/2       0.0%  55.5 MiB  https://myapp1.localhost
 ```
 
-Lane 1 reads failed, with one of its two services ready: the web app still runs. Lane 0 on main runs on, untouched. devlanes does not restart a failed service, so the API stays failed, with its reason, until you restart or stop it. [The daemon](../concepts/daemon.md) says more.
+The restart's row quotes the last line the API printed, which is Node's. In the status, lane 1 reads failed with one of its two services ready, and lane 0 on main runs as before. devlanes does not restart a failed service, so the API stays failed, with its reason, until someone restarts or stops it.
 
 ## The reason is kept with the failure
 
@@ -32,24 +38,22 @@ failed myapp@1:api
 
 The timeout says only that the ready check gave up. What the API printed is in its log, and `devlanes debug errors` shows the stack from it for each failed unit.
 
-```console title="~/dev/myapp-checkout, on Windows 11"
+```console title="~/dev/myapp-checkout"
 $ devlanes debug errors
 failed myapp@1:api
   wasn't ready in time
-  | file:///C:/Users/you/dev/myapp-checkout/api/server.mjs:3
   | throw new Error("checkout: the api is broken on this branch");
   |       ^
   | 
   | Error: checkout: the api is broken on this branch
-  |     at file:///C:/Users/you/dev/myapp-checkout/api/server.mjs:3:7
   | 
   | Node.js v24.16.0
   | Failed running 'server.mjs'. Waiting for file changes before restarting...
 ```
 
-## A fix runs, and the state stays failed
+## A fix does not clear the failure
 
-The branch takes the broken line out again. Node's watcher sees the change and runs the fixed server, but devlanes does not run the ready check again by itself.
+You take the broken line out again, and the API still reads failed. devlanes runs a service's ready check when it starts the service, and does not run it again later by itself.
 
 ```console title="~/dev/myapp-checkout"
 $ devlanes status 1
@@ -67,11 +71,19 @@ myapp
   api: wasn't ready in time
 ```
 
-A restart runs the service again and waits for its ready check. After `devlanes restart api`, the API reads ready, as the status in the last section shows.
+A restart starts the API again and waits for its ready check, which passes this time.
+
+```console title="~/dev/myapp-checkout"
+$ devlanes restart api --no-ui
+✓ services ready
+myapp@1 · feat/checkout
+✓ services  1 of 1 ready
+  ✓  api  https://api.myapp1.localhost
+```
 
 ## The project file is checked before it is used
 
-A typo in an expression, here `lane.domian` in the API's hostname, does not wait for a start to surface. The config check reads the file as a lane would and names the line, the column and the name it expected.
+A typo in an expression, `lane.domian` in the API's hostname, is the kind of mistake the config check catches. It reads the file as a lane would and names the line, the column and the name it expected. Line 35 is the API's `hosts` line in the file on the page before.
 
 ```console title="~/dev/myapp-checkout, on Windows 11"
 $ devlanes config check
@@ -79,9 +91,18 @@ error: C:\Users\you\dev\myapp-checkout\devlanes.yaml is invalid at line 35, colu
 hint: edit C:\Users\you\dev\myapp-checkout\devlanes.yaml at line 35, then run this again
 ```
 
-## An edit waits for a reload
+## An edit shows as drift
 
-With the typo gone, the branch gives the API a log level in its environment. The lane keeps running as it was. Its status shows drift, the difference between the file and what runs: a note on the lane's row and a line under the unit that changed.
+With the typo gone, you give the API a log level in its environment.
+
+```yaml devlanes
+services:
+  api:
+    env:
+      LOG_LEVEL: debug
+```
+
+The lane keeps running as it was. Its status shows drift, the difference between the file and what runs: a note on the lane's row with the command that applies it, and a line under the unit that changed.
 
 ```console title="~/dev/myapp-checkout"
 $ devlanes status 1
@@ -99,7 +120,9 @@ myapp
   api: env LOG_LEVEL changed since it started
 ```
 
-A reload applies the edit. It restarts the units the edit changed, starts the ones it added, stops the ones it removed and leaves the rest alone, so the web app keeps its process here.
+## A reload applies only what changed
+
+A reload restarts the units the edit changed, starts the ones it added and stops the ones it removed.
 
 ```console title="~/dev/myapp-checkout"
 $ devlanes reload --no-ui
@@ -109,7 +132,7 @@ myapp@1 · feat/checkout
   ✓  api  https://api.myapp1.localhost
 ```
 
-A reload is for an edit to the project file. A restart is for a service that failed or whose code needs a fresh process. It reads the file as it stands too, so a restarted service starts with its own edits while the rest of the lane waits for a reload.
+The reload counts only what it restarted, the API, and the web app keeps its process. A reload is for an edit to the project file or `.env`. A restart is for a service that failed or whose code needs a fresh process; it reads the project file as it stands too, so a restarted service starts with its own edits.
 
 So far a person has typed every command. Next, a coding agent gets a worktree of its own and runs a lane there.
 
