@@ -6,8 +6,8 @@ Every page under `docs/`, its title, what it holds, and which page owns each fac
 
 | Page | Title | Holds |
 |---|---|---|
-| `README.md` | devlanes | The overview at `/docs/`: what devlanes does in one paragraph, the prompt for an agent, one `devlanes status` block, one diagram of a machine with its daemon, proxy and two lanes, and a way in per goal. |
-| `install.md` | Install devlanes | Installing per OS and install method, what `devlanes setup` changes and how to undo it, a first `devlanes doctor`, shell completions. |
+| `README.md` | devlanes | The overview at `/docs/`: what devlanes does in one paragraph, the prompt for an agent, one diagram of a machine with its daemon, proxy and two lanes, and a way in per goal. |
+| `install.md` | Install devlanes | Installing per OS, `devlanes setup`, `devlanes doctor`, package managers, shell completions. |
 
 ## Learn
 
@@ -20,8 +20,8 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | `learn/connecting-services.md` | Services that find each other | A web app that calls the API of its own lane: expressions, the two kinds of URL, a preset, a task that installs dependencies. |
 | `learn/databases.md` | A database for each lane | One Postgres for every lane with a database per lane: containers, per-lane values, setup, tasks at lane events, cleaning a lane. |
 | `learn/failures.md` | When a service fails | A service that fails and a config edit: the failed state, no automatic restart, finding the reason, reload. |
-| `learn/coding-agents.md` | A coding agent runs the lane | An agent in a worktree of its own: what it sees, the skill, a long-running command, the label on what it started, tests against a lane, stopping only its own units. |
-| `learn/remote.md` | Lanes on another machine | A box in a container, pairing, a stopped local lane that keeps its hostnames until the box's lane is chosen, the same hostnames and ports on your machine. Carries the diagram of one request reaching the box. |
+| `learn/coding-agents.md` | A coding agent runs the lane | An agent in a worktree of its own: the skill, a long-running command, tests against a lane, stopping only what it started. |
+| `learn/remote.md` | Lanes on another machine | A box, pairing once, connecting, the same hostnames in your browser. Carries the diagram of a box and your machine. |
 
 ## How-to guides
 
@@ -122,16 +122,16 @@ Read in order. One project, myapp, from one service to lanes on a box.
 
 | Page | Title | Explains |
 |---|---|---|
-| `lanes-and-projects.md` | Lanes and projects | First of the concepts, so it names what a lane is made of: units (services, tasks), containers, setup, profiles, the data folder. Worktrees, lanes, lane 0 and when it moves, lane names, what a deleted worktree leaves behind, projects and project names, two clones of one repository, several projects in one repository. |
-| `daemon.md` | The daemon | The daemon and its clients, what it owns, when it starts and exits, sleep, reboot and daemon restart, that it does not restart a failed service or cap resources. Carries a diagram of the clients, the daemon and what it owns. |
-| `ports.md` | Ports | The port pool, a block per lane, a place per service, named ports, that ports differ between machines. |
-| `hostnames-and-https.md` | Hostnames and HTTPS | Lane domains, the proxy, certificates signed per hostname, how hostnames resolve, a lane as its own site for cookies. |
-| `environment.md` | Environment and expressions | Where a unit's variables come from, in order, that the shell's environment is never written to disk and what that protects, how expressions are evaluated. |
-| `start-order.md` | Start order and readiness | Containers, setup, tasks, services; setup against tasks; readiness; pacing of starts; that services have no dependency graph and what that asks of a service. |
-| `config-and-reload.md` | Config files and reload | How the project file, local files and `extends` merge; drift; what reload does. |
-| `freezing.md` | Throttling and freezing | Throttling and freezing: what counts as activity, what a frozen lane keeps, what thaws it. |
-| `remote-mirroring.md` | Remote mirroring | Two daemons and one session: what crosses it, why a box keeps its hostnames and ports, one box per lane. |
-| `security.md` | Security | Who can reach the daemon, what the CA can sign and where its key is, what pairing protects, what lanes do not isolate, what devlanes sends over the network. Carries a diagram of who is checked where. |
+| `lanes-and-projects.md` | Lanes and projects | Worktrees, lanes, lane 0, lane names, what a lane is made of, projects and their names. |
+| `daemon.md` | The daemon | What the daemon runs, when it starts and exits, what a reboot leaves, that it does not restart a failed service. |
+| `ports.md` | Ports | A block of ports per lane and a place in it per service. |
+| `hostnames-and-https.md` | Hostnames and HTTPS | Lane domains, the proxy, certificates, a lane as its own site for cookies. |
+| `environment.md` | Environment and expressions | Where a unit's variables come from and how expressions are evaluated. |
+| `start-order.md` | Start order and readiness | Containers, setup, tasks, services; what ready means; that services have no dependency graph. |
+| `config-and-reload.md` | Config files and reload | How the project file and the local file merge, drift, what a reload does. |
+| `freezing.md` | Throttling and freezing | What happens to a lane nobody uses and what thaws it. |
+| `remote-mirroring.md` | Remote mirroring | Two daemons and one connection, and why a box keeps its hostnames and ports on your machine. |
+| `security.md` | Security | Who can reach the daemon, that a lane is not a sandbox, what the CA can sign, what pairing protects, the release check. |
 
 ## Reference (`reference/`)
 
@@ -139,57 +139,39 @@ Read in order. One project, myapp, from one service to lanes on a box.
 |---|---|---|
 | `cli/<command>.md` | `devlanes <command>` | Generated. One page per command. |
 | config (website) | Project file reference, User config reference | Generated by the website from the schemas, at `/docs/reference/config/project/` and `/docs/reference/config/user/`. |
-| `expressions.md` | Expressions | Namespaces, functions and filters of `${{ }}`. |
-| `environment-variables.md` | Environment variables | Variables devlanes sets for units, and variables devlanes reads. |
-| `lane-and-unit-references.md` (skill) | Lane and unit references | The forms of a lane reference and a unit reference, globs and tags. |
-| `states-and-exit-codes.md` (skill) | States and exit codes | Unit and lane states, exit codes, the shape of `--json` output, output modes. |
-| `tui.md` | The TUI | Views and keys of the TUI. |
-| `mcp-tools.md` (skill) | MCP tools | The tools `devlanes mcp` offers, per-host timeouts, consent. |
-| `remote-states.md` | Remote connection states | Connection states and warnings of `remote ls`, the timings of pings, reconnects and waits, the pairing rules in numbers, what a box and a connected machine send each other. |
-| `files.md` | Files and folders | The devlanes home, the lane data folder, logs, the CA files, the socket or pipe, files outside the home, the files of a project. |
-| `windows.md` | Windows | Behaviour that differs on Windows: shells, stop signals, ports, terminals. |
+| `expressions.md` | Expressions | Namespaces and functions of `${{ }}`. |
+| `environment-variables.md` | Environment variables | Variables devlanes sets for a service, and variables a person sets to change devlanes. |
+| `lane-and-unit-references.md` (skill) | Lane and unit references | How to name a lane and a unit on the command line. |
+| `states-and-exit-codes.md` (skill) | States and exit codes | Unit and lane states, exit codes, output modes. |
+| `tui.md` | The TUI | The views and the keys a person uses. |
+| `mcp-tools.md` (skill) | MCP tools | The tools `devlanes mcp` offers and its options. |
+| `remote-states.md` | Remote connection states | The states and warnings of `devlanes remote ls` and what to do about each. |
+| `files.md` | Files and folders | Where the home, the logs, the CA, the user config and a project's files are. |
+| `windows.md` | Windows | What a person on Windows has to know or do differently. |
 | `limits.md` | Limits | What devlanes does not do, each with its issue. |
-| `glossary.md` | Glossary | The terms, one or two sentences each. |
-| `errors/` | | Proxy errors DL101 to DL303, one page each. The binary links these paths; keep them. |
+| `glossary.md` | Glossary | The words a person meets in the first week, one sentence each. |
+| `errors/` | | Proxy errors DL101 to DL303, one page each. The binary links these paths and a test checks their headings; keep both. |
 
-`troubleshooting.md`, titled Troubleshooting, sits at the top level: symptoms and messages, each with the page that fixes it.
+`troubleshooting.md`, titled Troubleshooting, sits at the top level: the problems people hit, each with its fix or the page that has it.
 
 ## Owners of facts that tend to spread
 
 | Fact | Owner | Elsewhere |
 |---|---|---|
-| The form of a lane domain | `concepts/hostnames-and-https.md` | One sentence in `learn/worktrees.md`; the glossary |
-| Lane names (`main`, `lane1`) | `concepts/lanes-and-projects.md` | One sentence in `learn/worktrees.md` |
-| Order of environment layers | `concepts/environment.md` | Nowhere else |
-| Variables devlanes sets | `reference/environment-variables.md` | A page names the ones it shows |
-| What `devlanes setup` changes | `install.md` | `how-to/hostnames/trust-the-ca.md` covers each store and OS |
-| Trusting the CA in browsers, tools and runtimes | `how-to/hostnames/trust-the-ca.md` | `install.md` links it |
-| Proxy ports and the fallback to 8443 and 8080 | `how-to/hostnames/proxy-ports.md` | One sentence in `install.md` |
-| Ready check kinds and fields | The generated config reference | `how-to/services/ready-checks.md` shows choosing one |
-| Start order | `concepts/start-order.md` | One sentence in `learn/databases.md` |
-| Freezing: what it keeps, what thaws a lane | `concepts/freezing.md` | One sentence in `learn/worktrees.md`; `how-to/lanes/many-lanes.md` changes the settings |
-| Freezing: the two default times | `concepts/freezing.md`, once | The generated config reference has the settings |
-| Freezing: the CPU threshold, how fast activity is noticed, how long a request waits for a thaw | `reference/states-and-exit-codes.md`, under the throttled and frozen states | Not on a prose page |
-| A failed service stays failed | `concepts/daemon.md` | One sentence in `concepts/start-order.md` and `learn/failures.md` |
-| The shell's environment is never written to disk | `concepts/environment.md` | One sentence in `concepts/daemon.md` |
-| Whose environment a lane has after a start, run, exec, reload, restart, `lane resume` and `daemon restart` | `concepts/environment.md` | One sentence in `concepts/daemon.md` and `concepts/config-and-reload.md` |
-| Which project file loads when none is named | `concepts/config-and-reload.md` | One sentence in `concepts/lanes-and-projects.md` |
-| What the CA can sign, where its key is | `concepts/security.md` | One sentence in `concepts/hostnames-and-https.md` |
-| A lane as its own site for cookies | `concepts/hostnames-and-https.md`, once | One sentence in `learn/worktrees.md` |
-| What a clean deletes, and when clean tasks and teardown run or are skipped | `how-to/lanes/clean-up.md` | One sentence in `how-to/infra/shared-database.md` and `learn/databases.md` |
-| Which worktree's `.env` and local file a lane reads | `reference/files.md` | One sentence in `how-to/projects/local-overrides.md`, `how-to/projects/env-files-and-tools.md` and `concepts/config-and-reload.md` |
-| Variables a new daemon keeps from the shell that started it | `reference/environment-variables.md` | One sentence in `concepts/environment.md` |
-| The daemon and terminals that end their child processes | `reference/windows.md` | One sentence in `concepts/daemon.md`; a row in `troubleshooting.md` |
+| Lane numbers, lane names, lane domains | `concepts/lanes-and-projects.md` | One sentence in `learn/worktrees.md` |
+| What `devlanes setup` changes | `install.md` | Linked from the hostname guides |
+| Trusting the CA in browsers, tools and runtimes | `how-to/hostnames/trust-the-ca.md` | Linked from `install.md` |
+| The proxy's ports | `how-to/hostnames/proxy-ports.md` | Nowhere else |
+| Ready checks | The generated config reference | `how-to/services/ready-checks.md` shows choosing one |
+| Start order, setup against tasks | `concepts/start-order.md` | The table on `learn/databases.md` |
+| A failed service stays failed | `concepts/daemon.md` | One sentence in `learn/failures.md` |
+| Freezing | `concepts/freezing.md` | `how-to/lanes/many-lanes.md` changes the settings |
+| What the CA can sign | `concepts/security.md` | One sentence in `concepts/hostnames-and-https.md` |
+| What a clean deletes | `how-to/lanes/clean-up.md` | Linked from the infra guides |
 | Pairing: the steps | `how-to/remote/connect.md` | `learn/remote.md` shows it once |
-| Which machine serves a lane that several run | `how-to/remote/several-boxes.md` | One sentence in `learn/remote.md` and `concepts/remote-mirroring.md` |
-| Installing devlanes on a box and keeping its daemon up | `how-to/remote/prepare-a-box.md` | The other remote guides link it |
-| Pairing: what it protects and what it does not | `concepts/security.md` | Nowhere else |
-| Pairing: code length and lifetime, wrong-code limits, pairings per machine | `reference/remote-states.md` | `concepts/security.md` gives the behaviour without the numbers |
-| What crosses a remote connection | `concepts/remote-mirroring.md` | `concepts/security.md` links it; the full list in `reference/remote-states.md` |
-| Reconnect, ping and wait times of a box | `reference/remote-states.md` | `concepts/remote-mirroring.md` gives the behaviour without the numbers |
-| Connection states and warnings | `reference/remote-states.md` | `troubleshooting.md` links rows to it |
-| Exit codes and unit states | `reference/states-and-exit-codes.md` | The skill |
-| TUI keys | `reference/tui.md` | A page names a key only when its section is about that key |
+| Pairing: what it protects | `concepts/security.md` | Nowhere else |
+| Installing devlanes on a box | `how-to/remote/prepare-a-box.md` | Linked from the other remote guides |
+| States and exit codes | `reference/states-and-exit-codes.md` | The skill |
 | Windows differences | `reference/windows.md` | OS tabs where a command differs |
-| Error messages and their fixes | `troubleshooting.md` | Nowhere else |
+| Problems and their fixes | `troubleshooting.md` | Nowhere else |
 | What devlanes does not do | `reference/limits.md` | Nowhere else |

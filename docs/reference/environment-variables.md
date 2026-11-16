@@ -66,4 +66,6 @@ Services, tasks, and `infra.setup` and `infra.teardown` entries get these.
 | `DEVLANES_VERBOSE` | `1` or `2`. | The same as `-v` or `-vv`. |
 | `NO_COLOR` | Any value except empty. | No color. |
 
-A daemon that a command starts keeps only some variables of that command's shell, such as `PATH`, `HOME` and those that start with `DEVLANES_` or `DOCKER_`. Each unit gets the environment of the command that started it.
+## Variables a new daemon keeps
+
+A daemon that a command starts keeps only these variables of that command's shell: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TZ`, `TMPDIR`, `TERM`, `SSH_AUTH_SOCK`, `KUBECONFIG`, the proxy variables such as `HTTPS_PROXY`, the CI markers such as `CI`, and those that start with `LC_`, `XDG_`, `DOCKER_` or `DEVLANES_`. On Windows it also keeps the system's own variables, such as `USERPROFILE`, `APPDATA` and `TEMP`. Each unit gets the environment of the command that started it.
