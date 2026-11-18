@@ -18,14 +18,22 @@ A project can pin devlanes instead: `devlanes` under `devDependencies` of its `p
 
 ## 2. Install the command
 
-Install only when the user asked for devlanes on this machine. Both scripts install the latest release and check the download against its published checksums.
+Install only when the user asked for devlanes on this machine. Use a package manager the machine already has. Each installs the same release build:
+
+| Package manager | Command |
+|---|---|
+| Homebrew (macOS, Linux) | `brew install devlanes-run/tap/devlanes` |
+| npm | `npm install -g devlanes` |
+| uv | `uv tool install devlanes` |
+
+Use the install script when the machine has none of them, or when the user asks for it. It installs the latest release and checks the download against its published checksums.
 
 | OS | Command | Notes |
 |---|---|---|
-| macOS, Linux | `curl -fsSL https://devlanes.run/install.sh \| sh` | Installs to `~/.local/bin` and says when that folder is not on `PATH`. Linux needs glibc; musl systems such as Alpine are not supported. |
-| Windows | `irm https://devlanes.run/install.ps1 \| iex` in PowerShell | Needs Windows 11 24H2 or later and Git for Windows. A shell opened before the install does not see the command; call `$env:LOCALAPPDATA\Programs\devlanes\devlanes.exe` by its path, or ask the user to open a new terminal. |
+| macOS, Linux | `curl -fsSL https://devlanes.run/install.sh \| sh` | Installs to `~/.local/bin` and says when that folder is not on `PATH`. |
+| Windows | `irm https://devlanes.run/install.ps1 \| iex` in PowerShell | A shell opened before the install does not see the command; call `$env:LOCALAPPDATA\Programs\devlanes\devlanes.exe` by its path, or ask the user to open a new terminal. |
 
-Package managers install the same release build: `brew install devlanes-run/tap/devlanes` (macOS, Linux), `npm install -g devlanes`, `uv tool install devlanes`. The project also needs Git, and Docker running when it has containers.
+Linux needs glibc; musl systems such as Alpine are not supported. Windows needs Windows 11 24H2 or later and Git for Windows. The project also needs Git, and Docker running when it has containers.
 
 ## 3. HTTPS and hostnames: `devlanes setup`
 
