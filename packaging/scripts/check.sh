@@ -1,6 +1,6 @@
 #!/bin/sh
-# Dry run of the release scripts against fake binaries: package.sh and package.ps1
-# for every target, manifest.sh, the Homebrew formula, the npm packages (packed,
+# Dry run of the release scripts against fake binaries: package.sh, package.ps1 and
+# package-debug.sh for every target, manifest.sh, the Homebrew formula, the npm packages (packed,
 # then installed from the tarballs on macOS and Linux arm64/x64), the PyPI wheels
 # (installed into a venv) and install.sh from a local release directory. Needs tar,
 # gzip, unzip, jq, node, npm, python3 with venv, curl and pwsh, and on Linux glibc
@@ -66,9 +66,21 @@ for target in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
 		exit 1
 	}
 done
+# The debug archives are in the release directories below too, so install.sh is
+# checked to skip their SHA256SUMS lines.
+printf 'fake debug file\n' >"$work/bin/devlanes.debug"
+for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+	sh "$root/packaging/scripts/package-debug.sh" "$version" "$target" "$work/dist" "$work/bin/devlanes.debug" >/dev/null
+	listed=$(tar -tzf "$work/dist/devlanes-$version-$target-debug.tar.gz" | tr '\n' ' ')
+	[ "$listed" = "devlanes-$version-$target-debug/ devlanes-$version-$target-debug/devlanes.debug " ] || {
+		echo "unexpected entries in the $target debug archive: $listed" >&2
+		exit 1
+	}
+done
 sh "$root/packaging/scripts/manifest.sh" "$version" "$work/dist" "https://example.invalid/download/v$version" >/dev/null
 jq -e '.artifacts | length == 4' "$work/dist/release-manifest.json" >/dev/null
-[ "$(grep -c '\.tar\.gz$' "$work/dist/SHA256SUMS")" -eq 4 ]
+[ "$(grep -c -e '-debug\.tar\.gz$' "$work/dist/SHA256SUMS")" -eq 6 ]
+[ "$(grep -v -e '-debug\.tar\.gz$' "$work/dist/SHA256SUMS" | grep -c '\.tar\.gz$')" -eq 4 ]
 [ "$(grep -c '\.zip$' "$work/dist/SHA256SUMS")" -eq 2 ]
 
 sh "$root/packaging/homebrew/render.sh" "$version" "$work/dist/SHA256SUMS" >"$work/devlanes.rb"

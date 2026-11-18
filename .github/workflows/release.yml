@@ -80,8 +80,8 @@ jobs:
           fi
 
   # The TUI web demo the website shows (crates/tui-web). Its archive is a release asset
-  # outside release-manifest.json and SHA256SUMS, which describe the binaries alone; the
-  # website downloads it for the tag it syncs.
+  # outside release-manifest.json and SHA256SUMS, which describe the binaries (and
+  # SHA256SUMS their debug archives) alone; the website downloads it for the tag it syncs.
   tui-web:
     needs: tag-version
     runs-on: ubuntu-latest

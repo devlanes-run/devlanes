@@ -413,6 +413,41 @@ iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
 
 `devlanes --version` then reads `X.Y.Z-next.N`, where N counts the commits since the last release, and `devlanes update` moves the install to the latest build of `main`. Only the install scripts carry `next` builds: npm, PyPI and Homebrew get releases only. [Update and uninstall](https://devlanes.run/docs/how-to/update/) says how to go back to releases.
 
+### Symbolicating a report
+
+Release and `next` binaries are stripped, so a stack from a user's machine (macOS `sample`, `perf`, a Windows crash dump) shows raw addresses. Each release, and the `next` prerelease, has a debug archive per target, `devlanes-VERSION-TARGET-debug.tar.gz`, built in the same job as the shipped binary, with function names and file:line tables. It holds `devlanes.dSYM` and `devlanes-hosts.dSYM` on macOS, `devlanes.debug` and `devlanes-hosts.debug` on Linux, and `devlanes.pdb` on Windows. Take the version and target from the report's `devlanes --version` and platform, then:
+
+```sh
+gh release download vX.Y.Z --repo devlanes-run/devlanes -p 'devlanes-X.Y.Z-aarch64-apple-darwin-debug.tar.gz'
+tar -xzf devlanes-X.Y.Z-aarch64-apple-darwin-debug.tar.gz
+```
+
+For a `next` build, download from the `next` release instead; it only holds the latest build, so it matches only if the user runs that one. `SHA256SUMS` lists the debug archives, and `gh attestation verify` works on them as on the other archives.
+
+On macOS, check that the dSYM is the one for the binary: `dwarfdump --uuid devlanes.dSYM` must print the UUID that the report's Binary Images section (or `dwarfdump --uuid "$(command -v devlanes)"` on the user's machine) shows. `sample` prints a frame as `??? (in devlanes)  load address 0x... + 0x1d3d104  [0x...]`. Pass the load address and the absolute address, or only the offset:
+
+```sh
+atos -o devlanes.dSYM -arch arm64 -l 0x104a14000 0x106751104
+atos -o devlanes.dSYM -arch arm64 -offset 0x1d3d104
+```
+
+Use `-arch x86_64` for Intel Macs, and add `-i` to see inlined frames.
+
+On Linux, `readelf -n devlanes.debug` must show the same `Build ID` as `readelf -n` on the user's `devlanes`. The binaries are position-independent, so pass the address minus the start of the first `devlanes` mapping in `/proc/PID/maps`:
+
+```sh
+addr2line -e devlanes.debug -f -C -i -p 0x1d3d104
+llvm-symbolizer --obj=devlanes.debug 0x1d3d104
+```
+
+Putting `devlanes.debug` next to `devlanes` lets gdb and perf find it on their own through the binary's debug link.
+
+On Windows, put `devlanes.pdb` next to `devlanes.exe` (or add its directory to the symbol path with `.sympath+` and `.reload` in WinDbg); WinDbg, Visual Studio and `!analyze -v` then resolve the dump's frames, and `ln devlanes+0x1d3d104` names one offset. Without a debugger, llvm-symbolizer reads the `devlanes.pdb` next to the executable and takes the offset added to the image base (`ImageBase` in `llvm-readobj --file-headers devlanes.exe`, 0x140000000 for the x64 build):
+
+```sh
+llvm-symbolizer --obj=devlanes.exe 0x141d3d104
+```
+
 ## License
 
 Contributions are licensed under Apache-2.0, the license of this repository.
