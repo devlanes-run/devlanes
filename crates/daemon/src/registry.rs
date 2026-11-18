@@ -1113,6 +1113,25 @@ impl Inner {
         trees: Vec<Tree>,
     ) -> Result<SyncReport, RpcError> {
         let _sync = project.sync.lock().await;
+        // Every request from a project's folder and every watcher wake lists
+        // the worktrees; most lists are the ones already applied.
+        if self.listed_as_known(project, &trees).await {
+            // A lane waiting on `lanes.max` may fit now that another was cleaned.
+            let assigned = self.assign_lanes(project).await?;
+            tracing::debug!(
+                project = %project.name(),
+                assigned = assigned.len(),
+                "worktree list unchanged"
+            );
+            if !assigned.is_empty() {
+                self.update_moves(project);
+                self.refresh_views(project).await;
+                for lane in assigned {
+                    self.emit_lane(project, &lane);
+                }
+            }
+            return Ok(SyncReport::default());
+        }
         let mut report = SyncReport::default();
         let mut seen = BTreeSet::new();
         let mut changed: Vec<Arc<LaneRt>> = Vec::new();
@@ -1159,13 +1178,13 @@ impl Inner {
                 }
                 (was_present, moved, rebranched)
             };
+            let unloaded = matches!(
+                lane.st().config(),
+                ConfigState::Missing | ConfigState::Elsewhere(_)
+            );
+            // An unchanged file reads the same; the config poller reloads on edits.
             if tree.present
-                && (!was_present
-                    || moved
-                    || matches!(
-                        lane.st().config(),
-                        ConfigState::Missing | ConfigState::Elsewhere(_)
-                    ))
+                && (!was_present || moved || (unloaded && self.config_stale(project, &lane).await))
             {
                 self.reload_config(project, &lane).await;
                 reloaded.push(lane.clone());
@@ -1265,10 +1284,81 @@ impl Inner {
                 changed.push(lane);
             }
         }
+        tracing::debug!(
+            project = %project.name(),
+            changed = changed.len(),
+            "worktree list applied"
+        );
         for lane in changed {
             self.emit_lane(project, &lane);
         }
         Ok(report)
+    }
+
+    /// Whether `trees` is what `project` already holds: each worktree with the
+    /// same folder, branch and presence, no other present worktree, extra lanes
+    /// in step with their base, and no present worktree whose config was never
+    /// read or changed while it did not load.
+    async fn listed_as_known(&self, project: &ProjectRt, trees: &[Tree]) -> bool {
+        let lanes = project.lanes();
+        let mut listed = BTreeSet::new();
+        let mut unloaded = Vec::new();
+        for tree in trees.iter().filter(|tree| !tree.identity.is_empty()) {
+            let Some(lane) = lanes.iter().find(|lane| {
+                let st = lane.st();
+                st.alias().is_none() && st.identity == tree.identity
+            }) else {
+                return false;
+            };
+            let st = lane.st();
+            if st.path() != tree.path
+                || st.branch() != tree.branch.as_deref()
+                || st.present() != tree.present
+            {
+                return false;
+            }
+            if st.present()
+                && matches!(
+                    st.config(),
+                    ConfigState::Missing | ConfigState::Elsewhere(_)
+                )
+            {
+                unloaded.push(lane.clone());
+            }
+            listed.insert(lane.worktree);
+        }
+        let place = |st: &LaneSt| {
+            (
+                st.path().to_path_buf(),
+                st.branch().map(str::to_owned),
+                st.present(),
+            )
+        };
+        for lane in &lanes {
+            let (base, own) = {
+                let st = lane.st();
+                (st.alias().map(|(base, _)| base.to_owned()), place(&st))
+            };
+            let Some(base) = base else {
+                if own.2 && !listed.contains(&lane.worktree) {
+                    return false;
+                }
+                continue;
+            };
+            let in_step = match lanes.iter().find(|other| other.st().identity == base) {
+                Some(base) => place(&base.st()) == own,
+                None => !own.2,
+            };
+            if !in_step {
+                return false;
+            }
+        }
+        for lane in unloaded {
+            if self.config_stale(project, &lane).await {
+                return false;
+            }
+        }
+        true
     }
 
     /// Assigns lanes to worktrees whose config appeared, without re-listing:
@@ -1978,6 +2068,13 @@ impl Inner {
             }
             other => other,
         };
+        // A load that failed before reading anything keeps the files the poller
+        // stamps, or the stamps would never match and it would reload every tick.
+        let files = if files.is_empty() {
+            known.clone()
+        } else {
+            files
+        };
         // A load that read other files (an `extends` added or removed) stamps those.
         let stamp = if files == known {
             stamp
@@ -2005,6 +2102,17 @@ impl Inner {
         }
     }
 
+    /// Whether the lane's config was never read or one of its files changed since.
+    async fn config_stale(&self, project: &ProjectRt, lane: &LaneRt) -> bool {
+        if lane.st().config_stamp.is_none() {
+            return true;
+        }
+        let (lane_dir, primary_dir) = self.config_dirs(project, lane);
+        let files = self.lane_config_files(project, lane);
+        let current = config_stamp(files, lane_dir, primary_dir).await;
+        lane.st().config_stamp.as_ref() != Some(&current)
+    }
+
     /// Reloads the lane's config right away when one of its files changed since the
     /// last load, so `start`, `restart`, `run`, `wait` and `config check` sent right
     /// after an edit see it instead of waiting for the poller, which calls this too.
@@ -2014,13 +2122,7 @@ impl Inner {
         lane: &Arc<LaneRt>,
     ) {
         let present = lane.st().present();
-        if !present {
-            return;
-        }
-        let (lane_dir, primary_dir) = self.config_dirs(project, lane);
-        let files = self.lane_config_files(project, lane);
-        let current = config_stamp(files, lane_dir, primary_dir).await;
-        if lane.st().config_stamp.as_ref() == Some(&current) {
+        if !present || !self.config_stale(project, lane).await {
             return;
         }
         self.reload_config(project, lane).await;

@@ -103,6 +103,43 @@ async fn subscribers_start_with_their_own_resync_or_snapshot() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// `lane ls` lists the worktrees again; a list that changed nothing tells
+/// subscribers nothing, and a new branch reaches them.
+async fn an_unchanged_worktree_list_sends_no_event() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CONFIG);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Status, json!({}), cx(&main))
+            .await
+            .expect("register");
+        let (subscriber, mut events) = background(&h, Method::Subscribe, json!({}), cx(&main), 900);
+        let first = next_event(&mut events, Duration::from_secs(2))
+            .await
+            .expect("resync");
+        assert_eq!(first.event, events::RESYNC);
+
+        h.call(Method::LaneList, json!({}), cx(&main))
+            .await
+            .expect("lane ls");
+        crate::git(&main, &["checkout", "-q", "-b", "other"]);
+        h.call(Method::LaneList, json!({}), cx(&main))
+            .await
+            .expect("lane ls");
+        // An event from the first listing would come before this one.
+        let next = next_event(&mut events, Duration::from_secs(2))
+            .await
+            .expect("lane.changed");
+        assert_eq!(next.event, events::LANE_CHANGED);
+        assert_eq!(next.data["lane"]["branch"], "other");
+        subscriber.close();
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// `status --all` (what completion sends, cwd or not) lists known lanes only;
 /// it never registers the project of its cwd.
 async fn status_all_never_registers_a_project() {
