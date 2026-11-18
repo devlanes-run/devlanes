@@ -247,15 +247,18 @@ pub fn parse_porcelain(bytes: &[u8]) -> Result<Vec<Worktree>, Error> {
     Ok(result)
 }
 
-/// Periodic reconciliation covers dropped notifications and newly created admin dirs.
+/// Sends a fresh [`list`] after a change that can alter it, and every 30 seconds,
+/// which covers dropped notifications and changes only `head` shows (commits).
+/// Blocking: registers the watches and resolves their canonical paths.
 pub fn watch(
     repository: Repository,
 ) -> Result<tokio::sync::mpsc::Receiver<Result<Vec<Worktree>, Error>>, Error> {
     use notify::Watcher;
+    let scope = Scope::of(&repository);
     let (events, mut changes) = tokio::sync::mpsc::channel(1);
     let mut watcher =
         notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
-            if event.is_ok_and(|event| changes_worktrees(&event)) {
+            if event.is_ok_and(|event| changes_worktrees(&event, &scope)) {
                 let _ = events.try_send(());
             }
         })?;
@@ -290,11 +293,101 @@ pub fn watch(
     Ok(receiver)
 }
 
-/// Whether a watch event can change the worktree list. inotify (Linux) also
-/// reports files being opened and closed, and the listing itself reads the
-/// common dir, so counting those would relist several times a second forever.
-fn changes_worktrees(event: &notify::Event) -> bool {
-    !event.kind.is_access()
+/// The watched directories, each as given and canonical: FSEvents (macOS)
+/// reports canonical paths, the other backends the watched path joined with
+/// the name that changed.
+struct Scope {
+    common: Vec<PathBuf>,
+    roots: Vec<PathBuf>,
+}
+
+impl Scope {
+    /// The common dir and the present worktrees of `repository`.
+    fn of(repository: &Repository) -> Self {
+        let both = |path: &Path| {
+            let mut forms = vec![path.to_owned()];
+            if let Ok(canonical) = std::fs::canonicalize(path)
+                && canonical != path
+            {
+                forms.push(canonical);
+            }
+            forms
+        };
+        Self {
+            common: both(&repository.common_dir),
+            roots: repository
+                .worktrees
+                .iter()
+                .filter(|tree| tree.present)
+                .flat_map(|tree| both(&tree.path))
+                .collect(),
+        }
+    }
+}
+
+/// Whether a watch event can change the worktree list. Git writes the common
+/// dir all the time (index, objects, logs, lock files, `FETCH_HEAD`, for every
+/// `git status` an agent runs), and the listing itself opens files there, which
+/// inotify reports; relisting on those would keep the daemon busy. What the
+/// list shows comes from `HEAD`, the admin dirs under `worktrees/` with their
+/// `HEAD`, `gitdir` and `locked`, and each worktree folder and its `.git`
+/// entry. A rescan, or an event without a path or with one outside the
+/// watches, counts as a change.
+fn changes_worktrees(event: &notify::Event, scope: &Scope) -> bool {
+    use notify::{EventKind, event::ModifyKind};
+    if event.kind.is_access() {
+        return false;
+    }
+    if event.need_rescan() || event.paths.is_empty() {
+        return true;
+    }
+    // A directory's own write time changes with every entry made in it, which
+    // Windows reports as a modification of the directory.
+    let reshapes = matches!(
+        event.kind,
+        EventKind::Any
+            | EventKind::Other
+            | EventKind::Create(_)
+            | EventKind::Remove(_)
+            | EventKind::Modify(ModifyKind::Name(_))
+    );
+    let names = |rest: &Path| -> Vec<String> {
+        rest.iter()
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect()
+    };
+    event.paths.iter().any(|path| {
+        if let Some(rest) = scope
+            .common
+            .iter()
+            .find_map(|common| strip_path_prefix(path, common))
+        {
+            return match names(rest).as_slice() {
+                [] => reshapes,
+                [name] => name == "HEAD" || (name == "worktrees" && reshapes),
+                [worktrees, _] => worktrees == "worktrees" && reshapes,
+                [worktrees, _, file] => {
+                    worktrees == "worktrees"
+                        && matches!(file.as_str(), "HEAD" | "gitdir" | "locked")
+                }
+                _ => false,
+            };
+        }
+        // Linked worktrees usually sit inside the main one, so a path can be
+        // below several roots; it matters when it matters to any of them.
+        let mut inside = false;
+        for root in &scope.roots {
+            if let Some(rest) = strip_path_prefix(path, root) {
+                inside = true;
+                match names(rest).as_slice() {
+                    [] if reshapes => return true,
+                    [name] if name == ".git" => return true,
+                    _ => {}
+                }
+            }
+        }
+        !inside
+    })
 }
 
 /// Uses origin's symbolic default before falling back to conventional local branches.
@@ -597,39 +690,97 @@ mod tests {
     }
 
     #[test]
-    /// Reads never wake the watcher; writes, creates, removes, renames and
-    /// rescans do.
-    fn only_changes_wake_the_watcher() {
+    /// Only events that can change what `list` reports wake the watcher: not
+    /// reads, not the index, objects or logs Git writes on every command, not
+    /// other files in a worktree folder.
+    fn only_list_changes_wake_the_watcher() {
         use notify::{
             Event, EventKind,
-            event::{AccessKind, AccessMode, CreateKind, ModifyKind, RemoveKind, RenameMode},
+            event::{
+                AccessKind, AccessMode, CreateKind, DataChange, Flag, ModifyKind, RemoveKind,
+                RenameMode,
+            },
         };
-        let wakes = |kind| changes_worktrees(&Event::new(kind));
-        assert!(!wakes(EventKind::Access(AccessKind::Open(AccessMode::Any))));
-        assert!(!wakes(EventKind::Access(AccessKind::Close(
-            AccessMode::Write
-        ))));
-        assert!(wakes(EventKind::Create(CreateKind::Folder)));
-        assert!(wakes(EventKind::Modify(ModifyKind::Name(RenameMode::To))));
-        assert!(wakes(EventKind::Remove(RemoveKind::File)));
-        assert!(wakes(EventKind::Other));
+        let root = Path::new("/src/acme");
+        let lane = root.join(".worktrees/lane");
+        let scope = Scope {
+            common: vec![root.join(".git")],
+            roots: vec![root.to_owned(), lane.clone()],
+        };
+        let write = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+        // Windows reports writes as `Modify(Any)`, and a directory whose
+        // entries changed as one too.
+        let touched = EventKind::Modify(ModifyKind::Any);
+        let renamed = EventKind::Modify(ModifyKind::Name(RenameMode::Both));
+        let file = EventKind::Create(CreateKind::File);
+        let gone = EventKind::Remove(RemoveKind::Folder);
+        let read = EventKind::Access(AccessKind::Close(AccessMode::Read));
+        let git = |rest: &str| root.join(".git").join(rest);
+        let cases: Vec<(EventKind, Vec<PathBuf>, bool)> = vec![
+            (write, vec![git("index")], false),
+            (file, vec![git("index.lock")], false),
+            (file, vec![git("objects/ab/cdef")], false),
+            (write, vec![git("logs/HEAD")], false),
+            (write, vec![git("FETCH_HEAD")], false),
+            (write, vec![git("worktrees/lane/index")], false),
+            (touched, vec![git("worktrees/lane")], false),
+            (touched, vec![root.join(".git")], false),
+            (read, vec![git("HEAD")], false),
+            (file, vec![lane.join("notes.txt")], false),
+            (touched, vec![root.to_owned()], false),
+            (write, vec![git("HEAD")], true),
+            (
+                renamed,
+                vec![git("worktrees/lane/HEAD.lock"), git("worktrees/lane/HEAD")],
+                true,
+            ),
+            (touched, vec![git("worktrees/lane/gitdir")], true),
+            (file, vec![git("worktrees/lane/locked")], true),
+            (
+                EventKind::Create(CreateKind::Folder),
+                vec![git("worktrees/new")],
+                true,
+            ),
+            (gone, vec![git("worktrees/lane")], true),
+            (
+                EventKind::Remove(RemoveKind::File),
+                vec![lane.join(".git")],
+                true,
+            ),
+            (gone, vec![lane.clone()], true),
+            (write, vec![PathBuf::from("/elsewhere/file")], true),
+            (EventKind::Any, Vec::new(), true),
+        ];
+        for (kind, paths, wakes) in cases {
+            let mut event = Event::new(kind);
+            event.paths = paths;
+            assert_eq!(changes_worktrees(&event, &scope), wakes, "{event:?}");
+        }
+        let rescan = Event::new(EventKind::Other)
+            .set_flag(Flag::Rescan)
+            .add_path(git("index"));
+        assert!(changes_worktrees(&rescan, &scope));
     }
 
     /// The watcher's own listing opens files in the common dir, which inotify
-    /// reports; it must not relist until something changes.
-    #[cfg(target_os = "linux")]
+    /// reports, and `git status` rewrites the index: neither relists, a new
+    /// worktree does.
     #[tokio::test]
-    async fn a_listing_does_not_wake_the_watcher() -> Result<(), Box<dyn std::error::Error>> {
+    async fn only_a_list_change_wakes_the_watcher() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::timeout(Duration::from_secs(15), async {
             let dir = tempfile::tempdir()?;
             let temp = TempPath(dunce::canonicalize(dir.path())?);
-            repository_with_nested_lane(temp.path()).await?;
+            let nested = repository_with_nested_lane(temp.path()).await?;
             let repository = discover(temp.path(), None)
                 .await?
                 .ok_or("missing repository")?;
             let mut updates = watch(repository)?;
             updates.recv().await.ok_or("first listing")??;
-            // A listing woken by the previous one followed it within 100 ms.
+            std::fs::write(nested.join("notes.txt"), "x")?;
+            git(&nested, &["status"]).await?;
+            git(temp.path(), &["status"]).await?;
+            // A listing woken by the previous one, or by those commands, follows
+            // within 100 ms of the event.
             let again = tokio::time::timeout(Duration::from_secs(1), updates.recv()).await;
             assert!(again.is_err(), "relisted without a change: {again:?}");
             let lane = temp.path().join("second");
