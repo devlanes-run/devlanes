@@ -1,5 +1,9 @@
 # devlanes-daemon
 
+## 0.14.2 — 2026-11-18
+
+Version bump only, to follow other packages.
+
 ## 0.14.1 — 2026-11-18
 
 ### Patch changes

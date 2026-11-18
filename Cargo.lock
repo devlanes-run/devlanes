@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1427,7 +1427,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-daemon"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1548,7 +1548,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-hosts-helper"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "sha2 0.10.9",
  "tempfile",
@@ -1630,7 +1630,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-mcp"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "devlanes-cli",
  "devlanes-proto",
@@ -1986,7 +1986,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-resolver-hosts"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "async-trait",
  "devlanes-hosts-helper",
