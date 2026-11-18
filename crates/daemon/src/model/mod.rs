@@ -1703,6 +1703,11 @@ pub(crate) struct ProjectRt {
     /// never before; never held while taking `sync`, and `sync` is never held
     /// while taking it.
     pub shared_infra: tokio::sync::RwLock<()>,
+    /// Runs the project's view refreshes one at a time, so deferred refreshes
+    /// cannot defer each other: with many lanes, they did so without end.
+    /// Callers may hold a lane's `op`, `sync` or `shared_infra` while taking
+    /// it, so its holder never waits for those: it only tries lanes' `op`.
+    pub refresh: tokio::sync::Mutex<()>,
     pub st: Mutex<ProjectSt>,
     pub watching: AtomicBool,
     pub watch: tokio_util::sync::CancellationToken,

@@ -3,7 +3,10 @@
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -1449,6 +1452,105 @@ async fn host_conflicts_prefer_running_lanes() {
             .await
             .expect("doctor");
         assert_eq!(doctor["route_warnings"][0]["code"], "host_conflict");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// Counts the services whose ports a layout asked for and, once `slow` is set,
+/// takes 20 ms each, as a lane with many units and expressions does.
+#[derive(Default)]
+struct SlowLayouts {
+    calls: AtomicUsize,
+    slow: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl devlanes_core::contrib::Contributor for SlowLayouts {
+    fn id(&self) -> &'static str {
+        "slow-layouts"
+    }
+
+    /// Counts the call and blocks the worker, as an expensive layout does.
+    fn required_ports(&self, _: &devlanes_core::contrib::ServiceView<'_>) -> Vec<String> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        if self.slow.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Vec::new()
+    }
+
+    /// Leaves the draft as it is.
+    async fn apply(
+        &self,
+        _: &mut devlanes_core::contrib::LaunchDraft,
+        _: &devlanes_core::contrib::ContribCx<'_>,
+    ) -> Result<(), devlanes_core::Error> {
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Config edits in three of eight lanes, read by requests at once, each
+/// refreshing the project's views, in a project whose layouts take time: once
+/// the requests return, the deferred refreshes run out and the daemon stops
+/// computing layouts (#212). Fewer lanes do not keep the old storm going
+/// reliably.
+async fn concurrent_refreshes_settle() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: demo\nservices:\n  a: { run: sleep, ready: started }\n  b: { run: sleep, ready: started }\n";
+        let main = repo(&tmp.path, "r", config);
+        let mut paths = vec![main.clone()];
+        for i in 1..8 {
+            let path = tmp.path.join(format!("wt{i}"));
+            worktree(&main, &path, &format!("feat/{i}"));
+            paths.push(path);
+        }
+        let layouts = Arc::new(SlowLayouts::default());
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                contributors: vec![layouts.clone()],
+                ..Setup::default()
+            },
+        )
+        .await;
+        // A command from a worktree gives it a lane.
+        for path in &paths {
+            lanes(&h, path).await;
+        }
+        let all = lanes(&h, &main).await;
+        assert_eq!(all.len(), paths.len(), "{all:?}");
+        assert!(all.iter().all(|lane| lane.index.is_some()), "{all:?}");
+        let edited = &paths[..3];
+        for path in edited {
+            std::fs::write(path.join("devlanes.yaml"), format!("{config}# edited\n"))
+                .expect("edit config");
+        }
+        layouts.slow.store(true, Ordering::Relaxed);
+        let shows = edited
+            .iter()
+            .map(|path| h.call(Method::ConfigShow, json!({}), cx(path)));
+        for show in futures_util::future::join_all(shows).await {
+            show.expect("config show");
+        }
+        assert!(layouts.calls.load(Ordering::Relaxed) > 0);
+        // Quiet: no layout for half a second. A storm computes layouts without
+        // pause, so it never gets there.
+        let quiet = async {
+            loop {
+                let before = layouts.calls.load(Ordering::Relaxed);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if layouts.calls.load(Ordering::Relaxed) == before {
+                    break;
+                }
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(15), quiet)
+            .await
+            .expect("the refreshes settle");
         h.close().await;
     })
     .await
