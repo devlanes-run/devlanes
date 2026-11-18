@@ -1,5 +1,5 @@
 #!/bin/sh
-# Writes SHA256SUMS (every archive, the Windows .zip ones included) and
+# Writes SHA256SUMS (every archive, the Windows .zip and the debug ones included) and
 # release-manifest.json (the .tar.gz archives) for the archives in DIST_DIR.
 # The daemon's update check reads the manifest's version; older clients'
 # `remote connect --install` also reads its archives: HTTPS URLs, lowercase hex
@@ -57,6 +57,18 @@ done
 # installs onto Linux and macOS boxes, so the manifest names the .tar.gz archives alone.
 for target in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
 	name=devlanes-$version-$target.zip
+	if [ ! -f "$dist/$name" ]; then
+		echo "missing $dist/$name" >&2
+		exit 1
+	fi
+	printf '%s  %s\n' "$(sha256 "$dist/$name")" "$name" >>"$sums"
+done
+
+# The debug archives (package-debug.sh), last. install.sh, install.ps1 and
+# `devlanes update`, in every released version, take the first line ending in
+# `-TARGET.tar.gz` or `-TARGET.zip`, which these names never do.
+for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+	name=devlanes-$version-$target-debug.tar.gz
 	if [ ! -f "$dist/$name" ]; then
 		echo "missing $dist/$name" >&2
 		exit 1

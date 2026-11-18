@@ -74,6 +74,9 @@ lto = "thin"
 # and 1m28s with Cargo's default of 16, for a binary 8% (4) or 21% (16) bigger than with 1.
 # The macOS runners have 3 cores, so more units than 4 gain little.
 codegen-units = 4
+# Release CI (.github/workflows/build.yml) adds line tables through CARGO_PROFILE_RELEASE_*
+# and ships them as separate debug archives, keeping the binaries stripped; `cargo install`
+# and local release builds stay without debug info.
 strip = true
 
 # The TUI web demo (crates/tui-web, `packaging/scripts/tui-web.sh`): every visitor

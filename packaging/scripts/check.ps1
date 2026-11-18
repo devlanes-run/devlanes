@@ -243,7 +243,8 @@ Assert-True (-not (Test-DevlanesCommand $cmd @('/d', '/c', 'exit', '3'))) 'a com
 Assert-True (-not (Test-DevlanesCommand 'C:\nonexistent\devlanes.exe' @('update', '--help'))) 'a program that does not start'
 Assert-Equal (Resolve-DevlanesLink $cmd) $cmd 'a path without links'
 
-$sums = "$('a' * 64)  devlanes-1.2.3-x86_64-unknown-linux-gnu.tar.gz`n$('b' * 64)  devlanes-1.2.3-x86_64-pc-windows-msvc.zip`n"
+# The debug archive's line comes first here to check it is skipped.
+$sums = "$('c' * 64)  devlanes-1.2.3-x86_64-pc-windows-msvc-debug.tar.gz`n$('a' * 64)  devlanes-1.2.3-x86_64-unknown-linux-gnu.tar.gz`n$('b' * 64)  devlanes-1.2.3-x86_64-pc-windows-msvc.zip`n"
 $found = Find-DevlanesArchive $sums 'x86_64-pc-windows-msvc' 'SHA256SUMS'
 Assert-Equal $found.Version '1.2.3' 'version from SHA256SUMS'
 Assert-Equal $found.Hash ('b' * 64) 'checksum from SHA256SUMS'
