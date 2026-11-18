@@ -7,6 +7,6 @@ devlanes runs a dev environment per Git worktree (a lane) with its own ports, UR
 - start, restart, reload and wait block until ready or failed. At the timeout they return what is ready so far; call wait to keep waiting instead of sleeping or polling with curl.
 - Read a unit with `logs {"units": ["web"], "tail": 100}`, the lane with status, a failure with `debug_why {"unit": "web"}`, CPU and memory with debug_top, setup problems with doctor.
 - Run builds, tests, git and other commands that exit in your own shell, or with `with {"command": ["pnpm", "test"]}` when they need the lane running.
-- Stop what you started with `stop {"mine": true}`. Leave the lane running when you hand work to the user for review.
+- When your task is done, stop what you started with `stop {"mine": true}`. Leave it running only when the user asked to try the result.
 - lane_clean, daemon_pair and other commands that delete data or reach other machines ask the user first.
 - cwd picks the worktree; without it the call uses the project the agent runs in.
