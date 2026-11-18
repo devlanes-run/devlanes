@@ -1,5 +1,11 @@
 # devlanes
 
+## 0.14.2 — 2026-11-18
+
+### Patch changes
+
+- [9b790ee0](https://github.com/devlanes-run/devlanes/commit/9b790ee0e9a21752edce856738b88976a0210cea) Changed the `devlanes mcp` instructions to tell agents to stop what they started when their task is done.
+
 ## 0.14.1 — 2026-11-18
 
 ### Patch changes
