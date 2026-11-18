@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a problem with devlanes, with a debug bundle.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For vulnerabilities, follow the [security policy](https://github.com/devlanes-run/.github/blob/main/SECURITY.md) instead of opening a public issue.
+
+        Make the debug bundle while the problem is happening, before you stop or restart the daemon: `devlanes debug bundle`, or `devlanes debug bundle -- start api` with the command that goes wrong. [Report a bug](https://devlanes.run/docs/how-to/report-a-bug/) explains each step.
+
+        Using a coding agent with the devlanes skill? Ask it to investigate the problem and draft this report following the skill's `references/reporting.md`, then review the draft before you post it.
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Before reporting
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Versions and environment
+      description: The output of `devlanes -v`, how devlanes was installed, OS and architecture, and Docker or other runtimes. For a box, describe both machines.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: What you saw, with numbers where they apply (CPU, memory, how long), and the commands you ran.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps
+      description: The commands and setup that lead to it, including how many lanes and worktrees were involved. Add the lines of the project file that matter, without secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What changed it
+      description: What you tried and whether the problem changed, such as stopping lanes, restarting the daemon or stopping Docker.
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Debug bundle
+      description: Drag the archive from `devlanes debug bundle` here, after reading its files for secrets. Add a CPU sample for CPU or memory problems. If you could not make a bundle, say why.
+    validations:
+      required: true
+  - type: textarea
+    id: ai-disclosure
+    attributes:
+      label: AI usage
+      description: Whether a coding agent investigated or wrote this report, and which agent and model.
+      placeholder: No AI used, or the agent, model and what it did.
+    validations:
+      required: true
