@@ -994,6 +994,7 @@ impl Inner {
             id,
             sync: tokio::sync::Mutex::new(()),
             shared_infra: tokio::sync::RwLock::new(()),
+            refresh: tokio::sync::Mutex::new(()),
             st: std::sync::Mutex::new(ProjectSt::new(
                 name,
                 root,
@@ -1627,21 +1628,35 @@ impl Inner {
     }
 
     /// Marks a refresh of `lane` pending and, unless one is already queued,
-    /// queues a task that runs it once it gets the lane's `op`: right after the
-    /// operation holding it ends, before or after the next one in line.
+    /// queues a task that runs it once it gets the project's `refresh`, then the
+    /// lane's `op`: right after the operation holding it ends, before or after
+    /// the next one in line.
     fn defer_refresh(self: &Arc<Self>, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
-        if std::mem::replace(&mut lane.st().refresh_pending, true) {
-            return;
-        }
+        let index = {
+            let mut st = lane.st();
+            if std::mem::replace(&mut st.refresh_pending, true) {
+                return;
+            }
+            st.index()
+        };
+        tracing::debug!(
+            project = %project.name(),
+            lane = index,
+            "lane busy, its view refresh waits for the operation to end"
+        );
         let (engine, project, lane) = (self.clone(), project.clone(), lane.clone());
         tokio::spawn(async move {
-            let _op = loop {
-                // Tried, never queued for: a writer in `op`'s queue would hold up
-                // every start that adds units until the start holding it ends,
-                // and that one may wait minutes for a start slot.
+            let (_refresh, _op) = loop {
+                // `op` is tried, never queued for: a writer in `op`'s queue would
+                // hold up every start that adds units until the start holding it
+                // ends, and that one may wait minutes for a start slot. It is
+                // tried under `refresh` and held only with it, so no other
+                // refresh finds this lane held and defers it again.
+                let refresh = project.refresh.lock().await;
                 if let Ok(op) = lane.op.try_write() {
-                    break op;
+                    break (refresh, op);
                 }
+                drop(refresh);
                 tokio::select! {
                     () = engine.shutdown.cancelled() => return,
                     // The project was dropped (`daemon reset-state`) or the lane removed.
@@ -1650,12 +1665,17 @@ impl Inner {
                     () = tokio::time::sleep(DEFERRED_REFRESH_POLL) => {}
                 }
             };
+            // The wait for `refresh` may have outlasted the daemon, the project or
+            // the lane.
+            let cancelled = engine.shutdown.is_cancelled()
+                || project.watch.is_cancelled()
+                || lane.watch.is_cancelled();
             // A start on this lane may have refreshed it meanwhile.
-            if !lane.st().refresh_pending {
+            if cancelled || !lane.st().refresh_pending {
                 return;
             }
             let refresh: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(engine.refresh_with(&project, Some(&lane)));
+                Box::pin(engine.refresh_pass(&project, Some(&lane)));
             refresh.await;
             engine.emit_lane(&project, &lane);
         });
@@ -2137,7 +2157,8 @@ impl Inner {
 
     /// Recomputes layouts (ports, URLs, routes) for every assigned lane, lane 0
     /// first so the others see `lanes.main.services`. A lane another operation holds
-    /// keeps its layout until that operation ends ([`Self::lane_access`]).
+    /// keeps its layout until that operation ends ([`Self::lane_access`]). The
+    /// project's refreshes run one at a time (`ProjectRt::refresh`).
     pub(crate) async fn refresh_views(self: &Arc<Self>, project: &Arc<ProjectRt>) {
         self.refresh_with(project, None).await;
     }
@@ -2151,8 +2172,15 @@ impl Inner {
         self.refresh_with(project, Some(lane)).await;
     }
 
-    /// The refresh, with the lane whose `op` the caller holds, if any.
+    /// The refresh, with the lane whose `op` the caller holds, if any. Waits for
+    /// a refresh of the project already running.
     async fn refresh_with(self: &Arc<Self>, project: &Arc<ProjectRt>, held: Option<&Arc<LaneRt>>) {
+        let _refresh = project.refresh.lock().await;
+        self.refresh_pass(project, held).await;
+    }
+
+    /// [`Self::refresh_with`] for a caller that holds the project's `refresh`.
+    async fn refresh_pass(self: &Arc<Self>, project: &Arc<ProjectRt>, held: Option<&Arc<LaneRt>>) {
         use tracing::Instrument as _;
         let name = project.name();
         let primary_config = self.primary_config(project);
@@ -2171,7 +2199,7 @@ impl Inner {
             .await;
     }
 
-    /// Body of [`Self::refresh_with`], in its span.
+    /// Body of [`Self::refresh_pass`], in its span.
     async fn refresh_lanes(self: &Arc<Self>, project: &Arc<ProjectRt>, held: Option<&Arc<LaneRt>>) {
         let mut lanes = project.lanes();
         lanes.sort_by_key(|lane| {
