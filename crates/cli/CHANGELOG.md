@@ -1,5 +1,11 @@
 # devlanes-cli
 
+## 0.14.1 — 2026-11-18
+
+### Patch changes
+
+- [e2e4f1ca](https://github.com/devlanes-run/devlanes/commit/e2e4f1cafda94805d6e447331980b83fcbab2e72) Fixed `devlanes stop --logs-dir` and `devlanes with --logs-dir` writing empty log files for units that never printed anything.
+
 ## 0.14.0 — 2026-11-16
 
 ### Minor changes

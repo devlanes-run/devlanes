@@ -1,5 +1,13 @@
 # devlanes
 
+## 0.14.1 — 2026-11-18
+
+### Patch changes
+
+- [c31f0059](https://github.com/devlanes-run/devlanes/commit/c31f0059f747d94d02a3199147c90491dd941ed2) Fixed the daemon re-reading the worktree list and lane layouts on every write to a repository's `.git` folder.
+- [e2e4f1ca](https://github.com/devlanes-run/devlanes/commit/e2e4f1cafda94805d6e447331980b83fcbab2e72) Fixed `devlanes stop --logs-dir` and `devlanes with --logs-dir` writing empty log files for units that never printed anything.
+- [a8935b83](https://github.com/devlanes-run/devlanes/commit/a8935b83f45e1955aca10ac3905b3e0f040dcc19) Fixed the daemon keeping several CPU cores busy in projects with many lanes, even with nothing running.
+
 ## 0.14.0 — 2026-11-16
 
 ### Minor changes
