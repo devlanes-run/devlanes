@@ -18,8 +18,8 @@ ready so far; call wait to keep waiting instead of sleeping or polling with curl
 with `debug_why {\"unit\": \"web\"}`, CPU and memory with debug_top, setup problems with doctor.
 - Run builds, tests, git and other commands that exit in your own shell, or with \
 `with {\"command\": [\"pnpm\", \"test\"]}` when they need the lane running.
-- Stop what you started with `stop {\"mine\": true}`. Leave the lane running when you hand work \
-to the user for review.
+- When your task is done, stop what you started with `stop {\"mine\": true}`. Leave it running \
+only when the user asked to try the result.
 - lane_clean, daemon_pair and other commands that delete data or reach other machines ask the \
 user first.
 - cwd picks the worktree; without it the call uses the project the agent runs in.";
@@ -85,8 +85,8 @@ unit printed.",
     ),
     (
         "stop",
-        "Call it with mine to stop what you started once you are done. Leave the lane running \
-when you hand work to the user for review.",
+        "Call it with mine when your task is done, to stop what you started. Leave that running \
+only when the user asked to try the result.",
     ),
     (
         "restart",

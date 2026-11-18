@@ -152,7 +152,7 @@ running myapp@2:watch-tests actor=opencode pid=53356
 
 The daemon owns the process. It gets your shell's environment, then the lane's, including `DEVLANES_PUBLIC_URL_<SERVICE>`; `--env KEY=VALUE` wins over both. The command runs directly, without a shell. Give it a name no configured unit has. It gets no port or hostname of its own; [references/configuration.md](references/configuration.md) shows `infra.external` for a server that needs a hostname. `devlanes wait NAME` waits for an `exec` command to exit, so never wait on one that serves.
 
-## Stop only what you started
+## Stop what you started
 
 | Goal | Command |
 |---|---|
@@ -161,7 +161,8 @@ The daemon owns the process. It gets your shell's environment, then the lane's, 
 
 `devlanes stop --mine` stops the units your agent session started in every lane of the current project, and leaves the rest running, the user's units and shared containers included. Outside a project it covers every project. When your units also run in other projects, it names them with the command for each, such as `devlanes -p myapp-prod stop --mine`. A bare `devlanes stop` stops the whole lane, the user's units included; run it only when the user asks.
 
-- When you hand the work to the user for review, leave the lane running and give them its URL.
+- Run `devlanes stop --mine` when your task is done, before your last message. A lane left running holds memory and ports, and each agent working in parallel leaves one. Tell the user the command that starts it again, such as `devlanes start`.
+- Leave it running only when the user asked to try the result themselves. Then give them the HTTPS URL, and say that the lane still runs and that `devlanes stop` in the worktree stops it.
 - As a subagent, stop the units you started by name before you return. Your parent may run in another session, which `stop --mine` does not reach, or in the same one, where your `stop --mine` stops its units too.
 - Stopping or restarting a unit someone else started works, and the result says so. Do it only when the task needs it.
 

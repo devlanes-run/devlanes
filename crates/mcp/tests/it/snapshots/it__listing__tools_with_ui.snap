@@ -229,7 +229,7 @@ expression: tools
   },
   {
     "name": "stop",
-    "description": "Stop units, or the whole lane when none are named. Call it with mine to stop what you started once you are done. Leave the lane running when you hand work to the user for review.",
+    "description": "Stop units, or the whole lane when none are named. Call it with mine when your task is done, to stop what you started. Leave that running only when the user asked to try the result.",
     "inputSchema": {
       "type": "object",
       "properties": {
