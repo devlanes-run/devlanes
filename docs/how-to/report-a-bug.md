@@ -4,7 +4,9 @@ description: Collect the versions, checks and logs a devlanes bug report needs, 
 kind: how-to
 ---
 
-Use this when devlanes does something you did not expect and you want someone to reproduce it.
+Use this when devlanes does something you did not expect and you want someone to reproduce it. Collect everything while the problem is happening: stopping or restarting the daemon loses most of it.
+
+A coding agent with the devlanes skill can collect this and draft the issue. Ask it to investigate the problem and draft a bug report, read the draft before it is posted, and attach the bundle yourself.
 
 ## Check the machine
 
@@ -26,7 +28,7 @@ It writes an archive with the versions, the doctor's checks, the status of the l
 
 ## File the issue
 
-Open an issue at [github.com/devlanes-run/devlanes/issues](https://github.com/devlanes-run/devlanes/issues) with your OS, the command you ran, what you expected and what you got, the lines of the project file involved with secrets removed, and the bundle.
+Open a [bug report](https://github.com/devlanes-run/devlanes/issues/new?template=bug.yml). The form asks for your versions, what happened, the steps, what you expected and the bundle. Add the lines of the project file involved, with secrets removed.
 
 ## If the daemon's log needs more detail
 

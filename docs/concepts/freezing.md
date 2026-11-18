@@ -40,7 +40,7 @@ A request to a frozen lane waits while the lane thaws and then goes through, so 
 
 ## Some lanes stay awake
 
-A busy lane does not freeze: one that is starting or stopping, or that runs a task or a command started with `devlanes exec`. A worker or queue consumer does its work without requests and would stall in a frozen lane, so mark it with [`services.<name>.keep_awake`](/docs/reference/config/project/services/) to keep its whole lane awake.
+A busy lane does not freeze: one that is starting or stopping, that runs a task or a command started with `devlanes exec`, or whose services keep using CPU, as a build or a process stuck in a loop does. A worker or queue consumer does its work without requests and would stall in a frozen lane, so mark it with [`services.<name>.keep_awake`](/docs/reference/config/project/services/) to keep its whole lane awake.
 
 Some lanes stay awake without being told. A browser tab whose dev client pings over a WebSocket counts as activity for as long as it is open, and closing the tab lets the lane freeze.
 

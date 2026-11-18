@@ -7,6 +7,8 @@ description: Start, stop, inspect and test dev services with the devlanes CLI. U
 
 devlanes runs each Git worktree of a project as a lane with its own ports, hostnames and data folder. A per-user daemon owns every process, so a dev server keeps running after your shell command returns and its logs stay readable.
 
+The docs are indexed at `https://devlanes.run/llms.txt`, each page in Markdown, and `https://devlanes.run/llms-full.txt` has all of them in one file.
+
 Open a reference when the task calls for it:
 
 | Situation | Read |
@@ -17,6 +19,7 @@ Open a reference when the task calls for it:
 | Registering `devlanes mcp`, or your shell cannot reach the daemon | [references/mcp.md](references/mcp.md) |
 | A box: a lane on another machine, pairing, `devlanes remote` | [references/remote.md](references/remote.md) |
 | A unit that fails, a ready check that never passes, a port, hostname, certificate, daemon or sandbox problem | [references/troubleshooting.md](references/troubleshooting.md) |
+| devlanes itself misbehaves, or the user wants a devlanes bug reported. Investigate before you work around it | [references/reporting.md](references/reporting.md) |
 
 ## Words
 
@@ -52,6 +55,8 @@ When `devlanes` is not found and the project's `package.json` lists `devlanes`, 
 `start`, `restart`, `reload` and `wait` return once the units are ready or one failed, or when `--timeout` passes (180 seconds by default for `start` and `wait`), with exit 124. Do not poll with `sleep` or `curl` loops. A plain `devlanes start` brings back what the lane ran before, else the project's default profile. A start into a running lane starts only the selected services the lane lacks and runs no tasks.
 
 A new worktree gets its own lane on its first `devlanes start`, with new ports, hostnames, data folder and lane number. It needs the project file in the worktree, so `devlanes.yaml` must be committed on its branch. That first start runs the project's `lane.create` tasks (installs, codegen) and setup entries; when the project has none, install dependencies in the new worktree before you start. A worktree without its own `devlanes.local.yaml` or `.env` reads the primary worktree's.
+
+Removing a worktree stops what its lane runs, and keeps the lane with its number, ports and data folder until `devlanes lane gc --yes` cleans it; run that only when the user asks. A project that sets `lanes.removed_worktrees: clean` has the daemon clean such lanes by itself. While the worktree exists, its lane keeps running until something stops it; an unused lane is frozen after a while, see [Throttling and freezing](https://devlanes.run/docs/concepts/freezing.md).
 
 ```sh
 git worktree add ../myapp-checkout -b feat/checkout
