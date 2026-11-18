@@ -1,6 +1,6 @@
 # devlanes-mcp
 
-## 0.3.1 ... 0.4.0 — 2026-11-16
+## 0.3.1 ... 0.4.1 — 2026-11-18
 
 Version bump only, to follow other packages.
 

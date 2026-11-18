@@ -1,5 +1,11 @@
 # devlanes-git
 
+## 0.10.1 — 2026-11-18
+
+### Patch changes
+
+- [c31f0059](https://github.com/devlanes-run/devlanes/commit/c31f0059f747d94d02a3199147c90491dd941ed2) Fixed the daemon re-reading the worktree list and lane layouts on every write to a repository's `.git` folder.
+
 ## 0.8.0 ... 0.10.0 — 2026-11-16
 
 Version bump only, to follow other packages.
