@@ -25,7 +25,7 @@ flowchart LR
 
 ## Lanes are numbered
 
-The worktree on the primary branch, usually main, is lane 0, the main lane. Any other worktree gets the lowest free number the first time you run devlanes in it, with a start or a status, for example. Creating a worktree with Git does nothing by itself.
+The primary worktree, the folder you cloned into, is lane 0, the main lane, whatever branch it has checked out. Any other worktree gets the lowest free number the first time you run devlanes in it, with a start or a status, for example. Creating a worktree with Git does nothing by itself.
 
 Lane 0 is named main and the others lane1, lane2 and so on, whatever their branch. Values built from the name differ per lane, which is how each lane gets a database of its own:
 

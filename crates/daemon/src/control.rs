@@ -1587,7 +1587,10 @@ impl Inner {
                     let (dir, name) = project.config_path();
                     lane.st().path().join(dir).join(name)
                 });
-                let branch = project.st().primary_branch().to_owned();
+                let branch = self
+                    .primary_lane(project)
+                    .and_then(|primary| primary.st().branch().map(str::to_owned))
+                    .unwrap_or_else(|| project.st().primary_branch().to_owned());
                 let primary = PrimaryWorktree {
                     root: self.primary_path(project),
                     branch: Some(branch),

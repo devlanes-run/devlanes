@@ -67,8 +67,8 @@ pub struct EngineOptions {
     /// `daemon restart`). Kept in memory only and dropped once used: it
     /// carries the restarting client's environment.
     pub resume: Option<devlanes_proto::ResumePlan>,
-    /// The daemon runs under CI: a checkout takes lane 0 while it is free,
-    /// whatever its branch, because CI checks out pull requests detached.
+    /// The daemon runs under CI: whichever lane holds lane 0 keeps it and no
+    /// other moves onto it, so a job's lane numbers never shift under it.
     /// Off in [`EngineOptions::new`] so tests behave the same in and out of CI.
     pub ci: bool,
 }
