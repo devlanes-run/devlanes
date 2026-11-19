@@ -45,7 +45,7 @@ $ devlanes start
 
 ## If you change the container
 
-A start into a running lane leaves its containers as they are. After you change a container's image, command, variables, mounts or ports, recreate it in that lane:
+A start into a running lane brings back containers that stopped and leaves running ones as they are. After you change a container's image, command, variables, mounts or ports, recreate it in that lane:
 
 ```console
 $ devlanes infra up

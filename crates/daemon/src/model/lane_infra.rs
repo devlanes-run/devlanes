@@ -226,6 +226,28 @@ impl LaneInfra {
             .collect()
     }
 
+    /// Declared keys that ran in this lane (an entry is stored) and are now
+    /// down, so a start into the running lane brings them back. Keys that never
+    /// ran, such as a finished one-shot job, are left alone, and so is a stopped
+    /// engine, which `up` could not fix.
+    pub(crate) fn lost(&self) -> BTreeSet<String> {
+        let Some(namespace) = &self.namespace else {
+            return BTreeSet::new();
+        };
+        self.declared
+            .iter()
+            .flatten()
+            .filter(|name| {
+                namespace.contains_key(*name)
+                    && matches!(
+                        self.keys.get(*name).map(|key| &key.state),
+                        Some(KeyState::Down(DownReason::NotRunning))
+                    )
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Whether a start into the running lane has nothing to check (with the
     /// setup-backed keys `extra`) and no run to wait for.
     pub(crate) fn settled(&self, extra: &[String]) -> bool {
@@ -864,6 +886,54 @@ mod tests {
                 "{case}: commands see only running entries"
             );
             assert_eq!(infra.to_verify(&[]).contains(key), checked, "{case}");
+        }
+    }
+
+    /// Only a key that ran in the lane and is down is lost.
+    #[test]
+    fn lost_keys_ran_here_and_are_down() {
+        use InfraEventKind::Died;
+        use Obs::{Down, Run, Stopped};
+        let cases: Vec<(&str, Vec<Step>, &[&str])> = vec![
+            (
+                "a key that ran and died",
+                vec![
+                    Step::Replace(0, &[("db", Run(1), Some(5432), Run(1))]),
+                    Step::Event(10, "db", 1, Died),
+                ],
+                &["db"],
+            ),
+            (
+                "a key that runs",
+                vec![Step::Replace(0, &[("db", Run(1), Some(5432), Run(1))])],
+                &[],
+            ),
+            (
+                "a key that never ran",
+                vec![Step::Replace(
+                    0,
+                    &[
+                        ("db", Run(1), Some(5432), Run(1)),
+                        ("cache", Down, None, Down),
+                    ],
+                )],
+                &[],
+            ),
+            (
+                "a stopped engine",
+                vec![
+                    Step::Replace(0, &[("db", Run(1), Some(5432), Run(1))]),
+                    Step::Observe(10, &[("db", Stopped)]),
+                ],
+                &[],
+            ),
+        ];
+        for (case, steps, expected) in cases {
+            let start = Instant::now();
+            let mut infra = LaneInfra::default();
+            apply(&mut infra, start, &steps);
+            let lost: Vec<String> = infra.lost().into_iter().collect();
+            assert_eq!(lost, expected, "{case}");
         }
     }
 }

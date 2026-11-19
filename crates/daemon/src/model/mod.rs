@@ -1263,6 +1263,9 @@ pub(crate) struct LaneRt {
     /// Held while a start checks and runs setup entries, so two starts never
     /// run the same entry at once.
     pub setup: tokio::sync::Mutex<()>,
+    /// Held while a start into a running lane brings back infra that stopped,
+    /// so two starts never run `up` for it at once.
+    pub infra_recovery: tokio::sync::Mutex<()>,
     /// The lane's single-flight drift job.
     pub drift_job: crate::drift::DriftJob,
 }
