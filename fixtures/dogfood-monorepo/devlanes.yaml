@@ -34,7 +34,7 @@ templates:
 
 # Each Git worktree is a lane with its own ports, hostnames and data.
 lanes:
-  # Branch whose worktree is lane 0.
+  # Branch whose worktree is lane 0 when the repository has no primary worktree, such as a bare clone.
   primary: trunk
   # Also write hostnames to /etc/hosts, for workerd, which cannot resolve *.localhost.
   hosts_file: always

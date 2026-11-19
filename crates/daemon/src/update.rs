@@ -94,8 +94,8 @@ impl UpdateCheckOptions {
 }
 
 /// The CI markers the CLI's output-mode detection uses. Under CI the daemon
-/// skips release checks, and the binary sets [`crate::EngineOptions::ci`] so a
-/// checkout takes lane 0 on any branch.
+/// skips release checks, and the binary sets [`crate::EngineOptions::ci`] so
+/// whichever lane holds lane 0 keeps it.
 pub fn ci_detected(lookup: impl Fn(&str) -> Option<String>) -> bool {
     [
         "CI",

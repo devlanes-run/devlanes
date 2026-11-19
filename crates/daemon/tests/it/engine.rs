@@ -238,6 +238,52 @@ async fn lane_indices_and_primary_moves() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A repository without a main checkout, such as a bare clone, gives lane 0 to
+/// the worktree on the primary branch: another one moving onto that branch takes
+/// it at its next start, and the holder moves off.
+async fn in_a_bare_clone_lane_zero_follows_the_primary_branch() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let source = repo(&tmp.path, "r", BASIC);
+        git(&tmp.path, &["clone", "-q", "--bare", "r", "bare.git"]);
+        let bare = tmp.path.join("bare.git");
+        let (on_main, other) = (tmp.path.join("wt-main"), tmp.path.join("wt-a"));
+        git(
+            &bare,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                &on_main.display().to_string(),
+                "main",
+            ],
+        );
+        worktree(&bare, &other, "feat/a");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let list = lanes(&h, &on_main).await;
+        assert_eq!(lane_at(&list, &on_main).index, Some(0));
+        let list = lanes(&h, &other).await;
+        assert_eq!(lane_at(&list, &other).index, Some(1));
+
+        git(&on_main, &["checkout", "-q", "--detach"]);
+        git(&other, &["checkout", "-q", "main"]);
+        let list = lanes(&h, &on_main).await;
+        assert_eq!(lane_at(&list, &other).moves_to, Some(0));
+        assert_eq!(lane_at(&list, &on_main).moves_to, Some(2));
+
+        let result = start(&h, cx(&other), json!({"units": ["worker"]})).await;
+        assert_eq!(result.lane, "demo@0");
+        let list = lanes(&h, &on_main).await;
+        assert_eq!(lane_at(&list, &other).index, Some(0));
+        assert_eq!(lane_at(&list, &on_main).index, Some(2));
+        drop(source);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// A worktree devlanes ran in, moved and removed, shows in `status` without a
 /// re-list request. Once removed and idle, its lane is cleaned when its file sets
 /// `removed_worktrees: clean`, and kept with its index otherwise.

@@ -1476,9 +1476,10 @@ impl Inner {
     }
 
     /// Computes `moves_to` for every assigned lane (applied at its next start): the
-    /// worktree [`primary_tree`] gives lane 0 to moves onto it (a linked worktree
-    /// that held lane 0 from before the main checkout did moves off). Under CI a lane that holds lane 0 keeps it, and nobody
-    /// moves onto it.
+    /// worktree [`primary_tree`] gives lane 0 to moves onto it, and another lane
+    /// holding it moves off once that worktree has a lane to move (one that waits
+    /// for `lanes.max` leaves the holder where it is). Under CI a lane that holds
+    /// lane 0 keeps it, and nobody moves onto it.
     pub(crate) fn update_moves(&self, project: &ProjectRt) {
         let primary = project.st().primary_branch().to_owned();
         let lanes = project.lanes();
@@ -1488,6 +1489,14 @@ impl Inner {
         let lane_zero = primary_tree(&trees, &primary, self.opts.ci)
             .filter(|found| found.lane_zero)
             .map(|found| found.tree.identity.clone());
+        // Moving the holder off lane 0 for a worktree without a lane would leave
+        // lane 0 empty.
+        let zero_waits = lane_zero.as_ref().is_some_and(|identity| {
+            !lanes.iter().any(|lane| {
+                let st = lane.st();
+                st.identity == *identity && st.index().is_some()
+            })
+        });
         for lane in lanes {
             let mut st = lane.st();
             let Some(index) = st.index() else {
@@ -1503,7 +1512,7 @@ impl Inner {
                 (true, 0) | (false, 1..) => None,
                 (true, _) if self.opts.ci && used.contains(&0) => None,
                 (true, _) => Some(0),
-                (false, 0) if self.opts.ci => None,
+                (false, 0) if self.opts.ci || zero_waits => None,
                 (false, 0) => Some(free),
             };
         }

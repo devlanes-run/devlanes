@@ -97,11 +97,11 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
 /// These settings decide which worktrees get a lane, how many ports each lane reserves,
 /// and the values each lane computes.
 pub struct LanesConfig {
-    /// Branch whose worktree is lane 0, the main lane (`lanes.main` in expressions), in a
-    /// repository without a main checkout, such as a bare clone. Everywhere else lane 0 is
-    /// the main checkout, the folder you cloned into, whatever branch it has checked out,
-    /// and the only worktree that gets a lane by itself. Defaults to the remote's default
-    /// branch, else `main` or `master`.
+    /// Branch whose worktree is lane 0 in a repository without a primary worktree, such as
+    /// a bare clone. Otherwise lane 0, the main lane (`lanes.main` in expressions), is the
+    /// primary worktree, the folder you cloned into, on any branch. Lane 0 is the only
+    /// worktree that gets a lane by itself. Defaults to the remote's default branch, else
+    /// `main` or `master`.
     #[schemars(extend("examples" = ["main"]))]
     pub primary: Option<String>,
     /// What devlanes does when a worktree gets its lane: only reserve it, also set it up,

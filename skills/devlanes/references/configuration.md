@@ -164,7 +164,7 @@ Layers, lowest first: the shell that started the lane, tools and runtimes (mise,
 
 ```yaml
 lanes:
-  primary: main                        # lane 0's branch in a bare clone; else lane 0 is the main checkout
+  primary: main                        # lane 0's branch in a bare clone; else lane 0 is the primary worktree
   max: 6
   vars:
     db_name: myapp_${{ lane.name }}
