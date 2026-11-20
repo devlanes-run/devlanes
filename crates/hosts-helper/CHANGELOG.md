@@ -1,6 +1,6 @@
 # devlanes-hosts-helper
 
-## 0.11.0 ... 0.14.2 — 2026-11-18
+## 0.11.0 ... 0.15.0 — 2026-11-20
 
 Version bump only, to follow other packages.
 
