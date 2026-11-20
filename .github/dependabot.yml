@@ -1,0 +1,68 @@
+version: 2
+
+# Every ecosystem runs weekly and waits a week after a release before proposing it,
+# so a yanked or compromised version is usually gone first. The wait does not apply to
+# security updates. Minor and patch updates share one pull request per ecosystem;
+# major updates stay one pull request each, except for crates that must move together.
+#
+# Not covered on purpose:
+# - rust-toolchain.toml: 1.99.1 is also in Cargo.toml, ci.yml and e2e/ssh/run.sh.
+# - e2e/ssh/Dockerfile: its Debian release has to match the rust image in run.sh.
+# - packaging/npm/devlanes: the release workflow sets those versions.
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      # Crates that break together across majors, so every update type lands in one pull request.
+      tokio:
+        patterns: [tokio, tokio-util, tokio-tungstenite]
+      rustls:
+        patterns: [rustls, rustls-pemfile, rustls-pki-types, tokio-rustls, webpki-root-certs]
+      hyper:
+        patterns: [hyper, hyper-util, http-body-util]
+      tracing:
+        patterns: [tracing, tracing-appender, tracing-subscriber]
+      tui:
+        patterns: [ratatui, crossterm, tui-term, vt100, vte, ratzilla]
+      wasm:
+        patterns: [wasm-bindgen, web-sys, console_error_panic_hook]
+      diesel:
+        patterns: [diesel, diesel_migrations, libsqlite3-sys]
+      cargo-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Pinned with `=` in Cargo.toml: the protocol revisions the MCP server negotiates come with the version.
+      - dependency-name: rmcp
+
+  - package-ecosystem: npm
+    directory: /crates/mcp-ui/ui
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      biome:
+        patterns: ["@biomejs/*", "@arthurfiorette/biomejs-config"]
+      rsbuild:
+        patterns: ["@rsbuild/*"]
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        update-types: [minor, patch]
