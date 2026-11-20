@@ -21,7 +21,7 @@ use hyper::{Request, body::Incoming};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpSocket, TcpStream},
     sync::oneshot,
     task::{JoinHandle, JoinSet},
 };
@@ -665,7 +665,12 @@ async fn sign_in_pages_do_not_wait() -> Result {
 #[tokio::test]
 async fn refused_connections_are_retried() -> Result {
     tokio::time::timeout(Duration::from_secs(10), async {
-        let address = TcpListener::bind("127.0.0.1:0").await?.local_addr()?;
+        // Bound but not listening: connections are refused, and the proxy's own
+        // retries cannot take the port as a source port (a self-connect) or
+        // another test pick it before the listener starts.
+        let socket = TcpSocket::new_v4()?;
+        socket.bind("127.0.0.1:0".parse()?)?;
+        let address = socket.local_addr()?;
         let table = RouteTable::new(vec![Route::new("app.lane.localhost", address)])?;
         let none = ProxyLimits {
             refused_retry: Duration::ZERO,
@@ -697,13 +702,13 @@ async fn refused_connections_are_retried() -> Result {
             &[],
         ));
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let listener = TcpListener::bind(address).await?;
-        let (mut socket, _) = listener.accept().await?;
+        let listener = socket.listen(16)?;
+        let (mut accepted, _) = listener.accept().await?;
         let mut head = Vec::new();
         while !head.ends_with(b"\r\n\r\n") {
-            head.push(socket.read_u8().await?);
+            head.push(accepted.read_u8().await?);
         }
-        socket
+        accepted
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
             .await?;
         let response = pending.await??;
