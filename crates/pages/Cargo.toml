@@ -16,7 +16,7 @@ percent-encoding = "2"
 [build-dependencies]
 base64.workspace = true
 grass.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 
 [lints]
 workspace = true
