@@ -832,6 +832,16 @@ fn cache_config() -> String {
         )
 }
 
+/// How many times the fake was asked what its containers run.
+fn observes(h: &crate::Harness) -> usize {
+    h.infra
+        .queries
+        .entries()
+        .iter()
+        .filter(|query| *query == "observe")
+        .count()
+}
+
 /// How many times the fake brought infra up.
 fn ups(h: &crate::Harness) -> usize {
     h.infra
@@ -902,16 +912,18 @@ async fn concurrent_starts_bring_stopped_infra_up_once() {
 
         let first = h.call(Method::Start, json!({"units": ["web"]}), cx(&main));
         let second = h.call(Method::Start, json!({"units": ["api"]}), cx(&main));
+        let before = observes(&h);
         let driver = async {
+            // One start waits in `up` and the other has seen the infra down
+            // too: one `observe` each before the lock, and one more by the
+            // start that holds it. Without the lock the other start would
+            // wait at the gate as well, and `notify_waiters` would let its
+            // `up` show in the count.
             let reached = crate::eventually(std::time::Duration::from_secs(5), || async {
-                (ups(&h) == 2).then_some(())
+                (ups(&h) >= 2 && observes(&h) >= before + 3).then_some(())
             })
             .await;
-            assert!(reached.is_some(), "a start reached `up`");
-            // Long enough for the other start to reach the lane's recovery
-            // lock; without it that start waits at the gate too, and releasing
-            // every waiter lets its `up` show in the count.
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            assert!(reached.is_some(), "both starts saw the infra down");
             gate.notify_waiters();
         };
         let (first, second, ()) = tokio::join!(first, second, driver);
