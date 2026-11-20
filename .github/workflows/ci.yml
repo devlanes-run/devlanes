@@ -76,7 +76,7 @@ jobs:
         run: |
           version=$(awk '/^name = "wasm-bindgen"$/ { found = 1; next } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' Cargo.lock)
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
       - name: Install wasm-opt
@@ -135,7 +135,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           "TMP=$dir" >> $env:GITHUB_ENV
           "TEMP=$dir" >> $env:GITHUB_ENV
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
       # The default nextest profile leaves out devlanes-e2e; the e2e jobs run it.
@@ -164,7 +164,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: shellcheck
       - name: Install actionlint
@@ -261,7 +261,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           "TMP=$dir" >> $env:GITHUB_ENV
           "TEMP=$dir" >> $env:GITHUB_ENV
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
       # Built once here; each nextest test process would otherwise run cargo build
