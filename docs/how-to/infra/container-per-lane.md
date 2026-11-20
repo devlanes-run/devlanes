@@ -56,7 +56,7 @@ $ devlanes lane clean 1 --yes
 
 ## If you replace the container
 
-A start into a running lane does not recreate a container you removed, for example to use a newly pulled image. Bring it back in the lane's worktree:
+A start into a running lane brings back a container that stopped or that you removed, and leaves a running one as it is. To recreate a running container, for example to use a newly pulled image, run this in the lane's worktree:
 
 ```console
 $ devlanes infra up

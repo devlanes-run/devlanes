@@ -784,8 +784,23 @@ impl LanePhase for InfraPhase {
         // Adding units to a lane that is up brings nothing up: the bring-up
         // stored the containers' namespace. Only keys in doubt are checked, and
         // containers that restarted since are waited for and read again.
-        if !cx.whole_lane && !cx.setup_only && cx.lane.st().infra().tracked() {
-            return settle_running_lane(engine, cx).await;
+        // Containers that ran in the lane and stopped since are brought up below,
+        // as a whole-lane start does.
+        let lane = cx.lane.clone();
+        let mut recovery = None;
+        if !cx.whole_lane && !cx.setup_only && lane.st().infra().tracked() {
+            if let Some(result) = settle_running_lane(engine, cx).await {
+                return result;
+            }
+            let guard = tokio::select! {
+                guard = lane.infra_recovery.lock() => guard,
+                () = cx.cancel.cancelled() => return PhaseResult::Error(start_cancelled(cx)),
+            };
+            // A start that held it first may have brought them back.
+            if let Some(result) = settle_running_lane(engine, cx).await {
+                return result;
+            }
+            recovery = Some(guard);
         }
         let empty_spec = match engine
             .infra_spec(&cx.project, &cx.lane, &[])
@@ -826,7 +841,7 @@ impl LanePhase for InfraPhase {
         };
         let skip = if !cx.infra_enabled {
             Some(profile_disables_infra(cx))
-        } else if !cx.whole_lane && !cx.setup_only {
+        } else if !cx.whole_lane && !cx.setup_only && recovery.is_none() {
             Some(reason("lane_running", json!({})))
         } else if cx.infra_templated && !engine.profiles_enable_infra(cx, &spec).await {
             cx.infra_enabled = false;
@@ -892,9 +907,10 @@ impl LanePhase for InfraPhase {
 /// containers setup entries are backed by are checked, and containers whose
 /// runs changed are waited for until healthy and their ports read again, so
 /// setup entries and services that resolve next see the current ones. With
-/// nothing in doubt, Docker is not asked.
-async fn settle_running_lane(engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult {
-    let skip = || PhaseResult::Skipped(reason("lane_running", json!({})));
+/// nothing in doubt, Docker is not asked. `None` when containers that ran in
+/// the lane are down, which the caller brings up.
+async fn settle_running_lane(engine: &Arc<Inner>, cx: &mut StartCx) -> Option<PhaseResult> {
+    let skip = || Some(PhaseResult::Skipped(reason("lane_running", json!({}))));
     if !cx.infra_enabled {
         return skip();
     }
@@ -914,7 +930,7 @@ async fn settle_running_lane(engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResu
     }
     let spec = match engine.restarted_infra_spec(&cx.project, &cx.lane).await {
         Ok(spec) => spec,
-        Err(error) => return PhaseResult::Error(error),
+        Err(error) => return Some(PhaseResult::Error(error)),
     };
     let mut shown = Vec::new();
     let settled = tokio::select! {
@@ -924,17 +940,26 @@ async fn settle_running_lane(engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResu
             &mut shown,
             engine.settle_infra(&cx.project, &cx.lane, Some(&spec), &setup_keys, cx.deadline),
         ) => settled,
-        () = cx.cancel.cancelled() => return PhaseResult::Error(start_cancelled(cx)),
+        () = cx.cancel.cancelled() => return Some(PhaseResult::Error(start_cancelled(cx))),
     };
-    match settled {
-        Ok(Settled::Nothing) => skip(),
-        Ok(Settled::Done { changed }) => {
-            if changed {
-                cx.lane.st().refresh_pending = true;
-            }
-            PhaseResult::Done
+    let (nothing, changed) = match settled {
+        Ok(Settled::Nothing) => (true, false),
+        Ok(Settled::Done { changed }) => (false, changed),
+        Err(error) => return Some(PhaseResult::Error(error)),
+    };
+    let lost = {
+        let mut st = cx.lane.st();
+        if changed {
+            st.refresh_pending = true;
         }
-        Err(error) => PhaseResult::Error(error),
+        !st.infra().lost().is_empty()
+    };
+    if lost {
+        None
+    } else if nothing {
+        skip()
+    } else {
+        Some(PhaseResult::Done)
     }
 }
 

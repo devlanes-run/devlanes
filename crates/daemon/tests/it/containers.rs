@@ -801,6 +801,144 @@ async fn restarted_shared_container_refreshes_ports_and_drift() {
     .expect("timeout");
 }
 
+/// The lane at `main` with `api` running and the shared `cache` stopped
+/// outside devlanes, as `status` shows it.
+async fn lane_with_stopped_cache(h: &crate::Harness, main: &std::path::Path) {
+    h.call(Method::Start, json!({"units": ["api"]}), cx(main))
+        .await
+        .expect("start");
+    assert_eq!(cache(h, main).await.map(|c| c.0), Some(6379));
+    *h.infra.cache_down.lock().expect("lock") = true;
+    h.infra.resync();
+    let down = crate::eventually(std::time::Duration::from_secs(5), || async {
+        cache(h, main)
+            .await
+            .filter(|(_, state)| state.as_deref() == Some("exited 0"))
+    })
+    .await;
+    assert!(down.is_some(), "status shows the stopped cache");
+}
+
+/// The config of the shared `cache` with the services `api` and `web`.
+fn cache_config() -> String {
+    CONFIG
+        .replace(
+            "infra:\n  containers:\n",
+            "infra:\n  containers:\n    cache: { image: \"redis:7\", ports: { \"6379\": 6379 } }\n",
+        )
+        .replace(
+            "api: { run: sleep }",
+            "api: { run: sleep }\n  web: { run: sleep }",
+        )
+}
+
+/// How many times the fake was asked what its containers run.
+fn observes(h: &crate::Harness) -> usize {
+    h.infra
+        .queries
+        .entries()
+        .iter()
+        .filter(|query| *query == "observe")
+        .count()
+}
+
+/// How many times the fake brought infra up.
+fn ups(h: &crate::Harness) -> usize {
+    h.infra
+        .calls
+        .entries()
+        .iter()
+        .filter(|call| call.starts_with("up"))
+        .count()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A start into a running lane brings back a shared container that stopped
+/// outside devlanes, and the next start leaves the infra alone.
+async fn start_into_a_running_lane_brings_back_stopped_infra() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", &cache_config());
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        lane_with_stopped_cache(&h, &main).await;
+        assert_eq!(ups(&h), 1);
+
+        *h.infra.up_revives_cache.lock().expect("lock") = true;
+        h.call(Method::Start, json!({"units": ["web"]}), cx(&main))
+            .await
+            .expect("start web");
+        assert_eq!(ups(&h), 2, "the start brought infra up");
+        let (_, state) = cache(&h, &main).await.expect("cache listed");
+        assert_ne!(state.as_deref(), Some("exited 0"), "status shows it up");
+
+        h.call(Method::Start, json!({"units": ["web"]}), cx(&main))
+            .await
+            .expect("start web again");
+        assert_eq!(ups(&h), 2, "infra that runs is not brought up again");
+        h.call(Method::Stop, json!({}), cx(&main))
+            .await
+            .expect("stop");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Two starts that find the same infra down run one `up` between them.
+async fn concurrent_starts_bring_stopped_infra_up_once() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", &cache_config());
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        lane_with_stopped_cache(&h, &main).await;
+        *h.infra.up_revives_cache.lock().expect("lock") = true;
+        let gate = Arc::new(tokio::sync::Notify::new());
+        *h.infra.up_gate.lock().expect("lock") = Some(gate.clone());
+
+        let first = h.call(Method::Start, json!({"units": ["web"]}), cx(&main));
+        let second = h.call(Method::Start, json!({"units": ["api"]}), cx(&main));
+        let before = observes(&h);
+        let driver = async {
+            // One start waits in `up` and the other has seen the infra down
+            // too: one `observe` each before the lock, and one more by the
+            // start that holds it. Without the lock the other start would
+            // wait at the gate as well, and `notify_waiters` would let its
+            // `up` show in the count.
+            let reached = crate::eventually(std::time::Duration::from_secs(5), || async {
+                (ups(&h) >= 2 && observes(&h) >= before + 3).then_some(())
+            })
+            .await;
+            assert!(reached.is_some(), "both starts saw the infra down");
+            gate.notify_waiters();
+        };
+        let (first, second, ()) = tokio::join!(first, second, driver);
+        first.expect("first start");
+        second.expect("second start");
+        assert_eq!(ups(&h), 2, "one `up` for both starts");
+        h.call(Method::Stop, json!({}), cx(&main))
+            .await
+            .expect("stop");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 /// The host port `status` lists for the lane's `db`.
 async fn db_port(h: &crate::Harness, main: &std::path::Path) -> Option<u16> {
     let status = h.call(Method::Status, json!({}), cx(main)).await.ok()?;

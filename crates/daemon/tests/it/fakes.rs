@@ -704,6 +704,8 @@ pub struct FakeInfra {
     /// running containers, `observe` reports it exited and `wait_healthy`
     /// skips it.
     pub cache_down: Arc<Mutex<bool>>,
+    /// `up` brings `cache` back, as `compose up` starts stopped containers.
+    pub up_revives_cache: Arc<Mutex<bool>>,
     /// When set, `wait_healthy` waits for a notification before it answers.
     pub wait_gate: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
     /// When set, `up` waits for a notification after recording `up <lane>`.
@@ -897,6 +899,11 @@ impl InfraProvider for FakeInfra {
         }
         if let Some(error) = self.fail_up.lock().ok().and_then(|e| e.clone()) {
             return Err(error);
+        }
+        if self.up_revives_cache.lock().is_ok_and(|revive| *revive)
+            && let Ok(mut down) = self.cache_down.lock()
+        {
+            *down = false;
         }
         let scripted = self.progress.lock().is_ok_and(|script| !script.is_empty());
         if scripted {

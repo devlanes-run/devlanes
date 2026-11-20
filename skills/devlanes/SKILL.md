@@ -52,7 +52,7 @@ When `devlanes` is not found and the project's `package.json` lists `devlanes`, 
 | Environment of a unit | `devlanes env show api`, `devlanes env show api --explain` |
 | Machine problems | `devlanes doctor` |
 
-`start`, `restart`, `reload` and `wait` return once the units are ready or one failed, or when `--timeout` passes (180 seconds by default for `start` and `wait`), with exit 124. Do not poll with `sleep` or `curl` loops. A plain `devlanes start` brings back what the lane ran before, else the project's default profile. A start into a running lane starts only the selected services the lane lacks and runs no tasks.
+`start`, `restart`, `reload` and `wait` return once the units are ready or one failed, or when `--timeout` passes (180 seconds by default for `start` and `wait`), with exit 124. Do not poll with `sleep` or `curl` loops. A plain `devlanes start` brings back what the lane ran before, else the project's default profile. A start into a running lane starts only the selected services the lane lacks, runs no tasks and brings back infra containers that stopped.
 
 A new worktree gets its own lane on its first `devlanes start`, with new ports, hostnames, data folder and lane number. It needs the project file in the worktree, so `devlanes.yaml` must be committed on its branch. That first start runs the project's `lane.create` tasks (installs, codegen) and setup entries; when the project has none, install dependencies in the new worktree before you start. A worktree without its own `devlanes.local.yaml` or `.env` reads the primary worktree's.
 
