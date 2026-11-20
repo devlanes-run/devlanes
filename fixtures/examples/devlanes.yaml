@@ -31,7 +31,7 @@ templates:
 
 # Each Git worktree is a lane with its own ports, hostnames and data.
 lanes:
-  # Branch whose worktree is lane 0.
+  # Branch whose worktree is lane 0 when the repository has no primary worktree, such as a bare clone.
   primary: main
   # A worktree gets its lane when start, status or another lane command first runs in it.
   # register only reserves the lane;

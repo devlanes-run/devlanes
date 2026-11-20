@@ -23,7 +23,7 @@ templates:
     platform: node
     tags: [watcher]
 
-# Each Git worktree is a lane; this branch's worktree is lane 0.
+# Each Git worktree is a lane; the folder holding .git is lane 0.
 lanes:
   primary: main
 

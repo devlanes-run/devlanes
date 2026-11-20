@@ -18,7 +18,7 @@ $ git worktree add ../myapp-checkout -b feat/checkout
 $ devlanes start --no-ui
 ```
 
-The start runs the API as lane 1 of myapp, on feat/checkout, at `https://api.myapp1.localhost`. The primary worktree, here the one on the main branch, is lane 0. The API has no dependencies to install, so the folder runs as it is; a project that has them can have devlanes install them when a lane starts, as [Services that find each other](connecting-services.md) shows.
+The start runs the API as lane 1 of myapp, on feat/checkout, at `https://api.myapp1.localhost`. The primary worktree, `~/dev/myapp` on the main branch, is lane 0. The API has no dependencies to install, so the folder runs as it is; a project that has them can have devlanes install them when a lane starts, as [Services that find each other](connecting-services.md) shows.
 
 ## Both lanes run at once
 

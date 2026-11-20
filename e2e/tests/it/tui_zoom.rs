@@ -227,6 +227,22 @@ impl Tui {
         }
     }
 
+    /// The pane's width once its box is whole on the screen. The TUI repaints in
+    /// pieces, so the box can lack its bottom corner right after a unit's output
+    /// first shows.
+    fn wait_for_pane(&self) -> Result<usize> {
+        let start = Instant::now();
+        loop {
+            if let Some((width, _)) = self.pane() {
+                return Ok(width);
+            }
+            if start.elapsed() > SETTLE {
+                return Err(Error::Unexpected(format!("no pane\n{}", self.dump())));
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     /// Says which line the pane shows more than once or out of order, with
     /// the screen; the service numbers its lines one by one.
     fn repeated(&self, stage: &str, prefix: char) -> Option<String> {
@@ -383,9 +399,7 @@ fn pane_fills_at_every_size(pty: bool) -> Result<()> {
     let mut tui = Tui::open(&lab)?;
     tui.wait_for_text(unit)?;
     select(&mut tui, unit, prefix)?;
-    let (split, _) = tui
-        .pane()
-        .ok_or_else(|| Error::Unexpected(format!("no pane\n{}", tui.dump())))?;
+    let split = tui.wait_for_pane()?;
     // Every step is checked, so a failure shows all that is wrong at once.
     let mut problems = Vec::new();
     problems.extend(tui.unfilled("watching", prefix, |width| width < LINE));
@@ -525,9 +539,7 @@ fn tui_pane_survives_repeated_zooms_of_a_pty_unit() -> Result<()> {
     let mut tui = Tui::open(&lab)?;
     tui.wait_for_text("ttyloop")?;
     select(&mut tui, "ttyloop", 'P')?;
-    let (split, _) = tui
-        .pane()
-        .ok_or_else(|| Error::Unexpected(format!("no pane\n{}", tui.dump())))?;
+    let split = tui.wait_for_pane()?;
     let mut problems = Vec::new();
     for round in 1..=3 {
         tui.keys(b"z")?;

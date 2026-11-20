@@ -26,7 +26,7 @@ Open a reference when the task calls for it:
 | Word | Meaning |
 |---|---|
 | project | What one `devlanes.yaml` describes, named by its `project:` key. |
-| lane | One worktree's place to run the project, kept whether its services run or not: lane 0 for the primary worktree (`myapp.localhost`), lane 1 for the next (`myapp1.localhost`), each with its own block of ports. |
+| lane | One worktree's place to run the project, kept whether its services run or not: lane 0 for the primary worktree, the folder holding `.git`, on any branch (`myapp.localhost`), lane 1 for the next (`myapp1.localhost`), each with its own block of ports. |
 | unit | A service, task, `exec` command, `infra.setup` or `infra.teardown` entry, or `infra.external` entry. Containers under `infra` sit next to the units and are not units. |
 | box | A machine whose lanes are mirrored to another machine under the same hostnames and ports. Its lanes are started and stopped on the box. |
 

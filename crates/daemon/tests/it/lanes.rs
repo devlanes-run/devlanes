@@ -1031,86 +1031,19 @@ async fn a_service_added_to_a_running_lane_starts_in_its_block() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// A start waiting in the start gate counts as running: a worktree that moved
-/// onto the primary branch meanwhile does not take lane 0 from it.
-async fn a_start_in_flight_keeps_lane_zero() {
+/// The main checkout takes lane 0 on any branch, detached as CI makes it for a
+/// pull request or on a feature branch with nothing on the primary one, and keeps
+/// it across a start.
+async fn the_main_checkout_takes_lane_zero_on_any_branch() {
     tokio::time::timeout(LIMIT, async {
-        let tmp = temp();
-        let main = repo(&tmp.path, "r", WEB);
-        let (a, b) = (tmp.path.join("wt-a"), tmp.path.join("wt-b"));
-        worktree(&main, &a, "feat/a");
-        worktree(&main, &b, "feat/b");
-        let gate = crate::pacing::gate(1, Duration::from_secs(3));
-        let h = harness(
-            &tmp.path.join("home"),
-            Setup {
-                gate: Some(gate),
-                metrics: crate::pacing::busy_metrics(),
-                ..Setup::default()
-            },
-        )
-        .await;
-        h.call(Method::LaneList, json!({}), cx(&main))
-            .await
-            .expect("lane list");
-        // `a` holds the only slot, so the next start waits in the gate.
-        h.call(Method::Start, json!({}), cx(&a))
-            .await
-            .expect("start a");
-        let holder = {
-            let engine = h.engine.clone();
-            let context = cx(&main);
-            tokio::spawn(async move {
-                let (session, _frames) = devlanes_daemon::Session::local(9_000);
-                let request = devlanes_proto::Request {
-                    id: 9_000,
-                    method: Method::Start,
-                    params: json!({}),
-                    context,
-                };
-                devlanes_daemon::Handler::handle(&engine, request, session).await
-            })
-        };
-        eventually(Duration::from_secs(5), || async {
-            let lane = lane_at(&h, &main, &main).await;
-            lane.units
-                .iter()
-                .any(|unit| unit.state == "queued")
-                .then_some(())
-        })
-        .await
-        .expect("main's start waits in the gate");
-        // Only now does `b` take the primary branch, so main's own start began
-        // without a move of its own.
-        git(&main, &["checkout", "-q", "-b", "other"]);
-        git(&b, &["checkout", "-q", "main"]);
-        h.call(Method::LaneList, json!({}), cx(&main))
-            .await
-            .expect("lane list");
-
-        let _ = h
-            .call(Method::Start, json!({"timeout_ms": 300}), cx(&b))
-            .await;
-        assert_eq!(lane_at(&h, &main, &main).await.index, Some(0));
-        let moved = lane_at(&h, &main, &b).await;
-        assert_eq!(moved.index, Some(2));
-        assert_eq!(moved.moves_to, Some(0));
-        let _ = holder.await;
-        h.close().await;
-    })
-    .await
-    .expect("timeout");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-/// A detached checkout, as CI makes for a pull request, gets lane 0 under CI
-/// and keeps it across a start; outside CI it gets lane 1 as before.
-async fn a_detached_checkout_takes_lane_zero_under_ci() {
-    tokio::time::timeout(LIMIT, async {
-        for (ci, index) in [(true, 0), (false, 1)] {
+        for (ci, detach) in [(true, true), (false, true), (false, false)] {
             let tmp = temp();
             let main = repo(&tmp.path, "r", WEB);
-            git(&main, &["checkout", "-q", "--detach"]);
+            if detach {
+                git(&main, &["checkout", "-q", "--detach"]);
+            } else {
+                git(&main, &["checkout", "-q", "-b", "feat/other"]);
+            }
             let h = harness(
                 &tmp.path.join("home"),
                 Setup {
@@ -1123,8 +1056,8 @@ async fn a_detached_checkout_takes_lane_zero_under_ci() {
                 .await
                 .expect("start");
             let lane = lane_at(&h, &main, &main).await;
-            assert_eq!(lane.reference, format!("demo@{index}"), "ci: {ci}");
-            assert_eq!(lane.moves_to, None, "ci: {ci}");
+            assert_eq!(lane.reference, "demo@0", "ci: {ci}, detached: {detach}");
+            assert_eq!(lane.moves_to, None, "ci: {ci}, detached: {detach}");
             h.close().await;
         }
     })

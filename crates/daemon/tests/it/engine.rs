@@ -171,10 +171,10 @@ async fn start(h: &crate::Harness, context: Context, params: Value) -> StartResu
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// Lane 0 follows the primary branch; other worktrees get a lane once devlanes
-/// runs in them and keep its index; a worktree moving onto the primary branch
-/// takes lane 0 at its next start; an idle lane whose folder is gone keeps its
-/// index by default, and the next lane takes the lowest free one.
+/// Lane 0 is the main checkout, on any branch; other worktrees get a lane once
+/// devlanes runs in them and keep its index, also when one moves onto the primary
+/// branch; an idle lane whose folder is gone keeps its index by default, and the
+/// next lane takes the lowest free one.
 async fn lane_indices_and_primary_moves() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -203,17 +203,19 @@ async fn lane_indices_and_primary_moves() {
             Some("demo2.localhost")
         );
 
+        // The main checkout keeps lane 0 on another branch, and a worktree that
+        // takes the primary branch does not get it.
         git(&main, &["checkout", "-q", "-b", "other"]);
         git(&b, &["checkout", "-q", "main"]);
         let list = lanes(&h, &main).await;
-        assert_eq!(lane_at(&list, &b).moves_to, Some(0));
-        assert_eq!(lane_at(&list, &main).moves_to, Some(3));
+        assert_eq!(lane_at(&list, &b).moves_to, None);
+        assert_eq!(lane_at(&list, &main).moves_to, None);
 
         let result = start(&h, cx(&b), json!({"units": ["worker"]})).await;
-        assert_eq!(result.lane, "demo@0");
+        assert_eq!(result.lane, "demo@2");
         let list = lanes(&h, &main).await;
-        assert_eq!(lane_at(&list, &b).index, Some(0));
-        assert_eq!(lane_at(&list, &main).index, Some(3));
+        assert_eq!(lane_at(&list, &b).index, Some(2));
+        assert_eq!(lane_at(&list, &main).index, Some(0));
 
         git(
             &main,
@@ -228,7 +230,53 @@ async fn lane_indices_and_primary_moves() {
             Some("worktree_missing"),
             "{kept:?}"
         );
-        assert_eq!(lane_at(&list, &c).index, Some(2), "lowest free index");
+        assert_eq!(lane_at(&list, &c).index, Some(3), "lowest free index");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A repository without a main checkout, such as a bare clone, gives lane 0 to
+/// the worktree on the primary branch: another one moving onto that branch takes
+/// it at its next start, and the holder moves off.
+async fn in_a_bare_clone_lane_zero_follows_the_primary_branch() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let source = repo(&tmp.path, "r", BASIC);
+        git(&tmp.path, &["clone", "-q", "--bare", "r", "bare.git"]);
+        let bare = tmp.path.join("bare.git");
+        let (on_main, other) = (tmp.path.join("wt-main"), tmp.path.join("wt-a"));
+        git(
+            &bare,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                &on_main.display().to_string(),
+                "main",
+            ],
+        );
+        worktree(&bare, &other, "feat/a");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let list = lanes(&h, &on_main).await;
+        assert_eq!(lane_at(&list, &on_main).index, Some(0));
+        let list = lanes(&h, &other).await;
+        assert_eq!(lane_at(&list, &other).index, Some(1));
+
+        git(&on_main, &["checkout", "-q", "--detach"]);
+        git(&other, &["checkout", "-q", "main"]);
+        let list = lanes(&h, &on_main).await;
+        assert_eq!(lane_at(&list, &other).moves_to, Some(0));
+        assert_eq!(lane_at(&list, &on_main).moves_to, Some(2));
+
+        let result = start(&h, cx(&other), json!({"units": ["worker"]})).await;
+        assert_eq!(result.lane, "demo@0");
+        let list = lanes(&h, &on_main).await;
+        assert_eq!(lane_at(&list, &other).index, Some(0));
+        assert_eq!(lane_at(&list, &on_main).index, Some(2));
+        drop(source);
         h.close().await;
     })
     .await

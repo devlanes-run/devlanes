@@ -33,7 +33,7 @@ async fn lanes(cwd: &Path) -> Result<(), Error> {
 ```yaml
 # devlanes.yaml
 lanes:
-  # Branch that gets lane 0.
+  # Branch whose worktree gets lane 0 when the repository has no main checkout.
   primary: main
 ```
 

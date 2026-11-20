@@ -775,16 +775,19 @@ impl PrimaryWorktree {
         ci: bool,
     ) -> Result<Self, RpcError> {
         let checkout = Checkout::of(config_file, config).await?;
-        let root = primary_tree(&checkout.trees, &checkout.primary_branch, ci).map_or_else(
+        let primary = primary_tree(&checkout.trees, &checkout.primary_branch, ci);
+        let root = primary.as_ref().map_or_else(
             || checkout.root.clone(),
             |primary| primary.tree.path.clone(),
         );
+        // The main checkout is on whatever branch it is on, not on the primary one.
+        let branch = match primary {
+            Some(primary) => primary.tree.branch.clone(),
+            None => Some(checkout.primary_branch.clone()),
+        };
         Ok(Self {
             root,
-            branch: checkout
-                .common_dir
-                .is_some()
-                .then(|| checkout.primary_branch.clone()),
+            branch: branch.filter(|_| checkout.common_dir.is_some()),
             relative: checkout.relative,
         })
     }
@@ -1375,8 +1378,8 @@ impl Inner {
     }
 
     /// Gives present worktrees with a config a lane index and port block
-    /// (decision 2: lane 0 for the worktree [`primary_tree`] gives it to while lane
-    /// 0 is free, else lowest free index >= 1).
+    /// (decision 2: lane 0 for the main checkout [`primary_tree`] finds, whatever its
+    /// branch, while lane 0 is free, else lowest free index >= 1).
     async fn assign_lanes(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -1474,8 +1477,9 @@ impl Inner {
 
     /// Computes `moves_to` for every assigned lane (applied at its next start): the
     /// worktree [`primary_tree`] gives lane 0 to moves onto it, and another lane
-    /// holding it moves off. Under CI a lane that holds lane 0 keeps it, and nobody
-    /// moves onto it.
+    /// holding it moves off once that worktree has a lane to move (one that waits
+    /// for `lanes.max` leaves the holder where it is). Under CI a lane that holds
+    /// lane 0 keeps it, and nobody moves onto it.
     pub(crate) fn update_moves(&self, project: &ProjectRt) {
         let primary = project.st().primary_branch().to_owned();
         let lanes = project.lanes();
@@ -1485,6 +1489,14 @@ impl Inner {
         let lane_zero = primary_tree(&trees, &primary, self.opts.ci)
             .filter(|found| found.lane_zero)
             .map(|found| found.tree.identity.clone());
+        // Moving the holder off lane 0 for a worktree without a lane would leave
+        // lane 0 empty.
+        let zero_waits = lane_zero.as_ref().is_some_and(|identity| {
+            !lanes.iter().any(|lane| {
+                let st = lane.st();
+                st.identity == *identity && st.index().is_some()
+            })
+        });
         for lane in lanes {
             let mut st = lane.st();
             let Some(index) = st.index() else {
@@ -1500,7 +1512,7 @@ impl Inner {
                 (true, 0) | (false, 1..) => None,
                 (true, _) if self.opts.ci && used.contains(&0) => None,
                 (true, _) => Some(0),
-                (false, 0) if self.opts.ci => None,
+                (false, 0) if self.opts.ci || zero_waits => None,
                 (false, 0) => Some(free),
             };
         }
@@ -2752,26 +2764,24 @@ pub(crate) struct Primary<'a> {
 }
 
 /// The primary worktree among `trees`: the only one that gets a lane by existing.
-/// Lane 0 belongs to the present worktree on `primary_branch` (the first by path
-/// if git reports several); under CI (`ci`) to the present main checkout (identity
-/// `main`) on any branch instead. Without that worktree the primary one is the
-/// present main checkout, or under CI the worktree on the primary branch, and lane
-/// 0 is nobody's: it gets the first free lane. An extra lane of a folder (`lane
-/// new`) is never primary, and neither is a worktree whose folder is gone. `None`
-/// when none qualifies.
+/// It is the present main checkout (identity `main`, the folder holding `.git`) on
+/// any branch, and lane 0 belongs to it. A repository without a main checkout (a
+/// bare one) has the present worktree on `primary_branch` instead (the first by
+/// path if git reports several), which takes lane 0 too, except under CI (`ci`),
+/// where lane 0 is nobody's and goes to the first free lane. An extra lane of a
+/// folder (`lane new`) is never primary, and neither is a worktree whose folder is
+/// gone. `None` when none qualifies.
 pub(crate) fn primary_tree<'a>(
     trees: impl IntoIterator<Item = &'a Tree>,
     primary_branch: &str,
     ci: bool,
 ) -> Option<Primary<'a>> {
     let rank = |tree: &Tree| {
-        let on_primary = tree.branch.as_deref() == Some(primary_branch);
-        let checkout = tree.identity == "main";
         if !tree.present || tree.identity.contains(crate::model::ALIAS_MARK) {
             None
-        } else if (ci && checkout) || (!ci && on_primary) {
+        } else if tree.identity == "main" {
             Some(0)
-        } else if on_primary || checkout {
+        } else if tree.branch.as_deref() == Some(primary_branch) {
             Some(1)
         } else {
             None
@@ -2783,7 +2793,7 @@ pub(crate) fn primary_tree<'a>(
         .min_by(|(a, x), (b, y)| a.cmp(b).then_with(|| x.path.cmp(&y.path)))
         .map(|(rank, tree)| Primary {
             tree,
-            lane_zero: rank == 0,
+            lane_zero: rank == 0 || !ci,
         })
 }
 
@@ -2975,5 +2985,63 @@ mod tests {
         assert_eq!(env["C"], "x#y");
         assert_eq!(env["D"], "plain");
         assert_eq!(env.len(), 4);
+    }
+
+    /// A worktree as git lists it.
+    fn listed(identity: &str, path: &str, branch: Option<&str>, present: bool) -> Tree {
+        Tree {
+            identity: identity.into(),
+            path: path.into(),
+            branch: branch.map(str::to_owned),
+            present,
+        }
+    }
+
+    #[test]
+    /// The main checkout is lane 0 on any branch, also with a worktree on the
+    /// primary branch.
+    fn the_main_checkout_is_primary_on_any_branch() {
+        for branch in [Some("feat/x"), Some("main"), None] {
+            let trees = [
+                listed("worktrees/b", "/r/.worktrees/b", Some("main"), true),
+                listed("main", "/r", branch, true),
+            ];
+            for ci in [false, true] {
+                let found = primary_tree(&trees, "main", ci).expect("a primary tree");
+                assert_eq!(found.tree.path, Path::new("/r"));
+                assert!(found.lane_zero);
+            }
+        }
+    }
+
+    #[test]
+    /// Without a main checkout (a bare repository) the worktree on the primary
+    /// branch is primary, and under CI lane 0 is nobody's.
+    fn without_a_main_checkout_the_primary_branch_decides() {
+        let trees = [
+            listed("worktrees/a", "/r/a", Some("feat/a"), true),
+            listed("worktrees/b", "/r/b", Some("main"), true),
+        ];
+        let found = primary_tree(&trees, "main", false).expect("a primary tree");
+        assert_eq!(found.tree.path, Path::new("/r/b"));
+        assert!(found.lane_zero);
+        assert!(
+            !primary_tree(&trees, "main", true)
+                .expect("a primary tree")
+                .lane_zero
+        );
+        assert!(primary_tree(&trees[..1], "main", false).is_none());
+    }
+
+    #[test]
+    /// A main checkout whose folder is gone and an extra lane of its folder are
+    /// never primary.
+    fn missing_and_extra_lanes_are_not_primary() {
+        let alias = format!("main{}x", crate::model::ALIAS_MARK);
+        let trees = [
+            listed("main", "/r", Some("main"), false),
+            listed(&alias, "/r", Some("main"), true),
+        ];
+        assert!(primary_tree(&trees, "main", false).is_none());
     }
 }

@@ -18,7 +18,7 @@ The words the devlanes docs use most, in alphabetical order, each with the page 
 | Frozen, thaw | A lane nobody uses is suspended, and runs again on its next request, connection or command. | [Throttling and freezing](../concepts/freezing.md) |
 | Hostname | A name the proxy serves over HTTPS, such as `api.myapp1.localhost`. | [Hostnames and HTTPS](../concepts/hostnames-and-https.md) |
 | Lane | One worktree's place to run the project, with ports, hostnames and data of its own. | [Lanes and projects](../concepts/lanes-and-projects.md) |
-| Lane 0 | The lane of the worktree that has the project's primary branch, such as `main`, checked out. | [Lanes and projects](../concepts/lanes-and-projects.md) |
+| Lane 0 | The lane of the primary worktree, the folder you cloned into, whatever branch it has checked out. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Lane domain | The domain a lane's hostnames end in: `myapp.localhost` in lane 0, `myapp1.localhost` in lane 1. | [Hostnames and HTTPS](../concepts/hostnames-and-https.md) |
 | Lane name | `main` for lane 0 and `lane<N>` for lane N. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Local file | `devlanes.local.yaml`: one developer's changes to the project file, kept out of Git. | [Keep personal changes out of Git](../how-to/projects/local-overrides.md) |
