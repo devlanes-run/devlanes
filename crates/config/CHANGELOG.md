@@ -1,5 +1,13 @@
 # devlanes-config
 
+## 0.14.0 — 2026-11-20
+
+### Patch changes
+
+- [f02858ac](https://github.com/devlanes-run/devlanes/commit/f02858ac9d24735a86abd5517f5584a275bfbade) Changed lane 0 to be the folder you cloned into on any branch, instead of the worktree on `lanes.primary`.
+  
+  A linked worktree that held lane 0 moves to the lowest free number at its next start while nothing runs in it, so its hostnames, `lane.name` and values built from them change. Only a repository without a primary worktree, such as a bare clone, still gives lane 0 to the worktree on `lanes.primary`.
+
 ## 0.13.0 — 2026-11-16
 
 ### Patch changes

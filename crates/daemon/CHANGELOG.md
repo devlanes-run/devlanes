@@ -1,5 +1,17 @@
 # devlanes-daemon
 
+## 0.15.0 — 2026-11-20
+
+### Minor changes
+
+- [f02858ac](https://github.com/devlanes-run/devlanes/commit/f02858ac9d24735a86abd5517f5584a275bfbade) Changed lane 0 to be the folder you cloned into on any branch, instead of the worktree on `lanes.primary`.
+  
+  A linked worktree that held lane 0 moves to the lowest free number at its next start while nothing runs in it, so its hostnames, `lane.name` and values built from them change. Only a repository without a primary worktree, such as a bare clone, still gives lane 0 to the worktree on `lanes.primary`.
+
+### Patch changes
+
+- [c37b5531](https://github.com/devlanes-run/devlanes/commit/c37b55316718ccddfe9cf29e09ee2e3bacfd69af) Fixed `devlanes start` into a running lane not bringing back infra containers that were stopped outside devlanes.
+
 ## 0.14.2 — 2026-11-18
 
 Version bump only, to follow other packages.
