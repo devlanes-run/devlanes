@@ -1275,7 +1275,7 @@ name = "devlanes-cli"
 version = "0.14.1"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "clap_complete",
  "devlanes-core",
@@ -1364,7 +1364,7 @@ name = "devlanes-daemon"
 version = "0.15.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "devlanes-client",
  "devlanes-config",
@@ -1588,7 +1588,7 @@ dependencies = [
 name = "devlanes-mcp-ui"
 version = "0.3.1"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "devlanes-proto",
  "devlanes-transport",
  "devlanes-version",
@@ -1665,7 +1665,7 @@ name = "devlanes-pages"
 version = "0.6.1"
 dependencies = [
  "askama",
- "base64 0.22.1",
+ "base64 0.23.1",
  "devlanes-version",
  "grass",
  "percent-encoding",
@@ -2191,7 +2191,7 @@ dependencies = [
 name = "devlanes-term"
 version = "0.13.1"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "devlanes-proto",
  "serde",
  "serde_json",
@@ -2254,7 +2254,7 @@ name = "devlanes-transport-ssh"
 version = "0.6.1"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "devlanes-ipc",
  "devlanes-sys-windows",
  "devlanes-testing",
@@ -2276,7 +2276,7 @@ name = "devlanes-trust"
 version = "0.4.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "devlanes-pki",
  "devlanes-sys-windows",
  "hex",
@@ -2318,7 +2318,7 @@ name = "devlanes-trust-windows"
 version = "0.5.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "devlanes-pki",
  "devlanes-sys-windows",
  "devlanes-trust",
@@ -2335,7 +2335,7 @@ version = "0.15.0"
 dependencies = [
  "ab_glyph",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bitflags 2.13.2",
  "bytes",
  "crossterm",
