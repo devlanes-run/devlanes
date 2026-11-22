@@ -1,0 +1,24 @@
+name: Dependabot
+# Turns on auto-merge for Dependabot's pull requests, so each one merges once the
+# required checks of the main ruleset pass. Every check a pull request runs must be
+# required there, or a failing one will not stop the merge.
+#
+# The merge is made with GITHUB_TOKEN, which starts no push workflows: CI's next
+# prerelease and Sampo skip that commit and pick it up on the next push to main.
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  auto-merge:
+    # The author, not the actor, so a fix pushed to the branch by hand still merges.
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ github.token }}

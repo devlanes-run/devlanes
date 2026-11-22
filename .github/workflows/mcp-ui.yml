@@ -2,6 +2,9 @@ name: MCP UI
 # The MCP Apps card is built with Node and committed (crates/mcp-ui/ui/dist/lane.html),
 # so the Rust build never runs Node. This checks its source and that the committed
 # file is what `pnpm build` writes from it.
+#
+# Every pull request runs it, because a required check that never reports blocks
+# the merge, and Dependabot's auto-merge needs it required.
 on:
   push:
     branches: [main]
@@ -9,9 +12,6 @@ on:
       - crates/mcp-ui/ui/**
       - .github/workflows/mcp-ui.yml
   pull_request:
-    paths:
-      - crates/mcp-ui/ui/**
-      - .github/workflows/mcp-ui.yml
 permissions:
   contents: read
 concurrency:
