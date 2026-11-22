@@ -28,6 +28,8 @@ cargo build --workspace --all-targets --all-features
 
 While working on one crate, test just that crate: `cargo nextest run -p devlanes-config`.
 
+CI skips what a change can't affect. Against a pull request's base, or on `main` the last commit whose CI passed, `.github/scripts/affected.py` picks the jobs to run and the crates whose tests run: each changed crate and every crate that depends on it. A file that tests read from outside their crate, or a new kind of file in the repository, needs a rule in that script; a file no rule knows runs everything. `python3 .github/scripts/affected.py origin/main` shows what your branch would run, and running the CI workflow by hand runs everything.
+
 Changes to shell scripts or workflows also have a check, which CI runs in its `packaging` job:
 
 ```sh

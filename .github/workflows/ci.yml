@@ -14,9 +14,68 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 jobs:
+  # Decides which jobs below run and whose tests the rust job runs, from the files that
+  # differ from a commit whose checks passed: a pull request's base, or on main the last
+  # commit whose CI run passed. A passing run vouches for every test it left out, since
+  # nothing those tests read changed. .github/scripts/affected.py has the rules; a run by
+  # hand (workflow_dispatch) runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      lint: ${{ steps.affected.outputs.lint }}
+      rust: ${{ steps.affected.outputs.rust }}
+      tests: ${{ steps.affected.outputs.tests }}
+      e2e: ${{ steps.affected.outputs.e2e }}
+      web: ${{ steps.affected.outputs.web }}
+      packaging: ${{ steps.affected.outputs.packaging }}
+      mcp_ui: ${{ steps.affected.outputs.mcp_ui }}
+      next: ${{ steps.affected.outputs.next }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # A pull request's merge commit and its first parent, the base branch.
+          fetch-depth: 2
+      - id: affected
+        env:
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          # cargo metadata only reads the manifests, so the runner's stable toolchain is
+          # enough and this job installs none.
+          RUSTUP_TOOLCHAIN: stable
+        run: |
+          set -euo pipefail
+          # Fetches commit $1 and prints it, or prints nothing when there is none.
+          # git diff compares the two trees, so the commit alone is enough.
+          fetch() {
+            if [ -n "$1" ] && git fetch --quiet --depth=1 origin "$1"; then echo "$1"; fi
+          }
+          base=
+          case $EVENT in
+            pull_request) base=$(git rev-parse HEAD^1) ;;
+            push)
+              base=$(fetch "$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$GITHUB_REF_NAME" \
+                --event push --status success --limit 1 --json headSha --jq '.[0].headSha // ""')")
+              ;;
+          esac
+          # shellcheck disable=SC2086 # an empty base is no argument
+          python3 .github/scripts/affected.py $base | grep -v '^next=' >> "$GITHUB_OUTPUT"
+          # `next` ships what changed since the commit the prerelease was built from,
+          # which is older than base when commits since then changed nothing it ships.
+          if [ "$EVENT" = push ]; then
+            published=$(fetch "$(git ls-remote origin refs/tags/next | cut -f1)")
+            # shellcheck disable=SC2086
+            python3 .github/scripts/affected.py $published | grep '^next=' >> "$GITHUB_OUTPUT"
+          fi
   # Separate from the rust job so clippy and the test build run in parallel; on
   # Windows they take about 5 and 10 minutes.
   lint:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -52,6 +111,8 @@ jobs:
   # native-only code out of that build. It also builds the bundle as release.yml's
   # tui-web job does, so a release never meets a broken bundle build first.
   web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -98,6 +159,8 @@ jobs:
           kache stats --full
           kache daemon stop
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -139,16 +202,26 @@ jobs:
         with:
           tool: nextest
       # The default nextest profile leaves out devlanes-e2e; the e2e jobs run it.
-      # Every nextest step runs all tests and repeats failed output at the end, so
+      # Every nextest step runs all its tests and repeats failed output at the end, so
       # one failure neither hides the others nor gets buried in the PASS lines.
-      - run: cargo nextest run --workspace --all-features --locked --no-fail-fast --failure-output immediate-final
+      # Every test binary is built, so the kache entries stay those of a workspace
+      # build, and TESTS picks which packages' tests run; empty runs them all.
+      - name: Tests
+        shell: bash
+        env:
+          TESTS: ${{ needs.changes.outputs.tests }}
+        run: cargo nextest run --workspace --all-features --locked --no-fail-fast --failure-output immediate-final ${TESTS:+--no-tests=pass -E "$TESTS"}
       # Only the Linux runners have Docker. This reuses the test binaries built above.
       - name: Docker tests
         if: runner.os == 'Linux'
+        env:
+          TESTS: ${{ needs.changes.outputs.tests }}
         run: |
           docker info
           docker compose version
-          cargo nextest run --workspace --all-features --locked --no-fail-fast --failure-output immediate-final --run-ignored only -E 'test(/(^|::)docker_/)'
+          filter='test(/(^|::)docker_/)'
+          cargo nextest run --workspace --all-features --locked --no-fail-fast --failure-output immediate-final --run-ignored only \
+            ${TESTS:+--no-tests=pass} -E "${TESTS:+($TESTS) & }$filter"
       - run: cargo test --workspace --doc --all-features --locked
       - name: kache stats
         if: ${{ !cancelled() }}
@@ -158,6 +231,8 @@ jobs:
           # Lets the daemon finish its queued uploads before the runner goes away.
           kache daemon stop
   packaging:
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -185,6 +260,8 @@ jobs:
   # install.ps1, package.ps1 and the npm launcher on Windows, against a fake
   # devlanes.exe, so no Rust build is needed.
   packaging-windows:
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true'
     runs-on: windows-latest
     timeout-minutes: 15
     defaults:
@@ -227,6 +304,8 @@ jobs:
           }
       - run: ./packaging/scripts/check.ps1
   e2e:
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -267,14 +346,16 @@ jobs:
       # Built once here; each nextest test process would otherwise run cargo build
       # itself (on Windows tests never build, so the binaries must exist first).
       - run: cargo build -p devlanes -p devlanes-testing --locked
-      - run: cargo nextest run --profile e2e --locked --no-fail-fast --failure-output immediate-final
+      # -p: the e2e profile only runs devlanes-e2e, and without it nextest would build
+      # every other package's test binaries too.
+      - run: cargo nextest run -p devlanes-e2e --profile e2e --locked --no-fail-fast --failure-output immediate-final
       # Only the Linux runners have Docker.
       - name: Docker tests
         if: runner.os == 'Linux'
         run: |
           docker info
           docker compose version
-          cargo nextest run --profile e2e --locked --no-fail-fast --failure-output immediate-final --run-ignored only -E 'test(/(^|::)docker_/)'
+          cargo nextest run -p devlanes-e2e --profile e2e --locked --no-fail-fast --failure-output immediate-final --run-ignored only -E 'test(/(^|::)docker_/)'
       - name: kache stats
         if: ${{ !cancelled() }}
         run: |
@@ -285,6 +366,8 @@ jobs:
   ssh:
     # `needs ssh` tests against a throwaway sshd container; the script builds the box's
     # Linux devlanes in rust:1.99.1-bookworm and always removes the container.
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -317,12 +400,60 @@ jobs:
           kache stats --full
           # Lets the daemon finish its queued uploads before the runner goes away.
           kache daemon stop
+  # The MCP Apps card is built with Node and committed (crates/mcp-ui/ui/dist/lane.html),
+  # so the Rust build never runs Node. This checks its source and that the committed
+  # file is what `pnpm build` writes from it.
+  mcp-ui:
+    needs: changes
+    if: needs.changes.outputs.mcp_ui == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: crates/mcp-ui/ui
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Installs pnpm from packageManager and Node from devEngines.runtime, then runs pnpm install.
+      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        with:
+          cache: true
+          install: true
+          require-lockfile: true
+          working-directory: crates/mcp-ui/ui
+      - run: pnpm lint-ci
+      - run: pnpm test-types
+      - run: pnpm build
+      - name: Check the committed card
+        run: |
+          if ! git diff --exit-code --text --stat -- dist/lane.html; then
+            echo "::error file=crates/mcp-ui/ui/dist/lane.html::dist/lane.html is stale. Run pnpm build in crates/mcp-ui/ui and commit the file."
+            exit 1
+          fi
+
+  # The one check the main branch requires. The jobs above are skipped when a change
+  # can't affect them, and a skipped job passes; a failed or cancelled one fails this.
+  ci:
+    if: always()
+    needs: [changes, lint, web, rust, packaging, packaging-windows, e2e, ssh, mcp-ui]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if echo "$RESULTS" | jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' >/dev/null; then
+            exit 1
+          fi
 
   # A push to main that passed every job above builds the rolling `next` prerelease in
-  # this same run, so its build and publish jobs show in the commit's checks.
+  # this same run, so its build and publish jobs show in the commit's checks. A commit
+  # that changes nothing it ships leaves the last one in place.
   next:
-    if: github.event_name == 'push'
-    needs: [lint, web, rust, packaging, packaging-windows, e2e, ssh]
+    if: github.event_name == 'push' && needs.changes.outputs.next == 'true'
+    needs: [changes, ci]
     uses: ./.github/workflows/next.yml
     secrets: inherit
     # The most next.yml's jobs may use: publish replaces release assets and attests them.
