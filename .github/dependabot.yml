@@ -1,9 +1,12 @@
 version: 2
 
-# Every ecosystem runs weekly and waits a week after a release before proposing it,
+# Every ecosystem runs daily and waits a week after a release before proposing it,
 # so a yanked or compromised version is usually gone first. The wait does not apply to
-# security updates. Minor and patch updates share one pull request per ecosystem;
-# major updates stay one pull request each, except for crates that must move together.
+# security updates. Patch updates share one pull request per ecosystem; minor and major
+# updates get one each, so one that breaks the build doesn't hold back the rest. Packages
+# that must move together share one whatever the update type. Running daily keeps each
+# group to the releases whose wait ended since the last run, as long as it keeps merging.
+# The pull request limit is high enough that it never holds updates back.
 #
 # Not covered on purpose:
 # - rust-toolchain.toml: 1.99.1 is also in Cargo.toml, ci.yml and e2e/ssh/run.sh.
@@ -13,12 +16,11 @@ updates:
   - package-ecosystem: cargo
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
     cooldown:
       default-days: 7
+    open-pull-requests-limit: 100
     groups:
-      # Crates that break together across majors, so every update type lands in one pull request.
       tokio:
         patterns: [tokio, tokio-util, tokio-tungstenite]
       rustls:
@@ -33,8 +35,8 @@ updates:
         patterns: [wasm-bindgen, web-sys, console_error_panic_hook]
       diesel:
         patterns: [diesel, diesel_migrations, libsqlite3-sys]
-      cargo-minor-patch:
-        update-types: [minor, patch]
+      cargo-patch:
+        update-types: [patch]
     ignore:
       # Pinned with `=` in Cargo.toml: the protocol revisions the MCP server negotiates come with the version.
       - dependency-name: rmcp
@@ -42,27 +44,27 @@ updates:
   - package-ecosystem: npm
     directory: /crates/mcp-ui/ui
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
     cooldown:
       default-days: 7
+    open-pull-requests-limit: 100
     groups:
       biome:
         patterns: ["@biomejs/*", "@arthurfiorette/biomejs-config"]
       rsbuild:
         patterns: ["@rsbuild/*"]
-      npm-minor-patch:
-        update-types: [minor, patch]
+      npm-patch:
+        update-types: [patch]
 
   - package-ecosystem: github-actions
     directories:
       - /
       - /.github/actions/*
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
     cooldown:
       default-days: 7
+    open-pull-requests-limit: 100
     groups:
-      github-actions:
-        update-types: [minor, patch]
+      github-actions-patch:
+        update-types: [patch]
