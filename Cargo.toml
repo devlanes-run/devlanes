@@ -14,7 +14,7 @@ async-trait = "0.1"
 anyhow = "1"
 # HTML templates of crates/pages; it adds the features it uses.
 askama = { version = "0.16", default-features = false }
-base64 = "0.22"
+base64 = "0.23"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
 diesel = { version = "2.3", default-features = false, features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
