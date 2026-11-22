@@ -2153,6 +2153,9 @@ impl Inner {
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
     ) {
+        // The poller stamps the files before it lays the new config out; a request
+        // racing it must wait for that rather than read the stamp and go on.
+        let _loading = lane.config_load.lock().await;
         let present = lane.st().present();
         if !present || !self.config_stale(project, lane).await {
             return;
@@ -2752,6 +2755,7 @@ pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
         decide: tokio::sync::Mutex::new(()),
         setup: tokio::sync::Mutex::new(()),
         infra_recovery: tokio::sync::Mutex::new(()),
+        config_load: tokio::sync::Mutex::new(()),
         drift_job: crate::drift::DriftJob::default(),
     })
 }

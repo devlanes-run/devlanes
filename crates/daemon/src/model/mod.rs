@@ -1266,6 +1266,10 @@ pub(crate) struct LaneRt {
     /// Held while a start into a running lane brings back infra that stopped,
     /// so two starts never run `up` for it at once.
     pub infra_recovery: tokio::sync::Mutex<()>,
+    /// Held by `fresh_config` from its stamp check until
+    /// the reloaded config's layout is in place, so a request that finds the
+    /// stamp current never reads a load the poller has not finished.
+    pub config_load: tokio::sync::Mutex<()>,
     /// The lane's single-flight drift job.
     pub drift_job: crate::drift::DriftJob,
 }
