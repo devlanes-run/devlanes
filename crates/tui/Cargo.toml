@@ -37,7 +37,7 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 # The `o` key opens URLs with the same opener as `devlanes url open`.
 devlanes-sys = { path = "../sys" }
 # daemon.log timestamps shown in local time.
-jiff = "0.2"
+jiff = "1.0"
 ratatui = "0.30"
 tokio.workspace = true
 
