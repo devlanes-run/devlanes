@@ -2,8 +2,10 @@ version: 2
 
 # Every ecosystem runs weekly and waits a week after a release before proposing it,
 # so a yanked or compromised version is usually gone first. The wait does not apply to
-# security updates. Minor and patch updates share one pull request per ecosystem;
-# major updates stay one pull request each, except for crates that must move together.
+# security updates. Cargo and npm patch updates share one pull request per ecosystem;
+# minor and major updates get one each, so one that breaks the build doesn't hold back
+# the rest. Crates that must move together share one whatever the update type. GitHub
+# Actions minor and patch updates share one.
 #
 # Not covered on purpose:
 # - rust-toolchain.toml: 1.99.1 is also in Cargo.toml, ci.yml and e2e/ssh/run.sh.
@@ -33,8 +35,8 @@ updates:
         patterns: [wasm-bindgen, web-sys, console_error_panic_hook]
       diesel:
         patterns: [diesel, diesel_migrations, libsqlite3-sys]
-      cargo-minor-patch:
-        update-types: [minor, patch]
+      cargo-patch:
+        update-types: [patch]
     ignore:
       # Pinned with `=` in Cargo.toml: the protocol revisions the MCP server negotiates come with the version.
       - dependency-name: rmcp
@@ -51,8 +53,8 @@ updates:
         patterns: ["@biomejs/*", "@arthurfiorette/biomejs-config"]
       rsbuild:
         patterns: ["@rsbuild/*"]
-      npm-minor-patch:
-        update-types: [minor, patch]
+      npm-patch:
+        update-types: [patch]
 
   - package-ecosystem: github-actions
     directories:
