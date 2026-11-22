@@ -38,6 +38,7 @@ jobs:
             echo "::notice::No bot App configured (vars.BOT_APP_CLIENT_ID and secrets.BOT_APP_PRIVATE_KEY), so Sampo pushes with GITHUB_TOKEN and the release pull request gets no CI"
           fi
       - id: app-token
+        name: Create the bot App token
         if: steps.bot.outputs.configured == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
