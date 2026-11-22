@@ -52,7 +52,7 @@ tempfile = "3"
 # std's); the browser's clock in wasm32 builds, where std's clock panics.
 web-time = "1"
 windows-sys = { version = "0.61", default-features = false }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
