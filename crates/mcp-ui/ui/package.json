@@ -17,8 +17,8 @@
   },
   "devDependencies": {
     "@arthurfiorette/biomejs-config": "^2.0.1",
-    "@biomejs/biome": "^2.6.5",
-    "@rsbuild/core": "^2.3.1",
+    "@biomejs/biome": "^2.6.8",
+    "@rsbuild/core": "^2.3.2",
     "@rsbuild/plugin-preact": "^2.1.0",
     "@rsbuild/plugin-sass": "^2.0.1",
     "typescript": "^7.0.2"
