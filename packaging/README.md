@@ -43,12 +43,14 @@ devlanes installs and updates to the latest release only; the scripts and `devla
 
 Releases come from the change files in `.sampo/changesets` (`CONTRIBUTING.md` describes them). `.github/workflows/sampo.yml` runs [Sampo's GitHub Action](https://github.com/bruits/sampo/tree/main/crates/sampo-github-action) on every push to `main`:
 
-1. While change files are pending, it keeps the pull request "Release (main)" from the branch `release/main` up to date. That runs `sampo release`, which consumes the change files, bumps the changed crates' versions, refreshes `Cargo.lock` and writes each crate's `CHANGELOG.md`. Approve the release pull request's CI run by hand before merging it.
-2. Merging it leaves no change files, so the action runs `sampo publish`. The crates inherit `publish = false`, so that publishes nothing and only tags the new devlanes version as `vX.Y.Z` (`short_tags` and `tag_unpublished` in `.sampo/config.toml`). The other crates get no tag; the `devlanes-<name>-vX.Y.Z` tags of older releases are unused. The workflow then dispatches `release.yml` on the new `vX.Y.Z` tag.
+1. While change files are pending, it keeps the pull request "Release (main)" from the branch `release/main` up to date. That runs `sampo release`, which consumes the change files, bumps the changed crates' versions, refreshes `Cargo.lock` and writes each crate's `CHANGELOG.md`. The action pushes the branch and opens the pull request with the bot App's token (see "Credentials"), so CI runs on the release pull request like on any other.
+2. Merging it leaves no change files, so the action runs `sampo publish`. The crates inherit `publish = false`, so that publishes nothing and only tags the new devlanes version as `vX.Y.Z` (`short_tags` and `tag_unpublished` in `.sampo/config.toml`). The other crates get no tag; the `devlanes-<name>-vX.Y.Z` tags of older releases are unused. Pushing the tag starts `release.yml`.
+
+Until the App is set up, `sampo.yml` prints a notice and pushes with `GITHUB_TOKEN`, whose pushes start no workflows: the release pull request's CI runs wait for someone to approve them, and the workflow dispatches `release.yml` on the new tag itself. It dispatches only in that case, since a second run of the same tag would publish it again.
 
 The release version is `bins/devlanes/Cargo.toml`'s. `.sampo/config.toml` keeps `devlanes` and `devlanes-hosts-helper` in a `fixed` group, so the two shipped binaries always match; library crates report the same version through `devlanes_version::VERSION`, which reads it from `bins/devlanes/Cargo.toml`. Every other crate has its own version in a `linked` group: a change to a crate bumps it and everything that depends on it up to `devlanes`, all with the biggest bump in the release, and leaves the rest alone. After 0.4.0, a `minor` change in `devlanes-daemon` releases it, the crates that depend on it and `devlanes` as 0.5.0, while `devlanes-pki` stays at 0.3.0. The helper being in the `fixed` group also bumps `devlanes-resolver-hosts`, which depends on it, on every release. Don't edit versions by hand. Sampo applies plain SemVer, so until 1.0 a breaking change is `minor` (0.3.x to 0.4.0) and everything else `patch`. The release notes are the version's section of `bins/devlanes/CHANGELOG.md`, or GitHub's generated notes when it has none.
 
-`release.yml` also runs for a `v*` tag pushed by hand, and checks that the tag matches the committed version. To retry a release whose dispatch never happened, run `gh workflow run release.yml --ref vX.Y.Z`. A version with a `-` suffix is a prerelease. Since a dispatched run doesn't show in the tagged commit's checks, the workflow posts a `release` commit status there: pending when it starts, then success or failure once every job finished. Its builds read the kache entries that the next builds of `main` uploaded, which use the same release profile and targets. The release itself writes nothing to the cache. It runs no tests: CI tested the release pull request and tests its merge on `main`, in a run the release doesn't wait for, so a hand-pushed tag should point at a commit whose CI passed. It runs these jobs:
+`release.yml` also runs for a `v*` tag pushed by hand, and checks that the tag matches the committed version. To retry a release that never started, run `gh workflow run release.yml --ref vX.Y.Z`. A version with a `-` suffix is a prerelease. Since a dispatched run doesn't show in the tagged commit's checks, the workflow posts a `release` commit status there: pending when it starts, then success or failure once every job finished. Its builds read the kache entries that the next builds of `main` uploaded, which use the same release profile and targets. The release itself writes nothing to the cache. It runs no tests: CI tested the release pull request and tests its merge on `main`, in a run the release doesn't wait for, so a hand-pushed tag should point at a commit whose CI passed. It runs these jobs:
 
 | Job | Does |
 |---|---|
@@ -97,7 +99,23 @@ gh attestation verify devlanes-0.1.0-x86_64-pc-windows-msvc.zip --repo devlanes-
 
 ## Credentials
 
-`sampo.yml` only uses the workflow's `GITHUB_TOKEN`. GitHub starts no workflows for what that token pushes, which is why the job dispatches `release.yml` itself and why CI on the release pull request waits for someone to approve the runs.
+GitHub starts no workflows for what the workflow's `GITHUB_TOKEN` pushes or merges. So `sampo.yml` and `dependabot.yml` act through a GitHub App, the bot App: `sampo.yml` pushes `release/main` and the tags and opens the release pull request with its token, and `dependabot.yml` enables auto-merge with it, so the merge is the App's and starts CI, the `next` build and Sampo on `main`. Each job asks for an installation token with `actions/create-github-app-token`. When `BOT_APP_CLIENT_ID` or `BOT_APP_PRIVATE_KEY` is missing, the job prints a notice and uses `GITHUB_TOKEN` as before.
+
+To set it up:
+
+1. Create a GitHub App owned by `devlanes-run` (Settings, Developer settings, GitHub Apps), named `devlanes-bot`, installable only on this account, with the webhook turned off. Repository permissions:
+   - Contents: read and write, to push `release/main` and the `vX.Y.Z` tags and to merge pull requests.
+   - Pull requests: read and write, to open and update the release pull request and to enable auto-merge on Dependabot's.
+   - Workflows: read and write. GitHub refuses an App's push or merge that changes `.github/workflows/` without it, and Dependabot updates the action pins there. The `release/main` force-push can carry workflow changes merged since its last update too.
+   - Metadata: read, which every App has.
+   No organization or account permissions, and no events.
+2. Install it on `devlanes-run/devlanes` only.
+3. Add the App's client ID (on its settings page, not the App ID) as the repository variable `BOT_APP_CLIENT_ID`.
+4. Generate a private key and add the whole `.pem` file as the repository secret `BOT_APP_PRIVATE_KEY` under both Actions and Dependabot. Dependabot's workflow runs read only Dependabot secrets, and the runs after someone pushes to a Dependabot branch read only Actions secrets.
+
+A release pull request opened before the App existed keeps its unapproved CI runs; the next push to `main` updates it with the App and starts CI on it.
+
+The kache cache (`.github/actions/kache`) reads `KACHE_S3_ACCESS_KEY` and `KACHE_S3_SECRET_KEY` from secrets, so Dependabot's runs, which get only Dependabot secrets, need their own copies. Create an R2 API token with Object Read only, scoped to the kache bucket, and add its access key ID and secret access key as the Dependabot secrets `KACHE_S3_ACCESS_KEY` and `KACHE_S3_SECRET_KEY`. The bucket, endpoint and region are variables, which Dependabot's runs already read. The action makes the runs of Dependabot's pull requests read-only against the bucket either way, since a dependency update's build scripts run with these credentials.
 
 `homebrew-publish` pushes to the tap with the repository secret `HOMEBREW_TAP_TOKEN`, a fine-grained token with Contents read and write on `devlanes-run/homebrew-tap` only. It expires on the date set when it was created; replace the secret before then. `website` sends its dispatch with `WEBSITE_DISPATCH_TOKEN`, a fine-grained token with Contents write on `devlanes-run/website` only.
 

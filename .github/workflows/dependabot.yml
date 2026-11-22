@@ -3,8 +3,10 @@ name: Dependabot
 # required checks of the main ruleset pass. Every check a pull request runs must be
 # required there, or a failing one will not stop the merge.
 #
-# The merge is made with GITHUB_TOKEN, which starts no push workflows: CI's next
-# prerelease and Sampo skip that commit and pick it up on the next push to main.
+# Auto-merge merges as whoever enabled it. With the bot App (packaging/README.md,
+# "Credentials") that is the App, so the merge starts CI, the next prerelease and Sampo
+# on main. Without it the merge is made with GITHUB_TOKEN, which starts no push
+# workflows: those skip the commit and pick it up on the next push to main.
 on: pull_request
 permissions:
   contents: read
@@ -18,7 +20,31 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # Dependabot's runs read Dependabot secrets, and the runs of a fix pushed by hand
+      # read Actions secrets, so the private key has to be in both.
+      - id: bot
+        name: Check for the bot App
+        env:
+          CLIENT_ID: ${{ vars.BOT_APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+        run: |
+          if [ -n "$CLIENT_ID" ] && [ -n "$PRIVATE_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No bot App configured (vars.BOT_APP_CLIENT_ID and secrets.BOT_APP_PRIVATE_KEY), so the merge uses GITHUB_TOKEN and starts no workflows on main"
+          fi
+      - id: app-token
+        if: steps.bot.outputs.configured == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          # GitHub refuses an App's merge of a pull request that changes
+          # .github/workflows without it, and Dependabot updates action pins there.
+          permission-workflows: write
       - run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}

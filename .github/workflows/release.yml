@@ -1,9 +1,10 @@
 name: Release
 # A `v*` tag builds the archives and uploads them to a draft release. The release is
 # published only after every asset is attached, so the Homebrew formula, npm packages,
-# cargo binstall and install.sh never see a half-filled release. sampo.yml dispatches
-# it on the tag it creates, because tags pushed with GITHUB_TOKEN start no workflows; a
-# tag pushed by hand starts it directly.
+# cargo binstall and install.sh never see a half-filled release. The tag sampo.yml
+# pushes with the bot App's token starts it, as does a tag pushed by hand. Without the
+# App, sampo.yml dispatches it on the tag instead, because tags pushed with GITHUB_TOKEN
+# start no workflows. Never both: the second run would publish the tag again.
 #
 # It runs no tests: the tagged commit is the release PR's merge on main, which CI
 # tested as a pull request and tests again on that push (a run the release doesn't
@@ -35,8 +36,8 @@ jobs:
             exit 1
             ;;
           esac
-      # sampo.yml dispatches this workflow, so its run doesn't show in the tagged commit's
-      # checks; this status does, and the `status` job settles it.
+      # A dispatched run (sampo.yml without the App, or a retry) doesn't show in the
+      # tagged commit's checks; this status does, and the `status` job settles it.
       - name: Mark the release as started on the commit
         env:
           GH_TOKEN: ${{ github.token }}

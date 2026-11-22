@@ -107,6 +107,10 @@ runs:
         # to a protected branch. The bucket's lifecycle rule expires `pr-artifacts/`.
         WRITE: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
+        # A dependency update's build scripts run with these credentials, so its runs
+        # only read, also when someone pushed to the Dependabot branch. Dependabot's own
+        # runs get the Dependabot secrets, a read-only token (packaging/README.md, "Credentials").
+        DEPENDABOT: ${{ github.actor == 'dependabot[bot]' || github.event.pull_request.user.login == 'dependabot[bot]' }}
       run: |
         set -euo pipefail
         if [ -z "$BUCKET" ] || [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ]; then
@@ -120,7 +124,9 @@ runs:
           # earlier build of the same crate in this job's event log.
           echo "explain_miss = true"
           # remote_readonly would also stop a pull request from writing to its prefix.
-          if [ "$WRITE" != true ] && [ "$PULL_REQUEST" != true ]; then echo "remote_readonly = true"; fi
+          if { [ "$WRITE" != true ] && [ "$PULL_REQUEST" != true ]; } || [ "$DEPENDABOT" = true ]; then
+            echo "remote_readonly = true"
+          fi
           echo "[cache.remote]"
           echo 'type = "s3"'
           echo "bucket = \"$BUCKET\""

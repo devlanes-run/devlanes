@@ -12,7 +12,7 @@ devlanes is a Cargo workspace: one binary (`bins/devlanes`) built from small cra
 
 Optional tools, needed only by the ignored tests that mention them: Docker (OrbStack or Docker Desktop on macOS, Docker Desktop on Windows), `node` with npm/pnpm/yarn/bun, `just`, `deno`, `uv`, `poetry`, `mise`, `direnv`, `certutil` (NSS), `dig`, `tmux`.
 
-CI also shares kache's cache through a remote bucket. Pushes to `main` write to it, and pull requests write to a separate prefix that `main` never reads. Contributors don't need the remote; kache's local cache is enough, and connecting to a remote is an optional setting in your own `~/.config/kache/config.toml`.
+CI also shares kache's cache through a remote bucket. Pushes to `main` write to it, and pull requests write to a separate prefix that `main` never reads. Dependabot's pull requests only read, with a read-only key of their own ("Credentials" in `packaging/README.md`). Contributors don't need the remote; kache's local cache is enough, and connecting to a remote is an optional setting in your own `~/.config/kache/config.toml`.
 
 ## Checks
 
@@ -395,7 +395,7 @@ Don't edit versions or `CHANGELOG.md` files by hand; the release pull request do
 
 ## Releases
 
-Merging the release pull request, which `.github/workflows/sampo.yml` keeps up to date on every push to `main`, releases everything; `packaging/README.md` describes the workflow and the Homebrew and npm packages.
+Merging the release pull request, which `.github/workflows/sampo.yml` keeps up to date on every push to `main`, releases everything; `packaging/README.md` describes the workflow, the Homebrew and npm packages, and the bot App the release and Dependabot workflows push and merge with.
 
 ### Using a merged change before it is released
 
