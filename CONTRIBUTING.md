@@ -6,9 +6,9 @@ devlanes is a Cargo workspace: one binary (`bins/devlanes`) built from small cra
 
 - Rust comes from `rust-toolchain.toml`; rustup installs the pinned version on the first `cargo` call.
 - Install nextest: `cargo install cargo-nextest --locked`.
-- Install kache, the build cache every compile goes through (`.cargo/config.toml` sets it as rustc wrapper): `cargo install kache --locked`, then `kache init` once.
+- Install kache, the build cache every compile goes through (`.cargo/config.toml` sets it as rustc wrapper): `cargo install kache --locked` (2.0.0 or later; CI pins 2.3.0), then `kache init` once.
 - macOS (Apple Silicon and Intel), Linux with glibc (x86_64 and arm64) and Windows 11 24H2 or later (x64 and arm64) are supported.
-- On Windows, also install the Visual Studio Build Tools (the "Desktop development with C++" workload) and [Git for Windows](https://gitforwindows.org). kache 1.2.2 can't wrap the C compiler there, so build kache from a commit with the fix, outside the checkout and without the wrapper: `cargo install --locked --git https://github.com/kunobi-ninja/kache --rev a37fb5ff3bcc86adfded7f3ecb4f7c5100f744c2 kache` with `RUSTC_WRAPPER` unset. Switch to `cargo install kache` once a release includes it.
+- On Windows, also install the Visual Studio Build Tools (the "Desktop development with C++" workload) and [Git for Windows](https://gitforwindows.org). kache 1.x can't wrap the C compiler there. kache leaves executables uncached on Windows unless its config has `[cache] cache_executables = true` (CI sets `KACHE_CACHE_EXECUTABLES=1`); with it, test binaries and build scripts restore instead of linking again.
 
 Optional tools, needed only by the ignored tests that mention them: Docker (OrbStack or Docker Desktop on macOS, Docker Desktop on Windows), `node` with npm/pnpm/yarn/bun, `just`, `deno`, `uv`, `poetry`, `mise`, `direnv`, `certutil` (NSS), `dig`, `tmux`.
 

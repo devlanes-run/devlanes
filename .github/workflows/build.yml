@@ -100,7 +100,8 @@ jobs:
         # too). For a bin it stores, kache 1.2.2 adds `-Wl,-oso_prefix,<profile dir>/`, so
         # the debug map names objects relative to a directory rustc's dsymutil doesn't run
         # in, and after rustc returns it runs its own dsymutil on the stripped binary,
-        # replacing rustc's .dSYM with one that has the UUID and no DWARF.
+        # replacing rustc's .dSYM with one that has the UUID and no DWARF. 2.3.0 still
+        # adds the prefix.
         env:
           DEVLANES_BUILD_ID: v${{ inputs.version }}
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
@@ -228,10 +229,17 @@ jobs:
       # devlanes-hosts is Unix-only; .cargo/config.toml links the C runtime statically.
       # The MSVC linker writes devlanes.pdb whatever `strip` says, and the executable
       # names it without a directory; line tables add file:line to it.
+      #
+      # kache doesn't cache executables here, so the shipped devlanes.exe and
+      # devlanes.pdb are the pair this job's linker wrote, not one restored on the
+      # strength of kache's GUID and age check. Caching would gain little: devlanes.exe
+      # misses anyway, as the version and commit change on every build. Set explicitly
+      # in case kache's Windows default changes.
       - name: Build
         env:
           DEVLANES_BUILD_ID: v${{ inputs.version }}
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+          KACHE_CACHE_EXECUTABLES: 0
         run: cargo build --release --locked --target "$TARGET" -p devlanes
       # .gitattributes checks the schemas out with LF on Windows too, as build.rs writes them.
       - name: Check the committed schemas

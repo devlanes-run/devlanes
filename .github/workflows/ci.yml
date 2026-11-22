@@ -13,6 +13,12 @@ permissions:
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
+# kache caches executables (bins, tests, build scripts) by default on Linux and macOS
+# only; on Windows it stores each .exe with the .pdb its debug record names, and
+# leaves it uncached when they don't match. Without this, every Windows test binary
+# and build script links again in each job. build.yml sets its own value.
+env:
+  KACHE_CACHE_EXECUTABLES: 1
 jobs:
   # Decides which jobs below run and whose tests the rust job runs; the script's header
   # says how. A run by hand (workflow_dispatch) runs everything.
