@@ -3,7 +3,7 @@ use base64::engine::general_purpose::STANDARD;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject as _;
 use sha1::{Digest as _, Sha1};
-use sha2::Sha256;
+use sha2::{Digest as _, Sha256};
 
 use crate::TrustError;
 
