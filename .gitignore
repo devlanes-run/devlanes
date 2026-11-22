@@ -9,3 +9,4 @@ devlanes.local.yaml
 .tmp/
 .tmp-*/
 .worktrees/
+**/PowerShell/ModuleAnalysisCache/**
