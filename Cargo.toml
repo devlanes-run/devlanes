@@ -14,7 +14,7 @@ async-trait = "0.1"
 anyhow = "1"
 # HTML templates of crates/pages; it adds the features it uses.
 askama = { version = "0.16", default-features = false }
-base64 = "0.22"
+base64 = "0.23"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
 diesel = { version = "2.3", default-features = false, features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
@@ -22,7 +22,7 @@ diesel = { version = "2.3", default-features = false, features = ["sqlite", "ret
 # most tools cannot use.
 dunce = "1"
 futures-util = { version = "0.3", features = ["sink"] }
-getrandom = "0.3"
+getrandom = "0.4"
 # SCSS for the stylesheets crates/pages compiles at build time.
 grass = { version = "0.13", default-features = false }
 # Agent detection: the CLI's actor and output mode, the agent markers lane units
@@ -36,7 +36,7 @@ serde = { version = "1", features = ["derive"] }
 # preserve_order: JSON output follows struct field order, and the feature is pinned
 # here so per-crate and workspace builds don't disagree through feature unification.
 serde_json = { version = "1", features = ["preserve_order"] }
-sha2 = "0.10"
+sha2 = "0.11"
 # Splits the `run_script` names of the Maven and Gradle runners and the JVM
 # contributors that inspect them.
 shell-words = "1"
@@ -52,7 +52,7 @@ tempfile = "3"
 # std's); the browser's clock in wasm32 builds, where std's clock panics.
 web-time = "1"
 windows-sys = { version = "0.61", default-features = false }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

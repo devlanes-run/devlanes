@@ -31,9 +31,9 @@ impl ContentHash {
 
     /// Hashes a reader without buffering it whole.
     pub fn of_reader(reader: &mut impl io::Read) -> io::Result<Self> {
-        let mut hasher = Sha256::new();
+        let mut hasher = HashWriter(Sha256::new());
         io::copy(reader, &mut hasher)?;
-        Ok(Self(hasher.finalize().into()))
+        Ok(Self(hasher.0.finalize().into()))
     }
 
     /// Lowercase hex, as sent in remote sync manifests.
@@ -57,6 +57,23 @@ impl fmt::Debug for ContentHash {
     /// Lowercase hex.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&hex::encode(self.0))
+    }
+}
+
+/// Lets `io::copy` feed a SHA-256, since digest 0.11 hashers no longer
+/// implement `io::Write`.
+struct HashWriter(Sha256);
+
+impl io::Write for HashWriter {
+    /// Hashes `bytes`; never fails.
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    /// Nothing is buffered.
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -627,6 +644,44 @@ mod tests {
             .expect("write read-only again");
         target.remove(&rel("locked.txt")).await.expect("remove");
         assert!(!path.exists());
+    }
+
+    /// A file something is reading is still replaced, whole or streamed: on
+    /// Windows a reader that allows deletion (std, Node) must not make the
+    /// update fail.
+    #[tokio::test]
+    async fn files_held_open_by_readers_are_replaced() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = LocalTarget::owned(dir.path().join("out"))
+            .await
+            .expect("claim");
+        let path = dir.path().join("out/app.js");
+        target
+            .write_file(&rel("app.js"), Bytes::from_static(b"one"), 0o644)
+            .await
+            .expect("write");
+        let reader = fs::File::open(&path).expect("open");
+        target
+            .write_file(&rel("app.js"), Bytes::from_static(b"two"), 0o644)
+            .await
+            .expect("replace while open");
+        assert_eq!(fs::read(&path).expect("read"), b"two");
+        let mut streamed = target
+            .begin_file(&rel("app.js"), 0o644)
+            .await
+            .expect("begin");
+        streamed
+            .append(Bytes::from_static(b"three"))
+            .await
+            .expect("append");
+        streamed.commit().await.expect("commit while open");
+        assert_eq!(fs::read(&path).expect("read"), b"three");
+        drop(reader);
+        let names: Vec<_> = fs::read_dir(dir.path().join("out"))
+            .expect("list")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "no temp file left: {names:?}");
     }
 
     // Windows symlinks need Developer Mode or an elevated shell, as on the CI runners.
