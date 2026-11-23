@@ -309,18 +309,18 @@ fn read_manifest(file: &Path, expected: &Value) -> Manifest {
     let text = match std::fs::read_to_string(file) {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Manifest::Missing,
-        Err(error) => return Manifest::Unreadable(format!("{}: {error}", file.display())),
+        Err(error) => return Manifest::Unreadable(error.to_string()),
     };
     let value: Value = match serde_json::from_str(&text) {
         Ok(value) => value,
-        Err(error) => return Manifest::Unreadable(format!("{}: {error}", file.display())),
+        Err(error) => return Manifest::Unreadable(error.to_string()),
     };
     match value.get("path").and_then(Value::as_str) {
         Some(path) => Manifest::Runs {
             path: PathBuf::from(path),
             current: &value == expected,
         },
-        None => Manifest::Unreadable(format!("{} has no path", file.display())),
+        None => Manifest::Unreadable("no path".into()),
     }
 }
 
@@ -387,7 +387,7 @@ fn inspect_key(
     let key = location.key(browser);
     let found = match registry::read_string(&key, "") {
         Ok(None) => Found::Missing,
-        Err(error) => Found::Unreadable(format!(r"HKCU\{key}: {error}")),
+        Err(error) => Found::Unreadable(error.to_string()),
         Ok(Some(named)) => {
             let named = PathBuf::from(named);
             let own_file = same_path(&named, &location.windows_manifest());
@@ -405,6 +405,10 @@ fn inspect_key(
                     runs: Some(install.entry.clone()),
                     ours: true,
                 },
+                // The key is the place, so the reason names the file.
+                Found::Unreadable(reason) => {
+                    Found::Unreadable(format!("{}: {reason}", named.display()))
+                }
                 found => found,
             }
         }
@@ -438,7 +442,7 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
             return (
                 false,
                 false,
-                "devlanes can't tell where your home folder is".into(),
+                "devlanes can't tell where your home folder is. Set HOME (USERPROFILE on Windows), then run devlanes setup again".into(),
             );
         }
         Facts::Refused(reason) => return (false, false, reason.clone()),
@@ -537,7 +541,7 @@ pub(crate) enum BrowserError {
     Write { path: PathBuf, source: io::Error },
     #[error("couldn't delete {}: {source}. Delete it by hand", .path.display())]
     Delete { path: PathBuf, source: io::Error },
-    #[error(r"couldn't change the registry key HKCU\{key}: {source}. Run devlanes setup again")]
+    #[error(r"couldn't change the registry key HKCU\{key}: {source}. Run the same devlanes setup command again")]
     Registry { key: String, source: io::Error },
 }
 
@@ -701,11 +705,11 @@ pub(crate) fn removal(location: &Location, install: &Install) -> Removal {
             Found::Stale {
                 runs: Some(runs), ..
             }
-            | Found::Kept { runs } => {
-                format!("it runs {}, not this devlanes", runs.display())
-            }
-            Found::Stale { runs: None, .. } => "the manifest it names is missing".into(),
-            Found::Unreadable(reason) => format!("it can't be read: {reason}"),
+            | Found::Kept { runs } => another_install(runs),
+            Found::Stale { runs: None, .. } => "the manifest it names is missing. Delete the key, or run devlanes setup to point it at this install".into(),
+            Found::Unreadable(reason) => format!(
+                "it can't be read ({reason}). Delete it, or run devlanes setup to replace it"
+            ),
         };
         removal
             .keep
@@ -720,14 +724,22 @@ pub(crate) fn removal(location: &Location, install: &Install) -> Removal {
                 removal.delete.push(Target::File(file));
             }
             Manifest::Runs { path, .. } => removal.keep.push(format!(
-                "left {} in place: it runs {}, not this devlanes",
+                "left {} in place: {}",
                 file.display(),
-                path.display()
+                another_install(&path)
             )),
             Manifest::Missing | Manifest::Unreadable(_) => {}
         }
     }
     removal
+}
+
+/// Why `--remove` leaves a registration that runs `runs` in place.
+fn another_install(runs: &Path) -> String {
+    format!(
+        "it runs {}, which is another devlanes install. Run devlanes setup --remove with that install to delete it",
+        runs.display()
+    )
 }
 
 /// Deletes the targets of `removal` and returns a line for each. Blocking.
@@ -1063,7 +1075,7 @@ mod tests {
             assert_eq!(removal.keep.len(), 1, "{removal:?}");
             assert!(
                 removal.keep[0].ends_with(&format!(
-                    "in place: it runs {}, not this devlanes",
+                    "in place: it runs {}, which is another devlanes install. Run devlanes setup --remove with that install to delete it",
                     other.display()
                 )),
                 "{removal:?}"

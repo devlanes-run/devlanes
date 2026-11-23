@@ -1108,7 +1108,7 @@ fn browser_checks(browser: &Value) -> Vec<Check> {
             (Some(runs), _) if entry["gone"] == true => {
                 format!("runs {}, which is gone", clean(runs))
             }
-            (Some(runs), _) => format!("runs {}, another devlanes", clean(runs)),
+            (Some(runs), _) => format!("runs {}, another devlanes install", clean(runs)),
             (None, None) => "names a manifest that is missing".to_owned(),
         };
         checks.push(

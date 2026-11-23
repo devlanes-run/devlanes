@@ -1456,7 +1456,7 @@ fn doctor_words_the_browser_host() {
         "{text}"
     );
     assert!(
-        text.contains("Chromium's extension host runs /opt/devlanes, another devlanes"),
+        text.contains("Chromium's extension host runs /opt/devlanes, another devlanes install"),
         "{text}"
     );
     assert!(text.contains("fix: devlanes setup"), "{text}");
