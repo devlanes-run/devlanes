@@ -59,7 +59,8 @@ pub(crate) struct Browser {
     windows: Option<(&'static str, &'static [&'static str])>,
 }
 
-/// `Software\Google\Chrome`, which every Chromium build on Windows reads.
+/// `Software\Google\Chrome`, which every Chromium build on Windows reads,
+/// after its own key when it has one.
 const CHROME_KEY: &str = "Google/Chrome";
 /// `Software\Chromium`, which a build without Google Chrome branding reads
 /// before [`CHROME_KEY`].
