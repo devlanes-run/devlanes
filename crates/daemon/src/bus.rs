@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
         Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -30,6 +30,27 @@ pub struct EventBus {
     /// sent or skipped, for [`Self::flushed`].
     forwarded: watch::Sender<BTreeMap<u64, u64>>,
     next_forward: AtomicU64,
+    /// Subscribers that asked not to keep the daemon awake, for
+    /// [`Self::awake_subscribers`].
+    quiet: AtomicUsize,
+}
+
+/// Counts one quiet subscriber in [`EventBus::quiet`] while it lives.
+struct Quiet<'a>(&'a AtomicUsize);
+
+impl<'a> Quiet<'a> {
+    /// Counts a quiet subscriber until the guard drops.
+    fn new(quiet: &'a AtomicUsize) -> Self {
+        quiet.fetch_add(1, Ordering::Relaxed);
+        Self(quiet)
+    }
+}
+
+impl Drop for Quiet<'_> {
+    /// The subscriber left, so it no longer counts as quiet.
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// Removes a forward from [`EventBus::forwarded`] when it ends.
@@ -72,6 +93,7 @@ impl EventBus {
             recent: Mutex::new(VecDeque::with_capacity(RECENT)),
             forwarded: watch::channel(BTreeMap::new()).0,
             next_forward: AtomicU64::new(1),
+            quiet: AtomicUsize::new(0),
         }
     }
 
@@ -124,26 +146,44 @@ impl EventBus {
             .unwrap_or_default()
     }
 
-    /// Current subscriber count, used to decide whether sampling is wanted.
+    /// Current subscriber count, quiet ones included, for `doctor`.
     pub fn subscribers(&self) -> usize {
         self.sender.receiver_count()
     }
 
+    /// The subscribers that keep the daemon awake: every one but those that
+    /// subscribed with `keeps_awake: false`. The idle exit and the sampler's
+    /// fast tick read this count.
+    pub fn awake_subscribers(&self) -> usize {
+        // A quiet forward counts itself before it subscribes and stops counting
+        // after its receiver dropped, so this may read too low for a moment but
+        // never too high.
+        self.sender
+            .receiver_count()
+            .saturating_sub(self.quiet.load(Ordering::Relaxed))
+    }
+
     /// Forwards events accepted by `filter` to `session` until it disconnects.
     pub async fn forward(&self, session: &Session, filter: impl Fn(&Event) -> bool) {
-        self.forward_from(session, |_| Vec::new(), filter).await;
+        self.forward_from(session, true, |_| Vec::new(), filter)
+            .await;
     }
 
     /// Like [`Self::forward`], but subscribes first and then sends `initial` to
     /// this session only, so a snapshot never misses a change and other
     /// subscribers never see it. `initial` gets a sequence number of its own,
     /// after every event the subscription missed and before every one it gets.
+    /// Without `keeps_awake`, the subscription is left out of
+    /// [`Self::awake_subscribers`].
     pub async fn forward_from(
         &self,
         session: &Session,
+        keeps_awake: bool,
         initial: impl FnOnce(u64) -> Vec<Event>,
         filter: impl Fn(&Event) -> bool,
     ) {
+        // Declared before the receiver so it drops after it.
+        let _quiet = (!keeps_awake).then(|| Quiet::new(&self.quiet));
         let (mut receiver, seq, forwarding) = {
             // Emits take their number under this lock, so none falls in between.
             let _emits = crate::model::lock(&self.recent);

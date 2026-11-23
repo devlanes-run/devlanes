@@ -60,6 +60,10 @@ pub mod features {
     /// [`super::events::START_ACCEPTED`], and [`super::Method::StartCancel`]
     /// ends a start by its id.
     pub const START_ACCEPTED: &str = "start_accepted";
+    /// [`super::Method::Subscribe`] reads `keeps_awake`. With `false` the
+    /// subscriber neither holds the daemon past its idle exit nor keeps the
+    /// sampler fast. An older daemon ignores it and counts every subscriber.
+    pub const QUIET_SUBSCRIBE: &str = "quiet_subscribe";
 }
 
 /// Attribution is supplied by clients and never inferred by the daemon.

@@ -6,7 +6,7 @@
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -612,6 +612,68 @@ async fn daemon_usage_is_reported_on_its_own() {
             assert_eq!(row.len(), 4, "{row:?}");
             assert_eq!(row[3], 1, "warn is level 1: {row:?}");
         }
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// Counts the samples the sampler takes and reports nothing.
+#[derive(Default)]
+struct Counting {
+    samples: AtomicUsize,
+}
+
+#[async_trait]
+impl MetricsSource for Counting {
+    /// `fake`.
+    fn name(&self) -> &'static str {
+        "fake"
+    }
+
+    /// Counts the call.
+    async fn sample(&self, _: &SampleRequest) -> Result<Vec<Sample>, Error> {
+        self.samples.fetch_add(1, Ordering::SeqCst);
+        Ok(Vec::new())
+    }
+}
+
+/// How many samples `source` counts over `window`.
+async fn samples_over(source: &Counting, window: Duration) -> usize {
+    let before = source.samples.load(Ordering::SeqCst);
+    tokio::time::sleep(window).await;
+    source.samples.load(Ordering::SeqCst) - before
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A `keeps_awake: false` subscriber leaves the sampler on its slow 5 s tick.
+/// A plain subscriber moves it to the 1 s tick.
+async fn only_subscribers_that_keep_the_daemon_awake_sample_fast() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let source = Arc::new(Counting::default());
+        // No start and no `metrics` call: either would ask for fast samples.
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                metrics: vec![source.clone()],
+                ..Setup::default()
+            },
+        )
+        .await;
+        // At most one slow tick falls in 3 s.
+        let window = Duration::from_secs(3);
+
+        let quiet = crate::shutdown::subscribed(&h, json!({"keeps_awake": false})).await;
+        let slow = samples_over(&source, window).await;
+        assert!(slow <= 1, "{slow} samples with a quiet subscriber");
+
+        let tui = crate::shutdown::subscribed(&h, json!({})).await;
+        let fast = samples_over(&source, window).await;
+        assert!(fast >= 2, "{fast} samples with a plain subscriber");
+
+        tui.close();
+        quiet.close();
         h.close().await;
     })
     .await
