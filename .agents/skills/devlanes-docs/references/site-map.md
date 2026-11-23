@@ -116,7 +116,8 @@ Read in order. One project, myapp, from one service to lanes on a box.
 
 | Page | Title | Goal |
 |---|---|---|
-| `use-the-browser-extension.md` | Use the browser extension | See lanes and their URLs in the browser, open a page in another lane, switch boxes, fill test logins. |
+| `use-the-browser-extension.md` | Use the browser extension | See lanes and their URLs in the browser, open a page in another lane, switch boxes. |
+| `fill-test-logins.md` | Fill test logins on lanes | Save and fill test logins across a project's lanes, the settings, the fields a form needs. |
 | `wsl.md` | Run devlanes in WSL | devlanes in a WSL distribution with the browser on Windows. |
 | `update.md` | Update and uninstall | New releases, builds of `main`, removing devlanes. |
 | `report-a-bug.md` | Report a bug | Collect what a bug report needs. |
@@ -173,7 +174,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | What a clean deletes | `how-to/lanes/clean-up.md` | Linked from the infra guides |
 | Pairing: the steps | `how-to/remote/connect.md` | `learn/remote.md` shows it once |
 | Pairing: what it protects | `concepts/security.md` | Nowhere else |
-| What a lane page can do with the browser extension's saved logins | `concepts/security.md` | Linked from `how-to/use-the-browser-extension.md` |
+| What a lane page can do with the browser extension's saved logins | `concepts/security.md` | Linked from `how-to/fill-test-logins.md` |
 | Installing devlanes on a box | `how-to/remote/prepare-a-box.md` | Linked from the other remote guides |
 | States and exit codes | `reference/states-and-exit-codes.md` | The skill |
 | Windows differences | `reference/windows.md` | OS tabs where a command differs |
