@@ -47,5 +47,9 @@ web-sys = { version = "0.3", features = [
   "Window",
 ] }
 
+# CI's web job builds the bundle with this script.
+[package.metadata.ci]
+inputs = ["packaging/scripts/tui-web.sh"]
+
 [lints]
 workspace = true

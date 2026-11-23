@@ -28,6 +28,8 @@ cargo build --workspace --all-targets --all-features
 
 While working on one crate, test just that crate: `cargo nextest run -p devlanes-config`.
 
+CI skips what a change can't affect. Against a pull request's base, or on `main` the last commit whose CI passed, `.github/scripts/affected.js` picks the jobs to run and the crates whose tests run: each changed crate and every crate that depends on it, and for a `Cargo.lock` change the crates whose locked dependencies changed. Files outside the crates select nothing. When a crate's build or tests read a file outside its directory, list it under `[package.metadata.ci]` in the crate's `Cargo.toml` (`build-inputs` or `inputs`), or the change won't run its tests. Running the CI workflow by hand runs everything. Only one check, `ci`, is required to merge; it fails when any job failed.
+
 Changes to shell scripts or workflows also have a check, which CI runs in its `packaging` job:
 
 ```sh

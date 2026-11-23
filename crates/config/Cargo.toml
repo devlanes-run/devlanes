@@ -40,5 +40,9 @@ tempfile.workspace = true
 insta = { version = "1", features = ["json"] }
 jsonschema = { version = "0.61", default-features = false }
 
+# The tests load the example and dogfood configs.
+[package.metadata.ci]
+inputs = ["fixtures/"]
+
 [lints]
 workspace = true

@@ -37,5 +37,10 @@ insta = { version = "1", features = ["json"] }
 [target.'cfg(windows)'.dev-dependencies]
 devlanes-testing = { path = "../testing" }
 
+# Files the tests read from outside this crate: the reference pages and the agent skill
+# they check against the CLI, and the daemon's error codes.
+[package.metadata.ci]
+inputs = ["docs/", "skills/", "crates/daemon/src/"]
+
 [lints]
 workspace = true
