@@ -65,6 +65,15 @@ fn main() -> ExitCode {
     {
         return devlanes_mcp::shell_env::print_payload(std::env::args_os().skip(2));
     }
+    // Chrome starts a native messaging host as `<path> chrome-extension://<id>/`.
+    // stdout carries the host's frames, so nothing below may run first: no
+    // completion, no console of its own and no CLI parsing.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| devlanes_browser_host::is_origin(&arg))
+    {
+        return devlanes_browser_host::run(std::env::args_os().skip(1));
+    }
     // CompleteEnv must run before any thread exists; it exits when completing.
     completion::install();
     // A bare `-v` is how most tools print their version, and the TUI it would
