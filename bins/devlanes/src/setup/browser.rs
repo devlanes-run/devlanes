@@ -290,7 +290,33 @@ pub(crate) enum Facts {
     Found {
         install: Install,
         registrations: Vec<Registration>,
+        /// Windows: the shared manifest another working install holds,
+        /// which a build leaves alone.
+        held: Option<Held>,
     },
+}
+
+/// The shared Windows manifest, when it runs another install whose binary
+/// exists and setup runs from a `Source` or `Local` build. Every key names
+/// that one file, so the build can't register any browser without taking
+/// the others over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Held {
+    pub(crate) manifest: PathBuf,
+    /// The program the manifest starts.
+    pub(crate) runs: PathBuf,
+}
+
+/// The [`Held`] shared manifest at `location` for `install`, if any. Blocking.
+fn held(location: &Location, install: &Install) -> Option<Held> {
+    if location.layout != Layout::Windows {
+        return None;
+    }
+    let manifest = location.windows_manifest();
+    match found_of(read_manifest(&manifest, &install.manifest()), install) {
+        Found::Kept { runs } => Some(Held { manifest, runs }),
+        _ => None,
+    }
 }
 
 /// A manifest as read from disk.
@@ -430,6 +456,7 @@ pub(crate) fn facts(location: Option<&Location>, install: Install) -> Facts {
     }
     Facts::Found {
         registrations: inspect(location, &install),
+        held: held(location, &install),
         install,
     }
 }
@@ -437,7 +464,7 @@ pub(crate) fn facts(location: Option<&Location>, install: Install) -> Facts {
 /// `(needed, done, reason)` of the step. `needed` means there is a browser to
 /// register for, and the step never counts as missing either way.
 pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
-    let (install, registrations) = match facts {
+    let (install, registrations, held) = match facts {
         Facts::NoHome => {
             return (
                 false,
@@ -449,7 +476,8 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
         Facts::Found {
             install,
             registrations,
-        } => (install, registrations),
+            held,
+        } => (install, registrations, held),
     };
     let names = |keep: &dyn Fn(&Found) -> bool| {
         join(
@@ -461,8 +489,8 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
         )
     };
     let registered = names(&|found| *found == Found::Current);
-    let missing = names(&|found| *found == Found::Missing);
-    let stale = names(&|found| matches!(found, Found::Stale { .. } | Found::Unreadable(_)));
+    let mut missing = names(&|found| *found == Found::Missing);
+    let mut stale = names(&|found| matches!(found, Found::Stale { .. } | Found::Unreadable(_)));
     let mut kept: Vec<String> = registrations
         .iter()
         .filter_map(|registration| match &registration.found {
@@ -474,6 +502,23 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
             _ => None,
         })
         .collect();
+    // Writing any key would rewrite the shared manifest the kept keys name.
+    if let Some(held) = held {
+        let blocked = names(&|found| {
+            matches!(
+                found,
+                Found::Missing | Found::Stale { .. } | Found::Unreadable(_)
+            )
+        });
+        (missing, stale) = (None, None);
+        if let Some(blocked) = blocked {
+            kept.push(format!(
+                "{blocked} would need {}, which runs {}, and a build doesn't replace it",
+                held.manifest.display(),
+                held.runs.display()
+            ));
+        }
+    }
     if !kept.is_empty() {
         kept.push(
             "To register this build, run devlanes setup --remove from that install first".into(),
@@ -630,7 +675,9 @@ pub(crate) fn apply(
     let mut lines = Vec::new();
     let todo: Vec<&Registration> = registrations.iter().filter(|r| r.to_write()).collect();
     if location.layout == Layout::Windows {
-        if todo.is_empty() {
+        // Every key names the shared manifest, so with another install
+        // holding it a build writes neither the file nor any key.
+        if todo.is_empty() || held(location, install).is_some() {
             return Ok(lines);
         }
         let file = location.windows_manifest();
@@ -995,6 +1042,7 @@ mod tests {
             let facts = Facts::Found {
                 install: install.clone(),
                 registrations: registrations.clone(),
+                held: None,
             };
             assert_eq!(
                 plan(&facts),
@@ -1034,6 +1082,7 @@ mod tests {
                 plan(&Facts::Found {
                     install: install.clone(),
                     registrations: inspect(&location, &install),
+                    held: None,
                 })
                 .1
             );
@@ -1184,6 +1233,7 @@ mod tests {
             let (needed, done, reason) = plan(&Facts::Found {
                 install: install.clone(),
                 registrations: registrations.clone(),
+                held: None,
             });
             assert!(needed && !done);
             // The whole line, so a doubled ". " or a trailing space shows.
@@ -1308,6 +1358,80 @@ mod tests {
         assert_eq!(
             registry::read_string(&edge, "").expect("read"),
             Some(other.display().to_string())
+        );
+    }
+
+    /// A `Source` build leaves the shared manifest alone while it runs
+    /// another working install: three keys name it and Edge has none, and
+    /// setup writes neither the file nor Edge's key.
+    #[cfg(windows)]
+    #[test]
+    fn a_build_leaves_the_shared_windows_manifest_alone() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = TestKey(format!(
+            r"Software\devlanes-test-browser-held-{}",
+            std::process::id()
+        ));
+        let location = Location {
+            home: temp.path().join("user"),
+            layout: Layout::Windows,
+            registry_root: root.0.clone(),
+        };
+        let other = temp.path().join("other").join("devlanes.exe");
+        std::fs::create_dir_all(other.parent().expect("parent")).expect("other");
+        std::fs::write(&other, "").expect("other binary");
+        let shared = location.windows_manifest();
+        std::fs::create_dir_all(shared.parent().expect("parent")).expect("browser folder");
+        std::fs::write(&shared, other_manifest(&other)).expect("shared manifest");
+        for browser in [Browser::Chrome, Browser::Chromium, Browser::Brave] {
+            registry::write_string(&location.key(browser), "", &shared.display().to_string())
+                .expect("key");
+        }
+        let build = temp
+            .path()
+            .join("target")
+            .join("debug")
+            .join("devlanes.exe");
+        let install = Install::new(InstallMethod::Source, build.clone());
+        let facts = facts(Some(&location), install.clone());
+        let Facts::Found {
+            registrations,
+            held,
+            ..
+        } = &facts
+        else {
+            panic!("{facts:?}");
+        };
+        assert_eq!(
+            held,
+            &Some(Held {
+                manifest: shared.clone(),
+                runs: other.clone()
+            })
+        );
+        let (needed, done, reason) = plan(&facts);
+        assert!(!needed && !done, "{reason}");
+        assert!(
+            reason.contains(&format!(
+                "Edge would need {}, which runs {}, and a build doesn't replace it. To register this build",
+                shared.display(),
+                other.display()
+            )),
+            "{reason}"
+        );
+        assert!(!reason.contains(". ."), "{reason}");
+        assert!(
+            apply(&location, &install, registrations)
+                .expect("apply")
+                .is_empty()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&shared).expect("read"),
+            other_manifest(&other)
+        );
+        assert_eq!(
+            registry::read_string(&location.key(Browser::Edge), "").expect("read"),
+            None
         );
     }
 

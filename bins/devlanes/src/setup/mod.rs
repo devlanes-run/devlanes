@@ -617,6 +617,7 @@ async fn run_in(
                     browser::Facts::Found {
                         install,
                         registrations,
+                        ..
                     },
                     Some(location),
                 ) => browser::install(runtime, location, install, registrations).await,
@@ -1363,6 +1364,7 @@ mod tests {
                     found: found.clone(),
                 })
                 .collect(),
+            held: None,
         }
     }
 
