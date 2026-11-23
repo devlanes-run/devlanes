@@ -57,8 +57,10 @@ pub(crate) enum MuxError {
 
 /// When the pipe last delivered bytes, shared with the session's liveness checks.
 ///
-/// Any inbound frame proves the peer is alive, so a large transfer that delays a
-/// pong behind data frames does not count as a dead link.
+/// Every byte read from the pipe counts: stream data and yamux's own pings,
+/// pongs, window updates and close frames. All of them come from the peer's
+/// process, since the pipe has no keep-alive of its own, so a large transfer
+/// that delays a pong behind data frames does not count as a dead link.
 #[derive(Debug)]
 pub(crate) struct Activity {
     last: Mutex<Instant>,
@@ -297,7 +299,7 @@ pub(crate) fn server(io: BoxDuplex) -> MuxServer {
 /// Owns and polls the connection until it ends, the handles drop, or shutdown.
 ///
 /// Inbound streams use an unbounded channel because the poll loop cannot wait;
-/// yamux's `MAX_STREAMS` limit bounds it instead.
+/// yamux's own stream limit ([`YAMUX_STREAMS`]) bounds it instead.
 async fn drive<T>(
     mut connection: yamux::Connection<T>,
     mut open_rx: Option<mpsc::Receiver<OpenReply>>,
