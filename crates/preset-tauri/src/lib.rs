@@ -468,7 +468,7 @@ mod tests {
     }
 
     /// Each replica gets its own overlay file, `--config`, env pointer and Cargo
-    /// target folder; `isolate_target_dir: false` leaves an existing folder alone.
+    /// target folder; a folder set earlier, for example by mise, is replaced and reported.
     #[tokio::test]
     async fn adapter_prepares_overlay_per_replica() {
         let memo = ContribMemo::default();
