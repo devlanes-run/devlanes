@@ -1073,8 +1073,62 @@ fn fact_checks(data: &Value) -> Vec<Check> {
     }
     checks.extend(reserved_port_checks(&data["reserved_ports"]));
     checks.extend(service_checks(data));
+    checks.extend(browser_checks(&data["browser"]));
     checks.extend(tls_and_hosts_checks(data, running));
     checks
+}
+
+/// The browser extension's host (`browser`: `{registered, stale, found}`,
+/// added by the CLI): the browsers it is registered for, and a warning per
+/// registration that runs a program that is gone or another devlanes.
+/// Nothing when no browser was found.
+fn browser_checks(browser: &Value) -> Vec<Check> {
+    let names =
+        |key: &str| -> Vec<String> { list(browser, key).iter().map(display_value).collect() };
+    let (registered, stale) = (names("registered"), list(browser, "stale"));
+    if names("found").is_empty() {
+        return Vec::new();
+    }
+    let mut checks = vec![if registered.is_empty() {
+        Check::new(
+            "browser",
+            Outcome::Ok,
+            "extension host not registered (devlanes setup registers it)",
+        )
+    } else {
+        Check::new(
+            "browser",
+            Outcome::Ok,
+            format!("extension host registered for {}", and_list(&registered)),
+        )
+    }];
+    for entry in stale {
+        let why = match (entry["runs"].as_str(), entry["error"].as_str()) {
+            (_, Some(error)) => format!("can't be read: {}", clean(error)),
+            (Some(runs), _) if entry["gone"] == true => {
+                format!("runs {}, which is gone", clean(runs))
+            }
+            (Some(runs), _) => format!("runs {}, another devlanes", clean(runs)),
+            (None, None) => "names a manifest that is missing".to_owned(),
+        };
+        checks.push(
+            Check::new(
+                "browser",
+                Outcome::Skip,
+                format!("{}'s extension host {why}", text(entry, "browser")),
+            )
+            .fix("devlanes setup"),
+        );
+    }
+    checks
+}
+
+/// `Chrome`, `Chrome and Brave`, `Chrome, Brave and Edge`.
+fn and_list(names: &[String]) -> String {
+    match names {
+        [rest @ .., last] if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => names.join(""),
+    }
 }
 
 /// The WSL distro this CLI runs in (`wsl`: `{distro, version, interop,

@@ -554,6 +554,7 @@ async fn rpc_start(
                 let mut data = crate::local_doctor::facts(&paths).await;
                 crate::notices::annotate_doctor(None, &mut data).await;
                 data["service"] = crate::daemon::service_report().await;
+                data["browser"] = crate::setup::browser_report().await;
                 crate::local_doctor::add_wsl(&mut data).await;
                 return render_result(runtime, Method::Doctor, &data, None)
                     .map(|code| (code, None));
@@ -657,6 +658,8 @@ async fn rpc_start(
                                 // The service definition is in this user's home, read here.
                                 if data.is_object() {
                                     data["service"] = crate::daemon::service_report().await;
+                                    // The browsers' registrations are this user's files and keys.
+                                    data["browser"] = crate::setup::browser_report().await;
                                 }
                                 // Facts of this terminal, whatever daemon answered.
                                 #[cfg(windows)]
