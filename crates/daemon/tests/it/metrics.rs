@@ -638,11 +638,9 @@ impl MetricsSource for Counting {
     }
 }
 
-/// How many samples `source` counts over `window`.
-async fn samples_over(source: &Counting, window: Duration) -> usize {
-    let before = source.samples.load(Ordering::SeqCst);
-    tokio::time::sleep(window).await;
-    source.samples.load(Ordering::SeqCst) - before
+/// The samples `source` has counted so far.
+fn samples(source: &Counting) -> usize {
+    source.samples.load(Ordering::SeqCst)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -661,16 +659,24 @@ async fn only_subscribers_that_keep_the_daemon_awake_sample_fast() {
             },
         )
         .await;
-        // At most one slow tick falls in 3 s.
-        let window = Duration::from_secs(3);
-
         let quiet = crate::shutdown::subscribed(&h, json!({"keeps_awake": false})).await;
-        let slow = samples_over(&source, window).await;
+        let before = samples(&source);
+        // The window must stay under five 1 s ticks, so it holds at most one
+        // slow sample.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        let slow = samples(&source) - before;
         assert!(slow <= 1, "{slow} samples with a quiet subscriber");
 
         let tui = crate::shutdown::subscribed(&h, json!({})).await;
-        let fast = samples_over(&source, window).await;
-        assert!(fast >= 2, "{fast} samples with a plain subscriber");
+        let before = samples(&source);
+        // The slow tick takes at most one sample in 5 s, so two need the fast one.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while samples(&source) < before + 2 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("a plain subscriber samples every second");
 
         tui.close();
         quiet.close();

@@ -181,8 +181,8 @@ async fn a_quiet_subscriber_lets_the_engine_go_idle() {
             .expect("idle with only a quiet subscriber");
         assert!(begun.elapsed() >= unwatched, "{:?}", begun.elapsed());
 
-        // Without `keeps_awake`, a subscriber keeps the engine awake.
         let tui = subscribed(&h, json!({})).await;
+        // 800 ms covers four 200 ms idle ticks.
         assert!(
             tokio::time::timeout(Duration::from_millis(800), h.engine.idle())
                 .await
