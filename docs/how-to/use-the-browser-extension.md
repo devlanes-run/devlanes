@@ -49,11 +49,11 @@ When the lane runs on your machine, the popup asks before it stops it. "Stop and
 
 ## If setup doesn't register your browser
 
-Setup also keeps the manifest at `~/.devlanes/browser/run.devlanes.browser.json`, `%USERPROFILE%\.devlanes\browser\run.devlanes.browser.json` on Windows, for any other Chromium-based browser. Point the browser at it by hand.
+Setup keeps a copy of the extension's host file, its manifest, for any other Chromium-based browser. Point the browser at the copy by hand.
 
 ::::tabs{sync="os"}
 :::tab[macOS]
-The browser's `chrome://version` page shows its Profile Path. Its user data folder is that path without the profile folder at the end, such as Default. Link the manifest into `NativeMessagingHosts` there:
+The copy is `~/.devlanes/browser/run.devlanes.browser.json`. The browser's `chrome://version` page shows its Profile Path. Its user data folder is that path without the profile folder at the end, such as Default. Link the copy into that folder's NativeMessagingHosts folder.
 
 ```console
 $ mkdir -p "<user data folder>/NativeMessagingHosts"
@@ -61,7 +61,7 @@ $ ln -s ~/.devlanes/browser/run.devlanes.browser.json "<user data folder>/Native
 ```
 :::
 :::tab[Linux]
-The browser's `chrome://version` page shows its Profile Path. Its user data folder is that path without the profile folder at the end, such as Default. Link the manifest into `NativeMessagingHosts` there:
+The copy is `~/.devlanes/browser/run.devlanes.browser.json`. The browser's `chrome://version` page shows its Profile Path. Its user data folder is that path without the profile folder at the end, such as Default. Link the copy into that folder's NativeMessagingHosts folder.
 
 ```console
 $ mkdir -p "<user data folder>/NativeMessagingHosts"
@@ -69,7 +69,7 @@ $ ln -s ~/.devlanes/browser/run.devlanes.browser.json "<user data folder>/Native
 ```
 :::
 :::tab[Windows]
-Add a key that names the manifest. The key depends on the browser, so check its documentation. Some browsers also read Chrome's key, `HKCU\Software\Google\Chrome\NativeMessagingHosts`.
+The copy is `%USERPROFILE%\.devlanes\browser\run.devlanes.browser.json`. Add a key that names the copy. The key depends on the browser, so check its documentation. Some browsers also read Chrome's key, `HKCU\Software\Google\Chrome\NativeMessagingHosts`.
 
 ```console
 PS> reg add "HKCU\Software\<Vendor>\<Browser>\NativeMessagingHosts\run.devlanes.browser" /ve /t REG_SZ /d "$env:USERPROFILE\.devlanes\browser\run.devlanes.browser.json" /f
