@@ -114,7 +114,8 @@ impl StepKind {
 struct Step {
     kind: StepKind,
     /// Whether the step applies to this machine. For the browser host,
-    /// whether there is a browser to register it for.
+    /// whether some browser holds or can take this install's registration.
+    /// With all of them registered it is `done` and shows `ok`.
     needed: bool,
     done: bool,
     /// Why the step is needed and what is missing, what is in place, or why
