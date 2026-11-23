@@ -1,11 +1,11 @@
 ---
 title: Use the browser extension
-description: See your lanes and their URLs in Chrome, Chromium, Brave or Edge, open a page in another lane, and pick which box serves a lane.
+description: See your lanes and their URLs in Chromium-based browsers such as Chrome, Edge and Brave, open a page in another lane, and pick which box serves a lane.
 kind: how-to
 publish: false
 ---
 
-The devlanes browser extension lists your projects and lanes with their URLs in a popup, and the toolbar badge shows the lane number of the current tab. It works in Chrome, Chromium, Brave and Edge.
+The devlanes browser extension lists your projects and lanes with their URLs in a popup, and the toolbar badge shows the lane number of the current tab. It works in Chromium-based browsers such as Chrome, Edge and Brave.
 
 ## Build and load the extension
 
