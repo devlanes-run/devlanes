@@ -126,7 +126,6 @@ impl AsyncWrite for Watched {
 type OpenReply = oneshot::Sender<Result<yamux::Stream, MuxError>>;
 
 /// Client-side handle; the only side allowed to open streams.
-#[derive(Clone)]
 pub(crate) struct MuxClient {
     open: mpsc::Sender<OpenReply>,
     shutdown: CancellationToken,
