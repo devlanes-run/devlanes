@@ -27,7 +27,8 @@ pub(crate) enum SharedOnClean {
     None,
     /// No other lane uses them: stop them with this spec.
     Stop(SharedInfraSpec),
-    /// Cannot tell what to stop: the primary worktree's file never loaded, a
+    /// Cannot tell what to stop: the file it is read from (the primary
+    /// worktree's, else the leaving lane's) does not load, neither has one, a
     /// value of the spec does not evaluate, or the provider cannot read it.
     Unknown(RpcError),
 }
@@ -111,7 +112,10 @@ impl Inner {
             return SharedOnClean::Used;
         }
         let env = leaving.st().env().cloned();
-        let spec = match self.shared_infra_spec(project, env.as_deref()).await {
+        let spec = match self
+            .shared_infra_spec(project, Some(leaving), env.as_deref())
+            .await
+        {
             Ok(spec) => spec,
             Err(error) => return SharedOnClean::Unknown(error),
         };

@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use crate::{
     engine::Inner,
     integrations::{ContainerDecl, InfraPortNeed, InfraSpec, PortScope, SharedInfraSpec},
-    model::{ConfigState, EnvMap, LaneRt, ProjectRt, Unassigned, unassigned},
+    model::{ConfigState, EnvMap, LaneRt, ProjectRt, Unassigned, elsewhere_error, unassigned},
     registry::{PrimaryWorktree, lane_context, read_dotenv, store_error},
 };
 
@@ -401,36 +401,21 @@ impl Inner {
         needs: &[InfraPortNeed],
     ) -> Result<InfraSpec, RpcError> {
         let reference = lane.st().reference(&project.name());
-        let (config, allocation, view, env, infra_ns) = {
+        let config = {
             let st = lane.st();
-            let config = st
-                .config()
+            st.config()
                 .loaded()
                 .cloned()
-                .ok_or_else(|| RpcError::new("no_config", json!({"path": st.path()}), 1))?;
-            let allocation = st
-                .allocation()
-                .cloned()
-                .ok_or_else(|| unassigned(&reference, Unassigned::NoPorts))?;
-            (
-                config,
-                allocation,
-                st.view().cloned(),
-                st.env().cloned(),
-                st.infra().namespace_value(),
-            )
+                .ok_or_else(|| RpcError::new("no_config", json!({"path": st.path()}), 1))?
         };
-        let facts = self.facts(project, lane)?;
-        let (lane_dir, primary_dir) = self.config_dirs(project, lane);
-        let dotenv = read_dotenv(lane_dir.clone(), primary_dir.clone()).await;
-        let client: EnvMap = env.map(|e| (*e).clone()).unwrap_or_default();
-        let (domain, port, vars) = match &view {
-            Some(view) => (view.domain.clone(), view.port, view.vars.clone()),
-            None => (String::new(), allocation.block.start, Default::default()),
-        };
-        let raw = lane_context(&facts, &domain, port, &vars, &infra_ns, &client, &dotenv);
-        // Prepared once: every infra value below is evaluated against it.
-        let context = raw.prepare();
+        let LaneInfraContext {
+            allocation,
+            facts,
+            lane_dir,
+            primary_dir,
+            raw,
+            context,
+        } = self.lane_infra_context(project, lane).await?;
         let infra = &config.infra;
         let evaluate = |path: &str, value: &devlanes_config::Templated<String>| {
             value.evaluate(&context).map_err(|error| {
@@ -565,39 +550,91 @@ impl Inner {
         })
     }
 
-    /// The project's [`SharedInfraSpec`], from what the project owns: the shared
-    /// fields of the primary worktree's file (whose project-wide settings apply
-    /// to every lane), evaluated against lane 0's provisional facts and `env`,
-    /// the client environment of the request that needs it (never persisted).
-    /// Needs no lane record, block or data folder, so it works whichever lane is
-    /// the last. A file that does not load is read as of its last good load; an
-    /// error when there was none or a shared value does not evaluate.
+    /// What `lane`'s infra values are evaluated against, as its start evaluates
+    /// them: its facts, view, stored client env, infra namespace and `.env` files.
+    async fn lane_infra_context(
+        &self,
+        project: &ProjectRt,
+        lane: &LaneRt,
+    ) -> Result<LaneInfraContext, RpcError> {
+        let (allocation, view, env, infra_ns) = {
+            let st = lane.st();
+            let allocation = st
+                .allocation()
+                .cloned()
+                .ok_or_else(|| unassigned(&st.reference(&project.name()), Unassigned::NoPorts))?;
+            (
+                allocation,
+                st.view().cloned(),
+                st.env().cloned(),
+                st.infra().namespace_value(),
+            )
+        };
+        let facts = self.facts(project, lane)?;
+        let (lane_dir, primary_dir) = self.config_dirs(project, lane);
+        let dotenv = read_dotenv(lane_dir.clone(), primary_dir.clone()).await;
+        let client: EnvMap = env.map(|e| (*e).clone()).unwrap_or_default();
+        let (domain, port, vars) = match &view {
+            Some(view) => (view.domain.clone(), view.port, view.vars.clone()),
+            None => (String::new(), allocation.block.start, Default::default()),
+        };
+        let raw = lane_context(&facts, &domain, port, &vars, &infra_ns, &client, &dotenv);
+        // Prepared once: every infra value is evaluated against it.
+        let context = raw.prepare();
+        Ok(LaneInfraContext {
+            allocation,
+            facts,
+            lane_dir,
+            primary_dir,
+            raw,
+            context,
+        })
+    }
+
+    /// The project's [`SharedInfraSpec`]: from the primary worktree's file (or
+    /// its last good load), evaluated as for a provisional lane 0 with `env`,
+    /// the request's client environment (never persisted). When the primary has
+    /// no file for the project, from `fallback`'s own file as its start
+    /// evaluated it, with the client environment that start stored; `env` is
+    /// not used then. Errors when the primary's file is invalid, there
+    /// is no usable fallback, or a shared value does not evaluate.
     pub(crate) async fn shared_infra_spec(
         &self,
         project: &ProjectRt,
+        fallback: Option<&LaneRt>,
         env: Option<&EnvMap>,
     ) -> Result<SharedInfraSpec, RpcError> {
         let primary = self.primary_lane(project);
-        let (config, branch) = match &primary {
+        let found = match &primary {
             Some(lane) => {
                 let st = lane.st();
                 // A file that stopped loading still names what its last good load
                 // brought up.
                 match (st.config().loaded().or(st.last_good.as_ref()), st.config()) {
-                    (Some(config), _) => (config.clone(), st.branch().map(str::to_owned)),
+                    (Some(config), _) => Some((config.clone(), st.branch().map(str::to_owned))),
                     (None, ConfigState::Invalid(error)) => return Err(error.clone()),
-                    (None, _) => {
-                        return Err(RpcError::new("no_config", json!({"path": st.path()}), 1));
-                    }
+                    // Missing, or a file of another project (Elsewhere).
+                    (None, _) => None,
                 }
             }
-            None => {
-                return Err(RpcError::new(
-                    "no_config",
-                    json!({"path": self.primary_path(project)}),
-                    1,
-                ));
-            }
+            None => None,
+        };
+        // Called only once no lane's `st` guard is held: `primary_path` locks them.
+        let missing = || {
+            RpcError::new(
+                "no_config",
+                json!({"path": self.primary_path(project), "primary": true}),
+                1,
+            )
+        };
+        let Some((config, branch)) = found else {
+            return match fallback {
+                Some(lane) => self
+                    .lane_shared_spec(project, lane)
+                    .await?
+                    .ok_or_else(missing),
+                None => Err(missing()),
+            };
         };
         let primary = PrimaryWorktree {
             root: self.primary_path(project),
@@ -606,6 +643,38 @@ impl Inner {
         };
         self.provisional_shared_spec(&config, project.name(), &primary, env)
             .await
+    }
+
+    /// `lane`'s own shared fields, evaluated as its start evaluated them (with
+    /// its stored client env), for a project whose primary worktree has no file,
+    /// so a clean or `infra down` stops what the lane brought up. `None` when the
+    /// lane has no file, record or ports; the error of a file that does not load
+    /// or names another project.
+    ///
+    /// Only this lane's file counts. When it declares nothing shared and a lane
+    /// on another branch declared shared containers without ports, so no shared
+    /// port block remains, the clean finds nothing to stop and they keep running.
+    async fn lane_shared_spec(
+        &self,
+        project: &ProjectRt,
+        lane: &LaneRt,
+    ) -> Result<Option<SharedInfraSpec>, RpcError> {
+        let config = {
+            let st = lane.st();
+            if st.record().is_none() || st.allocation().is_none() {
+                return Ok(None);
+            }
+            match (st.config().loaded().or(st.last_good.as_ref()), st.config()) {
+                (Some(config), _) => config.clone(),
+                (None, ConfigState::Invalid(error)) => return Err(error.clone()),
+                (None, ConfigState::Elsewhere(other)) => {
+                    return Err(elsewhere_error(other, Some(&st.reference(&project.name()))));
+                }
+                (None, _) => return Ok(None),
+            }
+        };
+        let ctx = self.lane_infra_context(project, lane).await?;
+        shared_fields(&config, project.name(), ctx.primary_dir, &ctx.context).map(Some)
     }
 
     /// The shared fields of `config` evaluated as for a provisional lane 0 in
@@ -749,6 +818,17 @@ impl Gathered {
     pub(crate) fn key(&self, inner: &Inner) -> InputsKey {
         self.input(inner).key(&self.references)
     }
+}
+
+/// What a lane's infra values are evaluated against ([`Inner::lane_infra_context`]).
+struct LaneInfraContext {
+    allocation: Allocation,
+    facts: LaneFacts,
+    lane_dir: PathBuf,
+    primary_dir: PathBuf,
+    /// The unprepared context, which `container_ready` reads.
+    raw: devlanes_config::ExpressionContext,
+    context: PreparedContext,
 }
 
 /// The shared fields of `config`'s infra (the Compose files and project name,
