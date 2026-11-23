@@ -1,6 +1,9 @@
 //! The environment of a command outside a unit: `exec` and the lane's `env`.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use devlanes_core::{
     contrib::runtime_ca_env,
@@ -49,7 +52,7 @@ pub(crate) fn left_out(entries: &BTreeMap<String, LeftOut>) -> Value {
         .iter()
         .map(|(key, entry)| {
             let mut item = json!({
-                "key": devlanes_core::env::fold_name(key.clone()),
+                "key": key,
                 "infra": entry.infra,
             });
             if entry.reason == DownReason::EngineNotRunning {
@@ -110,19 +113,21 @@ impl Inner {
         if let Some(error) = self.external_conflict(&config, lane, own) {
             return Err(error);
         }
-        layers
-            .left_out
-            .retain(|key, _| !request.overrides.contains_key(key));
-        layers
-            .unknown
-            .retain(|key, _| !request.overrides.contains_key(key));
+        // Folded, so on Windows `--env database_url=x` also replaces the
+        // config's `DATABASE_URL`, as `assemble` does.
+        let overridden: BTreeSet<String> = request
+            .overrides
+            .keys()
+            .map(|key| devlanes_core::env::fold_name(key.clone()))
+            .collect();
+        let kept = |key: &String| !overridden.contains(&devlanes_core::env::fold_name(key.clone()));
+        layers.left_out.retain(|key, _| kept(key));
+        layers.unknown.retain(|key, _| kept(key));
         if !layers.unknown.is_empty() {
             let keys: Vec<Value> = layers
                 .unknown
                 .iter()
-                .map(|(key, infra)| {
-                    json!({"key": devlanes_core::env::fold_name(key.clone()), "infra": infra})
-                })
+                .map(|(key, infra)| json!({"key": key, "infra": infra}))
                 .collect();
             return Err(RpcError::new(
                 "infra_unknown",
@@ -132,10 +137,8 @@ impl Inner {
         }
         let shell = request.shell.cloned().unwrap_or_default();
         let runtime_ca = runtime_ca_env(&layers.devlanes, |name| {
-            request
-                .overrides
-                .get(name)
-                .or_else(|| shell.get(name))
+            devlanes_core::env::lookup(request.overrides, name)
+                .or_else(|| devlanes_core::env::lookup(&shell, name))
                 .map(String::as_str)
         });
         let env = assemble([

@@ -134,6 +134,8 @@ async fn plan_lane<E: Extensions>(
         memo: ContribMemo::default(),
         devlanes,
         origins: layout.origins.join(","),
+        client: devlanes_core::env::fold_names(input.client_env.clone()),
+        client_names: devlanes_core::env::spellings(input.client_env),
     };
 
     let mut services = IndexMap::new();
@@ -242,6 +244,10 @@ struct Planner<'p, 'a, E: Extensions> {
     memo: ContribMemo,
     devlanes: BTreeMap<String, String>,
     origins: String,
+    /// The client env with folded names, for contributors and lookups by name.
+    client: BTreeMap<String, String>,
+    /// The client's spelling of each folded name ([`devlanes_core::env::spellings`]).
+    client_names: BTreeMap<String, String>,
 }
 
 /// What [`Planner::launch`] needs about one unit.
@@ -619,7 +625,8 @@ impl<E: Extensions> Planner<'_, '_, E> {
             public_url: spec.layout.and_then(|l| l.public_url.as_deref()),
             pty: spec.pty,
             script: script.as_ref(),
-            client_env: input.client_env,
+            client_env: &self.client,
+            client_spelled: input.client_env,
             ca_env: input.ca_env,
             memo: &self.memo,
         };
@@ -704,13 +711,15 @@ impl<E: Extensions> Planner<'_, '_, E> {
         let Some((program, rest)) = argv.split_first() else {
             return Err(ResolveError::invalid(run_path, "the command is empty"));
         };
-        // Folded here as `assemble` folds every layer, so a removal spelled
-        // `PATH` also drops a client's `Path` on Windows.
-        let mut client = devlanes_core::env::fold_names(input.client_env.clone());
+        // Removals work on folded names, so a removal spelled `PATH` also
+        // drops a client's `Path` on Windows; the client's spelling comes
+        // back before `assemble`.
+        let mut client = self.client.clone();
         for key in &remove {
             client.remove(&devlanes_core::env::fold_name(key.clone()));
         }
         remove_agent_markers(&mut client);
+        let client = devlanes_core::env::respell(client, &self.client_names);
         // The script's variables sit with devlanes' own, which win over them.
         let mut devlanes = script_env;
         devlanes.extend(self.devlanes.clone());
@@ -787,13 +796,9 @@ impl<E: Extensions> Planner<'_, '_, E> {
         let facts = self.input.facts;
         let path = format!("{path}.sync");
         let home = || {
-            self.input
-                .client_env
-                .get("HOME")
-                .map(PathBuf::from)
-                .ok_or_else(|| {
-                    ResolveError::invalid(&path, "HOME is not set in the client environment")
-                })
+            self.client.get("HOME").map(PathBuf::from).ok_or_else(|| {
+                ResolveError::invalid(&path, "HOME is not set in the client environment")
+            })
         };
         let mut specs = Vec::new();
         for entry in entries {

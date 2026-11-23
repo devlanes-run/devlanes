@@ -1544,6 +1544,11 @@ async fn exec_leaves_out_values_that_wait_on_infra() {
             env.get("DATABASE_URL").map(|(v, _)| v.as_str()),
             Some("x")
         );
+        // Windows reads `database_url` as `DATABASE_URL`.
+        #[cfg(windows)]
+        exec("spelled", json!({"database_url": "x"}))
+            .await
+            .expect("--env in another case replaces it too");
         set(&h.infra.observe_unknown, false);
 
         // A stopped container.
@@ -1553,6 +1558,13 @@ async fn exec_leaves_out_values_that_wait_on_infra() {
             unit["left_out"],
             json!([{"key": "DATABASE_URL", "infra": "db"}])
         );
+        #[cfg(windows)]
+        {
+            let unit = exec("down-spelled", json!({"database_url": "x"}))
+                .await
+                .expect("exec");
+            assert!(unit.get("left_out").is_none(), "{unit}");
+        }
 
         // Docker not running.
         set(&h.infra.engine_down, true);

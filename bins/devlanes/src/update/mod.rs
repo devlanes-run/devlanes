@@ -868,14 +868,10 @@ fn take_over(view: &mut View) {
 /// environment, as `daemon restart` passes it, without the variables the
 /// update itself set.
 fn restart_context(runtime: &Runtime) -> Context {
+    let own = [STEPS_ENV, REOPEN_ENV].map(|name| devlanes_core::env::fold_name(name.to_owned()));
     let env: BTreeMap<String, String> = std::env::vars_os()
-        .filter_map(|(key, value)| {
-            Some((
-                devlanes_core::env::fold_name(key.into_string().ok()?),
-                value.into_string().ok()?,
-            ))
-        })
-        .filter(|(key, _)| key != STEPS_ENV && key != REOPEN_ENV)
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .filter(|(key, _)| !own.contains(&devlanes_core::env::fold_name(key.clone())))
         .collect();
     Context {
         env: Some(env),

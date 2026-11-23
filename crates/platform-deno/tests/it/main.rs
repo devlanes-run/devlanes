@@ -89,6 +89,7 @@ async fn apply(
         pty: true,
         script: None,
         client_env: client,
+        client_spelled: client,
         ca_env: ca,
         memo: &memo,
     };

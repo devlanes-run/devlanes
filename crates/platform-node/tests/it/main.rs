@@ -55,6 +55,7 @@ impl Fixture {
             pty: true,
             script: None,
             client_env: &self.client,
+            client_spelled: &self.client,
             ca_env: &self.ca,
             memo: &self.memo,
         }

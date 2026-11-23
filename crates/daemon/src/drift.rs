@@ -44,7 +44,8 @@ pub(crate) struct Fingerprint {
     args: Vec<String>,
     cwd: PathBuf,
     pty: bool,
-    env: BTreeMap<String, String>,
+    /// By folded name: the name the process gets and its value.
+    env: BTreeMap<String, (String, String)>,
     files: Vec<(PathBuf, Vec<u8>)>,
     ports: BTreeMap<String, u16>,
     ready: devlanes_resolve::Ready,
@@ -77,7 +78,10 @@ impl Fingerprint {
                         Some(EnvLayer::Client | EnvLayer::Override)
                     )
                 })
-                .map(|(key, value)| (key.clone(), value.clone()))
+                .map(|(key, value)| {
+                    let name = service.launch.env.name(key).to_owned();
+                    (key.clone(), (name, value.clone()))
+                })
                 .collect(),
             files: service
                 .launch
@@ -117,14 +121,17 @@ impl Fingerprint {
         if self.files != now.files {
             fields.push("files".to_owned());
         }
+        // The lane's hostnames: one service gaining or losing hosts would mark
+        // every other one changed. It is the lane's, not this unit's.
+        let origins = devlanes_core::env::fold_name("DEVLANES_ORIGINS".to_owned());
         let keys: BTreeSet<&String> = self.env.keys().chain(now.env.keys()).collect();
         fields.extend(
             keys.into_iter()
-                // The lane's hostnames: one service gaining or losing hosts would mark
-                // every other one changed. It is the lane's, not this unit's.
-                .filter(|key| key.as_str() != "DEVLANES_ORIGINS")
+                .filter(|key| **key != origins)
                 .filter(|key| self.env.get(*key) != now.env.get(*key))
-                .map(|key| format!("env {key}")),
+                // A spelling-only change is one change, under the current spelling.
+                .filter_map(|key| now.env.get(key).or_else(|| self.env.get(key)))
+                .map(|(name, _)| format!("env {name}")),
         );
         fields
     }

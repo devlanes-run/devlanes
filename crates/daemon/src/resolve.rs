@@ -258,10 +258,10 @@ impl Inner {
         let reference = lane.st().reference(&project.name());
         let mut gathered = self.gather(project, lane, fallback, config).await?;
         if let Some(extra) = extra {
-            gathered
-                .inputs
-                .overrides
-                .extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+            devlanes_core::env::overlay(
+                &mut gathered.inputs.overrides,
+                extra.iter().map(|(k, v)| (k.clone(), v.clone())),
+            );
         }
         use tracing::Instrument as _;
         // Every launch (service, task, hook) is planned here, and may write to it.

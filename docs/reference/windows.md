@@ -13,7 +13,7 @@ devlanes runs natively on Windows 11 24H2 or later. [Install devlanes](../instal
 | Elevated terminals | A daemon started from an elevated terminal runs every unit as administrator. `devlanes doctor` warns, and `devlanes daemon restart` from a normal terminal fixes it. |
 | Stop signals | `SIGTERM` and `SIGINT` send Ctrl-C. `SIGHUP`, `SIGQUIT`, `SIGUSR1` and `SIGUSR2` send Ctrl-Break. `SIGKILL` ends the unit's processes at once. |
 | Units in a terminal | A unit with `pty: true`, the default, ends when the daemon ends. |
-| Variable names | Not case-sensitive: `Path` and `PATH` are one variable, shown as `PATH`. |
+| Variable names | Not case-sensitive: Path and PATH are one variable. A process gets each name spelled as the setting that gives its value, so Gradle's `ORG_GRADLE_PROJECT_` properties keep their case. |
 | `HOME` | PowerShell and cmd do not set it. A [`services.<name>.sync`](/docs/reference/config/project/services/) entry without `to`, or with a `to` under `~/`, then fails; give `to` a full path, or start the lane from Git Bash. |
 | Folders in use | Windows cannot delete a folder a program holds open. Stop the lane before you remove or move its worktree. `devlanes lane clean` leaves a data folder still in use, and `devlanes lane gc` deletes it later. |
 | Reserved ports | Hyper-V, WSL and Docker reserve port ranges. New lanes skip them, and `devlanes doctor` warns when a lane's ports fall into one later. |

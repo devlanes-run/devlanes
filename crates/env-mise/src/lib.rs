@@ -174,7 +174,7 @@ impl Contributor for MiseContributor {
         let outcome = match cx.memo.get::<Outcome>(&key) {
             Some(outcome) => outcome,
             None => {
-                let outcome = Arc::new(self.load(cx.lane_path, cx.client_env).await?);
+                let outcome = Arc::new(self.load(cx.lane_path, cx.client_spelled).await?);
                 cx.memo.insert(key, outcome.clone());
                 outcome
             }

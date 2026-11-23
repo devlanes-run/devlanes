@@ -119,6 +119,7 @@ async fn apply(unit: Unit<'_>) -> LaunchDraft {
         pty: unit.pty,
         script: unit.script,
         client_env: &unit.client,
+        client_spelled: &unit.client,
         ca_env: &unit.ca,
         memo: &memo,
     };

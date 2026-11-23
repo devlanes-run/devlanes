@@ -31,7 +31,7 @@ fn main() -> Result<(), AllocationError> {
 - `refs`: lane and unit reference parsing, context-aware resolution, globs, and tags.
 - `paths`: path comparison that ignores case on Windows (`same_path`, `path_starts_with`), and `name_on_disk`, the file name a project, service or task name is stored under (the name itself on macOS and Linux, a reversible `%XX` encoding on Windows).
 - `env::assemble`: environment precedence with source-layer attribution.
-- `env::fold_name`, `env::fold_names`: variable names as devlanes keeps them; unchanged on Unix, uppercased on Windows, where `Path` and `PATH` are one variable.
+- `env::fold_name`, `env::fold_names`: variable names as devlanes merges and looks them up; unchanged on Unix, uppercased on Windows, where `Path` and `PATH` are one variable. Processes keep the spelling of the layer that set the value (`Environment::spelled`).
 - `redact::Redactor`: hides secret values, URL passwords and secret assignments in values, text and JSON, built for screen output (`Redactor::screen`) or for a bug-report archive that also hides the home (`Redactor::archive`).
 - `Runner` and `Unit`: process launch, terminal I/O, stopping, exit waiting, and tracked process identities. `Unit::set_power` throttles or freezes a unit's process tree (`Power`) for idle lanes.
 - `contrib::{Contributor, ScriptRunner}`: launch customization and script command rendering.

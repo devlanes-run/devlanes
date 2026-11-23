@@ -181,7 +181,7 @@ pub async fn run_with<D: WithDriver + ?Sized>(
             match driver.env(&ownership.lane, &plan.env).await {
                 Ok(lane_env) => {
                     let mut env = plan.env.clone();
-                    env.extend(lane_env);
+                    devlanes_core::env::overlay(&mut env, lane_env);
                     match driver
                         .spawn_command(&plan.command, &env, &plan.start.context.cwd)
                         .await

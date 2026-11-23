@@ -173,31 +173,42 @@ tasks:
 
 #[tokio::test]
 /// Windows folds variable names where layers merge and in `${{ env.X }}`, so
-/// a client's `Path` and a service's `PATH` are one variable there; Unix keeps
-/// both.
-async fn env_names_fold_on_windows() {
+/// a client's `Path` and a service's `PATH` are one variable there, and the
+/// process gets each name as the winning layer spells it (Gradle reads
+/// `ORG_GRADLE_PROJECT_<property>` case-sensitively); Unix keeps both.
+async fn env_names_keep_their_spelling_on_windows() {
     let config = parse(
         r#"
 project: demo
 services:
   api:
     run: server
-    env: { PATH: "${{ env.Path }};extra", Home: dir }
+    env: { PATH: "${{ env.Path }};extra", Home: dir, "ORG_GRADLE_PROJECT_android.cmakeVersion": "3.22" }
 "#,
     );
     let facts = facts("demo", 1, Some("x"));
     let (block, offsets) = allocation(&config, 21_000, &[]);
-    let client = BTreeMap::from([("Path".to_owned(), "client".to_owned())]);
+    let client = BTreeMap::from([
+        ("Path".to_owned(), "client".to_owned()),
+        ("ORG_GRADLE_PROJECT_fromShell".to_owned(), "1".to_owned()),
+    ]);
+    let overrides = BTreeMap::from([("Over_Ride".to_owned(), "o".to_owned())]);
     let mut input = ResolveInput::new(&config, &facts, block, &offsets);
     input.client_env = &client;
+    input.overrides = &overrides;
     let lane = resolve_lane(input).await.expect("resolves");
     assert!(lane.errors.is_empty(), "{:?}", lane.errors);
-    let env = &lane.services["api"].launch.env;
+    let launch = &lane.services["api"].launch;
+    let env = &launch.env;
+    let spec = launch
+        .to_spec(false, devlanes_core::TerminalSize::default())
+        .env;
     #[cfg(unix)]
     {
         assert_eq!(env.values["Path"], "client");
         assert_eq!(env.values["PATH"], "client;extra");
         assert_eq!(env.values["Home"], "dir");
+        assert_eq!(spec, env.values);
     }
     #[cfg(windows)]
     {
@@ -211,6 +222,15 @@ services:
             "{:?}",
             env.values.keys().collect::<Vec<_>>()
         );
+        for (name, value) in [
+            ("PATH", "client;extra"),
+            ("Home", "dir"),
+            ("ORG_GRADLE_PROJECT_android.cmakeVersion", "3.22"),
+            ("ORG_GRADLE_PROJECT_fromShell", "1"),
+            ("Over_Ride", "o"),
+        ] {
+            assert_eq!(spec.get(name).map(String::as_str), Some(value), "{name}");
+        }
     }
 }
 

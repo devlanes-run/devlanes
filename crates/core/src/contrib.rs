@@ -206,8 +206,13 @@ pub struct ContribCx<'a> {
     pub public_url: Option<&'a str>,
     pub pty: bool,
     pub script: Option<&'a ScriptInfo>,
-    /// Environment of the client that started the lane.
+    /// Environment of the client that started the lane. Names go through
+    /// [`crate::env::fold_name`], so on Windows it has `PATH`, not `Path`.
     pub client_env: &'a BTreeMap<String, String>,
+    /// [`Self::client_env`] with names as the client spelled them, for tools
+    /// that run with the client's environment (direnv, mise). The same map on
+    /// Unix.
+    pub client_spelled: &'a BTreeMap<String, String>,
     /// Trust variables from the CA, keyed by [`CA_CERT_ENV`] and [`CA_BUNDLE_ENV`].
     pub ca_env: &'a BTreeMap<String, String>,
     /// Per-resolution cache shared by all units of one lane.

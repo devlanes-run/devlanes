@@ -79,14 +79,20 @@ fn ready_config(ready: &str) -> String {
 #[tokio::test(flavor = "multi_thread")]
 /// A container's `ready` gates the infra phase: a passing `cmd` or `log` check
 /// lets services start, a failing one fails the start with
-/// `container_not_ready` before any service spawns.
+/// `container_not_ready` before any service spawns. `${{ env.X }}` in a
+/// container field reads the shell's variable whatever its case on Windows.
 async fn container_ready_gates_the_infra_phase() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         for (name, ready, passes) in [
             ("cmd-ok", r#"{ cmd: "true" }"#, true),
             ("cmd-fails", r#"{ cmd: "false", timeout: 1s }"#, false),
-            ("log", r#"{ log: "ready to accept", timeout: 5s }"#, true),
+            // Read from the shell in its own spelling, which Windows ignores.
+            (
+                "log",
+                r#"{ log: "${{ env.Ready_Text }}", timeout: 5s }"#,
+                true,
+            ),
             (
                 "log-missing",
                 r#"{ log: "never printed", timeout: 1s }"#,
@@ -104,7 +110,13 @@ async fn container_ready_gates_the_infra_phase() {
             .await;
             *h.infra.logs.lock().expect("logs") =
                 vec!["database system is ready to accept connections".into()];
-            let started = h.call(Method::Start, json!({}), cx(&main)).await;
+            let mut env = crate::client_env();
+            env.insert("Ready_Text".into(), "ready to accept".into());
+            let context = devlanes_proto::Context {
+                env: Some(env),
+                ..cx(&main)
+            };
+            let started = h.call(Method::Start, json!({}), context).await;
             if passes {
                 let started = started.expect("start");
                 assert_eq!(started["ready"], true, "{name}: {started}");
