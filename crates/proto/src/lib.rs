@@ -60,10 +60,17 @@ pub mod features {
     /// [`super::events::START_ACCEPTED`], and [`super::Method::StartCancel`]
     /// ends a start by its id.
     pub const START_ACCEPTED: &str = "start_accepted";
-    /// [`super::Method::Subscribe`] reads `keeps_awake`. With `false` the
-    /// subscriber neither holds the daemon past its idle exit nor keeps the
-    /// sampler fast. An older daemon ignores it and counts every subscriber.
+    /// [`super::Method::Subscribe`] reads `keeps_awake`, which defaults to
+    /// `true`. With `false` the subscriber neither holds the daemon past its
+    /// idle exit nor keeps the sampler fast. Send it only when the daemon
+    /// advertises this feature. An older daemon ignores it and counts every
+    /// subscriber.
     pub const QUIET_SUBSCRIBE: &str = "quiet_subscribe";
+    /// [`super::Method::Hosts`] reads `all`. With `true` it lists the routes of
+    /// every project, whatever the cwd. Send it only when the daemon advertises
+    /// this feature. An older daemon ignores it and answers with the cwd's
+    /// scope.
+    pub const HOSTS_ALL: &str = "hosts_all";
 }
 
 /// Attribution is supplied by clients and never inferred by the daemon.

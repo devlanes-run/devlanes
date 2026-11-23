@@ -1030,6 +1030,7 @@ async fn serve_client(
             devlanes_proto::features::START_ENDED,
             devlanes_proto::features::START_ACCEPTED,
             devlanes_proto::features::QUIET_SUBSCRIBE,
+            devlanes_proto::features::HOSTS_ALL,
         ]
         .map(String::from),
     );
