@@ -34,7 +34,7 @@ Box side, over the tunnel's stdio:
 use std::sync::Arc;
 use devlanes_transport::{
     BoxServices, LoopbackDialer, NoPairing, NoSync, RegistrySnapshot, ServeOptions,
-    SharedRegistry, TUNNEL_PREAMBLE, serve, stdio,
+    SharedRegistry, TUNNEL_PREAMBLE, mux_server, serve, stdio,
 };
 use tokio::io::AsyncWriteExt;
 
@@ -51,16 +51,19 @@ async fn tunnel() -> Result<(), Box<dyn std::error::Error>> {
         // Serves every client; a `PairingGate` checks tokens and trades codes instead.
         pairing: Arc::new(NoPairing),
     };
-    serve(stdio(), services, ServeOptions::new("devlanes 0.1.0")).await?;
+    let connection = mux_server(Box::new(stdio()));
+    serve(connection, services, ServeOptions::new("devlanes 0.1.0")).await?;
     Ok(())
 }
 ```
 
-Publish changes with `registry.publish(event)`. A daemon that only has full snapshots can publish `old.diff(&new)`. A transport that runs the tunnel reads its output with `read_preamble(stream, wait)` and hands `Preamble::stream` to the session. A preamble naming another protocol revision is `PreambleError::Protocol`, which `PreambleError::is_permanent` reports as permanent.
+Publish changes with `registry.publish(event)`. A daemon that only has full snapshots can publish `old.diff(&new)`. A transport that runs the tunnel reads its output with `read_preamble(stream, wait)` and returns `mux_client(Box::new(preamble.stream))` from `connect`. A preamble naming another protocol revision is `PreambleError::Protocol`, which `PreambleError::is_permanent` reports as permanent.
 
 ## API
 
-- `Transport`: produces one duplex byte stream per `connect`.
+- `Transport`: produces one `Connection` per `connect`.
+- `Connection` and `ServerConnection`: the client's and the box's side of one connection; the client opens streams, the box accepts them.
+- `mux_client` and `mux_server`: yamux over one byte pipe, for SSH, a command and `devlanes tunnel --stdio`.
 - `read_preamble`: skips output before the tunnel's `TUNNEL_PREAMBLE` line, keeping it for errors.
 - `Session`: one connection; `open`, `subscribe_sync`, `report` (what the client mirrors, with `mirror_report`), `features`, `has_feature`, `box_info`, `round_trip` (the latest ping's), `closed`.
 - `Link`: keeps a session alive and shares one `ClientRegistry` across reconnects. A transport error classified `TransportError::NeedsAuth` parks it in `LinkState::NeedsAuth` without retrying until `Link::resume`, and a session that needs pairing (`SessionError::is_needs_pairing`) in `LinkState::NeedsPairing`. `TransportError::AuthFailed`, rejected credentials on a box that never connected, stops it like `Permanent`, unless the caller knows a prompt went unanswered and turns it into `NeedsAuth` with `into_needs_auth`.

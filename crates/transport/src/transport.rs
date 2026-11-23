@@ -1,4 +1,5 @@
-//! The byte-pipe abstraction every remote transport implements.
+//! The connection abstraction every remote transport implements, and the
+//! byte streams it carries.
 
 use std::io;
 use std::pin::Pin;

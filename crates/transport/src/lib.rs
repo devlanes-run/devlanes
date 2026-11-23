@@ -1,9 +1,11 @@
 //! Transport-independent remote protocol between a client daemon and a box.
 //!
-//! A [`Transport`] yields one duplex byte stream. On the box, `devlanes tunnel
-//! --stdio` first writes [`TUNNEL_PREAMBLE`]; transports that run it read up to
-//! that line with [`read_preamble`]. yamux then multiplexes the stream, and only
-//! the client opens streams:
+//! A [`Transport`] yields one [`Connection`]; the box serves the matching
+//! [`ServerConnection`]. On the box, `devlanes tunnel --stdio` first writes
+//! [`TUNNEL_PREAMBLE`]; transports that run it read up to that line with
+//! [`read_preamble`], then run yamux over their one byte pipe with
+//! [`mux_client`], and the tunnel with [`mux_server`]. Only the client opens
+//! streams, at most [`MAX_STREAMS`] at once:
 //!
 //! - one control stream: protocol check, features, client identity, box info,
 //!   registry snapshot, registry events and pings (every 10 s, dead after 20 s

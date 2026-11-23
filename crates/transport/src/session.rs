@@ -117,7 +117,7 @@ impl fmt::Display for SessionEnd {
 /// Failure to establish or use a session.
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    /// The transport could not produce a pipe.
+    /// The transport could not produce a connection.
     #[error(transparent)]
     Transport(#[from] TransportError),
     /// The connection could not open a stream.
@@ -387,7 +387,7 @@ impl Session {
         Self::establish(connection, options).await
     }
 
-    /// Runs the handshake over an existing pipe.
+    /// Runs the handshake over an existing connection.
     ///
     /// Returns after the box's snapshot replaced `options.registry`, so callers
     /// see current state immediately.
