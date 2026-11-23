@@ -13,7 +13,7 @@
     "test-types": "tsc --noEmit"
   },
   "dependencies": {
-    "preact": "^11.1.1"
+    "preact": "^11.2.0"
   },
   "devDependencies": {
     "@arthurfiorette/biomejs-config": "^2.0.1",
