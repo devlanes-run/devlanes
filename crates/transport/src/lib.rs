@@ -70,7 +70,8 @@ pub use sync::{
     SyncStreamError, SyncSubscription,
 };
 pub use transport::{
-    BoxDuplex, BoxError, Duplex, EXIT_DAEMON_STOPPED, Joined, Transport, TransportError, stdio,
+    BoxConnection, BoxDuplex, BoxError, BoxServerConnection, Connection, ConnectionError, Duplex,
+    EXIT_DAEMON_STOPPED, Joined, ServerConnection, Transport, TransportError, stdio,
 };
 pub use wire::{
     BoxInfo, DialTarget, EXTERNAL_UNITS, FEATURES, MIRROR_REPORT, PROTOCOL_VERSION, PairingReason,

@@ -3,9 +3,11 @@
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::time::Instant;
 
 /// Boxed error used where the concrete cause belongs to an integration crate.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -17,6 +19,62 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin> Duplex for T {}
 
 /// Type-erased duplex returned by [`Transport::connect`].
 pub type BoxDuplex = Box<dyn Duplex>;
+
+/// Type-erased client side of a connection.
+pub type BoxConnection = Box<dyn Connection>;
+
+/// Type-erased box side of a connection.
+pub type BoxServerConnection = Box<dyn ServerConnection>;
+
+/// The client's side of one connection to a box. Only the client opens streams.
+///
+/// A stream may reach the box only once the client wrote to it, so every
+/// protocol stream starts with a client frame.
+#[async_trait]
+pub trait Connection: Send + Sync {
+    /// Opens a protocol stream. Shutting down its write half ends what the box
+    /// reads and keeps the other direction; dropping it ends the stream, and the
+    /// box still reads every byte written before.
+    async fn open(&self) -> Result<BoxDuplex, ConnectionError>;
+
+    /// When the box last delivered bytes on any stream of this connection, on
+    /// tokio's clock; the connection's start before anything arrived.
+    fn last_inbound(&self) -> Instant;
+
+    /// Waits up to `limit` for the reason the connection failed, such as the
+    /// stderr of an SSH tunnel that exited. `None` when it closed cleanly or no
+    /// reason arrived in time.
+    async fn failure_within(&self, limit: Duration) -> Option<String>;
+
+    /// Starts closing the connection and its streams; returns at once.
+    fn shutdown(&self);
+
+    /// Resolves once the connection is closed, by either side.
+    async fn closed(&self);
+}
+
+/// The box's side of one connection: it accepts the streams the client opens.
+///
+/// Dropping it closes the connection. Bytes a stream wrote and shut down before
+/// that still reach the client.
+#[async_trait]
+pub trait ServerConnection: Send {
+    /// The next stream the client opened; `None` once the connection is gone.
+    async fn accept(&mut self) -> Option<BoxDuplex>;
+
+    /// When the client last delivered bytes on any stream of this connection,
+    /// on tokio's clock; the connection's start before anything arrived.
+    fn last_inbound(&self) -> Instant;
+}
+
+/// Failure to open a stream on a [`Connection`].
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ConnectionError {
+    /// The connection is closed; no further streams can be opened.
+    #[error("mux connection closed")]
+    Closed,
+}
 
 /// Produces one authenticated duplex byte stream to a box per call.
 ///
