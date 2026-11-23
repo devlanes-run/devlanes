@@ -17,12 +17,12 @@ async fn tunnel(start_daemon: bool, require_pairing: bool) -> Result<(), Box<dyn
 }
 ```
 
-To serve over another pipe, such as the in-memory transport in tests:
+To serve over another byte pipe:
 
 ```rust
 use devlanes_client::Paths;
 use devlanes_proto::remote::RemoteClient;
-use devlanes_transport::{Duplex, ServeError, ServeOptions, serve};
+use devlanes_transport::{Duplex, ServeError, ServeOptions, mux_server, serve};
 
 async fn serve_pipe(
     paths: Paths,
@@ -32,7 +32,7 @@ async fn serve_pipe(
     options.box_info = devlanes_tunnel::box_info(&paths).await?;
     let client = RemoteClient { pid: std::process::id(), ..RemoteClient::default() };
     let services = devlanes_tunnel::services(paths, client, true);
-    serve(stream, services, options).await?;
+    serve(mux_server(Box::new(stream)), services, options).await?;
     Ok(())
 }
 ```

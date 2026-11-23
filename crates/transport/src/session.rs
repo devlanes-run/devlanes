@@ -1,20 +1,26 @@
 //! Client side: one session over one transport connection.
 
 use std::fmt;
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures_util::SinkExt;
 use serde_json::Value;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::watch;
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
-use crate::mux::{self, MuxClient, MuxError, MuxStream};
 use crate::pairing::PairingClient;
 use crate::registry::ClientRegistry;
 use crate::sync::SyncSubscription;
-use crate::transport::{BoxDuplex, Transport, TransportError};
+use crate::transport::{
+    BoxConnection, BoxDuplex, Connection, ConnectionError, Transport, TransportError,
+};
 use crate::wire::{
     self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, MIRROR_REPORT,
     OpenReply, OpenRequest, PROTOCOL_VERSION, PairingReason, Prefixed, RejectReason, SYNC_ZSTD,
@@ -111,12 +117,15 @@ impl fmt::Display for SessionEnd {
 /// Failure to establish or use a session.
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    /// The transport could not produce a pipe.
+    /// The transport could not produce a connection.
     #[error(transparent)]
     Transport(#[from] TransportError),
-    /// The mux failed.
+    /// The connection could not open a stream.
     #[error(transparent)]
-    Mux(#[from] MuxError),
+    Connection(#[from] ConnectionError),
+    /// Every stream slot is in use; this open failed but the session lives on.
+    #[error("too many open streams ({MAX_STREAMS}); close some connections and retry")]
+    TooManyStreams,
     /// A stream failed or carried invalid frames.
     #[error(transparent)]
     Wire(#[from] WireError),
@@ -143,8 +152,9 @@ pub enum SessionError {
         /// The box's version label.
         server: String,
     },
-    /// The box side broke the connection; the text is the pipe's own report, such
-    /// as the stderr of a remote `devlanes tunnel --stdio` that exited.
+    /// The box side broke the connection; the text is the connection's own
+    /// failure reason, such as the stderr of a remote `devlanes tunnel --stdio`
+    /// that exited.
     #[error("box closed the connection: {0}")]
     Closed(String),
     /// The box serves only paired clients and nobody gave a pairing code.
@@ -240,7 +250,88 @@ pub enum OpenError {
 }
 
 /// A raw byte stream to a box endpoint.
-pub type DataStream = Prefixed<MuxStream>;
+pub type DataStream = Prefixed<BoxDuplex>;
+
+/// Streams per session on every transport; browsers plus database pools rarely
+/// exceed this. Transports keep at least this many open at once.
+pub const MAX_STREAMS: usize = 512;
+
+/// The session's connection and the streams it counts against [`MAX_STREAMS`].
+struct Streams {
+    connection: Arc<dyn Connection>,
+    open: Arc<AtomicUsize>,
+}
+
+impl Streams {
+    /// Counts no streams yet on `connection`.
+    fn new(connection: BoxConnection) -> Self {
+        Self {
+            connection: Arc::from(connection),
+            open: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Opens a stream that holds a slot until it drops. A full table fails this
+    /// open with [`SessionError::TooManyStreams`]; the connection and its other
+    /// streams go on.
+    async fn open(&self) -> Result<BoxDuplex, SessionError> {
+        let taken = self.open.fetch_add(1, Ordering::AcqRel);
+        let slot = Slot(self.open.clone());
+        if taken >= MAX_STREAMS {
+            return Err(SessionError::TooManyStreams);
+        }
+        let stream = self.connection.open().await?;
+        Ok(Box::new(Counted {
+            inner: stream,
+            _slot: slot,
+        }))
+    }
+}
+
+/// A stream slot, released when the stream drops.
+struct Slot(Arc<AtomicUsize>);
+
+impl Drop for Slot {
+    /// Frees the slot.
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A stream that holds its [`Slot`]; reads and writes go straight through.
+struct Counted {
+    inner: BoxDuplex,
+    _slot: Slot,
+}
+
+impl AsyncRead for Counted {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Counted {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    /// Half-closes the stream; reading continues until the peer closes.
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
 
 /// A live client session. Clones share it; dropping the last clone closes it.
 #[derive(Clone)]
@@ -249,7 +340,7 @@ pub struct Session {
 }
 
 struct Inner {
-    mux: MuxClient,
+    streams: Streams,
     welcome: Welcome,
     registry: ClientRegistry,
     timing: Timing,
@@ -264,7 +355,7 @@ struct Inner {
 impl Drop for Inner {
     fn drop(&mut self) {
         self.cancel.cancel();
-        self.mux.shutdown();
+        self.streams.connection.shutdown();
     }
 }
 
@@ -292,17 +383,20 @@ impl Session {
         transport: &dyn Transport,
         options: SessionOptions,
     ) -> Result<Self, SessionError> {
-        let io = transport.connect().await?;
-        Self::establish(io, options).await
+        let connection = transport.connect().await?;
+        Self::establish(connection, options).await
     }
 
-    /// Runs the handshake over an existing pipe.
+    /// Runs the handshake over an existing connection.
     ///
     /// Returns after the box's snapshot replaced `options.registry`, so callers
     /// see current state immediately.
-    pub async fn establish(io: BoxDuplex, options: SessionOptions) -> Result<Self, SessionError> {
-        let mux = mux::client(io);
-        match handshake(&mux, &options).await {
+    pub async fn establish(
+        connection: BoxConnection,
+        options: SessionOptions,
+    ) -> Result<Self, SessionError> {
+        let streams = Streams::new(connection);
+        match handshake(&streams, &options).await {
             Ok((control, welcome)) => {
                 let (end_tx, end) = watch::channel(None);
                 let cancel = CancellationToken::new();
@@ -315,14 +409,14 @@ impl Session {
                         timing: options.timing,
                         cancel: cancel.clone(),
                         end_tx,
-                        mux: mux.clone(),
+                        connection: streams.connection.clone(),
                         reports: report.subscribe(),
                         round_trip: round_trip_tx,
                     },
                 ));
                 Ok(Self {
                     inner: Arc::new(Inner {
-                        mux,
+                        streams,
                         welcome,
                         registry: options.registry,
                         timing: options.timing,
@@ -334,7 +428,7 @@ impl Session {
                 })
             }
             Err(error) => {
-                mux.shutdown();
+                streams.connection.shutdown();
                 Err(error)
             }
         }
@@ -434,14 +528,14 @@ impl Session {
         self.inner.cancel.cancel();
     }
 
-    /// Opens a mux stream and sends its open frame.
-    async fn open_stream(&self, open: &OpenRequest) -> Result<Channel<MuxStream>, SessionError> {
+    /// Opens a stream and sends its open frame.
+    async fn open_stream(&self, open: &OpenRequest) -> Result<Channel<BoxDuplex>, SessionError> {
         if let Some(end) = self.end() {
             return Err(SessionError::Ended(end));
         }
-        let stream = match self.inner.mux.open().await {
+        let stream = match self.inner.streams.open().await {
             Ok(stream) => stream,
-            Err(error) => return Err(self.end().map_or(error.into(), SessionError::Ended)),
+            Err(error) => return Err(self.end().map_or(error, SessionError::Ended)),
         };
         let mut channel = wire::channel(stream);
         wire::send(&mut channel, open).await?;
@@ -456,16 +550,17 @@ impl Session {
 /// pairing code does not: the [`PairingClient`] bounds it, and a
 /// [`crate::Link`] bounds the whole attempt.
 async fn handshake(
-    mux: &MuxClient,
+    streams: &Streams,
     options: &SessionOptions,
-) -> Result<(Channel<MuxStream>, Welcome), SessionError> {
+) -> Result<(Channel<BoxDuplex>, Welcome), SessionError> {
+    let connection = &*streams.connection;
     let limit = options.timing.handshake_timeout;
     let token = match &options.pairing {
         Some(pairing) => pairing.token().await,
         None => None,
     };
-    let (mut control, first) = within(mux, limit, async {
-        let mut control = wire::channel(mux.open().await?);
+    let (mut control, first) = within(connection, limit, async {
+        let mut control = wire::channel(streams.open().await?);
         let hello = OpenRequest::Control {
             protocol: PROTOCOL_VERSION,
             client: options.client.clone(),
@@ -481,12 +576,12 @@ async fn handshake(
     .await?;
     let first = match first {
         Some((BoxControl::PairingRequired { reason }, _)) => {
-            pair(mux, &mut control, options, reason).await?;
+            pair(connection, &mut control, options, reason).await?;
             None
         }
         other => Some(other),
     };
-    let welcome = within(mux, limit, async {
+    let welcome = within(connection, limit, async {
         let first = match first {
             Some(first) => first,
             None => wire::recv::<_, BoxControl>(&mut control).await?,
@@ -539,8 +634,8 @@ async fn handshake(
 /// sends it and keeps the token the box sends back. Without a code the
 /// session needs pairing; a refused code says why.
 async fn pair(
-    mux: &MuxClient,
-    control: &mut Channel<MuxStream>,
+    connection: &dyn Connection,
+    control: &mut Channel<BoxDuplex>,
     options: &SessionOptions,
     reason: PairingReason,
 ) -> Result<(), SessionError> {
@@ -554,7 +649,7 @@ async fn pair(
     else {
         return Err(SessionError::NeedsPairing(reason));
     };
-    let token = within(mux, options.timing.handshake_timeout, async {
+    let token = within(connection, options.timing.handshake_timeout, async {
         let message = ClientControl::Pair { code: Secret(code) };
         wire::send(control, &message).await?;
         match wire::recv::<_, BoxControl>(control).await? {
@@ -584,9 +679,9 @@ async fn pair(
 
 /// Runs one handshake exchange within `limit`. A failure other than the
 /// box's own answer (a protocol mismatch, a refusal, a refused pairing code) is replaced
-/// by the pipe's error when the pipe died, which usually says why.
+/// by the connection's failure reason when it failed, which usually says why.
 async fn within<T>(
-    mux: &MuxClient,
+    connection: &dyn Connection,
     limit: Duration,
     exchange: impl std::future::Future<Output = Result<T, SessionError>>,
 ) -> Result<T, SessionError> {
@@ -597,7 +692,7 @@ async fn within<T>(
             | SessionError::Refused(_)
             | SessionError::PairingRefused { .. }),
         )) => Err(error),
-        Ok(Err(error)) => match mux.failure_within(FAILURE_GRACE).await {
+        Ok(Err(error)) => match connection.failure_within(FAILURE_GRACE).await {
             Some(reason) => Err(SessionError::Closed(reason)),
             None => Err(error),
         },
@@ -605,12 +700,13 @@ async fn within<T>(
     }
 }
 
-/// How long a lost stream waits for the mux driver to report the pipe's error.
+/// How long a lost stream waits for the connection to report why it failed.
 const FAILURE_GRACE: Duration = Duration::from_secs(1);
 
-/// Ends a session that lost its control stream, preferring the pipe's own error.
-async fn lost(mux: &MuxClient) -> SessionEnd {
-    match mux.failure_within(FAILURE_GRACE).await {
+/// Ends a session that lost its control stream, preferring the connection's
+/// failure reason.
+async fn lost(connection: &dyn Connection) -> SessionEnd {
+    match connection.failure_within(FAILURE_GRACE).await {
         Some(reason) => SessionEnd::Failed(reason),
         None => SessionEnd::Disconnected,
     }
@@ -622,7 +718,7 @@ struct Control {
     timing: Timing,
     cancel: CancellationToken,
     end_tx: watch::Sender<Option<SessionEnd>>,
-    mux: MuxClient,
+    connection: Arc<dyn Connection>,
     /// Mirror reports to send, latest only.
     reports: watch::Receiver<Option<Value>>,
     /// Set from each answered ping.
@@ -631,13 +727,13 @@ struct Control {
 
 /// Applies registry changes, pings and sends mirror reports until the
 /// session ends.
-async fn run_control(mut control: Channel<MuxStream>, parts: Control) {
+async fn run_control(mut control: Channel<BoxDuplex>, parts: Control) {
     let Control {
         registry,
         timing,
         cancel,
         end_tx,
-        mux,
+        connection,
         mut reports,
         round_trip,
     } = parts;
@@ -650,10 +746,10 @@ async fn run_control(mut control: Channel<MuxStream>, parts: Control) {
         // Any inbound frame proves the box is alive: a pong queued behind a large
         // transfer must not end the session.
         let deadline =
-            outstanding.map(|(_, sent)| sent.max(mux.last_inbound()) + timing.ping_timeout);
+            outstanding.map(|(_, sent)| sent.max(connection.last_inbound()) + timing.ping_timeout);
         tokio::select! {
             () = cancel.cancelled() => break SessionEnd::Closed,
-            () = mux.closed() => break lost(&mux).await,
+            () = connection.closed() => break lost(&*connection).await,
             message = wire::recv::<_, BoxControl>(&mut control) => match message {
                 Ok(Some((BoxControl::Snapshot { snapshot }, _))) => registry.replace(snapshot),
                 Ok(Some((BoxControl::Event { event }, _))) => registry.apply(event),
@@ -666,8 +762,8 @@ async fn run_control(mut control: Channel<MuxStream>, parts: Control) {
                     }
                 }
                 Ok(Some(_)) => break SessionEnd::Failed("unexpected control message".into()),
-                Ok(None) => break lost(&mux).await,
-                Err(error) => break match mux.failure_within(FAILURE_GRACE).await {
+                Ok(None) => break lost(&*connection).await,
+                Err(error) => break match connection.failure_within(FAILURE_GRACE).await {
                     Some(reason) => SessionEnd::Failed(reason),
                     None => SessionEnd::Failed(error.to_string()),
                 },
@@ -695,7 +791,7 @@ async fn run_control(mut control: Channel<MuxStream>, parts: Control) {
                 }
             }
             () = sleep_until_opt(deadline) => {
-                let silent_since = outstanding.map(|(_, sent)| sent.max(mux.last_inbound()));
+                let silent_since = outstanding.map(|(_, sent)| sent.max(connection.last_inbound()));
                 if silent_since.is_some_and(|since| since + timing.ping_timeout > Instant::now()) {
                     continue;
                 }
@@ -706,7 +802,7 @@ async fn run_control(mut control: Channel<MuxStream>, parts: Control) {
     tracing::debug!("session ended: {end}");
     end_tx.send_replace(Some(end));
     let _ = timeout(Duration::from_millis(200), control.close()).await;
-    mux.shutdown();
+    connection.shutdown();
 }
 
 /// Sleeps until `deadline`, or forever when there is none.
@@ -722,9 +818,11 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::mux::{self, mux_client, mux_server};
     use crate::registry::{RegistrySnapshot, SharedRegistry};
     use crate::server::{BoxServices, LoopbackDialer, ServeError, ServeOptions, serve};
     use crate::sync::NoSync;
+    use crate::transport::ServerConnection;
 
     fn services() -> BoxServices {
         BoxServices {
@@ -789,7 +887,7 @@ mod tests {
                 ping_timeout: Duration::from_millis(150),
                 handshake_timeout: Duration::from_secs(5),
             };
-            let session = Session::establish(Box::new(client_io), options).await?;
+            let session = Session::establish(mux_client(Box::new(client_io)), options).await?;
             let mut feed = session.subscribe_sync(Value::Null).await?;
             let reader = tokio::spawn(async move { while let Some(Ok(_)) = feed.next().await {} });
             while streaming.load(std::sync::atomic::Ordering::SeqCst) {
@@ -806,10 +904,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_full_stream_table_fails_only_that_open() -> Result<(), Box<dyn std::error::Error>> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        timeout(Duration::from_secs(20), async {
+            let (a, b) = tokio::io::duplex(1024 * 1024);
+            let streams = Streams::new(mux_client(Box::new(a)));
+            let mut server = mux::server(Box::new(b));
+            // Like the real box, answer every stream: yamux stops opening streams
+            // while too many wait for their first reply (ACK).
+            let (held_tx, mut held) = tokio::sync::mpsc::unbounded_channel();
+            let answering = tokio::spawn(async move {
+                while let Some(mut stream) = server.accept().await {
+                    if stream.write_all(b"k").await.is_err() {
+                        break;
+                    }
+                    if held_tx.send(stream).is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut open = Vec::new();
+            let refused = loop {
+                match streams.open().await {
+                    Ok(mut stream) => {
+                        // yamux announces a stream with its first frame, as the open
+                        // request does in the real protocol.
+                        stream.write_all(b"o").await?;
+                        let mut ack = [0u8; 1];
+                        stream.read_exact(&mut ack).await?;
+                        open.push(stream);
+                    }
+                    Err(error) => break error,
+                }
+                assert!(
+                    open.len() <= MAX_STREAMS,
+                    "the stream limit was not enforced"
+                );
+            };
+            assert!(
+                matches!(refused, SessionError::TooManyStreams),
+                "{refused:?}"
+            );
+            // The first stream still carries data, and freed slots open again.
+            open[0].write_all(b"alive").await?;
+            let mut inbound = held.recv().await.ok_or("no inbound stream")?;
+            let mut opened = [0u8; 1];
+            inbound.read_exact(&mut opened).await?;
+            let mut buf = [0u8; 5];
+            inbound.read_exact(&mut buf).await?;
+            assert_eq!(&buf, b"alive");
+            // Both ends must close a stream before yamux frees its slot.
+            drop(inbound);
+            open.clear();
+            while let Ok(Some(stream)) = timeout(Duration::from_millis(50), held.recv()).await {
+                drop(stream);
+            }
+            let reopened = timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Ok(mut stream) = streams.open().await
+                        && stream.write_all(b"o").await.is_ok()
+                    {
+                        return true;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap_or(false);
+            assert!(reopened, "a closed stream frees its slot");
+            answering.abort();
+            Ok(())
+        })
+        .await?
+    }
+
+    #[tokio::test]
     async fn box_refuses_other_protocol_revisions() -> Result<(), Box<dyn std::error::Error>> {
         timeout(Duration::from_secs(5), async {
             let (client_io, box_io) = tokio::io::duplex(64 * 1024);
-            let server = tokio::spawn(serve(box_io, services(), ServeOptions::new("box 9")));
+            let server = tokio::spawn(serve(
+                mux_server(Box::new(box_io)),
+                services(),
+                ServeOptions::new("box 9"),
+            ));
             let mux = mux::client(Box::new(client_io));
             let mut control = wire::channel(mux.open().await?);
             let hello = OpenRequest::Control {
@@ -897,7 +1074,9 @@ mod tests {
     #[tokio::test]
     async fn handshake_surfaces_the_pipe_error() -> Result<(), Box<dyn std::error::Error>> {
         timeout(Duration::from_secs(5), async {
-            let result = Session::establish(Box::new(DeadTunnel), SessionOptions::new("c")).await;
+            let result =
+                Session::establish(mux_client(Box::new(DeadTunnel)), SessionOptions::new("c"))
+                    .await;
             let Err(error) = result else {
                 panic!("handshake over a dead pipe succeeded");
             };
@@ -1010,7 +1189,11 @@ mod tests {
             pairing: gate,
             ..services()
         };
-        let server = tokio::spawn(serve(box_io, services, ServeOptions::new("box")));
+        let server = tokio::spawn(serve(
+            mux_server(Box::new(box_io)),
+            services,
+            ServeOptions::new("box"),
+        ));
         (Box::new(client_io), server)
     }
 
@@ -1033,7 +1216,7 @@ mod tests {
                 ..Holder::default()
             });
             let (io, server) = paired_box(gate.clone());
-            let session = Session::establish(io, holding(&holder)).await?;
+            let session = Session::establish(mux_client(io), holding(&holder)).await?;
             assert_eq!(session.registry().current().lanes().count(), 1);
             assert_eq!(holder.token().await.as_deref(), Some(TOKEN));
             assert_eq!(holder.asked(), [PairingReason::Missing]);
@@ -1041,7 +1224,7 @@ mod tests {
             server.abort();
 
             let (io, server) = paired_box(gate.clone());
-            let again = Session::establish(io, holding(&holder)).await?;
+            let again = Session::establish(mux_client(io), holding(&holder)).await?;
             assert_eq!(holder.asked().len(), 1, "a held token needs no code");
             assert_eq!(gate.claims.load(std::sync::atomic::Ordering::SeqCst), 1);
             again.close();
@@ -1073,7 +1256,7 @@ mod tests {
                 let (io, server) = paired_box(gate);
                 let options = holding(&holder);
                 let registry = options.registry.clone();
-                let Err(error) = Session::establish(io, options).await else {
+                let Err(error) = Session::establish(mux_client(io), options).await else {
                     panic!("an unpaired client connected");
                 };
                 assert!(error.is_needs_pairing(), "{error:?}");
@@ -1129,7 +1312,11 @@ mod tests {
                 pairing: Arc::new(OneCode::default()),
                 ..services()
             };
-            let server = tokio::spawn(serve(box_io, services, ServeOptions::new("box")));
+            let server = tokio::spawn(serve(
+                mux_server(Box::new(box_io)),
+                services,
+                ServeOptions::new("box"),
+            ));
             let mux = mux::client(Box::new(client_io));
             let mut control = wire::channel(mux.open().await?);
             let hello = OpenRequest::Control {
@@ -1197,8 +1384,11 @@ mod tests {
                 let _ = wire::recv::<_, Value>(&mut control).await;
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             });
-            let result =
-                Session::establish(Box::new(client_io), SessionOptions::new("client")).await;
+            let result = Session::establish(
+                mux_client(Box::new(client_io)),
+                SessionOptions::new("client"),
+            )
+            .await;
             let Err(error) = result else {
                 panic!("handshake with an incompatible box succeeded");
             };
@@ -1223,10 +1413,15 @@ mod tests {
             let (client_io, box_io) = tokio::io::duplex(64 * 1024);
             let reason =
                 "the box does not accept connections. Set remote.allow_connections to true there";
-            let server = tokio::spawn(crate::refuse(box_io, reason.into(), Timing::default()));
+            let server = tokio::spawn(crate::refuse(
+                mux_server(Box::new(box_io)),
+                reason.into(),
+                Timing::default(),
+            ));
             let options = SessionOptions::new("client");
             let registry = options.registry.clone();
-            let Err(error) = Session::establish(Box::new(client_io), options).await else {
+            let Err(error) = Session::establish(mux_client(Box::new(client_io)), options).await
+            else {
                 panic!("a refusing box served the client");
             };
             assert!(matches!(&error, SessionError::Refused(_)), "{error:?}");

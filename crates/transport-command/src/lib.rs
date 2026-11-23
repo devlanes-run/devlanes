@@ -30,8 +30,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use devlanes_transport::{
-    BoxDuplex, EXIT_DAEMON_STOPPED, Joined, PREAMBLE_LIMIT, PreambleError, Prefixed, Transport,
-    TransportError, read_preamble,
+    BoxConnection, EXIT_DAEMON_STOPPED, Joined, PREAMBLE_LIMIT, PreambleError, Prefixed, Transport,
+    TransportError, mux_client, read_preamble,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio::sync::oneshot;
@@ -561,8 +561,9 @@ impl CommandTransport {
 
 #[async_trait]
 impl Transport for CommandTransport {
-    async fn connect(&self) -> Result<BoxDuplex, TransportError> {
-        Ok(Box::new(self.open().await?.stream))
+    /// yamux over the stdio of a fresh run of the command.
+    async fn connect(&self) -> Result<BoxConnection, TransportError> {
+        Ok(mux_client(Box::new(self.open().await?.stream)))
     }
 }
 

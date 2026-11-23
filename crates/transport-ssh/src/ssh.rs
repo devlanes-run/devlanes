@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use devlanes_transport::{BoxDuplex, Prefixed, Transport, TransportError};
+use devlanes_transport::{BoxConnection, Prefixed, Transport, TransportError, mux_client};
 use devlanes_transport_command::{CommandError, CommandOptions, CommandStream, CommandTransport};
 use openssh::{Session, Stdio};
 use tokio::sync::Mutex;
@@ -494,8 +494,9 @@ impl SshTransport {
 
 #[async_trait]
 impl Transport for SshTransport {
-    async fn connect(&self) -> Result<BoxDuplex, TransportError> {
-        Ok(Box::new(self.open().await?))
+    /// yamux over a fresh tunnel through the box's master connection.
+    async fn connect(&self) -> Result<BoxConnection, TransportError> {
+        Ok(mux_client(Box::new(self.open().await?)))
     }
 }
 

@@ -203,11 +203,11 @@ async fn ssh_tunnel_session() -> TestResult {
             }
             return Err("devlanes is not installed on the box".into());
         }
-        // A working tunnel writes its preamble (which `connect` reads), then waits
-        // for the client's hello or starts the mux (yamux opens with an RTT ping);
-        // an unimplemented one exits at once, and its stderr is the error.
-        let mut raw = match transport.connect().await {
-            Ok(raw) => raw,
+        // This connect only decides the skip: a box whose tunnel reports
+        // not_supported_yet fails it. A tunnel that exits at once after its
+        // preamble fails the `Session::connect` below with its stderr instead.
+        let connection = match transport.connect().await {
+            Ok(connection) => connection,
             Err(error) => {
                 let message = error.to_string();
                 let lower = message.to_lowercase();
@@ -220,13 +220,7 @@ async fn ssh_tunnel_session() -> TestResult {
                 return Err(error.into());
             }
         };
-        let mut byte = [0u8; 1];
-        match tokio::time::timeout(Duration::from_secs(3), raw.read(&mut byte)).await {
-            Err(_) | Ok(Ok(1..)) => {}
-            Ok(Err(error)) => return Err(error.into()),
-            Ok(Ok(_)) => return Err("tunnel closed its output without an error".into()),
-        }
-        drop(raw);
+        drop(connection);
         let session = Session::connect(&transport, SessionOptions::new("ssh-test")).await?;
         assert!(!session.server().is_empty());
         // The box reports its `ports.range` from its daemon.

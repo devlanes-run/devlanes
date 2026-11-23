@@ -1,11 +1,14 @@
-//! The byte-pipe abstraction every remote transport implements.
+//! The connection abstraction every remote transport implements, and the
+//! byte streams it carries.
 
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::time::Instant;
 
 /// Boxed error used where the concrete cause belongs to an integration crate.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -15,15 +18,116 @@ pub trait Duplex: AsyncRead + AsyncWrite + Send + Unpin {}
 
 impl<T: AsyncRead + AsyncWrite + Send + Unpin> Duplex for T {}
 
-/// Type-erased duplex returned by [`Transport::connect`].
+/// Type-erased duplex, such as one stream of a [`Connection`].
 pub type BoxDuplex = Box<dyn Duplex>;
 
-/// Produces one authenticated duplex byte stream to a box per call.
+/// Type-erased client side of a connection, returned by [`Transport::connect`].
+pub type BoxConnection = Box<dyn Connection>;
+
+/// Type-erased box side of a connection, taken by [`crate::serve`] and [`crate::refuse`].
+pub type BoxServerConnection = Box<dyn ServerConnection>;
+
+/// The client's side of one connection to a box. Only the client opens streams.
 ///
-/// Implementations do not interpret the bytes; the mux and protocol run on top.
+/// A stream may reach the box only once the client wrote to it, so every
+/// protocol stream starts with a client frame. Reads and writes on every
+/// stream end once the connection closes or fails. A reset stream may read
+/// as end-of-stream or as an error; the session ends on either.
+#[async_trait]
+pub trait Connection: Send + Sync {
+    /// Opens a protocol stream. Shutting down its write half ends what the box
+    /// reads and keeps the other direction; dropping it ends the stream, and the
+    /// box still reads every byte written before.
+    ///
+    /// The session holds at most [`crate::MAX_STREAMS`] streams at once, and
+    /// may drop one and open another at once, any number of times; `open` must
+    /// not wait for that. The transport's own limit has to cover every stream
+    /// the session dropped that the transport has not freed yet, so it needs
+    /// headroom above [`crate::MAX_STREAMS`]. A transport that returns stream
+    /// credit in batches, as QUIC does, needs more headroom than yamux's 64;
+    /// iroh 1.5.0, for example, blocked with 64 and passed with 128.
+    ///
+    /// The one wait allowed is yamux's: it opens no stream while 256 it opened
+    /// have had no reply from the box yet, so the box must answer streams.
+    async fn open(&self) -> Result<BoxDuplex, ConnectionError>;
+
+    /// When bytes last arrived from the box that show its process is running,
+    /// on tokio's clock; the connection's start before anything arrived.
+    ///
+    /// Stream data counts, and so do replies the box's protocol stack sends
+    /// to this side, such as yamux's pongs and window updates. Traffic that
+    /// arrives whether or not the box's process runs, such as a QUIC
+    /// transport's keep-alives or ACKs, must not count, or the session's ping
+    /// timeout never notices a hung box. This side's own writes never count.
+    fn last_inbound(&self) -> Instant;
+
+    /// Waits up to `limit` for the reason the connection failed, such as the
+    /// stderr of an SSH tunnel that exited. `None` when it closed cleanly, by
+    /// either side (including after this side's own [`Connection::shutdown`]),
+    /// or when no reason arrived in time. A close the transport starts itself,
+    /// such as dropping a path it may not use or a box that breaks the
+    /// protocol, is a failure and returns its reason.
+    async fn failure_within(&self, limit: Duration) -> Option<String>;
+
+    /// Starts closing the connection and its streams; returns at once.
+    fn shutdown(&self);
+
+    /// Resolves once the connection is closed by either side or has failed.
+    async fn closed(&self);
+}
+
+/// The box's side of one connection: it accepts the streams the client opens.
+///
+/// Accepted streams behave like opened ones in both directions: shutting
+/// down the write half keeps the other direction, and a dropped stream ends
+/// after the bytes written before. Reads and writes on every stream end once
+/// the connection closes or fails.
+///
+/// Dropping it closes the connection. One control message a stream wrote and
+/// shut down before the drop, such as `Incompatible`, `PairingRefused` or
+/// `Refused` (a few hundred bytes), still reaches the client while the
+/// process keeps running. A transport whose close discards unsent stream
+/// data, as QUIC's does, waits a bounded time for the client to close before
+/// it closes on drop. Nothing larger is promised. When the box process exits
+/// right after [`crate::serve`] returns, as `devlanes tunnel --stdio` does
+/// after `Incompatible` and `PairingRefused`, that message is best effort; a
+/// box that must be sure the client read its last words waits for the client
+/// to close first, as [`crate::refuse`] does.
+#[async_trait]
+pub trait ServerConnection: Send {
+    /// The next stream the client opened; `None` once the connection is gone.
+    ///
+    /// A stream the client opened and wrote to before opening any other is
+    /// accepted first, which is how the box finds the control stream. Nothing
+    /// else about the order of accepted streams is promised.
+    async fn accept(&mut self) -> Option<BoxDuplex>;
+
+    /// When bytes last arrived from the client that show its process is
+    /// running, on tokio's clock; the connection's start before anything
+    /// arrived. What counts is as for [`Connection::last_inbound`]: stream
+    /// data and replies from the client's protocol stack, never keep-alives
+    /// that arrive whether or not its process runs, and never this side's
+    /// own writes.
+    fn last_inbound(&self) -> Instant;
+}
+
+/// Failure to open a stream on a [`Connection`].
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ConnectionError {
+    /// The connection is closed; no further streams can be opened.
+    #[error("mux connection closed")]
+    Closed,
+}
+
+/// Produces one authenticated connection to a box per call.
+///
+/// Implementations do not interpret the bytes on its streams; the protocol
+/// runs on top. A transport with one byte pipe to the box wraps it with
+/// [`crate::mux_client`].
 #[async_trait]
 pub trait Transport: Send + Sync {
-    /// Opens a fresh pipe to the box.
+    /// Opens a fresh connection to the box.
     ///
     /// Return [`TransportError::Permanent`] when retrying cannot help (missing
     /// binary) so reconnect loops stop instead of spinning,
@@ -31,10 +135,10 @@ pub trait Transport: Send + Sync {
     /// never connected, and [`TransportError::NeedsAuth`] when a person has to
     /// sign in again to a box that worked before, so [`crate::Link`] waits for
     /// them.
-    async fn connect(&self) -> Result<BoxDuplex, TransportError>;
+    async fn connect(&self) -> Result<BoxConnection, TransportError>;
 }
 
-/// Failure to produce a pipe, classified for reconnect decisions.
+/// Failure to produce a connection, classified for reconnect decisions.
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     /// Local or network I/O failed; retrying later may succeed.

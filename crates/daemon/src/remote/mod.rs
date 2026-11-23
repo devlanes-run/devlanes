@@ -62,7 +62,7 @@ use devlanes_proto::{
 };
 use devlanes_sync::{HashCache, RelPath};
 use devlanes_transport::{
-    BoxDuplex, BoxInfo, ClientRegistry, Link, LinkState, Session as BoxSession, SessionOptions,
+    BoxConnection, BoxInfo, ClientRegistry, Link, LinkState, Session as BoxSession, SessionOptions,
     Transport, TransportError,
 };
 use serde::Deserialize;
@@ -494,7 +494,7 @@ struct Attended {
 impl Transport for Attended {
     /// Connects through the inner transport and reclassifies an
     /// authentication failure after an unanswered prompt.
-    async fn connect(&self) -> Result<BoxDuplex, TransportError> {
+    async fn connect(&self) -> Result<BoxConnection, TransportError> {
         self.board.unanswered.store(false, Ordering::Relaxed);
         let result = self.inner.connect().await;
         let unanswered = self.board.unanswered.swap(false, Ordering::Relaxed);
@@ -2379,7 +2379,7 @@ mod tests {
     #[async_trait]
     impl Transport for AsksThenFails {
         /// Asks, then fails whatever the answer.
-        async fn connect(&self) -> Result<BoxDuplex, TransportError> {
+        async fn connect(&self) -> Result<BoxConnection, TransportError> {
             let _ = self
                 .prompts
                 .ask(RemotePrompt {
@@ -2569,11 +2569,15 @@ mod tests {
             pairing: Arc::new(devlanes_transport::NoPairing),
         };
         tokio::spawn(devlanes_transport::serve(
-            box_io,
+            devlanes_transport::mux_server(Box::new(box_io)),
             services,
             devlanes_transport::ServeOptions::new("box"),
         ));
-        Ok(BoxSession::establish(Box::new(client_io), SessionOptions::new("client")).await?)
+        Ok(BoxSession::establish(
+            devlanes_transport::mux_client(Box::new(client_io)),
+            SessionOptions::new("client"),
+        )
+        .await?)
     }
 
     /// A daemon is idle only with no box it would cut off and no pairing code

@@ -1,9 +1,11 @@
 //! Transport-independent remote protocol between a client daemon and a box.
 //!
-//! A [`Transport`] yields one duplex byte stream. On the box, `devlanes tunnel
-//! --stdio` first writes [`TUNNEL_PREAMBLE`]; transports that run it read up to
-//! that line with [`read_preamble`]. yamux then multiplexes the stream, and only
-//! the client opens streams:
+//! A [`Transport`] yields one [`Connection`]; the box serves the matching
+//! [`ServerConnection`]. On the box, `devlanes tunnel --stdio` first writes
+//! [`TUNNEL_PREAMBLE`]; transports that run it read up to that line with
+//! [`read_preamble`], then run yamux over their one byte pipe with
+//! [`mux_client`], and the tunnel with [`mux_server`]. Only the client opens
+//! streams, at most [`MAX_STREAMS`] at once:
 //!
 //! - one control stream: protocol check, features, client identity, box info,
 //!   registry snapshot, registry events and pings (every 10 s, dead after 20 s
@@ -49,7 +51,7 @@ mod sync;
 mod transport;
 mod wire;
 
-pub use mux::{MuxError, MuxStream};
+pub use mux::{mux_client, mux_server};
 pub use pairing::{NoPairing, PairingCheck, PairingClaim, PairingClient, PairingGate};
 pub use preamble::{PREAMBLE_LIMIT, Preamble, PreambleError, TUNNEL_PREAMBLE, read_preamble};
 pub use reconnect::{Backoff, Link, LinkError, LinkState};
@@ -62,7 +64,7 @@ pub use server::{
     BoxServices, ClientInfo, Dialer, LoopbackDialer, ServeError, ServeOptions, refuse, serve,
 };
 pub use session::{
-    DataStream, OpenError, Session, SessionEnd, SessionError, SessionOptions, Timing,
+    DataStream, MAX_STREAMS, OpenError, Session, SessionEnd, SessionError, SessionOptions, Timing,
 };
 pub use splice::{HALF_CLOSE_IDLE, splice};
 pub use sync::{
@@ -70,7 +72,8 @@ pub use sync::{
     SyncStreamError, SyncSubscription,
 };
 pub use transport::{
-    BoxDuplex, BoxError, Duplex, EXIT_DAEMON_STOPPED, Joined, Transport, TransportError, stdio,
+    BoxConnection, BoxDuplex, BoxError, BoxServerConnection, Connection, ConnectionError, Duplex,
+    EXIT_DAEMON_STOPPED, Joined, ServerConnection, Transport, TransportError, stdio,
 };
 pub use wire::{
     BoxInfo, DialTarget, EXTERNAL_UNITS, FEATURES, MIRROR_REPORT, PROTOCOL_VERSION, PairingReason,

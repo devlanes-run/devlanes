@@ -14,12 +14,11 @@ use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
-use crate::mux::{self, MuxServer, MuxStream};
 use crate::pairing::{PairingCheck, PairingClaim, PairingGate};
 use crate::registry::{AuthorizedTarget, Registry, RegistrySource, RegistryUpdate};
 use crate::session::Timing;
 use crate::sync::{self, SyncSource};
-use crate::transport::{BoxDuplex, BoxError, Duplex};
+use crate::transport::{BoxDuplex, BoxError, BoxServerConnection};
 use crate::wire::{
     self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, MIRROR_REPORT,
     OpenReply, OpenRequest, PROTOCOL_VERSION, RejectReason, SYNC_ZSTD, WireError, negotiate,
@@ -226,10 +225,10 @@ struct Hello {
 /// Accepts the control stream and reads the client's hello. A client of
 /// another protocol revision is told so and fails the session.
 async fn hello(
-    mux: &mut MuxServer,
+    connection: &mut BoxServerConnection,
     timing: Timing,
-) -> Result<(Channel<MuxStream>, Hello), ServeError> {
-    let first = timeout(timing.handshake_timeout, mux.accept())
+) -> Result<(Channel<BoxDuplex>, Hello), ServeError> {
+    let first = timeout(timing.handshake_timeout, connection.accept())
         .await
         .map_err(|_| ServeError::HandshakeTimeout)?
         .ok_or(ServeError::Handshake(
@@ -281,16 +280,17 @@ async fn hello(
     Ok((control, hello))
 }
 
-/// Turns the client on `io` away before the welcome, telling it `message`,
-/// for a box that takes no connections (`remote.allow_connections: false`).
-/// Nothing else about the box is sent, and no service is asked anything.
-/// Returns once the client was told, or failed to read the refusal.
-pub async fn refuse<S>(io: S, message: String, timing: Timing) -> Result<(), ServeError>
-where
-    S: Duplex + 'static,
-{
-    let mut mux = mux::server(Box::new(io));
-    let (mut control, hello) = hello(&mut mux, timing).await?;
+/// Turns the client on `connection` away before the welcome, telling it
+/// `message`, for a box that takes no connections
+/// (`remote.allow_connections: false`). Nothing else about the box is sent,
+/// and no service is asked anything. Returns once the client was told, or
+/// failed to read the refusal.
+pub async fn refuse(
+    mut connection: BoxServerConnection,
+    message: String,
+    timing: Timing,
+) -> Result<(), ServeError> {
+    let (mut control, hello) = hello(&mut connection, timing).await?;
     tracing::debug!(client = %hello.client, id = %hello.client_id, "refused a client: connections are off");
     let refused = BoxControl::Refused { message };
     timeout(timing.handshake_timeout, async {
@@ -299,25 +299,26 @@ where
     })
     .await
     .map_err(|_| ServeError::ClientTimeout)??;
-    // The client closes the session once it read the refusal; dropping the
-    // mux before then could cut the frame off on its way out.
+    // The client closes the session once it read the refusal. Dropping the
+    // connection sends the frame, but `refuse_stdio` exits the process right
+    // after this returns, which can end the close before the frame is out.
     let _ = timeout(timing.handshake_timeout, async {
-        while mux.accept().await.is_some() {}
+        while connection.accept().await.is_some() {}
     })
     .await;
     Ok(())
 }
 
-/// Runs one box-side session over `io` until the client leaves.
+/// Runs one box-side session over `connection` until the client leaves.
 ///
 /// The first stream must be the control stream. Returns `Ok(())` when the
 /// client closes the session; per-stream tasks are aborted on return.
-pub async fn serve<S>(io: S, services: BoxServices, options: ServeOptions) -> Result<(), ServeError>
-where
-    S: Duplex + 'static,
-{
+pub async fn serve(
+    mut connection: BoxServerConnection,
+    services: BoxServices,
+    options: ServeOptions,
+) -> Result<(), ServeError> {
     let timing = options.timing;
-    let mut mux = mux::server(Box::new(io));
     let (
         mut control,
         Hello {
@@ -327,7 +328,7 @@ where
             client_name,
             token,
         },
-    ) = hello(&mut mux, timing).await?;
+    ) = hello(&mut connection, timing).await?;
     let peer = ClientInfo {
         features: negotiate(&options.features, &features),
         label: client,
@@ -337,7 +338,7 @@ where
     // Nothing about the box, not even its welcome, goes to a client it does
     // not serve, and nothing it opens before then is answered.
     refusing_streams(
-        &mut mux,
+        &mut connection,
         pair(
             &mut control,
             &services,
@@ -399,7 +400,7 @@ where
     }
     loop {
         tokio::select! {
-            stream = mux.accept() => match stream {
+            stream = connection.accept() => match stream {
                 Some(stream) => {
                     tasks.spawn(handle_stream(stream, context.clone()));
                 }
@@ -445,7 +446,7 @@ where
             }
             () = tokio::time::sleep_until(deadline) => {
                 // Any inbound frame counts: pings can queue behind a large upload.
-                let alive_until = mux.last_inbound() + idle_limit;
+                let alive_until = connection.last_inbound() + idle_limit;
                 if alive_until <= Instant::now() {
                     return Err(ServeError::ClientTimeout);
                 }
@@ -459,13 +460,16 @@ where
 /// Runs `work` while resetting every stream the client opens meanwhile, by
 /// dropping it unanswered: until the welcome a client may only use its
 /// control stream, and a client that is not paired yet gets nothing else.
-async fn refusing_streams<T>(mux: &mut MuxServer, work: impl Future<Output = T>) -> T {
+async fn refusing_streams<T>(
+    connection: &mut BoxServerConnection,
+    work: impl Future<Output = T>,
+) -> T {
     tokio::pin!(work);
     let mut open = true;
     loop {
         tokio::select! {
             done = &mut work => return done,
-            stream = mux.accept(), if open => match stream {
+            stream = connection.accept(), if open => match stream {
                 Some(stream) => {
                     tracing::debug!("reset a stream the client opened before the welcome");
                     drop(stream);
@@ -482,7 +486,7 @@ async fn refusing_streams<T>(mux: &mut MuxServer, work: impl Future<Output = T>)
 /// The new token goes to the client before the welcome. A refused code and a
 /// client that leaves without one end the session.
 async fn pair(
-    control: &mut Channel<MuxStream>,
+    control: &mut Channel<BoxDuplex>,
     services: &BoxServices,
     peer: &ClientInfo,
     token: Option<String>,
@@ -564,7 +568,7 @@ async fn forward_reports(
 
 /// Writes a control message; a write stalled past the ping timeout ends the session.
 async fn send_control(
-    control: &mut Channel<MuxStream>,
+    control: &mut Channel<BoxDuplex>,
     message: &BoxControl,
     timing: Timing,
 ) -> Result<(), ServeError> {
@@ -580,7 +584,7 @@ fn write(registry: &RwLock<Registry>) -> std::sync::RwLockWriteGuard<'_, Registr
 }
 
 /// Reads the open frame of a non-control stream and dispatches it.
-async fn handle_stream(stream: MuxStream, context: Arc<StreamContext>) {
+async fn handle_stream(stream: BoxDuplex, context: Arc<StreamContext>) {
     let mut channel = wire::channel(stream);
     let open = match timeout(
         context.handshake_timeout,
@@ -605,7 +609,7 @@ async fn handle_stream(stream: MuxStream, context: Arc<StreamContext>) {
 const NOT_REGISTERED: &str = "target is not registered on this box";
 
 /// Authorizes, dials and splices one data stream.
-async fn serve_data(mut channel: Channel<MuxStream>, target: DialTarget, context: &StreamContext) {
+async fn serve_data(mut channel: Channel<BoxDuplex>, target: DialTarget, context: &StreamContext) {
     let authorized = context
         .registry
         .read()
@@ -679,7 +683,7 @@ async fn serve_data(mut channel: Channel<MuxStream>, target: DialTarget, context
 }
 
 /// Tells the client why its open failed, then closes the stream.
-async fn reject(channel: &mut Channel<MuxStream>, reason: RejectReason, message: String) {
+async fn reject(channel: &mut Channel<BoxDuplex>, reason: RejectReason, message: String) {
     let _ = wire::send(channel, &OpenReply::Rejected { reason, message }).await;
     let _ = channel.close().await;
 }
@@ -689,11 +693,13 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
+    use crate::mux::{self, mux_server};
     use crate::registry::{
         LaneInfo, LaneKey, PortInfo, RegistryEvent, RegistrySnapshot, SharedRegistry, UnitInfo,
         UnitKey, UnitKind,
     };
     use crate::sync::{NoSync, SyncFeed, SyncInput};
+    use crate::transport::Connection;
     use crate::wire::{OpenRequest, PROTOCOL_VERSION};
 
     type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
@@ -779,7 +785,11 @@ mod tests {
                 pairing: Arc::new(crate::NoPairing),
             };
             let (client_io, box_io) = tokio::io::duplex(1024 * 1024);
-            let server = tokio::spawn(serve(box_io, services, ServeOptions::new("box")));
+            let server = tokio::spawn(serve(
+                mux_server(Box::new(box_io)),
+                services,
+                ServeOptions::new("box"),
+            ));
             let client = mux::client(Box::new(client_io));
             let mut control = wire::channel(client.open().await?);
             let hello = OpenRequest::Control {
