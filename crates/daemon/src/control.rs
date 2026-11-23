@@ -973,7 +973,7 @@ impl Inner {
                 program: program.clone(),
                 args: rest.to_vec(),
                 cwd,
-                env: launch.env.values.clone(),
+                env: launch.env.spelled(),
                 pty: args.pty,
                 size: TerminalSize::default(),
             },

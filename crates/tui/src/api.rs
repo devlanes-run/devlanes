@@ -883,16 +883,18 @@ pub fn is_unsupported(error: &ApiError) -> bool {
     )
 }
 
-/// The environment lanes started from the TUI get: `vars` with names folded
-/// as the CLI folds them (`Path` is `PATH` on Windows), without what a
-/// relaunch or `devlanes update` passed to this TUI alone.
+/// The environment lanes started from the TUI get: `vars` with names spelled
+/// as given, as the CLI sends them, without what a relaunch or
+/// `devlanes update` passed to this TUI alone.
 fn lane_env(vars: impl IntoIterator<Item = (String, String)>) -> BTreeMap<String, String> {
     vars.into_iter()
-        .map(|(name, value)| (devlanes_core::env::fold_name(name), value))
         .filter(|(name, _)| {
             ![crate::REOPEN_ENV, crate::UPDATE_STEPS_ENV]
                 .iter()
-                .any(|own| devlanes_core::env::fold_name((*own).to_owned()) == *name)
+                .any(|own| {
+                    devlanes_core::env::fold_name((*own).to_owned())
+                        == devlanes_core::env::fold_name(name.clone())
+                })
         })
         .collect()
 }
@@ -1578,12 +1580,12 @@ mod tests {
             (crate::REOPEN_ENV.to_owned(), "{}".to_owned()),
             (crate::UPDATE_STEPS_ENV.to_owned(), "{}".to_owned()),
         ]);
-        assert_eq!(
-            env.keys().cloned().collect::<Vec<_>>(),
-            [devlanes_core::env::fold_name("HOME".to_owned())]
-        );
+        assert_eq!(env.keys().cloned().collect::<Vec<_>>(), ["HOME"]);
         #[cfg(windows)]
-        assert!(lane_env([("devlanes_update_steps".to_owned(), "{}".to_owned())]).is_empty());
+        {
+            assert!(lane_env([("devlanes_update_steps".to_owned(), "{}".to_owned())]).is_empty());
+            assert!(lane_env([("Path".to_owned(), "a".to_owned())]).contains_key("Path"));
+        }
     }
 
     /// Read as the tunnel reads them: pairing is off and connections are

@@ -869,13 +869,13 @@ fn take_over(view: &mut View) {
 /// update itself set.
 fn restart_context(runtime: &Runtime) -> Context {
     let env: BTreeMap<String, String> = std::env::vars_os()
-        .filter_map(|(key, value)| {
-            Some((
-                devlanes_core::env::fold_name(key.into_string().ok()?),
-                value.into_string().ok()?,
-            ))
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .filter(|(key, _)| {
+            let key = devlanes_core::env::fold_name(key.clone());
+            [STEPS_ENV, REOPEN_ENV]
+                .iter()
+                .all(|own| key != devlanes_core::env::fold_name((*own).to_owned()))
         })
-        .filter(|(key, _)| key != STEPS_ENV && key != REOPEN_ENV)
         .collect();
     Context {
         env: Some(env),

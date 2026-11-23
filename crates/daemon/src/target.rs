@@ -639,7 +639,7 @@ impl Inner {
             home: context
                 .env
                 .as_ref()
-                .and_then(|env| env.get("HOME"))
+                .and_then(|env| devlanes_core::env::lookup(env, "HOME"))
                 .map(PathBuf::from),
         };
         let found = devlanes_core::refs::resolve_lane(parsed, &candidates, &resolve)

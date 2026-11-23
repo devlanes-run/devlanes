@@ -2847,10 +2847,12 @@ pub(crate) fn lane_context(
             }
         }
     }
+    // Folded as the resolver's `env_namespace` folds them: `${{ env.X }}`
+    // looks up the folded name, and on Windows the client sends `Path`.
     let mut env_ns = serde_json::Map::new();
     for source in [dotenv, env] {
         for (key, value) in source {
-            env_ns.insert(key.clone(), json!(value));
+            env_ns.insert(devlanes_core::env::fold_name(key.clone()), json!(value));
         }
     }
     ExpressionContext {

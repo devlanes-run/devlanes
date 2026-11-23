@@ -247,7 +247,7 @@ impl Launch {
             program: self.program.clone(),
             args: self.args.clone(),
             cwd: self.cwd.clone(),
-            env: self.env.values.clone(),
+            env: self.env.spelled(),
             pty,
             size,
         }

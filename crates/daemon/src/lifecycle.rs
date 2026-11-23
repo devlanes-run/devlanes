@@ -100,6 +100,7 @@ pub(crate) fn copy_env(env: &Environment) -> Environment {
     Environment {
         values: env.values.clone(),
         sources: env.sources.clone(),
+        names: env.names.clone(),
     }
 }
 
@@ -149,8 +150,10 @@ impl SpawnRequest {
         actor: &Actor,
     ) -> Self {
         let mut spec = launch.to_spec(pty, TerminalSize::default());
-        spec.env
-            .extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+        devlanes_core::env::overlay(
+            &mut spec.env,
+            extra.iter().map(|(k, v)| (k.clone(), v.clone())),
+        );
         Self {
             name: name.to_owned(),
             kind,
@@ -2282,7 +2285,7 @@ impl Inner {
             unit: request.name.clone(),
             program: request.spec.program.clone(),
             cwd: request.spec.cwd.clone(),
-            path: request.spec.env.get("PATH").cloned(),
+            path: devlanes_core::env::lookup(&request.spec.env, "PATH").cloned(),
         };
         // Keys only: values can hold secrets.
         tracing::debug!(
@@ -5078,7 +5081,7 @@ impl Inner {
             .env()
             .map(|env| env.as_ref().clone())
             .unwrap_or_default();
-        env.extend(spec.env.clone());
+        devlanes_core::env::overlay(&mut env, spec.env.clone());
         // `up` just listed every plain container here under its Docker name.
         let dockers: BTreeMap<String, String> = lane
             .st()

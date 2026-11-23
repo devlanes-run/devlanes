@@ -77,7 +77,7 @@ impl Fingerprint {
                         Some(EnvLayer::Client | EnvLayer::Override)
                     )
                 })
-                .map(|(key, value)| (key.clone(), value.clone()))
+                .map(|(key, value)| (service.launch.env.name(key).to_owned(), value.clone()))
                 .collect(),
             files: service
                 .launch
@@ -122,7 +122,7 @@ impl Fingerprint {
             keys.into_iter()
                 // The lane's hostnames: one service gaining or losing hosts would mark
                 // every other one changed. It is the lane's, not this unit's.
-                .filter(|key| key.as_str() != "DEVLANES_ORIGINS")
+                .filter(|key| devlanes_core::env::fold_name((*key).clone()) != "DEVLANES_ORIGINS")
                 .filter(|key| self.env.get(*key) != now.env.get(*key))
                 .map(|key| format!("env {key}")),
         );

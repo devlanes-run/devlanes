@@ -315,6 +315,21 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             let lane: std::collections::BTreeMap<String, String> =
                 serde_json::from_value(data.get("env").cloned().unwrap_or_default())
                     .unwrap_or_default();
+            // Windows reads `Path` and `PATH` as one variable, and std keeps
+            // the first spelling and the last value; with both here the
+            // shell's value would replace the lane's.
+            #[cfg(windows)]
+            {
+                let lane_names: std::collections::BTreeSet<String> = lane
+                    .keys()
+                    .map(|key| devlanes_core::env::fold_name(key.clone()))
+                    .collect();
+                env.retain(|key, _| {
+                    key.to_str().is_none_or(|key| {
+                        !lane_names.contains(&devlanes_core::env::fold_name(key.to_owned()))
+                    })
+                });
+            }
             env.extend(
                 lane.into_iter()
                     .map(|(key, value)| (key.into(), value.into())),

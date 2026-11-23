@@ -1114,7 +1114,7 @@ impl Inner {
                     },
                 )
                 .await?;
-            let env: std::collections::BTreeMap<&String, &String> = command
+            let env: std::collections::BTreeMap<&str, &String> = command
                 .env
                 .values
                 .iter()
@@ -1127,6 +1127,7 @@ impl Inner {
                         .unwrap_or(EnvLayer::Client)
                         != EnvLayer::Client
                 })
+                .map(|(key, value)| (command.env.name(key), value))
                 .collect();
             let reference = lane.st().reference(&project.name());
             let mut result = json!({"lane": reference, "env": env});
@@ -1192,12 +1193,12 @@ impl Inner {
                 .iter()
                 .map(|(key, value)| {
                     let layer = env.sources.get(key).copied().unwrap_or(EnvLayer::Client);
-                    json!({"key": key, "value": value, "layer": layer_word(layer)})
+                    json!({"key": env.name(key), "value": value, "layer": layer_word(layer)})
                 })
                 .collect();
             json!({"lane": reference, "unit": name, "items": items, "notes": notes, "truncated": false, "next_cursor": null})
         } else {
-            json!({"lane": reference, "unit": name, "env": env.values})
+            json!({"lane": reference, "unit": name, "env": env.spelled()})
         };
         if !launch.left_out.is_empty() {
             result["left_out"] = crate::command_env::left_out(&launch.left_out);
