@@ -185,12 +185,12 @@ impl Install {
     }
 
     /// Why this install can't be registered: uvx and pipx run devlanes from a
-    /// cache, which they may clear or replace at any time, and a relative
-    /// entry means devlanes couldn't find its own binary.
+    /// cache, which they may clear or replace at any time. A relative entry
+    /// is refused too, because the browser can't start it.
     fn refusal(&self) -> Option<String> {
         if !self.entry.is_absolute() {
             return Some(format!(
-                "devlanes can't find the path of its own binary, only {}, so the browser extension couldn't start it. Run devlanes setup again by its full path",
+                "devlanes can't find the full path of its own binary, only {}, so the browser extension can't start it. Run devlanes setup again as /full/path/to/devlanes setup",
                 self.entry.display()
             ));
         }
@@ -1176,7 +1176,10 @@ mod tests {
         let Facts::Refused(reason) = facts(Some(&location), relative.clone()) else {
             panic!("not refused");
         };
-        assert!(reason.contains("by its full path"), "{reason}");
+        assert!(
+            reason.contains("as /full/path/to/devlanes setup"),
+            "{reason}"
+        );
         assert!(matches!(
             apply(&location, &relative, &inspect(&location, &relative)),
             Err(BrowserError::Refused(_))
