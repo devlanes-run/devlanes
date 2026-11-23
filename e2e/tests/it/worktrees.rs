@@ -171,15 +171,19 @@ fn worktree_add_move_and_remove_reach_the_running_daemon() -> Result<()> {
     assert_eq!(one_pids.len(), 2, "{running}");
     remove_running_worktree(&lab, &moved)?;
 
-    let stopped = lab.eventually("lane 1 to stop", Duration::from_secs(20), || {
+    // The stop saves the lane's desired state after its processes exit, and
+    // `lane gc` keeps a lane that is still `stopping` then.
+    lab.eventually("lane 1 to stop", Duration::from_secs(20), || {
         let lanes = watched(&lab)?;
+        let settled = |l: &Value| {
+            !["running", "starting", "stopping"].contains(&l["state"].as_str().unwrap_or(""))
+                && units_in(l, "ready").is_empty()
+        };
         let done = one_pids.iter().all(|p| !alive(*p))
             && one_ports.iter().all(|p| !listening(*p))
-            && lane(&lanes, "fixture-two@1").is_some_and(|l| units_in(l, "ready").is_empty());
-        Ok(done.then_some(lanes))
+            && lane(&lanes, "fixture-two@1").is_some_and(settled);
+        Ok(done.then_some(()))
     })?;
-    let gone = need(lane(&stopped, "fixture-two@1"), "lane 1 after removal")?;
-    assert_ne!(gone["state"], "running", "{gone}");
     // What Git could not delete on Windows goes once the units stopped, so the
     // folder is gone for the re-list below, as on Unix.
     #[cfg(windows)]
