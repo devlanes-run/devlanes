@@ -592,7 +592,8 @@ fn the_messages_fixture_matches_the_host() {
     ];
     assert_eq!(fixture["events"], json!(events));
 
-    let invalid = Request::parse(b"{").err().map(|invalid| invalid.message);
+    let invalid = Request::parse(br#"{"id": 7, "method": "use", "params": {"lane": "acme@0"}}"#)
+        .expect_err("a use without a box is invalid");
     let errors = [
         ErrorReply {
             id: Some(3),
@@ -630,8 +631,8 @@ fn the_messages_fixture_matches_the_host() {
             error: HostError::hello_required(),
         },
         ErrorReply {
-            id: None,
-            error: HostError::plain("invalid_request", invalid.unwrap_or_default()),
+            id: invalid.id,
+            error: HostError::plain("invalid_request", invalid.message),
         },
         ErrorReply {
             id: Some(6),

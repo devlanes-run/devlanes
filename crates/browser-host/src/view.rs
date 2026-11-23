@@ -115,7 +115,6 @@ pub struct HostRoute {
     /// `None` for a wildcard host, which has no single address.
     #[serde(default)]
     pub url: Option<String>,
-    pub project: String,
     pub lane: String,
     pub unit: String,
     pub state: String,

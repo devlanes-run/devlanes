@@ -83,11 +83,16 @@ impl Local {
     /// Connects without spawning, and refuses a daemon without the features
     /// the host relies on.
     async fn connect() -> Result<Client, Unavailable> {
-        let paths = Paths::discover().map_err(|error| {
-            Unavailable::Stopped(format!(
-                "devlanes can't find its home: {error}. Run devlanes doctor."
-            ))
-        })?;
+        // Resolving the home reads the filesystem.
+        let paths = tokio::task::spawn_blocking(Paths::discover)
+            .await
+            .map_err(devlanes_client::Error::from)
+            .and_then(|paths| paths)
+            .map_err(|error| {
+                Unavailable::Stopped(format!(
+                    "devlanes can't find its home: {error}. Run devlanes doctor."
+                ))
+            })?;
         match Client::connect(&paths).await {
             // An older daemon would answer `hosts` for the cwd's project only,
             // and count the subscription as a reason to stay up.

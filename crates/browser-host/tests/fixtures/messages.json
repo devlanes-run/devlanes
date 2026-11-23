@@ -87,10 +87,10 @@
       "error": { "code": "hello_required", "message": "The extension sent a request before hello. Reload the devlanes extension." }
     },
     {
-      "id": null,
+      "id": 7,
       "error": {
         "code": "invalid_request",
-        "message": "The extension sent a message that isn't JSON. Update the devlanes extension and devlanes."
+        "message": "The extension sent use without a lane and a box. Update the devlanes extension and devlanes."
       }
     },
     {
