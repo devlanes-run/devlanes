@@ -667,8 +667,10 @@ Works out what this machine needs and lists each step as ok, todo, info or skip:
             daemon needs it for a project
   resolver  send hostnames.tld to the devlanes DNS server (a resolver file, or an
             NRPT rule on Windows) when hostnames.resolver is resolver
-  browser   register the browser extension's host for Chrome, Chromium, Brave and
-            Edge. It shows as info, never todo, and doesn't change --check's exit code
+  browser   register the browser extension's host for the installed Chromium
+            browsers, such as Chrome, Edge and Brave, and keep a copy of its
+            manifest in ~/.devlanes/browser for any other. It shows as info, never
+            todo, and doesn't change --check's exit code
 
 Then it asks once before doing the todo steps, and registers the browser host
 with them. With nothing else to do, it registers the host without asking. sudo
