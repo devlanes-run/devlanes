@@ -273,7 +273,10 @@ struct Building<'a> {
 ///
 /// A box source serves when its lane has a unit the daemon mirrors and isn't
 /// in the box's `skipped_lanes`. This machine's source serves when no box
-/// does and the reference isn't in `yielded_local_lanes`.
+/// does and the reference isn't in `yielded_local_lanes`. A known limit is
+/// that the daemon also needs its mirror to have built the lane, which
+/// `host.list` doesn't expose, so a lane the mirror hasn't built yet can show
+/// as serving for a moment.
 pub fn compose(status: &Page<LaneSummary>, hosts: &Hosts, host_list: &HostList) -> View {
     let boxes = host_list
         .items
@@ -297,8 +300,7 @@ pub fn compose(status: &Page<LaneSummary>, hosts: &Hosts, host_list: &HostList) 
             .local = Some(summary);
     }
     for item in &host_list.items {
-        // A box whose link ended, failed or stopped has no registry, so it
-        // adds no sources. A reconnecting box keeps its registry.
+        // See compose's doc: only a box with a registry adds sources.
         let Some(registry) = &item.registry else {
             continue;
         };
