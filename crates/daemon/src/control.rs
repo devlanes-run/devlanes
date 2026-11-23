@@ -1532,7 +1532,9 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let (project, lane) = self.lane(context, Policy::of(Method::InfraDown)).await?;
         let env = lane.st().env().cloned();
-        let spec = self.shared_infra_spec(&project, env.as_deref()).await?;
+        let spec = self
+            .shared_infra_spec(&project, Some(&lane), env.as_deref())
+            .await?;
         let running: Vec<String> = project
             .lanes()
             .iter()

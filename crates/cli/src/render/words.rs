@@ -934,9 +934,19 @@ pub(crate) const EXAMPLE_CONFIG: &str = devlanes_version::MINIMAL_CONFIG_URL;
 
 /// `no_config` (`{path, searched_to}`; older daemons send `{lane}`): where the
 /// search looked, and an example to create the file from. Never `config check`,
-/// which fails the same way.
+/// which fails the same way. With `primary: true` (`infra down` from a lane with
+/// no file, when the primary worktree has none either): a lane that has one.
 fn no_config(data: &Value) -> (String, Option<Hint>) {
     let path = text(data, "path");
+    if data.get("primary").and_then(Value::as_bool) == Some(true) {
+        return (
+            format!("the primary worktree ({path}) has no devlanes.yaml for this project"),
+            Some(Hint(format!(
+                "run {} in a worktree that has the project file",
+                Hint::command(["infra", "down"]).0
+            ))),
+        );
+    }
     let root = text(data, "searched_to");
     let message = match (path.is_empty(), root.is_empty()) {
         (false, false) => {

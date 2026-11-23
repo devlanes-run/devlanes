@@ -1217,6 +1217,7 @@ fn shared_infra_line(shared: &Value) -> String {
     } else if shared.get("skipped").is_some() {
         let when = match text(shared, "skipped").as_str() {
             "docker_unavailable" => "once it is",
+            "no_config" => "from a lane whose project file loads",
             _ => "once the file loads",
         };
         format!(
@@ -1233,6 +1234,7 @@ fn shared_infra_line(shared: &Value) -> String {
 fn shared_skipped(shared: &Value) -> String {
     match (text(shared, "skipped").as_str(), text(shared, "message")) {
         ("docker_unavailable", _) => "Docker is not available".into(),
+        ("no_config", _) => "the primary worktree has no devlanes.yaml for this project".into(),
         (_, message) if message.is_empty() => "the project file does not load".into(),
         (_, message) => clean(&message),
     }
