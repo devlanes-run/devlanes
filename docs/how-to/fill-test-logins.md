@@ -4,7 +4,7 @@ description: Save the test logins you use on one lane and fill them on the proje
 kind: how-to
 ---
 
-Use this when your lanes share test accounts and you sign in on each lane again. The fill is part of the devlanes browser extension, which [Use the browser extension](use-the-browser-extension.md) sets up.
+Use this when your lanes share test accounts and you sign in on each lane again. The fill is part of the devlanes browser extension. [Use the browser extension](use-the-browser-extension.md) covers installing it.
 
 ## Save a login and fill it on another lane
 
