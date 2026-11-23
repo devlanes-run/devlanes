@@ -1,5 +1,9 @@
 # devlanes-config
 
+## 0.15.0 — 2026-11-23
+
+Version bump only, to follow other packages.
+
 ## 0.14.0 — 2026-11-20
 
 ### Patch changes

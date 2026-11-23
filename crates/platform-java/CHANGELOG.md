@@ -1,5 +1,9 @@
 # devlanes-platform-java
 
+## 0.9.0 — 2026-11-23
+
+Version bump only, to follow other packages.
+
 ## 0.8.0 — 2026-11-16
 
 ### Minor changes

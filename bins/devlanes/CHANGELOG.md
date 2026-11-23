@@ -1,5 +1,30 @@
 # devlanes
 
+## 0.16.0 — 2026-11-23
+
+### Minor changes
+
+- [7cd831d1](https://github.com/devlanes-run/devlanes/commit/7cd831d172b11c471bbeba1c4816178a97bfbf37) Changed variable names on Windows to keep the case they are written in, so Gradle's `ORG_GRADLE_PROJECT_` properties work.
+  
+  Names in `env show`, `--explain` and `env export` output keep their spelling (for example `Path`), so look them up case-insensitively. Restart the daemon after updating so `${{ env.X }}` in infra fields finds any spelling.
+
+### Patch changes
+
+- [3b4ae053](https://github.com/devlanes-run/devlanes/commit/3b4ae0530e88b2c6ab845b808fa8478e94180c79) Fixed `preset: tauri` replicas rebuilding each other's app, which failed on Windows.
+  
+  Replicas 2 and up ignore a `CARGO_TARGET_DIR` from the shell, mise or direnv. Set one in the service's `env` to choose the folder.
+- [396637f1](https://github.com/devlanes-run/devlanes/commit/396637f1e61ca5eea2dbc9ba7e579d80917753bb) Fixed `devlanes lane clean` saying the project file does not load when the primary worktree has none.
+  
+  It now stops the shared containers the lane's own file declares, and `devlanes infra down` works from a lane's worktree in that setup.
+- [7cd831d1](https://github.com/devlanes-run/devlanes/commit/7cd831d172b11c471bbeba1c4816178a97bfbf37) Fixed `exec --env` on Windows not replacing a value that waits on a container when the name differs only in case.
+- [46d4a597](https://github.com/devlanes-run/devlanes/commit/46d4a597d7e9ae40c280e8db20f671e0901f091b) Fixed `start`, `stop`, `restart`, `reload`, `logs` and `with` sending units named without `lane:` to another unit's lane instead of the current one.
+  
+  To act on another lane, prefix every unit with it or use `--lane`. One lane written two ways, such as `1:api myapp@1:web`, now works.
+- [7cd831d1](https://github.com/devlanes-run/devlanes/commit/7cd831d172b11c471bbeba1c4816178a97bfbf37) Fixed `devlanes env shell` on Windows keeping your shell's `Path` over the lane's `PATH`.
+- [71325d24](https://github.com/devlanes-run/devlanes/commit/71325d247eecd40c1dafa88a181c9121a0ee0ca4) Added browser extension support to `devlanes setup` for Chromium-based browsers such as Chrome, Edge and Brave.
+  
+  The extension doesn't keep the daemon running, so the daemon can stop while the popup is open.
+
 ## 0.15.1 — 2026-11-23
 
 ### Patch changes

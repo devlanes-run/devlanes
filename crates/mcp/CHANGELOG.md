@@ -1,5 +1,9 @@
 # devlanes-mcp
 
+## 0.5.0 — 2026-11-23
+
+Version bump only, to follow other packages.
+
 ## 0.4.2 — 2026-11-18
 
 ### Patch changes

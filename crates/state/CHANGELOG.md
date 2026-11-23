@@ -1,6 +1,6 @@
 # devlanes-state
 
-## 0.12.0 — 2026-11-16
+## 0.12.0 ... 0.13.0 — 2026-11-23
 
 Version bump only, to follow other packages.
 

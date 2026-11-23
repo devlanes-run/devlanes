@@ -1,5 +1,9 @@
 # devlanes-git
 
+## 0.11.0 — 2026-11-23
+
+Version bump only, to follow other packages.
+
 ## 0.10.1 — 2026-11-18
 
 ### Patch changes
