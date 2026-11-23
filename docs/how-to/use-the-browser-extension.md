@@ -77,7 +77,7 @@ PS> reg add "HKCU\Software\<Vendor>\<Browser>\NativeMessagingHosts\run.devlanes.
 :::
 ::::
 
-Each run of setup keeps the manifest current, so the link or key keeps working. `devlanes setup --remove` doesn't delete a link or key you made for another browser, so delete it yourself.
+Each run of setup keeps the copy current, so the link or key keeps working. `devlanes setup --remove` deletes the copy, so a link or key you made stops working. Delete the link or key yourself. A key at Chrome's location counts as Chrome's registration, and `--remove` deletes it.
 
 ## Related
 
