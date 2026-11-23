@@ -53,7 +53,7 @@ The `browser` step registers devlanes as the native host of the devlanes browser
 - setup runs from a source checkout or a project dependency, and another install holds every registration
 - devlanes can't tell where the home folder is
 
-The line says why. `devlanes setup --remove` deletes the copy and only the registrations that start this install. A link or key the user made to the copy for another browser stays.
+The line says why. `devlanes setup --remove` deletes the copy and only the registrations that start this install. A link or key the user made to the copy for another browser stays, except a Windows key under `HKCU\Software\Chromium` or `HKCU\Software\Google\Chrome`, which `--remove` deletes. On Windows, Brave, Vivaldi and most other Chromium browsers read those two keys, not a key under their own name.
 
 When something is `todo`:
 
