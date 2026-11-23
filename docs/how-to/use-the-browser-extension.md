@@ -55,7 +55,7 @@ When you sign in with a form on a lane, the extension saves the username and pas
 Passwords are stored unencrypted in this browser. Use the fill for test accounts only.
 :::
 
-The fill reads only fields marked with the standard `autocomplete` tokens `username`, `email`, `current-password` and `new-password`. It never saves one-time codes or card numbers.
+The fill reads only fields with a standard `autocomplete` token for a username, an email or a password. It never saves one-time codes or card numbers.
 
 ## Change the login settings
 
