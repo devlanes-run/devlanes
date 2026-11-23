@@ -27,7 +27,7 @@ Until devlanes is registered, the popup says "Not set up" and asks you to run se
 $ devlanes setup
 ```
 
-Setup registers devlanes as the extension's native host. Reopen the popup afterwards. The browser doesn't need a restart.
+Setup registers devlanes as the extension's native messaging host, the way Claude Code registers itself for [Claude in Chrome](https://code.claude.com/docs/en/chrome): it writes a small file into each browser's own folder, or a registry key on Windows. Reopen the popup afterwards. The browser doesn't need a restart.
 
 ## Open the popup
 
