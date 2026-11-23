@@ -153,6 +153,7 @@ mod tests {
             pty: true,
             script: None,
             client_env: &empty,
+            client_spelled: &empty,
             ca_env: &empty,
             memo: &memo,
         };

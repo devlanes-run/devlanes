@@ -626,6 +626,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
             pty: spec.pty,
             script: script.as_ref(),
             client_env: &self.client,
+            client_spelled: input.client_env,
             ca_env: input.ca_env,
             memo: &self.memo,
         };

@@ -887,15 +887,10 @@ pub fn is_unsupported(error: &ApiError) -> bool {
 /// as given, as the CLI sends them, without what a relaunch or
 /// `devlanes update` passed to this TUI alone.
 fn lane_env(vars: impl IntoIterator<Item = (String, String)>) -> BTreeMap<String, String> {
+    let own = [crate::REOPEN_ENV, crate::UPDATE_STEPS_ENV]
+        .map(|name| devlanes_core::env::fold_name(name.to_owned()));
     vars.into_iter()
-        .filter(|(name, _)| {
-            ![crate::REOPEN_ENV, crate::UPDATE_STEPS_ENV]
-                .iter()
-                .any(|own| {
-                    devlanes_core::env::fold_name((*own).to_owned())
-                        == devlanes_core::env::fold_name(name.clone())
-                })
-        })
+        .filter(|(name, _)| !own.contains(&devlanes_core::env::fold_name(name.clone())))
         .collect()
 }
 

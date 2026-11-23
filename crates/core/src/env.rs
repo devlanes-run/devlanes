@@ -54,17 +54,38 @@ pub fn assemble(
     let mut result = Environment::default();
     for (layer, values) in layers {
         for (name, value) in values {
-            let key = fold_name(name.clone());
-            if key == name {
-                result.names.remove(&key);
-            } else {
-                result.names.insert(key.clone(), name);
+            let (key, spelling) = split_name(name);
+            match spelling {
+                Some(spelling) => {
+                    result.names.insert(key.clone(), spelling);
+                }
+                None if !result.names.is_empty() => {
+                    result.names.remove(&key);
+                }
+                None => {}
             }
             result.sources.insert(key.clone(), layer);
             result.values.insert(key, value);
         }
     }
     result
+}
+
+/// `name` as a key, and no spelling: Unix does not fold names.
+#[cfg(not(windows))]
+fn split_name(name: String) -> (String, Option<String>) {
+    (name, None)
+}
+
+/// `name` folded, and its spelling when that differs from the folded name.
+#[cfg(windows)]
+fn split_name(name: String) -> (String, Option<String>) {
+    let key = fold_name(name.clone());
+    if key == name {
+        (key, None)
+    } else {
+        (key, Some(name))
+    }
 }
 
 /// An environment variable name as devlanes keeps it: unchanged on Unix,
@@ -91,11 +112,13 @@ pub fn fold_name(name: String) -> String {
 pub fn spellings(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut names = BTreeMap::new();
     for name in env.keys() {
-        let key = fold_name(name.clone());
-        if &key == name {
-            names.remove(&key);
-        } else {
-            names.insert(key, name.clone());
+        match split_name(name.clone()) {
+            (key, Some(spelling)) => {
+                names.insert(key, spelling);
+            }
+            (key, None) => {
+                names.remove(&key);
+            }
         }
     }
     names
@@ -106,6 +129,9 @@ pub fn respell(
     env: BTreeMap<String, String>,
     spellings: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
+    if spellings.is_empty() {
+        return env;
+    }
     env.into_iter()
         .map(|(key, value)| match spellings.get(&key) {
             Some(name) => (name.clone(), value),
@@ -114,22 +140,23 @@ pub fn respell(
         .collect()
 }
 
-/// The value of `name` in `env`, whose names keep their spelling: exact.
+/// The value of `name` in `env`, whose names keep their spelling. Exact
+/// match on Unix.
 #[cfg(not(windows))]
 pub fn lookup<'a>(env: &'a BTreeMap<String, String>, name: &str) -> Option<&'a String> {
     env.get(name)
 }
 
-/// The value of `name` in `env`, whose names keep their spelling: any
-/// spelling matches on Windows (`Path` for `PATH`).
+/// The value of `name` in `env`, whose names keep their spelling. Matches any
+/// spelling on Windows (`Path` for `PATH`); with two spellings, the one
+/// sorting last wins, as in [`fold_names`]. A linear scan, not for hot paths.
 #[cfg(windows)]
 pub fn lookup<'a>(env: &'a BTreeMap<String, String>, name: &str) -> Option<&'a String> {
-    env.get(name).or_else(|| {
-        let key = fold_name(name.to_owned());
-        env.iter()
-            .find(|(candidate, _)| fold_name((*candidate).clone()) == key)
-            .map(|(_, value)| value)
-    })
+    let key = fold_name(name.to_owned());
+    env.iter()
+        .rev()
+        .find(|(candidate, _)| fold_name((*candidate).clone()) == key)
+        .map(|(_, value)| value)
 }
 
 /// Puts `layer` over `env`.

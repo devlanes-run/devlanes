@@ -309,31 +309,11 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
         Action::Shell(request) => {
             let cwd = request.context.cwd.clone();
             let data = call(request).await?;
-            // vars_os: a variable that is not UTF-8 is passed on, not a panic.
-            let mut env: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString> =
-                std::env::vars_os().collect();
             let lane: std::collections::BTreeMap<String, String> =
                 serde_json::from_value(data.get("env").cloned().unwrap_or_default())
                     .unwrap_or_default();
-            // Windows reads `Path` and `PATH` as one variable, and std keeps
-            // the first spelling and the last value; with both here the
-            // shell's value would replace the lane's.
-            #[cfg(windows)]
-            {
-                let lane_names: std::collections::BTreeSet<String> = lane
-                    .keys()
-                    .map(|key| devlanes_core::env::fold_name(key.clone()))
-                    .collect();
-                env.retain(|key, _| {
-                    key.to_str().is_none_or(|key| {
-                        !lane_names.contains(&devlanes_core::env::fold_name(key.to_owned()))
-                    })
-                });
-            }
-            env.extend(
-                lane.into_iter()
-                    .map(|(key, value)| (key.into(), value.into())),
-            );
+            // vars_os: a variable that is not UTF-8 is passed on, not a panic.
+            let env = shell_env(std::env::vars_os().collect(), lane);
             let shell = std::env::var("SHELL").unwrap_or_else(|_| default_shell());
             let status = tokio::process::Command::new(shell)
                 .env_clear()
@@ -1307,6 +1287,34 @@ async fn open_url(url: &str) -> Result<(), RpcError> {
         .map_err(|error| failed(error.to_string()))
 }
 
+/// The environment `env shell` starts its shell with: this shell's `env`
+/// with the lane's variables over it.
+fn shell_env(
+    mut env: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+    lane: std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString> {
+    // Windows reads `Path` and `PATH` as one variable, and std keeps the first
+    // spelling and the last value; with both here the shell's value would
+    // replace the lane's.
+    #[cfg(windows)]
+    {
+        let lane_names: std::collections::BTreeSet<String> = lane
+            .keys()
+            .map(|key| devlanes_core::env::fold_name(key.clone()))
+            .collect();
+        env.retain(|key, _| {
+            key.to_str().is_none_or(|key| {
+                !lane_names.contains(&devlanes_core::env::fold_name(key.to_owned()))
+            })
+        });
+    }
+    env.extend(
+        lane.into_iter()
+            .map(|(key, value)| (key.into(), value.into())),
+    );
+    env
+}
+
 /// The shell `env shell` starts when `$SHELL` is unset.
 #[cfg(unix)]
 fn default_shell() -> String {
@@ -1375,6 +1383,21 @@ mod tests {
     use devlanes_cli::clap::Parser;
 
     use super::*;
+
+    /// The lane's `PATH` replaces the shell's `Path` instead of sitting next
+    /// to it, where std would keep the shell's value.
+    #[cfg(windows)]
+    #[test]
+    fn env_shell_keeps_the_lane_path_over_a_shell_path() {
+        let env = shell_env(
+            [("Path".into(), "shell".into()), ("X".into(), "1".into())].into(),
+            [("PATH".to_owned(), "lane".to_owned())].into(),
+        );
+        assert_eq!(
+            env,
+            [("PATH".into(), "lane".into()), ("X".into(), "1".into())].into()
+        );
+    }
 
     /// A plain, non-interactive runtime.
     fn runtime() -> Runtime {
