@@ -65,11 +65,6 @@ const CHROME_KEY: &str = "Google/Chrome";
 /// before [`CHROME_KEY`].
 const CHROMIUM_KEY: &str = "Chromium";
 
-/// Keys an older devlanes wrote that no browser reads. `--remove` still
-/// deletes them when they are this install's: devlanes 0.16.0 wrote Brave's
-/// own key, which Brave never reads.
-const UNREAD_KEYS: [&str; 1] = ["BraveSoftware/Brave-Browser"];
-
 impl Browser {
     // Chrome's channels: the folders are Chromium's `docs/user_data_dir.md`.
     // A Google Chrome build reads only `Software\Google\Chrome`
@@ -1084,24 +1079,6 @@ pub(crate) fn removal(location: &Location, install: &Install) -> Removal {
             removal.keep.push(line);
         }
     }
-    if location.layout == Layout::Windows {
-        let expected = install.manifest();
-        for browser_key in UNREAD_KEYS {
-            // No browser reads it, so only this install's own is touched.
-            let registration = inspect_key(
-                location,
-                install,
-                &expected,
-                Browser::BRAVE,
-                browser_key,
-                false,
-            );
-            let target = Target::Key(location.key(browser_key));
-            if ours(&registration.found) && !removal.delete.contains(&target) {
-                removal.delete.push(target);
-            }
-        }
-    }
     // The copy goes last, after the links and keys that name it. A link or
     // key the user made for a browser outside the list is theirs to delete.
     let file = location.copy();
@@ -1988,11 +1965,10 @@ mod tests {
     }
 
     /// Brave on Windows reads Chromium's and Chrome's keys and never its own,
-    /// and Vivaldi gets its own key next to those two. So with only Brave
-    /// installed, a key under `BraveSoftware`, as devlanes 0.16.0 wrote it,
-    /// doesn't count as registered, setup writes the two keys Brave reads,
-    /// and `--remove` deletes all three. A Brave with only one of its keys is
-    /// not registered either.
+    /// and Vivaldi gets its own key next to those two. With only Brave
+    /// installed, setup writes the two keys Brave reads and none under
+    /// `BraveSoftware`. A Brave whose first key runs another install isn't
+    /// registered, and `--remove` deletes every key setup wrote.
     #[cfg(windows)]
     #[test]
     fn windows_brave_and_vivaldi_get_the_keys_they_read() {
@@ -2005,22 +1981,13 @@ mod tests {
         install_browsers(&location, &[Browser::BRAVE]);
         let install = script(&temp.path().join("bin").join("devlanes.exe"));
         let check = || facts_plan(&location, &install);
-        let copy = location.copy().display().to_string();
-        // devlanes 0.16.0's registration.
-        apply(&location, &install, &[]).expect("copy");
-        registry::write_string(&location.key("BraveSoftware/Brave-Browser"), "", &copy)
-            .expect("old key");
         assert_eq!(
             check().2,
             "setup registers the browser extension host for Brave"
         );
-        assert_eq!(report(&location, &install)["registered"], json!([]));
 
         apply(&location, &install, &inspect(&location, &install)).expect("apply");
-        assert_eq!(
-            written_keys(&location),
-            ["Google/Chrome", "Chromium", "BraveSoftware/Brave-Browser"]
-        );
+        assert_eq!(written_keys(&location), ["Google/Chrome", "Chromium"]);
         assert_eq!(
             check(),
             (
@@ -2061,12 +2028,7 @@ mod tests {
         apply(&location, &install, &inspect(&location, &install)).expect("apply");
         assert_eq!(
             written_keys(&location),
-            [
-                "Google/Chrome",
-                "Chromium",
-                "Vivaldi",
-                "BraveSoftware/Brave-Browser"
-            ]
+            ["Google/Chrome", "Chromium", "Vivaldi"]
         );
         assert_eq!(
             check().2,
