@@ -1,6 +1,6 @@
 # devlanes-tui-web
 
-## 0.5.2 ... 0.7.0 — 2026-11-20
+## 0.5.2 ... 0.8.0 — 2026-11-23
 
 Version bump only, to follow other packages.
 

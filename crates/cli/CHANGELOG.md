@@ -1,5 +1,22 @@
 # devlanes-cli
 
+## 0.15.0 — 2026-11-23
+
+### Minor changes
+
+- [7cd831d1](https://github.com/devlanes-run/devlanes/commit/7cd831d172b11c471bbeba1c4816178a97bfbf37) Changed variable names on Windows to keep the case they are written in, so Gradle's `ORG_GRADLE_PROJECT_` properties work.
+  
+  Names in `env show`, `--explain` and `env export` output keep their spelling (for example `Path`), so look them up case-insensitively. Restart the daemon after updating so `${{ env.X }}` in infra fields finds any spelling.
+
+### Patch changes
+
+- [396637f1](https://github.com/devlanes-run/devlanes/commit/396637f1e61ca5eea2dbc9ba7e579d80917753bb) Fixed `devlanes lane clean` saying the project file does not load when the primary worktree has none.
+  
+  It now stops the shared containers the lane's own file declares, and `devlanes infra down` works from a lane's worktree in that setup.
+- [46d4a597](https://github.com/devlanes-run/devlanes/commit/46d4a597d7e9ae40c280e8db20f671e0901f091b) Fixed `start`, `stop`, `restart`, `reload`, `logs` and `with` sending units named without `lane:` to another unit's lane instead of the current one.
+  
+  To act on another lane, prefix every unit with it or use `--lane`. One lane written two ways, such as `1:api myapp@1:web`, now works.
+
 ## 0.14.1 — 2026-11-18
 
 ### Patch changes

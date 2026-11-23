@@ -1,7 +1,7 @@
 [package]
 name = "devlanes-browser-host"
 description = "Native messaging host that relays the devlanes browser extension's requests to the daemon"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
