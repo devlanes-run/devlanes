@@ -36,7 +36,7 @@ What devlanes does not do, with the issue that tracks each limit. An empty Issue
 | Limit | Issue |
 |---|---|
 | The extension runs in Chromium-based browsers, not in Firefox. | [browser#1](https://github.com/devlanes-run/browser/issues/1) |
-| `devlanes setup` registers only the browsers [Install devlanes](../install.md) lists. Another Chromium browser, such as Opera, needs the manual step in [Use the browser extension](../how-to/use-the-browser-extension.md). | |
+| `devlanes setup` registers only the browsers [Install devlanes](../install.md) lists. Another Chromium browser, such as Opera, needs the copy in `~/.devlanes/browser` linked into its `NativeMessagingHosts` folder by hand. | |
 | A browser installed as a Snap or Flatpak can't start devlanes, so the extension can't reach it. | [browser#2](https://github.com/devlanes-run/browser/issues/2) |
 | The extension only knows hostnames ending in `.localhost`, not a `hostnames.tld` such as `.test`. | [browser#5](https://github.com/devlanes-run/browser/issues/5) |
 | Installs run with `uvx` or `pipx run` can't register the browser extension's host. Install with `uv tool install devlanes` or `pipx install devlanes`. | |
