@@ -27,64 +27,41 @@ inputs:
 runs:
   using: composite
   steps:
-    # kache 1.2.2 can't wrap cl.exe: cc routes C compiles through RUSTC_WRAPPER when it
-    # is kache, and 1.2.2 rejects `kache cl.exe ...`, so ring, libsqlite3-sys and zstd-sys
-    # fail to build. https://github.com/kunobi-ninja/kache/pull/1640 fixes it but was
-    # merged after 1.2.2. Until a release includes it, Windows builds kache from a commit
-    # that has the fix; replace this with a release asset in the step below once one ships.
-    - if: runner.os == 'Windows'
-      id: windows-kache
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ runner.temp }}/kache-git
-        key: kache-git-a37fb5ff3bcc86adfded7f3ecb4f7c5100f744c2-${{ runner.os }}-${{ runner.arch }}
-    - if: runner.os == 'Windows'
-      name: Install kache (Windows, from git)
+    - name: Install kache
       shell: bash
       env:
-        KACHE_REV: a37fb5ff3bcc86adfded7f3ecb4f7c5100f744c2
-        CACHED: ${{ steps.windows-kache.outputs.cache-hit }}
+        KACHE_VERSION: 2.3.0
       run: |
         set -euo pipefail
-        root=$RUNNER_TEMP/kache-git
-        if [ "$CACHED" != true ]; then
-          # Outside the checkout, so the repository's rustc-wrapper and toolchain don't apply.
-          cd "$RUNNER_TEMP"
-          env -u RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER= \
-            cargo install --locked --git https://github.com/kunobi-ninja/kache --rev "$KACHE_REV" --root "$root" kache
-        fi
-        "$root/bin/kache" --version
-        echo "$root/bin" >> "$GITHUB_PATH"
-        echo "KACHE_CACHE_DIR=$RUNNER_TEMP/kache" >> "$GITHUB_ENV"
-    - if: runner.os != 'Windows'
-      name: Install kache
-      shell: bash
-      env:
-        KACHE_VERSION: 1.2.2
-      run: |
-        set -euo pipefail
-        case "$(uname -s)-$(uname -m)" in
-          Linux-x86_64) target=x86_64-unknown-linux-musl sha=f2f6555dee50945c2a90a7fb793c2084a00cc6459d08ac2306d38d905064321b ;;
-          Linux-aarch64) target=aarch64-unknown-linux-musl sha=38856cee613f6ee0ec579099fc9205b840a0b45bb763f4b8fa782d25d93c18ef ;;
-          Darwin-arm64) target=aarch64-apple-darwin sha=10d09e146852a8df8796cf642ca58872107a7f391b7647ec8cc253cf289af0a9 ;;
-          Darwin-x86_64) target=x86_64-apple-darwin sha=9a1c3ecc89cf36b23512a93868226140d46f1f70cf6cb648bfe08eeafb25a368 ;;
-          *) echo "::error::no pinned kache release for $(uname -s)-$(uname -m)"; exit 1 ;;
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) asset=kache-x86_64-unknown-linux-musl.tar.gz sha=60b6c507a1bfd396baba8670e0612feb5dda2c8460c8f02644328dde64359701 ;;
+          Linux-ARM64) asset=kache-aarch64-unknown-linux-musl.tar.gz sha=c3f8dfeef93659eabbb00f7d58cdf882e33560ae61306bb784158ccfa7d02bd5 ;;
+          macOS-ARM64) asset=kache-aarch64-apple-darwin.tar.gz sha=66a078e0cb85f80a80a365b61a646791d6fe27f2000832194cadf06deddd6438 ;;
+          macOS-X64) asset=kache-x86_64-apple-darwin.tar.gz sha=45e33861306133dfd970de7301ed1e560b2db18f999528e2416556064e3e3719 ;;
+          Windows-X64) asset=kache-x86_64-pc-windows-msvc.zip sha=07b723787880c0de128f6e9d1f52ee4f96948a574f108c574a4f58728daacf59 ;;
+          Windows-ARM64) asset=kache-aarch64-pc-windows-msvc.zip sha=943013b221d867742cb4dd2a8e157e323f9d0f2f3edf16daae98f47a57c61a4a ;;
+          *) echo "::error::no pinned kache release for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
         esac
         dir=$RUNNER_TEMP/kache-bin
         mkdir -p "$dir"
-        curl -fsSL --retry 3 -o "$dir/kache.tar.gz" \
-          "https://github.com/kunobi-ninja/kache/releases/download/v$KACHE_VERSION/kache-$target.tar.gz"
+        curl -fsSL --retry 3 -o "$dir/$asset" \
+          "https://github.com/kunobi-ninja/kache/releases/download/v$KACHE_VERSION/$asset"
         if command -v sha256sum >/dev/null; then
-          actual=$(sha256sum < "$dir/kache.tar.gz")
+          actual=$(sha256sum < "$dir/$asset")
         else
-          actual=$(shasum -a 256 < "$dir/kache.tar.gz")
+          actual=$(shasum -a 256 < "$dir/$asset")
         fi
         if [ "${actual%% *}" != "$sha" ]; then
-          echo "::error::kache-$target.tar.gz does not match the pinned SHA-256"
+          echo "::error::$asset does not match the pinned SHA-256"
           exit 1
         fi
-        tar -xzf "$dir/kache.tar.gz" -C "$dir" kache
-        rm "$dir/kache.tar.gz"
+        # kache runs compiles through kache-engine, which must come from the same release
+        # and sit in the same directory.
+        case $asset in
+          *.zip) unzip -q -o "$dir/$asset" kache.exe kache-engine.exe -d "$dir" ;;
+          *) tar -xzf "$dir/$asset" -C "$dir" kache kache-engine ;;
+        esac
+        rm "$dir/$asset"
         "$dir/kache" --version
         echo "$dir" >> "$GITHUB_PATH"
         # On the workspace's filesystem, so restores link into target/ instead of copying.
