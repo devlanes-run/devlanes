@@ -9,6 +9,15 @@ pub const SCHEME: &str = "chrome-extension://";
 /// public key in the extension manifest's `key`, so every unpacked build has it.
 pub const ALLOWED_IDS: &[&str] = &["pggffblellmckocpflaaeligadjpkahj"];
 
+/// The origins of [`ALLOWED_IDS`], as a host manifest's `allowed_origins`
+/// lists them: `chrome-extension://<id>/`.
+pub fn allowed_origins() -> Vec<String> {
+    ALLOWED_IDS
+        .iter()
+        .map(|id| format!("{SCHEME}{id}/"))
+        .collect()
+}
+
 /// An argument list the host refuses to run with.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum OriginError {

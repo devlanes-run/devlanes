@@ -31,6 +31,17 @@ What devlanes does not do, with the issue that tracks each limit. An empty Issue
 | The CA is not installed in iOS simulators or Android emulators. | |
 | Cookies, storage and saved passwords cannot be shared between lanes. | [#190](https://github.com/devlanes-run/devlanes/issues/190) |
 
+## Browser extension
+
+| Limit | Issue |
+|---|---|
+| The extension runs in Chromium-based browsers, not in Firefox. | [browser#1](https://github.com/devlanes-run/browser/issues/1) |
+| `devlanes setup` registers only the browsers [Install devlanes](../install.md) lists. Another Chromium browser, such as Opera, needs the copy in `~/.devlanes/browser` linked into its `NativeMessagingHosts` folder by hand. | |
+| A browser installed as a Snap or Flatpak can't start devlanes, so the extension can't reach it. | [browser#2](https://github.com/devlanes-run/browser/issues/2) |
+| The extension only knows hostnames ending in `.localhost`, not a `hostnames.tld` such as `.test`. | [browser#5](https://github.com/devlanes-run/browser/issues/5) |
+| Installs run with `uvx` or `pipx run` can't register the browser extension's host. Install with `uv tool install devlanes` or `pipx install devlanes`. | |
+| The browser starts devlanes with its own environment, so a `DEVLANES_HOME` set only in a shell doesn't reach it and the extension uses the default home. | |
+
 ## Remote boxes
 
 | Limit | Issue |

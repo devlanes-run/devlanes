@@ -7,11 +7,14 @@
 //!   daemon reports that a lane needs it.
 //! - `resolver`: the resolver file (NRPT rule on Windows) for `hostnames.tld`
 //!   under `hostnames.resolver: resolver`.
+//! - `browser`: the native messaging host of the devlanes browser extension.
+//!   It is never missing, so it never asks for setup on its own.
 //!
 //! [`plan`] decides from read-only [`Facts`] which steps are needed and done;
 //! `setup` asks once and runs the missing ones, `--check` only reports, and
 //! `--remove` undoes all of them.
 
+mod browser;
 mod ca;
 mod hosts;
 #[cfg(windows)]
@@ -30,6 +33,7 @@ use devlanes_proto::{Context, Method, RpcError};
 use devlanes_resolver_hosts::LocalhostResolution;
 use serde_json::{Value, json};
 
+pub(crate) use browser::doctor_report as browser_report;
 pub(crate) use ca::{
     UNCONSTRAINED_CA, ca_tld, certificate, doctor_report, mkcert_caroot, mkcert_selected,
     recreate_ca_command, report,
@@ -72,6 +76,7 @@ enum StepKind {
     Ca,
     Hosts,
     Resolver,
+    BrowserHost,
 }
 
 impl StepKind {
@@ -81,6 +86,7 @@ impl StepKind {
             Self::Ca => "ca",
             Self::Hosts => "hosts",
             Self::Resolver => "resolver",
+            Self::BrowserHost => "browser",
         }
     }
 
@@ -91,7 +97,15 @@ impl StepKind {
         match self {
             Self::Ca => ca::needs_root(config),
             Self::Hosts | Self::Resolver => cfg!(unix),
+            Self::BrowserHost => false,
         }
+    }
+
+    /// Whether the step counts as missing when it isn't done. The browser
+    /// host never does: lanes work without it, and agents rely on `--check`
+    /// exiting 0 once the rest is done.
+    fn counts(self) -> bool {
+        self != Self::BrowserHost
     }
 }
 
@@ -99,6 +113,9 @@ impl StepKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Step {
     kind: StepKind,
+    /// Whether the step applies to this machine. For the browser host,
+    /// whether some browser holds or can take this install's registration.
+    /// With all of them registered it is `done` and shows `ok`.
     needed: bool,
     done: bool,
     /// Why the step is needed and what is missing, what is in place, or why
@@ -107,17 +124,25 @@ struct Step {
 }
 
 impl Step {
-    /// `ok`, `todo` or `skip`.
+    /// `ok`, `todo` or `skip`, and `info` for a step that never counts but
+    /// that setup still applies.
     fn state(&self) -> &'static str {
         match (self.needed, self.done) {
             (false, _) => "skip",
             (true, true) => "ok",
-            (true, false) => "todo",
+            (true, false) if self.kind.counts() => "todo",
+            (true, false) => "info",
         }
     }
 
-    /// Whether `setup` has to run this step.
+    /// Whether this step is missing, so `setup` asks for it and `--check`
+    /// exits 1.
     fn todo(&self) -> bool {
+        self.kind.counts() && self.applies()
+    }
+
+    /// Whether `setup` runs this step when it runs.
+    fn applies(&self) -> bool {
         self.needed && !self.done
     }
 }
@@ -182,11 +207,28 @@ struct Facts {
     /// A running daemon reports `hosts` in `setup.missing`.
     daemon_hosts: bool,
     dns: Dns,
+    browser: browser::Facts,
 }
 
 /// The steps for `facts`, in the order they run.
 fn plan(facts: &Facts) -> Vec<Step> {
-    vec![ca_step(facts), hosts_step(facts), resolver_step(&facts.dns)]
+    vec![
+        ca_step(facts),
+        hosts_step(facts),
+        resolver_step(&facts.dns),
+        browser_step(&facts.browser),
+    ]
+}
+
+/// The browser extension's host, registered whenever setup runs.
+fn browser_step(facts: &browser::Facts) -> Step {
+    let (needed, done, reason) = browser::plan(facts);
+    Step {
+        kind: StepKind::BrowserHost,
+        needed,
+        done,
+        reason,
+    }
 }
 
 /// The CA is always needed; mkcert's root is trusted the same way as devlanes' own.
@@ -391,7 +433,8 @@ fn dns_of(tld: String, status: &Value) -> Dns {
 }
 
 /// Reads everything the plan needs without changing or prompting for anything.
-async fn gather(paths: &Paths, config: &UserConfig) -> Facts {
+/// The browser registrations are read at `location`.
+async fn gather(paths: &Paths, config: &UserConfig, location: Option<&browser::Location>) -> Facts {
     let hosts = hosts_wanted(config);
     let trust = async {
         match ca::certificate(paths, config, false).await {
@@ -430,12 +473,23 @@ async fn gather(paths: &Paths, config: &UserConfig) -> Facts {
         .unwrap_or_else(|error| json!({"error": error.to_string()}));
         dns_of(tld, &status)
     };
-    let (trust, localhost, helper, missing, dns) = tokio::join!(
+    let browser = {
+        let location = location.cloned();
+        async move {
+            tokio::task::spawn_blocking(move || {
+                browser::facts(location.as_ref(), browser::Install::current())
+            })
+            .await
+            .unwrap_or(browser::Facts::NoHome)
+        }
+    };
+    let (trust, localhost, helper, missing, dns, browser) = tokio::join!(
         trust,
         probe,
         hosts::installed_helper(),
         daemon_missing(paths),
-        dns
+        dns,
+        browser
     );
     Facts {
         windows: cfg!(windows),
@@ -446,6 +500,7 @@ async fn gather(paths: &Paths, config: &UserConfig) -> Facts {
         helper: helper_of(helper.as_ref()),
         daemon_hosts: missing.iter().any(|step| step == "hosts"),
         dns,
+        browser,
     }
 }
 
@@ -481,20 +536,34 @@ fn missing_of(status: &Value) -> Vec<String> {
 pub async fn run(runtime: &Runtime, action: SetupAction) -> Result<u8, RpcError> {
     let paths = Paths::discover()
         .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
-    run_in(runtime, &paths, action).await
+    run_in(
+        runtime,
+        &paths,
+        browser::Location::current().as_ref(),
+        action,
+    )
+    .await
 }
 
-/// [`run`] for the devlanes home at `paths`.
-async fn run_in(runtime: &Runtime, paths: &Paths, action: SetupAction) -> Result<u8, RpcError> {
+/// [`run`] for the devlanes home at `paths`, with the browser registrations
+/// at `location`.
+async fn run_in(
+    runtime: &Runtime,
+    paths: &Paths,
+    location: Option<&browser::Location>,
+    action: SetupAction,
+) -> Result<u8, RpcError> {
     let yes = match action {
-        SetupAction::Remove { keep_ca } => return remove(runtime, paths, keep_ca).await,
+        SetupAction::Remove { keep_ca } => {
+            return remove_in(runtime, paths, location, keep_ca).await;
+        }
         SetupAction::Check => None,
         SetupAction::Apply { yes } => Some(yes),
     };
     // Every step depends on the config; a partial read could pick another CA,
     // other stores or another TLD than the file names.
     let config = crate::user_config::load(paths).await?;
-    let facts = gather(paths, &config).await;
+    let facts = gather(paths, &config, location).await;
     let steps = plan(&facts);
     #[cfg(windows)]
     if let Some(warning) = hosts::windows_warning(facts.localhost) {
@@ -503,18 +572,21 @@ async fn run_in(runtime: &Runtime, paths: &Paths, action: SetupAction) -> Result
             ..Rendered::default()
         });
     }
-    let todo: Vec<&Step> = steps.iter().filter(|step| step.todo()).collect();
     let Some(yes) = yes else {
         show(runtime, &steps, runtime.mode == OutputMode::Json);
-        return Ok(u8::from(!todo.is_empty()));
+        return Ok(check_code(&steps));
     };
     show(runtime, &steps, false);
-    if todo.is_empty() {
-        return Ok(0);
-    }
-    let password = todo.iter().any(|step| step.kind.sudo(&config));
-    if !yes && !ask(runtime, todo.len(), password).await? {
-        return Ok(1);
+    let runs: Vec<&Step> = steps.iter().filter(|step| step.applies()).collect();
+    let password = runs.iter().any(|step| step.kind.sudo(&config));
+    match decide(&steps, yes) {
+        Decision::Nothing => return Ok(0),
+        Decision::Run => {}
+        Decision::Ask { missing, browser } => {
+            if !ask(runtime, missing, browser, password).await? {
+                return Ok(1);
+            }
+        }
     }
     #[cfg(unix)]
     if password {
@@ -522,7 +594,7 @@ async fn run_in(runtime: &Runtime, paths: &Paths, action: SetupAction) -> Result
     }
     // A failed step is reported and the next one still runs.
     let mut code = 0;
-    for step in todo {
+    for step in runs {
         let result = match step.kind {
             StepKind::Ca => ca::install(runtime, paths, &config).await,
             #[cfg(unix)]
@@ -541,10 +613,57 @@ async fn run_in(runtime: &Runtime, paths: &Paths, action: SetupAction) -> Result
                 recheck_resolver(paths).await;
                 result
             }
+            StepKind::BrowserHost => match (&facts.browser, location) {
+                (
+                    browser::Facts::Found {
+                        install,
+                        registrations,
+                        ..
+                    },
+                    Some(location),
+                ) => browser::install(runtime, location, install, registrations).await,
+                // The plan applies it only with a home and an install it takes.
+                _ => Ok(0),
+            },
         };
         fold(runtime, &mut code, result);
     }
     Ok(code)
+}
+
+/// What a plain `setup` does with its plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decision {
+    /// No step applies.
+    Nothing,
+    /// Run the steps that apply without a question.
+    Run,
+    /// Ask once about `missing` steps, and the browser host with them when
+    /// `browser`.
+    Ask { missing: usize, browser: bool },
+}
+
+/// What a plain `setup` does with `steps`. A step that never counts is asked
+/// about only with the missing ones, and runs without a question when it is
+/// alone, so it never needs `--yes`. `yes` skips the question.
+fn decide(steps: &[Step], yes: bool) -> Decision {
+    let missing = steps.iter().filter(|step| step.todo()).count();
+    let runs = steps.iter().filter(|step| step.applies()).count();
+    match (runs, missing) {
+        (0, _) => Decision::Nothing,
+        (_, 0) => Decision::Run,
+        _ if yes => Decision::Run,
+        _ => Decision::Ask {
+            missing,
+            browser: runs > missing,
+        },
+    }
+}
+
+/// `--check`'s exit status: 1 while a step is missing, else 0. A step that
+/// never counts doesn't change it.
+fn check_code(steps: &[Step]) -> u8 {
+    u8::from(steps.iter().any(Step::todo))
 }
 
 /// Has a running daemon read the resolver file (NRPT rule on Windows)
@@ -561,19 +680,37 @@ async fn recheck_resolver(paths: &Paths) {
 /// One change `setup --remove` makes on this machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Removal {
-    /// `hosts`, `resolver` or `ca`.
+    /// `hosts`, `resolver`, `browser` or `ca`.
     pub(crate) step: &'static str,
     /// What changes, or why the step will fail.
     pub(crate) what: String,
     /// Whether it runs sudo.
     pub(crate) sudo: bool,
+    /// Whether this is something `--remove` leaves in place, such as another
+    /// install's browser registration, listed so the user knows it stays.
+    pub(crate) kept: bool,
 }
 
-/// What `setup --remove` changes on this machine, without changing anything
-/// or prompting; steps with nothing to undo are left out.
+/// What `setup --remove` changes on this machine, and what it leaves in
+/// place, without changing anything or prompting; steps with nothing to undo
+/// are left out.
 pub(crate) async fn removal_plan(paths: &Paths, keep_ca: bool) -> Vec<Removal> {
+    removal_plan_in(paths, browser::Location::current().as_ref(), keep_ca).await
+}
+
+/// [`removal_plan`] with the browser registrations at `location`.
+async fn removal_plan_in(
+    paths: &Paths,
+    location: Option<&browser::Location>,
+    keep_ca: bool,
+) -> Vec<Removal> {
     let config = crate::user_config::load(paths).await;
-    let item = |step: &'static str, what: String, sudo: bool| Removal { step, what, sudo };
+    let item = |step: &'static str, what: String, sudo: bool| Removal {
+        step,
+        what,
+        sudo,
+        kept: false,
+    };
     let failed = |error: RpcError| {
         error.data["message"]
             .as_str()
@@ -606,6 +743,15 @@ pub(crate) async fn removal_plan(paths: &Paths, keep_ca: bool) -> Vec<Removal> {
         ),
         Err(error) => plan.push(item(StepKind::Resolver.name(), failed(error), false)),
     }
+    plan.extend(
+        browser::removal_lines(location)
+            .await
+            .into_iter()
+            .map(|(what, kept)| Removal {
+                kept,
+                ..item(StepKind::BrowserHost.name(), what, false)
+            }),
+    );
     if !keep_ca {
         match config {
             Ok(config) => match ca::removal(paths, &config).await {
@@ -625,18 +771,34 @@ pub(crate) async fn removal_plan(paths: &Paths, keep_ca: bool) -> Vec<Removal> {
     plan
 }
 
-/// `setup --remove`: the hosts helper and the resolver file (or NRPT rule)
-/// first, so a CA removal failure (a cancelled keychain prompt) still leaves
-/// them removed, then the CA unless `keep_ca`. sudo asks for the password
-/// once up front when a step needs it. A failed step is reported and the next
-/// one still runs.
+/// `setup --remove`: the hosts helper, the resolver file (or NRPT rule) and
+/// the browser host first, so a CA removal failure (a cancelled keychain
+/// prompt) still leaves them removed, then the CA unless `keep_ca`. sudo asks
+/// for the password once up front when a step needs it. A failed step is
+/// reported and the next one still runs.
 pub(crate) async fn remove(
     runtime: &Runtime,
     paths: &Paths,
     keep_ca: bool,
 ) -> Result<u8, RpcError> {
+    remove_in(
+        runtime,
+        paths,
+        browser::Location::current().as_ref(),
+        keep_ca,
+    )
+    .await
+}
+
+/// [`remove`] with the browser registrations at `location`.
+async fn remove_in(
+    runtime: &Runtime,
+    paths: &Paths,
+    location: Option<&browser::Location>,
+    keep_ca: bool,
+) -> Result<u8, RpcError> {
     #[cfg(unix)]
-    if removal_plan(paths, keep_ca)
+    if removal_plan_in(paths, location, keep_ca)
         .await
         .iter()
         .any(|item| item.sudo)
@@ -659,6 +821,7 @@ pub(crate) async fn remove(
     #[cfg(windows)]
     fold(runtime, &mut code, nrpt::remove(runtime, paths).await);
     recheck_resolver(paths).await;
+    fold(runtime, &mut code, browser::remove(runtime, location).await);
     if !keep_ca {
         let result = match config {
             Ok(config) => ca::remove(runtime, paths, &config).await,
@@ -722,9 +885,10 @@ fn lines(steps: &[Step]) -> String {
         .collect()
 }
 
-/// Asks once whether to run `count` steps, yes by default. Without a terminal
-/// to ask on it refuses, so agents and CI pass `--yes`.
-async fn ask(runtime: &Runtime, count: usize, sudo: bool) -> Result<bool, RpcError> {
+/// Asks once whether to run `count` missing steps, and the browser host
+/// with them when `browser`, yes by default. Without a terminal to ask on it
+/// refuses, so agents and CI pass `--yes`.
+async fn ask(runtime: &Runtime, count: usize, browser: bool, sudo: bool) -> Result<bool, RpcError> {
     if !runtime.can_prompt() {
         return Err(RpcError::new(
             "confirmation_required",
@@ -732,7 +896,7 @@ async fn ask(runtime: &Runtime, count: usize, sudo: bool) -> Result<bool, RpcErr
             2,
         ));
     }
-    let question = question(count, sudo);
+    let question = question(count, browser, sudo);
     tokio::task::spawn_blocking(move || {
         eprint!("{question}");
         let mut answer = String::new();
@@ -744,9 +908,16 @@ async fn ask(runtime: &Runtime, count: usize, sudo: bool) -> Result<bool, RpcErr
     .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))
 }
 
-/// `Do the 2 missing steps? sudo may ask for your password once. [Y/n] `.
-fn question(count: usize, sudo: bool) -> String {
+/// `Do the 2 missing steps? sudo may ask for your password once. [Y/n] `,
+/// with `and register the browser extension host` after the count when
+/// `browser`.
+fn question(count: usize, browser: bool, sudo: bool) -> String {
     let steps = if count == 1 { "step" } else { "steps" };
+    let steps = if browser {
+        format!("{steps} and register the browser extension host")
+    } else {
+        steps.to_owned()
+    };
     let note = if sudo {
         " sudo may ask for your password once."
     } else if cfg!(windows) {
@@ -918,6 +1089,7 @@ mod tests {
                                             helper: helper.clone(),
                                             daemon_hosts,
                                             dns,
+                                            browser: browser::Facts::NoHome,
                                         });
                                     }
                                 }
@@ -939,10 +1111,15 @@ mod tests {
             let kinds: Vec<StepKind> = steps.iter().map(|step| step.kind).collect();
             assert_eq!(
                 kinds,
-                [StepKind::Ca, StepKind::Hosts, StepKind::Resolver],
+                [
+                    StepKind::Ca,
+                    StepKind::Hosts,
+                    StepKind::Resolver,
+                    StepKind::BrowserHost
+                ],
                 "{facts:?}"
             );
-            let [ca, hosts, resolver] = &steps[..] else {
+            let [ca, hosts, resolver, _] = &steps[..] else {
                 unreachable!()
             };
 
@@ -992,6 +1169,7 @@ mod tests {
             helper: Helper::Absent,
             daemon_hosts: false,
             dns: Dns::Off,
+            browser: browser::Facts::Refused("pipx run runs devlanes from a cache".into()),
         }
     }
 
@@ -1001,7 +1179,8 @@ mod tests {
             lines(&plan(&fresh())),
             "todo  ca        there is no devlanes CA yet; setup creates and trusts it\n\
              skip  hosts     *.localhost resolves to loopback\n\
-             skip  resolver  hostnames.resolver is not resolver\n"
+             skip  resolver  hostnames.resolver is not resolver\n\
+             skip  browser   pipx run runs devlanes from a cache\n"
         );
         let facts = Facts {
             mkcert: true,
@@ -1018,13 +1197,15 @@ mod tests {
             lines(&plan(&facts)),
             "todo  ca        mkcert's CA is not trusted by firefox\n\
              todo  hosts     *.localhost does not resolve to loopback; the installed helper is revision 1 and devlanes needs 2\n\
-             todo  resolver  *.test does not reach the devlanes DNS server: /etc/resolver/test is missing\n"
+             todo  resolver  *.test does not reach the devlanes DNS server: /etc/resolver/test is missing\n\
+             skip  browser   pipx run runs devlanes from a cache\n"
         );
         let done = Facts {
             trust: Trust::Trusted,
             hosts: HostsWanted::Always("hostnames.hosts_file is always"),
             helper: Helper::Current,
             dns: Dns::Routed { tld: "test".into() },
+            browser: browser_facts(&[browser::Found::Current, browser::Found::NoBrowser]),
             ..fresh()
         };
         let steps = plan(&done);
@@ -1157,10 +1338,213 @@ mod tests {
     #[test]
     fn the_question_counts_and_mentions_sudo() {
         assert_eq!(
-            question(2, true),
+            question(2, false, true),
             "Do the 2 missing steps? sudo may ask for your password once. [Y/n] "
         );
-        assert!(question(1, false).starts_with("Do the 1 missing step?"));
+        assert!(question(1, false, false).starts_with("Do the 1 missing step?"));
+        assert!(
+            question(1, true, false)
+                .starts_with("Do the 1 missing step and register the browser extension host?")
+        );
+    }
+
+    /// Where [`browser_facts`] puts the manifest copy.
+    const COPY: &str = "/home/a/.devlanes/browser/run.devlanes.browser.json";
+
+    /// Browser facts with Chrome, Chromium, Brave and Edge found as `found`
+    /// says, in that order, for a script install, with a current copy.
+    fn browser_facts(found: &[browser::Found]) -> browser::Facts {
+        browser_facts_with(found, browser::Found::Current)
+    }
+
+    /// [`browser_facts`] with the manifest copy found as `copy`.
+    fn browser_facts_with(found: &[browser::Found], copy: browser::Found) -> browser::Facts {
+        browser::Facts::Found {
+            install: browser::Install::new(
+                devlanes_update::InstallMethod::Script("/opt/devlanes".into()),
+                "/opt/devlanes/devlanes".into(),
+            ),
+            registrations: [
+                browser::Browser::CHROME,
+                browser::Browser::CHROMIUM,
+                browser::Browser::BRAVE,
+                browser::Browser::EDGE,
+            ]
+            .into_iter()
+            .zip(found)
+            .map(|(browser, found)| browser::Registration {
+                browser,
+                place: format!("/home/a/{}", browser.name()),
+                found: found.clone(),
+                installed: *found != browser::Found::NoBrowser,
+                linked: false,
+            })
+            .collect(),
+            copy: browser::ManifestCopy {
+                path: COPY.into(),
+                found: copy,
+                named_by_keys: false,
+            },
+        }
+    }
+
+    /// The browser step never counts: whether nothing, a fresh registration
+    /// or a stale one is in place, `--check` exits 0 once the rest is done,
+    /// `missing` stays empty, and setup asks nothing for it alone.
+    #[test]
+    fn the_browser_step_never_counts() {
+        use browser::Found::{Current, Missing, NoBrowser, Stale};
+        let stale = Stale {
+            runs: Some("/gone/devlanes".into()),
+            ours: false,
+        };
+        let done = Facts {
+            trust: Trust::Trusted,
+            ..fresh()
+        };
+        for (browser, state) in [
+            (browser_facts(&[Missing, NoBrowser]), "info"),
+            (browser_facts(&[Current, NoBrowser]), "ok"),
+            (browser_facts(&[stale.clone(), Current]), "info"),
+            (browser_facts(&[NoBrowser, NoBrowser]), "ok"),
+            (browser_facts_with(&[NoBrowser, NoBrowser], Missing), "info"),
+            (browser::Facts::Refused("pipx run".into()), "skip"),
+        ] {
+            let facts = Facts {
+                browser,
+                ..done.clone()
+            };
+            let steps = plan(&facts);
+            let step = &steps[3];
+            assert_eq!(step.kind, StepKind::BrowserHost);
+            assert_eq!(step.state(), state, "{step:?}");
+            assert!(!step.todo(), "{step:?}");
+            assert_eq!(step.applies(), state == "info", "{step:?}");
+            assert!(!step.kind.sudo(&UserConfig::default()));
+            assert_eq!(check_code(&steps), 0, "{steps:?}");
+            // Alone, it runs without a question, so it needs no --yes.
+            let alone = if state == "info" {
+                Decision::Run
+            } else {
+                Decision::Nothing
+            };
+            assert_eq!(decide(&steps, false), alone, "{steps:?}");
+        }
+        // With a missing step, the exit status is that step's alone, and the
+        // browser host is asked about with it.
+        let facts = Facts {
+            browser: browser_facts(&[Current]),
+            ..fresh()
+        };
+        let steps = plan(&facts);
+        assert_eq!(check_code(&steps), 1);
+        assert_eq!(
+            decide(&steps, false),
+            Decision::Ask {
+                missing: 1,
+                browser: false
+            }
+        );
+        let steps = plan(&Facts {
+            browser: browser_facts(&[Missing]),
+            ..fresh()
+        });
+        assert_eq!(
+            decide(&steps, false),
+            Decision::Ask {
+                missing: 1,
+                browser: true
+            }
+        );
+        assert_eq!(decide(&steps, true), Decision::Run);
+
+        let reason = |found: &[browser::Found]| browser::plan(&browser_facts(found)).2;
+        assert_eq!(
+            reason(&[Missing, NoBrowser, Current, Missing]),
+            "setup registers the browser extension host for Chrome and Edge, and it is registered for Brave"
+        );
+        assert_eq!(
+            reason(&[stale.clone(), Missing]),
+            "setup registers the browser extension host for Chromium and refreshes it for Chrome"
+        );
+        assert_eq!(
+            reason(&[Current, Current, Current]),
+            "the browser extension host is registered for Chrome, Chromium and Brave"
+        );
+        assert_eq!(
+            reason(&[NoBrowser]),
+            format!(
+                "none of the browsers devlanes registers is installed. The manifest copy for other Chromium browsers is at {COPY}"
+            )
+        );
+        // The copy is named only when it is all setup writes.
+        assert_eq!(
+            browser::plan(&browser_facts_with(&[Current], Missing)).2,
+            format!(
+                "setup writes the manifest copy for other Chromium browsers at {COPY}, and the browser extension host is registered for Chrome"
+            )
+        );
+        assert_eq!(
+            browser::plan(&browser_facts_with(&[Missing], Missing)).2,
+            "setup registers the browser extension host for Chrome"
+        );
+    }
+
+    /// Browser folders under `home` in the Linux layout, which needs no
+    /// registry, so these tests run the same on every OS.
+    fn temp_location(home: &std::path::Path) -> browser::Location {
+        browser::Location {
+            home: home.to_path_buf(),
+            local_app_data: home.join("AppData").join("Local"),
+            layout: browser::Layout::Linux,
+            registry_root: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    /// `--check` exits 1 while a step is missing (a fresh home has no CA yet)
+    /// and creates nothing: no CA, and no browser manifest whether one is
+    /// missing or stale. Without a terminal and without --yes, setup refuses
+    /// before changing anything, the browser host included.
+    async fn check_exits_1_while_something_is_missing() {
+        use devlanes_cli::clap::Parser;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = Paths::new(temp.path().join("home")).expect("paths");
+        let user = temp.path().join("user");
+        let location = temp_location(&user);
+        let hosts = user
+            .join(".config")
+            .join("google-chrome")
+            .join("NativeMessagingHosts");
+        std::fs::create_dir_all(hosts.parent().expect("parent")).expect("browser folder");
+        let manifest = hosts.join("run.devlanes.browser.json");
+        let cli = devlanes_cli::Cli::parse_from(["devlanes", "--output", "plain", "--quiet"]);
+        let runtime = Runtime::resolve(&cli, devlanes_cli::Signals::default()).expect("runtime");
+        let check = || run_in(&runtime, &paths, Some(&location), SetupAction::Check);
+        // A fresh home has no CA, so the exit status is 1 from the CA alone.
+        assert_eq!(check().await.expect("check"), 1);
+        assert!(!manifest.exists(), "--check wrote a manifest");
+        let copy = user
+            .join(".devlanes")
+            .join("browser")
+            .join("run.devlanes.browser.json");
+        assert!(!copy.exists(), "--check wrote the manifest copy");
+        let stale = r#"{"name": "run.devlanes.browser", "path": "/gone/devlanes"}"#;
+        std::fs::create_dir_all(&hosts).expect("hosts folder");
+        std::fs::write(&manifest, stale).expect("stale manifest");
+        assert_eq!(check().await.expect("check"), 1);
+        let error = run_in(
+            &runtime,
+            &paths,
+            Some(&location),
+            SetupAction::Apply { yes: false },
+        )
+        .await
+        .expect_err("needs --yes");
+        assert_eq!(error.code, "confirmation_required");
+        assert_eq!(std::fs::read_to_string(&manifest).expect("manifest"), stale);
+        assert!(!copy.exists(), "setup wrote the manifest copy");
+        assert!(!paths.home.join("ca").exists(), "setup created the CA");
     }
 
     /// The start notice follows the TUI prompt's rules: it names only the
@@ -1204,32 +1588,6 @@ mod tests {
     }
 
     #[tokio::test]
-    /// `--check` exits 1 while a step is missing (a fresh home has no CA yet)
-    /// and creates nothing, so the CA is still missing afterwards.
-    async fn check_exits_1_while_something_is_missing() {
-        use devlanes_cli::clap::Parser;
-        let temp = tempfile::tempdir().expect("tempdir");
-        let paths = Paths::new(temp.path().join("home")).expect("paths");
-        let cli = devlanes_cli::Cli::parse_from(["devlanes", "--output", "plain", "--quiet"]);
-        let runtime = Runtime::resolve(&cli, devlanes_cli::Signals::default()).expect("runtime");
-        for _ in 0..2 {
-            assert_eq!(
-                run_in(&runtime, &paths, SetupAction::Check)
-                    .await
-                    .expect("check"),
-                1
-            );
-        }
-        assert!(!paths.home.join("ca").exists(), "--check created the CA");
-        // Without a terminal and without --yes, setup refuses before changing anything.
-        let error = run_in(&runtime, &paths, SetupAction::Apply { yes: false })
-            .await
-            .expect_err("needs --yes");
-        assert_eq!(error.code, "confirmation_required");
-        assert!(!paths.home.join("ca").exists());
-    }
-
-    #[tokio::test]
     /// Every setup action refuses a user config that the lenient load would
     /// take with one key dropped, before any trust store, sudo or resolver
     /// file is touched; `--check` too.
@@ -1242,7 +1600,8 @@ mod tests {
         let cli = devlanes_cli::Cli::parse_from(["devlanes", "--output", "plain"]);
         let runtime = Runtime::resolve(&cli, devlanes_cli::Signals::default()).expect("runtime");
         for action in [SetupAction::Apply { yes: true }, SetupAction::Check] {
-            let error = run_in(&runtime, &paths, action)
+            let location = temp_location(&temp.path().join("user"));
+            let error = run_in(&runtime, &paths, Some(&location), action)
                 .await
                 .expect_err("setup refuses");
             assert_eq!(error.code, "config_error", "{error:?}");

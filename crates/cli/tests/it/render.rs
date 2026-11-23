@@ -1430,6 +1430,75 @@ fn doctor_words_the_logon_start() {
 }
 
 #[test]
+/// Doctor names the browsers the extension host is registered for, warns
+/// about a registration that runs a program that is gone or another devlanes,
+/// and says nothing when no browser was found. None of it fails doctor.
+fn doctor_words_the_browser_host() {
+    let mut data = json!({
+        "running": false,
+        "browser": {
+            "registered": ["Chrome", "Brave"],
+            "found": ["Chrome", "Brave", "Edge", "Chromium"],
+            "stale": [
+                {"browser": "Edge", "place": "/x", "runs": "/gone/devlanes", "gone": true, "error": null},
+                {"browser": "Chromium", "place": "/y", "runs": "/opt/devlanes", "gone": false, "error": null},
+            ],
+        },
+    });
+    let text = render_text(Method::Doctor, &data);
+    assert!(text.contains("--- plain (exit 0)"), "{text}");
+    assert!(
+        text.contains("extension host registered for Chrome and Brave"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Edge's extension host runs /gone/devlanes, which is gone"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Chromium's extension host runs /opt/devlanes, another devlanes install"),
+        "{text}"
+    );
+    assert!(text.contains("fix: devlanes setup"), "{text}");
+    assert!(!text.contains("--remove"), "{text}");
+
+    // This install's own manifest, only out of date, is never another install.
+    data["browser"]["stale"] = json!([{"browser": "Chromium", "place": "/y", "runs": "/usr/local/bin/devlanes",
+        "gone": false, "error": null, "kept": false, "ours": true}]);
+    let text = render_text(Method::Doctor, &data);
+    assert!(
+        text.contains("Chromium's extension host is out of date"),
+        "{text}"
+    );
+    assert!(!text.contains("another devlanes install"), "{text}");
+    assert!(text.contains("fix: devlanes setup"), "{text}");
+
+    // A build leaves another install's registration alone, so the fix names
+    // that install, not a setup from here.
+    data["browser"]["stale"] = json!([{"browser": "Chrome", "place": "/x", "runs": "/opt/devlanes",
+        "gone": false, "error": null, "kept": true}]);
+    let text = render_text(Method::Doctor, &data);
+    assert!(
+        text.contains(
+            "fix: devlanes setup --remove from that install, then devlanes setup from this build"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("fix: devlanes setup\n"), "{text}");
+
+    data["browser"] = json!({"registered": [], "found": ["Chrome"], "stale": []});
+    let text = render_text(Method::Doctor, &data);
+    assert!(
+        text.contains("extension host not registered (devlanes setup registers it)"),
+        "{text}"
+    );
+
+    data["browser"] = json!({"registered": [], "found": [], "stale": []});
+    let text = render_text(Method::Doctor, &data);
+    assert!(!text.contains("extension host"), "{text}");
+}
+
+#[test]
 /// A human terminal with colors gets a unit's colors back, each line ending in a
 /// reset and nothing but SGR kept; every other output gets plain text.
 fn logs_keep_colors_only_where_they_show() {

@@ -45,7 +45,17 @@ Check first. This reads and changes nothing:
 devlanes setup --check
 ```
 
-Each line is `ok`, `todo` or `skip` with a step (`ca`, `hosts`, `resolver`); it exits 0 when nothing is missing and 1 otherwise. When something is `todo`:
+Each line is `ok`, `todo`, `info` or `skip` with a step (`ca`, `hosts`, `resolver`, `browser`). It exits 0 when nothing is `todo` and 1 otherwise.
+
+The `browser` step registers devlanes as the native host of the devlanes browser extension in each installed browser on its list (Chrome and its channels, Chromium, Edge and its channels, Brave, Vivaldi, and Arc on macOS), and keeps a copy of the manifest at `~/.devlanes/browser/run.devlanes.browser.json` for any other Chromium browser. It is `info` when setup would write or refresh a registration or the copy, and it is never `todo`: it never counts in `missing` or the exit code. With nothing else `todo`, plain `devlanes setup` applies it without asking and exits 0, also without a terminal. It needs no `sudo` and no dialog. It is `skip` when setup can't register anything, for example:
+
+- devlanes runs from `uvx` or `pipx run`, whose cache paths a browser can't rely on
+- setup runs from a source checkout or a project dependency, and another install holds every registration
+- devlanes can't tell where the home folder is
+
+The line says why. `devlanes setup --remove` deletes the copy and only the registrations that start this install. A link or key the user made to the copy for another browser stays.
+
+When something is `todo`:
 
 - Without a terminal, which includes agent output, a plain `devlanes setup` refuses with `this needs confirmation; rerun with --yes` and exit 2.
 - Run `devlanes setup --yes` only when the user asked you to set devlanes up. Tell them first that their system will ask them:
