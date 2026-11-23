@@ -88,9 +88,13 @@ fn parse(text: &str) -> Vec<(u16, u16)> {
         .collect()
 }
 
-/// Reads both families concurrently; one that fails leaves the other's ranges.
-async fn read() -> Reading {
-    let (ipv4, ipv6) = tokio::join!(read_family(FAMILIES[0]), read_family(FAMILIES[1]));
+/// Reads both families concurrently, giving each `netsh` up to `timeout`; one
+/// that fails leaves the other's ranges.
+async fn read(timeout: Duration) -> Reading {
+    let (ipv4, ipv6) = tokio::join!(
+        read_family(FAMILIES[0], timeout),
+        read_family(FAMILIES[1], timeout)
+    );
     let mut reading = Reading::default();
     for (family, result) in FAMILIES.into_iter().zip([ipv4, ipv6]) {
         match result {
@@ -125,7 +129,7 @@ impl From<String> for Failure {
 }
 
 /// One family's ranges from `<System32>\netsh.exe`, never a `netsh` on `PATH`.
-async fn read_family(family: &str) -> Result<Vec<(u16, u16)>, Failure> {
+async fn read_family(family: &str, timeout: Duration) -> Result<Vec<(u16, u16)>, Failure> {
     let netsh = devlanes_sys_windows::file::system_directory()
         .map_err(|error| format!("cannot locate System32: {error}"))?
         .join("netsh.exe");
@@ -141,9 +145,9 @@ async fn read_family(family: &str) -> Result<Vec<(u16, u16)>, Failure> {
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .output();
-    let output = tokio::time::timeout(NETSH_TIMEOUT, output)
+    let output = tokio::time::timeout(timeout, output)
         .await
-        .map_err(|_| format!("netsh did not answer within {}s", NETSH_TIMEOUT.as_secs()))?
+        .map_err(|_| format!("netsh did not answer within {}s", timeout.as_secs()))?
         .map_err(|error| Failure {
             message: format!("cannot run netsh: {error}"),
             spawn_denied: devlanes_sys_windows::spawn::refused_to_start(&error),
@@ -158,13 +162,17 @@ async fn read_family(family: &str) -> Result<Vec<(u16, u16)>, Failure> {
 /// The last [`Reading`] and when it was taken. Callers at the same time share
 /// one `netsh` run.
 pub struct Cache {
+    /// How long each `netsh` run may take.
+    timeout: Duration,
     last: Mutex<Option<(Instant, Arc<Reading>)>>,
 }
 
 impl Cache {
-    /// An empty cache; the first [`Cache::get`] reads.
-    const fn new() -> Self {
+    /// An empty cache whose `netsh` runs may take up to `timeout`; the first
+    /// [`Cache::get`] reads.
+    const fn new(timeout: Duration) -> Self {
         Self {
+            timeout,
             last: Mutex::const_new(None),
         }
     }
@@ -178,7 +186,7 @@ impl Cache {
         {
             return reading.clone();
         }
-        let reading = Arc::new(read().await);
+        let reading = Arc::new(read(self.timeout).await);
         *last = Some((Instant::now(), reading.clone()));
         reading
     }
@@ -194,7 +202,7 @@ fn fresh_for(reading: &Reading) -> Duration {
 }
 
 /// The process-wide cache, shared by `doctor` and the port allocator.
-pub static RESERVED: Cache = Cache::new();
+pub static RESERVED: Cache = Cache::new(NETSH_TIMEOUT);
 
 /// The fallback ports the proxy binds when its configured ones fail.
 const PROXY_FALLBACKS: [(&str, u16); 2] = [
@@ -332,10 +340,12 @@ mod tests {
     }
 
     /// The real `netsh` answers for both families with ordered ranges, and the
-    /// cache hands out the same reading while it is fresh.
+    /// cache hands out the same reading while it is fresh. The timeout is far
+    /// above [`NETSH_TIMEOUT`] because a CI runner busy compiling has taken
+    /// longer than that to start `netsh`; nextest still ends a hung run.
     #[tokio::test]
     async fn netsh_is_read_and_cached() {
-        let cache = Cache::new();
+        let cache = Cache::new(Duration::from_secs(60));
         let reading = cache.get().await;
         assert!(reading.errors.is_empty(), "{:?}", reading.errors);
         assert!(reading.ranges.iter().all(|(start, end)| start <= end));
