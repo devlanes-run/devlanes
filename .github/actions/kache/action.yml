@@ -44,7 +44,12 @@ runs:
         esac
         dir=$RUNNER_TEMP/kache-bin
         mkdir -p "$dir"
-        curl -fsSL --retry 3 -o "$dir/$asset" \
+        # Windows curl uses schannel, which fails with CRYPT_E_REVOCATION_OFFLINE when the
+        # runner can't reach the revocation server. This flag accepts the certificate in that
+        # case and still verifies the chain. Other TLS backends reject the flag.
+        revoke=
+        if [ "$RUNNER_OS" = Windows ]; then revoke=--ssl-revoke-best-effort; fi
+        curl -fsSL --retry 3 $revoke -o "$dir/$asset" \
           "https://github.com/kunobi-ninja/kache/releases/download/v$KACHE_VERSION/$asset"
         if command -v sha256sum >/dev/null; then
           actual=$(sha256sum < "$dir/$asset")
