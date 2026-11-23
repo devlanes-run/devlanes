@@ -575,17 +575,16 @@ async fn run_in(
         return Ok(check_code(&steps));
     };
     show(runtime, &steps, false);
-    let missing = steps.iter().filter(|step| step.todo()).count();
     let runs: Vec<&Step> = steps.iter().filter(|step| step.applies()).collect();
-    if runs.is_empty() {
-        return Ok(0);
-    }
-    // A step that never counts is asked about only with the missing ones, and
-    // runs without a question when it is alone.
     let password = runs.iter().any(|step| step.kind.sudo(&config));
-    let extra = runs.len() > missing;
-    if missing > 0 && !yes && !ask(runtime, missing, extra, password).await? {
-        return Ok(1);
+    match decide(&steps, yes) {
+        Decision::Nothing => return Ok(0),
+        Decision::Run => {}
+        Decision::Ask { missing, browser } => {
+            if !ask(runtime, missing, browser, password).await? {
+                return Ok(1);
+            }
+        }
     }
     #[cfg(unix)]
     if password {
@@ -627,6 +626,35 @@ async fn run_in(
         fold(runtime, &mut code, result);
     }
     Ok(code)
+}
+
+/// What a plain `setup` does with its plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Decision {
+    /// No step applies.
+    Nothing,
+    /// Run the steps that apply without a question.
+    Run,
+    /// Ask once about `missing` steps, and the browser host with them when
+    /// `browser`.
+    Ask { missing: usize, browser: bool },
+}
+
+/// Whether `setup` asks before it runs `steps`. A step that never counts is
+/// asked about only with the missing ones, and runs without a question when
+/// it is alone, so it never needs `--yes`. `yes` skips the question.
+fn decide(steps: &[Step], yes: bool) -> Decision {
+    let missing = steps.iter().filter(|step| step.todo()).count();
+    let runs = steps.iter().filter(|step| step.applies()).count();
+    match (runs, missing) {
+        (0, _) => Decision::Nothing,
+        (_, 0) => Decision::Run,
+        _ if yes => Decision::Run,
+        _ => Decision::Ask {
+            missing,
+            browser: runs > missing,
+        },
+    }
 }
 
 /// `--check`'s exit status: 1 while a step is missing, else 0. A step that
@@ -1369,13 +1397,41 @@ mod tests {
             assert_eq!(step.applies(), state == "info", "{step:?}");
             assert!(!step.kind.sudo(&UserConfig::default()));
             assert_eq!(check_code(&steps), 0, "{steps:?}");
+            // Alone, it runs without a question, so it needs no --yes.
+            let alone = if state == "info" {
+                Decision::Run
+            } else {
+                Decision::Nothing
+            };
+            assert_eq!(decide(&steps, false), alone, "{steps:?}");
         }
-        // With a missing step, the exit status is that step's alone.
+        // With a missing step, the exit status is that step's alone, and the
+        // browser host is asked about with it.
         let facts = Facts {
             browser: browser_facts(&[Current]),
             ..fresh()
         };
-        assert_eq!(check_code(&plan(&facts)), 1);
+        let steps = plan(&facts);
+        assert_eq!(check_code(&steps), 1);
+        assert_eq!(
+            decide(&steps, false),
+            Decision::Ask {
+                missing: 1,
+                browser: false
+            }
+        );
+        let steps = plan(&Facts {
+            browser: browser_facts(&[Missing]),
+            ..fresh()
+        });
+        assert_eq!(
+            decide(&steps, false),
+            Decision::Ask {
+                missing: 1,
+                browser: true
+            }
+        );
+        assert_eq!(decide(&steps, true), Decision::Run);
 
         let reason = |found: &[browser::Found]| browser::plan(&browser_facts(found)).2;
         assert_eq!(
