@@ -16,7 +16,7 @@ hosts     install the /etc/hosts helper (macOS and Linux) when *.localhost does 
 resolver  send hostnames.tld to the devlanes DNS server (a resolver file, or an
           NRPT rule on Windows) when hostnames.resolver is resolver
 browser   register the browser extension's host for Chrome, Chromium, Brave and
-          Edge. It shows as info, never as todo, and --check ignores it
+          Edge. It shows as info, never todo, and doesn't change --check's exit code
 ```
 
 Then it asks once before doing the todo steps, and registers the browser host with them. With nothing else to do, it registers the host without asking. sudo asks for your password at most once. Without a terminal, pass --yes.
