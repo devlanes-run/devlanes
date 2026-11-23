@@ -101,9 +101,9 @@ impl StepKind {
         }
     }
 
-    /// Whether the step can be missing. The browser host can't: lanes work
-    /// without it, and agents rely on `--check` exiting 0 once the rest is
-    /// done.
+    /// Whether the step counts as missing when it isn't done. The browser
+    /// host never does: lanes work without it, and agents rely on `--check`
+    /// exiting 0 once the rest is done.
     fn counts(self) -> bool {
         self != Self::BrowserHost
     }
@@ -113,7 +113,8 @@ impl StepKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Step {
     kind: StepKind,
-    /// For a step that never counts, whether setup has something to do it for.
+    /// Whether the step applies to this machine. For the browser host,
+    /// whether there is a browser to register it for.
     needed: bool,
     done: bool,
     /// Why the step is needed and what is missing, what is in place, or why
