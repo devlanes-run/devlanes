@@ -13,6 +13,10 @@ use std::{ffi::OsString, process::ExitCode};
 
 pub use origin::is_origin;
 
+/// The native messaging host name the extension connects to, and the name of
+/// the host manifest `devlanes setup` writes.
+pub const HOST_NAME: &str = "run.devlanes.browser";
+
 /// Runs the host with `args`, the arguments after the program name. It
 /// refuses an origin outside [`origin::ALLOWED_IDS`] with exit code 1, and
 /// exits 0 when the extension closes the port. stdout carries frames only,

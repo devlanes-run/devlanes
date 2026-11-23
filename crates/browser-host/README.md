@@ -24,7 +24,8 @@ if std::env::args_os()
 - `run(args)` serves one extension port on stdin and stdout until the extension closes it.
 - `is_origin(arg)` says whether the first argument is a Chrome extension origin.
 - `view::compose` builds the popup's view from `status {all: true}`, `hosts {all: true}` and `host.list`.
-- `origin::ALLOWED_IDS` lists the extension ids the host answers.
+- `origin::ALLOWED_IDS` lists the extension ids the host answers, and `origin::allowed_origins` gives them as a manifest lists them.
+- `HOST_NAME` is `run.devlanes.browser`, the name `devlanes setup` registers.
 
 ## Protocol
 
