@@ -1,0 +1,89 @@
+{
+  "status": {
+    "items": [
+      {
+        "reference": "acme@0",
+        "project": "acme",
+        "index": 0,
+        "branch": "main",
+        "path": "/work/acme",
+        "state": "running",
+        "config_changed": false,
+        "units": [],
+        "domain": "acme.localhost",
+        "url": "https://acme.localhost"
+      }
+    ],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "hosts": {
+    "items": [
+      {
+        "host": "app.acme.localhost",
+        "url": "https://app.acme.localhost",
+        "project": "acme",
+        "lane": "acme@0",
+        "unit": "web",
+        "port": 41000,
+        "fallback": false,
+        "host_header_upstream": false,
+        "state": "ready",
+        "clients": []
+      }
+    ],
+    "warnings": [],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "host_list": {
+    "items": [
+      {
+        "host": "fork-a",
+        "state": "connected",
+        "server": "devlanes 0.15.1",
+        "transport": "ssh",
+        "https_port": 443,
+        "lanes": 1,
+        "ports": [],
+        "routes": [],
+        "skipped_lanes": [
+          {
+            "lane": "acme@0",
+            "hosts": ["app.acme.localhost"],
+            "box": null,
+            "reason": "acme@0 runs on this machine",
+            "cause": "local_running",
+            "winner": null,
+            "winner_lane": "acme@0",
+            "can_use": false,
+            "holds": "processes"
+          }
+        ],
+        "skipped_hosts": [],
+        "syncs": [],
+        "warnings": [],
+        "connected_since_ms": 1700000000000,
+        "daemon_version": "devlanes 0.15.1",
+        "registry": {
+          "lanes": [
+            { "key": { "project": "acme", "lane": "0" }, "index": 0, "domain": "acme.localhost" }
+          ],
+          "units": [
+            {
+              "key": { "lane": { "project": "acme", "lane": "0" }, "kind": "service", "name": "web" },
+              "hidden": false,
+              "state": "ready",
+              "ports": [{ "name": "default", "port": 41000 }],
+              "hosts": [{ "host": "app.acme.localhost", "port": 41000, "fallback": false, "host_header": "keep" }]
+            }
+          ]
+        },
+        "chosen_lanes": []
+      }
+    ],
+    "yielded_local_lanes": [],
+    "truncated": false,
+    "next_cursor": null
+  }
+}

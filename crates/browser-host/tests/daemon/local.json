@@ -1,0 +1,121 @@
+{
+  "status": {
+    "items": [
+      {
+        "reference": "acme@0",
+        "project": "acme",
+        "index": 0,
+        "branch": "main",
+        "path": "/work/acme",
+        "state": "running",
+        "config_changed": false,
+        "units": [],
+        "domain": "acme.localhost",
+        "url": "https://acme.localhost:8443"
+      },
+      {
+        "reference": "acme@2",
+        "project": "acme",
+        "index": 2,
+        "branch": "main",
+        "name": "review",
+        "path": "/work/acme",
+        "state": "failed",
+        "config_changed": false,
+        "units": [],
+        "domain": "acme2.localhost",
+        "url": "https://acme2.localhost:8443"
+      },
+      {
+        "reference": "acme@spike",
+        "project": "acme",
+        "index": null,
+        "branch": "spike",
+        "path": "/work/acme-spike",
+        "state": "unassigned",
+        "config_changed": false,
+        "units": []
+      },
+      {
+        "reference": "tools@0",
+        "project": "tools",
+        "index": 0,
+        "branch": "main",
+        "path": "/work/tools",
+        "state": "running",
+        "config_changed": false,
+        "units": [],
+        "domain": null
+      }
+    ],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "hosts": {
+    "items": [
+      {
+        "host": "app.acme.localhost",
+        "url": "https://app.acme.localhost:8443",
+        "project": "acme",
+        "lane": "acme@0",
+        "unit": "web",
+        "port": 41000,
+        "fallback": false,
+        "host_header_upstream": false,
+        "state": "ready",
+        "clients": []
+      },
+      {
+        "host": "*.app.acme.localhost",
+        "url": null,
+        "project": "acme",
+        "lane": "acme@0",
+        "unit": "web",
+        "port": 41000,
+        "fallback": false,
+        "host_header_upstream": false,
+        "state": "ready",
+        "clients": []
+      },
+      {
+        "host": "app.acme2.localhost",
+        "url": "https://app.acme2.localhost:8443",
+        "project": "acme",
+        "lane": "acme@2",
+        "unit": "web",
+        "port": 41020,
+        "fallback": false,
+        "host_header_upstream": false,
+        "state": "failed",
+        "clients": []
+      }
+    ],
+    "warnings": [],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "host_list": {
+    "items": [
+      {
+        "host": "fork-a",
+        "state": "reconnecting",
+        "retry_in_ms": 4000,
+        "error": "ssh: connect to host fork-a.example.invalid port 22: Connection refused",
+        "transport": "ssh",
+        "https_port": 443,
+        "lanes": 0,
+        "ports": [],
+        "routes": [],
+        "skipped_lanes": [],
+        "skipped_hosts": [],
+        "syncs": [],
+        "warnings": [],
+        "connected_since_ms": null,
+        "chosen_lanes": []
+      }
+    ],
+    "yielded_local_lanes": [],
+    "truncated": false,
+    "next_cursor": null
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "status": {
+    "items": [
+      {
+        "reference": "acme@0",
+        "project": "acme",
+        "index": 0,
+        "branch": "main",
+        "path": "/work/acme",
+        "state": "idle",
+        "config_changed": false,
+        "units": [],
+        "domain": "acme.localhost",
+        "url": "https://acme.localhost"
+      }
+    ],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "hosts": {
+    "items": [
+      {
+        "host": "app.acme.localhost",
+        "url": "https://app.acme.localhost",
+        "project": "acme",
+        "lane": "acme@0",
+        "unit": "web",
+        "port": 41000,
+        "fallback": false,
+        "host_header_upstream": false,
+        "state": "ready",
+        "clients": []
+      },
+      {
+        "host": "app.acme3.localhost",
+        "url": "https://app.acme3.localhost",
+        "project": "acme",
+        "lane": "acme@3",
+        "unit": "web",
+        "port": 41030,
+        "fallback": false,
+        "host_header_upstream": false,
+        "state": "starting",
+        "clients": []
+      }
+    ],
+    "warnings": [],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "host_list": {
+    "items": [
+      {
+        "host": "fork-a",
+        "state": "connected",
+        "server": "devlanes 0.15.1",
+        "transport": "ssh",
+        "https_port": 443,
+        "lanes": 2,
+        "ports": [],
+        "routes": [
+          { "host": "app.acme.localhost", "port": 41000, "lane": "acme@0", "unit": "web", "url": "https://app.acme.localhost", "state": "ready" },
+          { "host": "app.acme3.localhost", "port": 41030, "lane": "acme@3", "unit": "web", "url": "https://app.acme3.localhost", "state": "starting" }
+        ],
+        "skipped_lanes": [],
+        "skipped_hosts": [],
+        "syncs": [],
+        "warnings": [],
+        "connected_since_ms": 1700000000000,
+        "daemon_version": "devlanes 0.15.1",
+        "registry": {
+          "lanes": [
+            { "key": { "project": "acme", "lane": "0" }, "index": 0, "domain": "acme.localhost" },
+            { "key": { "project": "acme", "lane": "3" }, "index": 3, "domain": "acme3.localhost" }
+          ],
+          "units": [
+            {
+              "key": { "lane": { "project": "acme", "lane": "0" }, "kind": "service", "name": "web" },
+              "hidden": false,
+              "state": "ready",
+              "ports": [{ "name": "default", "port": 41000 }],
+              "hosts": [{ "host": "app.acme.localhost", "port": 41000, "fallback": false, "host_header": "keep" }]
+            },
+            {
+              "key": { "lane": { "project": "acme", "lane": "0" }, "kind": "container", "name": "db" },
+              "hidden": false,
+              "state": "running",
+              "ports": [{ "name": "default", "port": 41002 }],
+              "hosts": []
+            },
+            {
+              "key": { "lane": { "project": "acme", "lane": "3" }, "kind": "service", "name": "web" },
+              "hidden": false,
+              "state": "starting",
+              "ports": [{ "name": "default", "port": 41030 }],
+              "hosts": [{ "host": "app.acme3.localhost", "port": 41030, "fallback": false, "host_header": "keep" }]
+            }
+          ]
+        },
+        "chosen_lanes": ["acme@0"]
+      }
+    ],
+    "yielded_local_lanes": [{ "lane": "acme@0", "winner": "fork-a" }],
+    "truncated": false,
+    "next_cursor": null
+  }
+}

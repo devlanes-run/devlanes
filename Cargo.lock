@@ -1189,6 +1189,7 @@ dependencies = [
  "bollard",
  "bytes",
  "crossterm",
+ "devlanes-browser-host",
  "devlanes-cli",
  "devlanes-client",
  "devlanes-config",
@@ -1268,6 +1269,20 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "devlanes-browser-host"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "devlanes-client",
+ "devlanes-proto",
+ "devlanes-version",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
