@@ -40,8 +40,12 @@ use crate::output::emit;
 ///
 /// On macOS and Linux a Chromium browser reads the user's hosts from
 /// `<user data>/NativeMessagingHosts` (`DIR_USER_NATIVE_MESSAGING` in
-/// Chromium's `chrome/common/chrome_paths.cc`). On Windows it reads a key
-/// under `HKCU\Software` that names the manifest.
+/// Chromium's `chrome/common/chrome_paths.cc`). On Windows it reads keys
+/// under `HKCU\Software` that name the manifest. Which keys depends on the
+/// build, not on the browser's own registry folder: `GetManifestPathWithFlags`
+/// in Chromium's `chrome/browser/extensions/api/messaging/launch_context_win.cc`
+/// reads `Software\Chromium` and then `Software\Google\Chrome` in any build
+/// without Google Chrome branding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Browser {
     name: &'static str,
@@ -49,95 +53,113 @@ pub(crate) struct Browser {
     macos: Option<&'static str>,
     /// The user data folder under `~/.config`.
     linux: Option<&'static str>,
-    /// The user data folder under `%LOCALAPPDATA%`, and the key under
-    /// `HKCU\Software` the browser reads.
-    windows: Option<(&'static str, &'static str)>,
+    /// The user data folder under `%LOCALAPPDATA%`, and the keys under
+    /// `HKCU\Software` setup writes for the browser. The browser counts as
+    /// registered only when each of them is.
+    windows: Option<(&'static str, &'static [&'static str])>,
 }
+
+/// `Software\Google\Chrome`, which every Chromium build on Windows reads.
+const CHROME_KEY: &str = "Google/Chrome";
+/// `Software\Chromium`, which a build without Google Chrome branding reads
+/// before [`CHROME_KEY`].
+const CHROMIUM_KEY: &str = "Chromium";
+
+/// Keys an older devlanes wrote that no browser reads. `--remove` still
+/// deletes them when they are this install's: devlanes 0.16.0 wrote Brave's
+/// own key, which Brave never reads.
+const UNREAD_KEYS: [&str; 1] = ["BraveSoftware/Brave-Browser"];
 
 impl Browser {
     // Chrome's channels: the folders are Chromium's `docs/user_data_dir.md`.
-    // Every Google Chrome build on Windows reads `Software\Google\Chrome`
+    // A Google Chrome build reads only `Software\Google\Chrome`
     // (`launch_context_win.cc`), so the channels share that key.
     pub(crate) const CHROME: Self = Self {
         name: "Chrome",
         macos: Some("Google/Chrome"),
         linux: Some("google-chrome"),
-        windows: Some(("Google/Chrome/User Data", "Google/Chrome")),
+        windows: Some(("Google/Chrome/User Data", &[CHROME_KEY])),
     };
     pub(crate) const CHROME_BETA: Self = Self {
         name: "Chrome Beta",
         macos: Some("Google/Chrome Beta"),
         linux: Some("google-chrome-beta"),
-        windows: Some(("Google/Chrome Beta/User Data", "Google/Chrome")),
+        windows: Some(("Google/Chrome Beta/User Data", &[CHROME_KEY])),
     };
     pub(crate) const CHROME_DEV: Self = Self {
         name: "Chrome Dev",
         macos: Some("Google/Chrome Dev"),
         linux: Some("google-chrome-unstable"),
-        windows: Some(("Google/Chrome Dev/User Data", "Google/Chrome")),
+        windows: Some(("Google/Chrome Dev/User Data", &[CHROME_KEY])),
     };
     pub(crate) const CHROME_CANARY: Self = Self {
         name: "Chrome Canary",
         macos: Some("Google/Chrome Canary"),
         linux: Some("google-chrome-canary"),
-        windows: Some(("Google/Chrome SxS/User Data", "Google/Chrome")),
+        windows: Some(("Google/Chrome SxS/User Data", &[CHROME_KEY])),
     };
-    // Chromium-branded builds read `Software\Chromium` first
-    // (`launch_context_win.cc`).
+    // Chromium reads its own key first, so nothing in Chrome's can shadow it.
     pub(crate) const CHROMIUM: Self = Self {
         name: "Chromium",
         macos: Some("Chromium"),
         linux: Some("chromium"),
-        windows: Some(("Chromium/User Data", "Chromium")),
+        windows: Some(("Chromium/User Data", &[CHROMIUM_KEY])),
     };
     // Edge's channels: the folders are Microsoft's "Chrome DevTools MCP"
     // page (https://learn.microsoft.com/en-us/microsoft-edge/web-platform/devtools-mcp-server),
     // and the key is its "Native messaging" page
-    // (https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging),
-    // which names one key for Edge. Edge has no Canary on Linux.
+    // (https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging).
+    // Edge reads its own key first, then Chromium's and Chrome's, so its own
+    // is enough. Edge has no Canary on Linux.
     pub(crate) const EDGE: Self = Self {
         name: "Edge",
         macos: Some("Microsoft Edge"),
         linux: Some("microsoft-edge"),
-        windows: Some(("Microsoft/Edge/User Data", "Microsoft/Edge")),
+        windows: Some(("Microsoft/Edge/User Data", &["Microsoft/Edge"])),
     };
     pub(crate) const EDGE_BETA: Self = Self {
         name: "Edge Beta",
         macos: Some("Microsoft Edge Beta"),
         linux: Some("microsoft-edge-beta"),
-        windows: Some(("Microsoft/Edge Beta/User Data", "Microsoft/Edge")),
+        windows: Some(("Microsoft/Edge Beta/User Data", &["Microsoft/Edge"])),
     };
     pub(crate) const EDGE_DEV: Self = Self {
         name: "Edge Dev",
         macos: Some("Microsoft Edge Dev"),
         linux: Some("microsoft-edge-dev"),
-        windows: Some(("Microsoft/Edge Dev/User Data", "Microsoft/Edge")),
+        windows: Some(("Microsoft/Edge Dev/User Data", &["Microsoft/Edge"])),
     };
     pub(crate) const EDGE_CANARY: Self = Self {
         name: "Edge Canary",
         macos: Some("Microsoft Edge Canary"),
         linux: None,
-        windows: Some(("Microsoft/Edge SxS/User Data", "Microsoft/Edge")),
+        windows: Some(("Microsoft/Edge SxS/User Data", &["Microsoft/Edge"])),
     };
     // Brave: the folders are Bitwarden's and KeePassXC's installers, and
-    // Brave's support pages on Windows. The key is the one Claude Code's
-    // Chrome docs and Bitwarden name.
+    // Brave's support pages on Windows. On Windows Brave reads Chromium's
+    // key, then Chrome's, and never `Software\BraveSoftware`: brave-core
+    // doesn't override `launch_context_win.cc`, and Brave 158 finds a host
+    // under either key and not under its own. Both are written, so Brave
+    // finds this install whichever one it reads.
     pub(crate) const BRAVE: Self = Self {
         name: "Brave",
         macos: Some("BraveSoftware/Brave-Browser"),
         linux: Some("BraveSoftware/Brave-Browser"),
         windows: Some((
             "BraveSoftware/Brave-Browser/User Data",
-            "BraveSoftware/Brave-Browser",
+            &[CHROMIUM_KEY, CHROME_KEY],
         )),
     };
     // Vivaldi: the folders are Bitwarden's and KeePassXC's installers, and
-    // Vivaldi's help on Windows. The key is the one Bitwarden writes.
+    // Vivaldi's help on Windows. Bitwarden writes `Software\Vivaldi`, while
+    // KeePassXC-Browser's issue #48 reports Vivaldi reading Chrome's key,
+    // as a build without Google Chrome branding does. Nothing settles it, so
+    // setup writes Vivaldi's key and the two every such build reads.
     pub(crate) const VIVALDI: Self = Self {
         name: "Vivaldi",
         macos: Some("Vivaldi"),
         linux: Some("vivaldi"),
-        windows: Some(("Vivaldi/User Data", "Vivaldi")),
+        windows: Some(("Vivaldi/User Data", &["Vivaldi", CHROMIUM_KEY, CHROME_KEY])),
     };
     // Arc on macOS: the folder is KeePassXC-Browser's troubleshooting guide.
     // Nothing documents where Arc on Windows reads hosts.
@@ -180,11 +202,10 @@ impl Browser {
         Some(path.split('/').collect())
     }
 
-    /// The browser's key under the registry root, on Windows.
-    fn key(self) -> String {
-        self.windows
-            .map(|(_, key)| key.replace('/', r"\"))
-            .unwrap_or_default()
+    /// The keys setup writes for the browser under the registry root, on
+    /// Windows.
+    fn keys(self) -> &'static [&'static str] {
+        self.windows.map(|(_, keys)| keys).unwrap_or_default()
     }
 }
 
@@ -268,12 +289,13 @@ impl Location {
             .join(manifest_name())
     }
 
-    /// The registry key, under `HKCU`, that points `browser` at a manifest.
-    fn key(&self, browser: Browser) -> String {
+    /// The registry key, under `HKCU`, that points the browsers reading
+    /// `browser_key`, such as `Google/Chrome`, at a manifest.
+    fn key(&self, browser_key: &str) -> String {
         format!(
             r"{}\{}\NativeMessagingHosts\{HOST_NAME}",
             self.registry_root,
-            browser.key()
+            browser_key.replace('/', r"\")
         )
     }
 
@@ -389,12 +411,15 @@ pub(crate) enum Found {
     Unreadable(String),
 }
 
-/// One browser's registration.
+/// One browser's registration. On Windows a browser has one per key it
+/// gets, and it is registered only when all of them are current.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Registration {
     pub(crate) browser: Browser,
     /// The manifest file, or on Windows the registry key, as setup names it.
     pub(crate) place: String,
+    /// Windows: the key under `HKCU` that `place` names.
+    pub(crate) key: Option<String>,
     pub(crate) found: Found,
     /// Whether the browser's user data folder exists. On Windows a key can
     /// outlive its browser, and `--remove` still deletes it when it's ours.
@@ -538,10 +563,14 @@ pub(crate) fn inspect(location: &Location, install: &Install) -> Vec<Registratio
     let expected = install.manifest();
     location
         .browsers()
-        .map(|browser| {
+        .flat_map(|browser| {
             let installed = location.user_data(browser).is_dir();
             if location.layout == Layout::Windows {
-                return inspect_key(location, install, &expected, browser, installed);
+                return browser
+                    .keys()
+                    .iter()
+                    .map(|key| inspect_key(location, install, &expected, browser, key, installed))
+                    .collect();
             }
             let file = location.unix_manifest(browser);
             let linked = links_to(&file, &location.copy());
@@ -559,13 +588,14 @@ pub(crate) fn inspect(location: &Location, install: &Install) -> Vec<Registratio
                     manifest => found_of(manifest, install),
                 }
             };
-            Registration {
+            vec![Registration {
                 browser,
                 place: file.display().to_string(),
+                key: None,
                 found,
                 installed,
                 linked,
-            }
+            }]
         })
         .collect()
 }
@@ -598,17 +628,19 @@ fn links_to(file: &Path, copy: &Path) -> bool {
         || canonical(&resolved).is_some_and(|target| Some(target) == canonical(copy))
 }
 
-/// The Windows registration of `browser`: its key, and the manifest it names.
-/// The key is read even when the browser isn't `installed`, since an earlier
-/// setup may have written it.
+/// The Windows registration of `browser` under `browser_key`, one of its
+/// [`Browser::keys`]: the key, and the manifest it names. The key is read
+/// even when the browser isn't `installed`, since an earlier setup may have
+/// written it.
 fn inspect_key(
     location: &Location,
     install: &Install,
     expected: &Value,
     browser: Browser,
+    browser_key: &str,
     installed: bool,
 ) -> Registration {
-    let key = location.key(browser);
+    let key = location.key(browser_key);
     let found = match registry::read_string(&key, "") {
         Ok(None) if !installed => Found::NoBrowser,
         Ok(None) => Found::Missing,
@@ -641,6 +673,7 @@ fn inspect_key(
     Registration {
         browser,
         place: format!(r"HKCU\{key}"),
+        key: Some(key),
         found,
         installed,
         linked: false,
@@ -686,29 +719,24 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
         .iter()
         .filter(|registration| registration.installed)
         .collect();
-    let names = |keep: &dyn Fn(&Found) -> bool| {
-        join(
-            &registrations
-                .iter()
-                .filter(|registration| keep(&registration.found))
-                .map(|registration| registration.browser.name())
-                .collect::<Vec<_>>(),
-        )
-    };
-    let registered = names(&|found| *found == Found::Current);
+    let names = |keep: &dyn Fn(&Found) -> bool| join(&browser_names(&registrations, keep));
+    let registered = join(&registered_names(&registrations));
     let mut missing = names(&|found| *found == Found::Missing);
     let mut stale = names(&|found| matches!(found, Found::Stale { .. } | Found::Unreadable(_)));
-    let mut kept: Vec<String> = registrations
-        .iter()
-        .filter_map(|registration| match &registration.found {
-            Found::Kept { runs } => Some(format!(
+    let mut kept: Vec<String> = Vec::new();
+    for registration in &registrations {
+        if let Found::Kept { runs } = &registration.found {
+            let line = format!(
                 "{} runs {}, another devlanes install, and a build doesn't replace it",
                 registration.browser.name(),
                 runs.display()
-            )),
-            _ => None,
-        })
-        .collect();
+            );
+            // Two keys of one browser can run the same install.
+            if !kept.contains(&line) {
+                kept.push(line);
+            }
+        }
+    }
     if let Some(runs) = copy.held() {
         if copy.named_by_keys {
             // Writing any key would rewrite the shared manifest the kept
@@ -781,6 +809,32 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
         reason.push_str(&format!(", and {subject} is registered for {registered}"));
     }
     (true, false, format!("{reason}{note}"))
+}
+
+/// The browsers with a registration `keep` matches, each named once, in the
+/// order of `registrations`.
+fn browser_names(
+    registrations: &[&Registration],
+    keep: &dyn Fn(&Found) -> bool,
+) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    for registration in registrations {
+        let name = registration.browser.name();
+        if keep(&registration.found) && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// The browsers whose registrations are all current. On Windows a browser
+/// with one current key and another one stale may still find another host.
+fn registered_names(registrations: &[&Registration]) -> Vec<&'static str> {
+    let unfinished = browser_names(registrations, &|found| *found != Found::Current);
+    browser_names(registrations, &|found| *found == Found::Current)
+        .into_iter()
+        .filter(|name| !unfinished.contains(name))
+        .collect()
 }
 
 /// `Chrome`, `Chrome and Brave`, `Chrome, Brave and Edge`; `None` for none.
@@ -923,10 +977,13 @@ pub(crate) fn apply(
     }
     if location.layout == Layout::Windows {
         let value = copy.path.to_string_lossy();
-        // A browser's channels share one key, so each key is written once.
+        // A browser's channels share one key, and Brave and Vivaldi share
+        // Chromium's and Chrome's, so each key is written once.
         let mut written: Vec<String> = Vec::new();
         for registration in todo {
-            let key = location.key(registration.browser);
+            let Some(key) = registration.key.clone() else {
+                continue;
+            };
             if !written.contains(&key) {
                 registry::write_string(&key, "", &value).map_err(|source| {
                     BrowserError::Registry {
@@ -992,11 +1049,11 @@ pub(crate) fn removal(location: &Location, install: &Install) -> Removal {
     for registration in inspect(location, install) {
         let found = &registration.found;
         if ours(found) {
-            let target = match location.layout {
-                Layout::Windows => Target::Key(location.key(registration.browser)),
-                _ => Target::File(location.unix_manifest(registration.browser)),
+            let target = match registration.key {
+                Some(key) => Target::Key(key),
+                None => Target::File(location.unix_manifest(registration.browser)),
             };
-            // A browser's channels share one key on Windows.
+            // Browsers share keys on Windows.
             if !removal.delete.contains(&target) {
                 removal.delete.push(target);
             }
@@ -1016,6 +1073,24 @@ pub(crate) fn removal(location: &Location, install: &Install) -> Removal {
         let line = format!("left {} in place: {why}", registration.place);
         if !removal.keep.contains(&line) {
             removal.keep.push(line);
+        }
+    }
+    if location.layout == Layout::Windows {
+        let expected = install.manifest();
+        for browser_key in UNREAD_KEYS {
+            // No browser reads it, so only this install's own is touched.
+            let registration = inspect_key(
+                location,
+                install,
+                &expected,
+                Browser::BRAVE,
+                browser_key,
+                false,
+            );
+            let target = Target::Key(location.key(browser_key));
+            if ours(&registration.found) && !removal.delete.contains(&target) {
+                removal.delete.push(target);
+            }
         }
     }
     // The copy goes last, after the links and keys that name it. A link or
@@ -1142,19 +1217,27 @@ pub(crate) async fn doctor_report() -> Value {
 
 /// [`doctor_report`] for `location` and `install`. Blocking.
 pub(crate) fn report(location: &Location, install: &Install) -> Value {
-    let registrations: Vec<Registration> = inspect(location, install)
-        .into_iter()
+    let inspected = inspect(location, install);
+    let registrations: Vec<&Registration> = inspected
+        .iter()
         .filter(|registration| registration.installed)
         .collect();
-    let names = |keep: &dyn Fn(&Found) -> bool| -> Vec<&str> {
-        registrations
-            .iter()
-            .filter(|registration| keep(&registration.found))
-            .map(|registration| registration.browser.name())
-            .collect()
-    };
+    let mut reported: Vec<&str> = Vec::new();
     let stale: Vec<Value> = registrations
         .iter()
+        // Doctor says what is wrong with a browser, so a browser with two
+        // stale keys gets one entry.
+        .filter(|registration| {
+            let name = registration.browser.name();
+            let first = matches!(
+                registration.found,
+                Found::Stale { .. } | Found::Kept { .. } | Found::Unreadable(_)
+            ) && !reported.contains(&name);
+            if first {
+                reported.push(name);
+            }
+            first
+        })
         .filter_map(|registration| {
             let (runs, error) = match &registration.found {
                 Found::Stale { runs, .. } => (runs.as_ref(), None),
@@ -1176,9 +1259,9 @@ pub(crate) fn report(location: &Location, install: &Install) -> Value {
         })
         .collect();
     json!({
-        "registered": names(&|found| *found == Found::Current),
+        "registered": registered_names(&registrations),
         "stale": stale,
-        "found": names(&|found| *found != Found::NoBrowser),
+        "found": browser_names(&registrations, &|found| *found != Found::NoBrowser),
     })
 }
 
@@ -1261,7 +1344,8 @@ mod tests {
         Browser::BRAVE,
     ];
 
-    /// The `found` of each of [`FOUR`], in that order.
+    /// The `found` of each registration of [`FOUR`], in that order. On
+    /// Windows Brave has two, for Chromium's key and Chrome's.
     fn founds(location: &Location, install: &Install) -> Vec<Found> {
         inspect(location, install)
             .into_iter()
@@ -1531,7 +1615,7 @@ mod tests {
             folder(Browser::EDGE_CANARY, Layout::Windows).as_deref(),
             Some("Microsoft/Edge SxS/User Data")
         );
-        assert_eq!(Browser::EDGE_CANARY.key(), r"Microsoft\Edge");
+        assert_eq!(Browser::EDGE_CANARY.keys(), ["Microsoft/Edge"]);
         assert_eq!(folder(Browser::ARC, Layout::Windows), None);
     }
 
@@ -1793,11 +1877,31 @@ mod tests {
         }
     }
 
-    /// On Windows, one manifest under `.devlanes\browser` and a key per
-    /// installed browser pointing at it, under a test key instead of
-    /// `HKCU\Software`. Chrome Beta shares Chrome's key, and Vivaldi, which
-    /// isn't installed, gets none. `--remove` deletes this install's keys and
-    /// manifest, and leaves a key that names another install's manifest.
+    /// The keys under the test root that name a manifest, as `Google\Chrome`.
+    #[cfg(windows)]
+    fn written_keys(location: &Location) -> Vec<&'static str> {
+        [
+            "Google/Chrome",
+            "Chromium",
+            "Microsoft/Edge",
+            "Vivaldi",
+            "BraveSoftware/Brave-Browser",
+        ]
+        .into_iter()
+        .filter(|key| {
+            registry::read_string(&location.key(key), "")
+                .expect("read")
+                .is_some()
+        })
+        .collect()
+    }
+
+    /// On Windows, one manifest under `.devlanes\browser` and the keys the
+    /// installed browsers read pointing at it, under a test key instead of
+    /// `HKCU\Software`. Chrome Beta and Brave share Chrome's key, and
+    /// Vivaldi, which isn't installed, gets none. `--remove` deletes this
+    /// install's keys and manifest, and leaves a key that names another
+    /// install's manifest.
     #[cfg(windows)]
     #[test]
     fn windows_registers_installed_browsers_and_removes_only_this_install() {
@@ -1810,41 +1914,38 @@ mod tests {
         install_browsers(&location, &FOUR);
         install_browsers(&location, &[Browser::CHROME_BETA]);
         let install = script(&temp.path().join("bin").join("devlanes.exe"));
-        assert_eq!(founds(&location, &install), vec![Found::Missing; 4]);
+        // Brave has two keys.
+        assert_eq!(founds(&location, &install), vec![Found::Missing; 5]);
 
         let lines = apply(&location, &install, &inspect(&location, &install)).expect("apply");
-        assert_eq!(lines.len(), 6, "{lines:?}");
+        assert_eq!(lines.len(), 7, "{lines:?}");
         let file = location
             .home
             .join(".devlanes")
             .join("browser")
             .join("run.devlanes.browser.json");
         assert!(file.is_file());
-        for browser in FOUR {
+        assert_eq!(
+            written_keys(&location),
+            ["Google/Chrome", "Chromium", "Microsoft/Edge"]
+        );
+        for key in written_keys(&location) {
             assert_eq!(
-                registry::read_string(&location.key(browser), "").expect("read"),
+                registry::read_string(&location.key(key), "").expect("read"),
                 Some(file.display().to_string())
             );
         }
-        assert_eq!(
-            location.key(Browser::CHROME_BETA),
-            location.key(Browser::CHROME)
-        );
-        assert_eq!(
-            registry::read_string(&location.key(Browser::VIVALDI), "").expect("read"),
-            None
-        );
         assert!(
             location
-                .key(Browser::CHROME)
+                .key("Google/Chrome")
                 .ends_with(r"\Google\Chrome\NativeMessagingHosts\run.devlanes.browser")
         );
-        assert_eq!(founds(&location, &install), vec![Found::Current; 4]);
+        assert_eq!(founds(&location, &install), vec![Found::Current; 5]);
 
         let other = temp.path().join("other.json");
         let other_exe = temp.path().join("other").join("devlanes.exe");
         std::fs::write(&other, other_manifest(&other_exe)).expect("other manifest");
-        let edge = location.key(Browser::EDGE);
+        let edge = location.key("Microsoft/Edge");
         registry::write_string(&edge, "", &other.display().to_string()).expect("edge key");
         assert_eq!(
             founds(&location, &install)[2],
@@ -1856,23 +1957,110 @@ mod tests {
         let report = report(&location, &install);
         assert_eq!(report["stale"][0]["gone"], true, "{report}");
 
-        // Chrome's key once, for both channels, then Chromium's and Brave's
-        // keys and the manifest.
+        // Chrome's and Chromium's keys once each, for every browser that
+        // reads them, then the manifest.
         let removal = removal(&location, &install);
-        assert_eq!(removal.delete.len(), 4, "{removal:?}");
+        assert_eq!(
+            removal.delete,
+            [
+                Target::Key(location.key("Google/Chrome")),
+                Target::Key(location.key("Chromium")),
+                Target::File(file.clone()),
+            ]
+        );
         assert_eq!(removal.keep.len(), 1, "{removal:?}");
         delete(&removal).expect("delete");
         assert!(!file.exists());
-        for browser in [Browser::CHROME, Browser::CHROMIUM, Browser::BRAVE] {
-            assert_eq!(
-                registry::read_string(&location.key(browser), "").expect("read"),
-                None
-            );
-        }
+        assert_eq!(written_keys(&location), ["Microsoft/Edge"]);
         assert_eq!(
             registry::read_string(&edge, "").expect("read"),
             Some(other.display().to_string())
         );
+    }
+
+    /// Brave on Windows reads Chromium's and Chrome's keys and never its own,
+    /// and Vivaldi gets its own key next to those two. So with only Brave
+    /// installed, a key under `BraveSoftware`, as devlanes 0.16.0 wrote it,
+    /// doesn't count as registered, setup writes the two keys Brave reads,
+    /// and `--remove` deletes all three. A Brave with only one of its keys is
+    /// not registered either.
+    #[cfg(windows)]
+    #[test]
+    fn windows_brave_and_vivaldi_get_the_keys_they_read() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = TestKey(format!(
+            r"Software\devlanes-test-browser-brave-{}",
+            std::process::id()
+        ));
+        let location = location(&temp.path().join("user"), Layout::Windows, root.0.clone());
+        install_browsers(&location, &[Browser::BRAVE]);
+        let install = script(&temp.path().join("bin").join("devlanes.exe"));
+        let check = || facts_plan(&location, &install);
+        let copy = location.copy().display().to_string();
+        // devlanes 0.16.0's registration.
+        apply(&location, &install, &[]).expect("copy");
+        registry::write_string(&location.key("BraveSoftware/Brave-Browser"), "", &copy)
+            .expect("old key");
+        assert_eq!(
+            check().2,
+            "setup registers the browser extension host for Brave"
+        );
+        assert_eq!(report(&location, &install)["registered"], json!([]));
+
+        apply(&location, &install, &inspect(&location, &install)).expect("apply");
+        assert_eq!(
+            written_keys(&location),
+            ["Google/Chrome", "Chromium", "BraveSoftware/Brave-Browser"]
+        );
+        assert_eq!(
+            check(),
+            (
+                true,
+                true,
+                "the browser extension host is registered for Brave".into()
+            )
+        );
+        assert_eq!(report(&location, &install)["registered"], json!(["Brave"]));
+
+        // Another install's manifest under Chromium's key, which Brave reads
+        // first: Brave would start that one.
+        let other = temp.path().join("other.json");
+        let other_exe = temp.path().join("other").join("devlanes.exe");
+        std::fs::write(&other, other_manifest(&other_exe)).expect("other manifest");
+        registry::write_string(&location.key("Chromium"), "", &other.display().to_string())
+            .expect("chromium key");
+        assert_eq!(
+            check().2,
+            "setup refreshes the browser extension host for Brave"
+        );
+        let report = report(&location, &install);
+        assert_eq!(report["registered"], json!([]), "{report}");
+        assert_eq!(
+            report["stale"].as_array().map(Vec::len),
+            Some(1),
+            "{report}"
+        );
+        registry::write_string(&location.key("Chromium"), "", &copy).expect("chromium key");
+
+        install_browsers(&location, &[Browser::VIVALDI]);
+        apply(&location, &install, &inspect(&location, &install)).expect("apply");
+        assert_eq!(
+            written_keys(&location),
+            [
+                "Google/Chrome",
+                "Chromium",
+                "Vivaldi",
+                "BraveSoftware/Brave-Browser"
+            ]
+        );
+        assert_eq!(
+            check().2,
+            "the browser extension host is registered for Brave and Vivaldi"
+        );
+
+        delete(&removal(&location, &install)).expect("delete");
+        assert_eq!(written_keys(&location), Vec::<&str>::new());
+        assert!(!location.copy().exists());
     }
 
     /// A `Source` build leaves the shared manifest alone while it runs
@@ -1894,8 +2082,9 @@ mod tests {
         let shared = location.copy();
         std::fs::create_dir_all(shared.parent().expect("parent")).expect("browser folder");
         std::fs::write(&shared, other_manifest(&other)).expect("shared manifest");
-        for browser in [Browser::CHROME, Browser::CHROMIUM, Browser::BRAVE] {
-            registry::write_string(&location.key(browser), "", &shared.display().to_string())
+        // Chrome's, Chromium's and so Brave's.
+        for key in ["Google/Chrome", "Chromium"] {
+            registry::write_string(&location.key(key), "", &shared.display().to_string())
                 .expect("key");
         }
         let build = temp
@@ -1936,7 +2125,7 @@ mod tests {
             other_manifest(&other)
         );
         assert_eq!(
-            registry::read_string(&location.key(Browser::EDGE), "").expect("read"),
+            registry::read_string(&location.key("Microsoft/Edge"), "").expect("read"),
             None
         );
     }
@@ -1958,29 +2147,27 @@ mod tests {
         let install = script(&temp.path().join("bin").join("devlanes.exe"));
         apply(&location, &install, &inspect(&location, &install)).expect("apply");
         // As if Vivaldi was registered, then uninstalled.
-        let vivaldi = location.key(Browser::VIVALDI);
+        let vivaldi = location.key("Vivaldi");
         registry::write_string(&vivaldi, "", &location.copy().display().to_string())
             .expect("vivaldi key");
         std::fs::remove_dir_all(location.home.join(".devlanes")).expect("delete .devlanes");
         let elsewhere = temp.path().join("missing.json");
-        let edge = location.key(Browser::EDGE);
+        let edge = location.key("Microsoft/Edge");
         registry::write_string(&edge, "", &elsewhere.display().to_string()).expect("edge key");
         let ours = Found::Stale {
             runs: None,
             ours: true,
         };
         let found = founds(&location, &install);
-        assert_eq!([&found[0], &found[1], &found[3]], [&ours; 3], "{found:?}");
+        assert_eq!(
+            [&found[0], &found[1], &found[3], &found[4]],
+            [&ours; 4],
+            "{found:?}"
+        );
         let removal = removal(&location, &install);
         assert_eq!(
             removal.delete,
-            [
-                Browser::CHROME,
-                Browser::CHROMIUM,
-                Browser::BRAVE,
-                Browser::VIVALDI
-            ]
-            .map(|browser| Target::Key(location.key(browser)))
+            ["Google/Chrome", "Chromium", "Vivaldi"].map(|key| Target::Key(location.key(key)))
         );
         assert_eq!(removal.keep.len(), 1, "{removal:?}");
         assert!(
@@ -1988,17 +2175,6 @@ mod tests {
             "{removal:?}"
         );
         delete(&removal).expect("delete");
-        for browser in [
-            Browser::CHROME,
-            Browser::CHROMIUM,
-            Browser::BRAVE,
-            Browser::VIVALDI,
-        ] {
-            assert_eq!(
-                registry::read_string(&location.key(browser), "").expect("read"),
-                None
-            );
-        }
-        assert!(registry::read_string(&edge, "").expect("read").is_some());
+        assert_eq!(written_keys(&location), ["Microsoft/Edge"]);
     }
 }
