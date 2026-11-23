@@ -646,6 +646,44 @@ mod tests {
         assert!(!path.exists());
     }
 
+    /// A file something is reading is still replaced, whole or streamed: on
+    /// Windows a reader that allows deletion (std, Node) must not make the
+    /// update fail.
+    #[tokio::test]
+    async fn files_held_open_by_readers_are_replaced() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = LocalTarget::owned(dir.path().join("out"))
+            .await
+            .expect("claim");
+        let path = dir.path().join("out/app.js");
+        target
+            .write_file(&rel("app.js"), Bytes::from_static(b"one"), 0o644)
+            .await
+            .expect("write");
+        let reader = fs::File::open(&path).expect("open");
+        target
+            .write_file(&rel("app.js"), Bytes::from_static(b"two"), 0o644)
+            .await
+            .expect("replace while open");
+        assert_eq!(fs::read(&path).expect("read"), b"two");
+        let mut streamed = target
+            .begin_file(&rel("app.js"), 0o644)
+            .await
+            .expect("begin");
+        streamed
+            .append(Bytes::from_static(b"three"))
+            .await
+            .expect("append");
+        streamed.commit().await.expect("commit while open");
+        assert_eq!(fs::read(&path).expect("read"), b"three");
+        drop(reader);
+        let names: Vec<_> = fs::read_dir(dir.path().join("out"))
+            .expect("list")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "no temp file left: {names:?}");
+    }
+
     // Windows symlinks need Developer Mode or an elevated shell, as on the CI runners.
     #[tokio::test]
     async fn never_follows_symlinked_directories() {

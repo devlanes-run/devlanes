@@ -102,6 +102,11 @@ mod windows {
     /// no write bits. The attribute is set after the rename because Windows
     /// refuses to replace a read-only file, so an existing read-only `dest` is
     /// made writable first.
+    ///
+    /// `fs::rename` rather than `NamedTempFile::persist`: persist calls
+    /// `MoveFileExW`, which fails with access denied while anything has `dest`
+    /// open, even a reader that allows deletion. `fs::rename` uses POSIX
+    /// semantics, which replace a file such readers hold open.
     pub(crate) fn persist_with_mode(temp: NamedTempFile, dest: &Path, mode: u32) -> io::Result<()> {
         if let Ok(meta) = fs::symlink_metadata(dest)
             && meta.is_file()
@@ -109,7 +114,13 @@ mod windows {
         {
             set_readonly(dest, &meta, false)?;
         }
-        temp.persist(dest).map_err(|error| error.error)?;
+        // Closes the temp file and clears its temporary attribute, which the
+        // destination would otherwise keep.
+        let temp = temp.into_temp_path().keep().map_err(|error| error.error)?;
+        if let Err(error) = fs::rename(&temp, dest) {
+            let _ = fs::remove_file(&temp);
+            return Err(error);
+        }
         if mode & WRITE_BITS == 0 {
             set_readonly(dest, &fs::symlink_metadata(dest)?, true)?;
         }
