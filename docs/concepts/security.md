@@ -56,6 +56,12 @@ The token is a bearer secret: any process running as you on the paired machine c
 
 A box's services see your connections as coming from the box itself. A service there that trusts local connections without a password, such as an admin page or a database, trusts every machine the box serves.
 
+## The browser extension holds test passwords
+
+The browser extension saves the usernames and passwords you sign in with on lanes. They are stored unencrypted in the extension's local storage in that browser. The extension's background answers only a frame on a lane route, and only with the logins of that lane's project. The extension reaches devlanes through its native host, the devlanes command the browser starts. The host passes on four kinds of request, to read the lanes and to switch boxes, and never sends the extension environments, secrets or logs.
+
+A lane page still has some reach. In browsers that can't restrict the extension's storage to its own pages, such as Chrome 120, a compromised page process could read the saved logins, though page code can't. A lane page can submit its own form with values it chooses, and the extension saves them. One such submit replaces the saved password of a username, and 20 push out every real login of that project. A page can also draw its own content over the login menu and line up a click on one of its options. That needs a real click, and any extension's frame on a page has the same exposure. Keep the fill for test accounts.
+
 ## The daemon looks for new releases
 
 The daemon reads the latest version from the registry devlanes was installed from, and installs patch releases from there in the background. The request carries nothing that identifies your machine or your projects. [Update and uninstall](../how-to/update.md) says how to turn this off.
