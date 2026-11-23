@@ -36,5 +36,9 @@ tempfile.workspace = true
 [target.'cfg(windows)'.dev-dependencies]
 devlanes-testing = { path = "../testing" }
 
+# The tests check the highlights in the pending change files.
+[package.metadata.ci]
+inputs = [".sampo/changesets/"]
+
 [lints]
 workspace = true

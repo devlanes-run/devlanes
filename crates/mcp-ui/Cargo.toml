@@ -19,5 +19,9 @@ insta = { version = "1", features = ["json"] }
 serde_json.workspace = true
 sha2.workspace = true
 
+# The tests check the card's tokens against the pages stylesheet.
+[package.metadata.ci]
+inputs = ["crates/pages/styles/"]
+
 [lints]
 workspace = true

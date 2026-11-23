@@ -9,6 +9,11 @@ license = "Apache-2.0"
 repository = "https://github.com/devlanes-run/devlanes"
 publish = false
 
+# A change to these runs every CI job and test. Packages list the files they read from
+# outside their directory in `[package.metadata.ci]`; .github/scripts/affected.js says how.
+[workspace.metadata.ci]
+inputs = [".github/workflows/ci.yml", ".github/actions/", ".github/scripts/", ".cargo/", ".config/", "rust-toolchain.toml"]
+
 [workspace.dependencies]
 async-trait = "0.1"
 anyhow = "1"

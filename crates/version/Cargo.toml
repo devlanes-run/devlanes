@@ -7,5 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+# The build script reads the release version from it, so every crate that depends on
+# this one builds differently when it changes.
+[package.metadata.ci]
+build-inputs = ["bins/devlanes/Cargo.toml"]
+
 [lints]
 workspace = true

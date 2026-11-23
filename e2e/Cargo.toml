@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+# The tests start the fixture projects.
+[package.metadata.ci]
+inputs = ["fixtures/"]
+
 [lints]
 workspace = true
 

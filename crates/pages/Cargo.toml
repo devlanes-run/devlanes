@@ -18,5 +18,9 @@ base64.workspace = true
 grass.workspace = true
 sha2 = "0.11"
 
+# The tests check every error code has its docs page.
+[package.metadata.ci]
+inputs = ["docs/errors/"]
+
 [lints]
 workspace = true

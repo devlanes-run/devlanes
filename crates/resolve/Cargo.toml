@@ -33,5 +33,9 @@ serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
+# The tests load the example configs.
+[package.metadata.ci]
+inputs = ["fixtures/"]
+
 [lints]
 workspace = true

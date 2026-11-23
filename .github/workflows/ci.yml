@@ -14,11 +14,8 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 jobs:
-  # Decides which jobs below run and whose tests the rust job runs, from the files that
-  # differ from a commit whose checks passed: a pull request's base, or on main the last
-  # commit whose CI run passed. A passing run vouches for every test it left out, since
-  # nothing those tests read changed. .github/scripts/affected.py has the rules; a run by
-  # hand (workflow_dispatch) runs everything.
+  # Decides which jobs below run and whose tests the rust job runs; the script's header
+  # says how. A run by hand (workflow_dispatch) runs everything.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -31,46 +28,16 @@ jobs:
       tests: ${{ steps.affected.outputs.tests }}
       e2e: ${{ steps.affected.outputs.e2e }}
       web: ${{ steps.affected.outputs.web }}
-      packaging: ${{ steps.affected.outputs.packaging }}
       mcp_ui: ${{ steps.affected.outputs.mcp_ui }}
       next: ${{ steps.affected.outputs.next }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # A pull request's merge commit and its first parent, the base branch.
-          fetch-depth: 2
       - id: affected
-        env:
-          EVENT: ${{ github.event_name }}
-          GH_TOKEN: ${{ github.token }}
-          # cargo metadata only reads the manifests, so the runner's stable toolchain is
-          # enough and this job installs none.
-          RUSTUP_TOOLCHAIN: stable
-        run: |
-          set -euo pipefail
-          # Fetches commit $1 and prints it, or prints nothing when there is none.
-          # git diff compares the two trees, so the commit alone is enough.
-          fetch() {
-            if [ -n "$1" ] && git fetch --quiet --depth=1 origin "$1"; then echo "$1"; fi
-          }
-          base=
-          case $EVENT in
-            pull_request) base=$(git rev-parse HEAD^1) ;;
-            push)
-              base=$(fetch "$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$GITHUB_REF_NAME" \
-                --event push --status success --limit 1 --json headSha --jq '.[0].headSha // ""')")
-              ;;
-          esac
-          # shellcheck disable=SC2086 # an empty base is no argument
-          python3 .github/scripts/affected.py $base | grep -v '^next=' >> "$GITHUB_OUTPUT"
-          # `next` ships what changed since the commit the prerelease was built from,
-          # which is older than base when commits since then changed nothing it ships.
-          if [ "$EVENT" = push ]; then
-            published=$(fetch "$(git ls-remote origin refs/tags/next | cut -f1)")
-            # shellcheck disable=SC2086
-            python3 .github/scripts/affected.py $published | grep '^next=' >> "$GITHUB_OUTPUT"
-          fi
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: return require('./.github/scripts/affected.js')({ github, context, core })
   # Separate from the rust job so clippy and the test build run in parallel; on
   # Windows they take about 5 and 10 minutes.
   lint:
@@ -231,8 +198,6 @@ jobs:
           # Lets the daemon finish its queued uploads before the runner goes away.
           kache daemon stop
   packaging:
-    needs: changes
-    if: needs.changes.outputs.packaging == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -260,8 +225,6 @@ jobs:
   # install.ps1, package.ps1 and the npm launcher on Windows, against a fake
   # devlanes.exe, so no Rust build is needed.
   packaging-windows:
-    needs: changes
-    if: needs.changes.outputs.packaging == 'true'
     runs-on: windows-latest
     timeout-minutes: 15
     defaults:
@@ -440,13 +403,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: |
-          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          if echo "$RESULTS" | jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' >/dev/null; then
-            exit 1
-          fi
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
 
   # A push to main that passed every job above builds the rolling `next` prerelease in
   # this same run, so its build and publish jobs show in the commit's checks. A commit
