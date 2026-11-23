@@ -576,8 +576,11 @@ fn write_manifest(file: &Path, manifest: &Value) -> Result<(), BrowserError> {
         .map_err(io::Error::from)
         .map_err(failed)?;
     text.push('\n');
-    let temporary = tempfile::NamedTempFile::new_in(dir).map_err(failed)?;
-    std::fs::write(temporary.path(), text).map_err(failed)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(dir).map_err(failed)?;
+    io::Write::write_all(temporary.as_file_mut(), text.as_bytes()).map_err(failed)?;
+    // On disk before the rename, so a crash never leaves an empty manifest
+    // under the real name.
+    temporary.as_file_mut().sync_all().map_err(failed)?;
     temporary
         .persist(file)
         .map_err(|error| failed(error.error))?;
