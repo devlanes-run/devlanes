@@ -1,5 +1,11 @@
 # devlanes-sync
 
+## 0.4.1 — 2026-11-23
+
+### Patch changes
+
+- [e44cecd7](https://github.com/devlanes-run/devlanes/commit/e44cecd7397437881f202ec89eab4f0f13981b94) Fixed `sync` on Windows failing to update a file while another program was reading it.
+
 ## 0.4.0 — 2026-10-25
 
 ### Patch changes

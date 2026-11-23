@@ -1,5 +1,13 @@
 # devlanes
 
+## 0.15.1 — 2026-11-23
+
+### Patch changes
+
+- [e44cecd7](https://github.com/devlanes-run/devlanes/commit/e44cecd7397437881f202ec89eab4f0f13981b94) Fixed `sync` on Windows failing to update a file while another program was reading it.
+- [1ed9cccc](https://github.com/devlanes-run/devlanes/commit/1ed9cccc55b9dc00d11434307ec3074ba99da3cf) Fixed small writes through box ports and the proxy, such as WebSocket messages, arriving late.
+- [0ddedcc4](https://github.com/devlanes-run/devlanes/commit/0ddedcc4ab95dbcac6946cd77300449ca179974c) Fixed `devlanes status` and `start` right after an edit to `devlanes.yaml` sometimes reading the new file before its ports and drift were ready.
+
 ## 0.15.0 — 2026-11-20
 
 ### Minor changes
