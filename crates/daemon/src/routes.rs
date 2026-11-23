@@ -24,8 +24,7 @@ use crate::{
 /// `hosts` parameters.
 #[derive(Debug, Default, Deserialize)]
 struct HostsParams {
-    /// Every project's routes, whatever the cwd, as `status`'s `all`. The
-    /// browser extension's host asks for it, since Chrome picks its cwd.
+    /// Lists every project's routes whatever the cwd, as `all` does for `status`.
     #[serde(default)]
     all: bool,
 }
@@ -405,9 +404,10 @@ impl Inner {
             .collect()
     }
 
-    /// `hosts`: the routes of the request's scope (as `status`'s, every project
-    /// with `all`) with their lane, unit, port and state, and for this machine's
-    /// own routes the URL each reporting client opens it at. A box route counts
+    /// `hosts`: the routes of the request's scope, the same as `status`'s, with
+    /// their lane, unit, port and state. With `all` the scope is every project.
+    /// For this machine's own routes it adds the URL each reporting client
+    /// opens it at. A box route counts
     /// by its project and the box lane's reference, so `--lane` on a local lane
     /// that yielded its hostnames to a box lane with another reference lists
     /// none of them.

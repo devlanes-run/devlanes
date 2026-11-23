@@ -91,8 +91,8 @@ struct SubscribeParams {
     #[serde(default)]
     follow: Option<bool>,
     /// Whether this subscriber holds the daemon past its idle exit and keeps
-    /// the sampler on its fast tick, as a TUI does. A browser extension that
-    /// only listens sends `false` ([`devlanes_proto::features::QUIET_SUBSCRIBE`]).
+    /// the sampler on its fast tick, as a TUI does. A subscriber that only
+    /// listens sends `false` ([`devlanes_proto::features::QUIET_SUBSCRIBE`]).
     #[serde(default = "keeps_awake_default")]
     keeps_awake: bool,
 }
@@ -1291,9 +1291,10 @@ impl Inner {
         }))
     }
 
-    /// `subscribe`: streams every event until disconnect; `follow: false` returns
-    /// the recent events instead. With `keeps_awake: false` the subscription
-    /// neither holds the daemon past its idle exit nor keeps the sampler fast.
+    /// `subscribe`: streams every event until disconnect. `follow: false`
+    /// returns the recent events instead. With `keeps_awake: false` the
+    /// subscription neither holds the daemon past its idle exit nor keeps the
+    /// sampler fast.
     pub(crate) async fn subscribe_method(
         self: &Arc<Self>,
         value: Value,
