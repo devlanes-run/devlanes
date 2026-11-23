@@ -1166,13 +1166,31 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             with_message("ports could not be allocated".into()),
             Some(Hint::command(["doctor"])),
         ),
-        "mixed_lanes" => (
-            format!(
-                "{} belong to different lanes; name units of one lane per command",
-                names("units")
-            ),
-            None,
-        ),
+        "mixed_lanes" => {
+            let units = names("units");
+            let lanes = names("lanes");
+            // `bare_lane` is there when some units name no lane: the lane they went
+            // to, or null for none. Older daemons send neither field.
+            let line = match data.get("bare_lane") {
+                Some(Value::String(bare)) => format!(
+                    "{units} belong to different lanes ({lanes}): units without a lane prefix are in {}; prefix each unit with its lane or use --lane",
+                    super::clean(bare)
+                ),
+                Some(_) if lanes.is_empty() => format!(
+                    "{units} belong to different lanes: units without a lane prefix have no lane here; prefix each unit with its lane or use --lane"
+                ),
+                Some(_) => format!(
+                    "{units} belong to different lanes ({lanes}): units without a lane prefix have no lane here; prefix each unit with its lane or use --lane"
+                ),
+                None if lanes.is_empty() => {
+                    format!("{units} belong to different lanes; name units of one lane per command")
+                }
+                None => format!(
+                    "{units} belong to different lanes ({lanes}); name units of one lane per command"
+                ),
+            };
+            (line, None)
+        }
         "not_running" => {
             let unit = target(data);
             (

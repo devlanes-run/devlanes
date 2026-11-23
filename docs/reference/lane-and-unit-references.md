@@ -23,7 +23,7 @@ A reference made only of digits matches lane numbers only. Any other reference i
 
 ## Unit references
 
-A unit reference is `[lane:]unit`, where `lane` is any lane reference. Without `lane:`, the unit is looked for in the lane of the current directory, or in the one `--lane` names.
+A unit reference is `[lane:]unit`, where `lane` is any lane reference. Without `lane:`, the unit is looked for in the lane of the current directory, or in the one `--lane` names. The units of one command must be in one lane, though they may write it two ways, as in `1:api myapp@1:web`. From lane 1's folder, `devlanes stop 2:api web` fails, because `web` is lane 1's `web`.
 
 | Form | Matches | Example |
 |---|---|---|

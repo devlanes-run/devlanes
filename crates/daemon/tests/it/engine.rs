@@ -1093,6 +1093,154 @@ async fn start_result_ownership_stop_and_restart() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A unit without `lane:` is in the request's lane, even next to one that names
+/// a lane: units of two lanes fail as `mixed_lanes` and stop, start or claim
+/// nothing, and one lane named in different words is one lane.
+async fn bare_units_stay_in_the_request_lane() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BASIC);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        // The first start registers the project through `0:`, before the bare
+        // unit can resolve.
+        let first = start(&h, cx(&main), json!({"units": ["0:worker", "worker"]})).await;
+        assert_eq!(first.started, ["demo@0:worker"]);
+        h.call(Method::LaneNew, json!({"name": "review"}), cx(&main))
+            .await
+            .expect("lane new");
+        let review = Context {
+            lane: Some("review".into()),
+            ..cx(&main)
+        };
+        h.call(Method::Start, json!({"units": ["worker"]}), review)
+            .await
+            .expect("start review");
+        let workers = async || {
+            let mut states: Vec<(String, String)> = status(&h, cx(&main), json!({}))
+                .await
+                .into_iter()
+                .flat_map(|lane| {
+                    lane.units
+                        .into_iter()
+                        .filter(|unit| unit.name == "worker")
+                        .map(move |unit| (lane.reference.clone(), unit.state))
+                })
+                .collect();
+            states.sort();
+            states
+        };
+        let both_up = vec![
+            ("demo@0".to_owned(), "ready".to_owned()),
+            ("demo@1".to_owned(), "ready".to_owned()),
+        ];
+        assert_eq!(workers().await, both_up);
+
+        let outside = Context {
+            project: Some("demo".into()),
+            cwd: tmp.path.clone(),
+            ..cx(&main)
+        };
+        let review = Context {
+            lane: Some("review".into()),
+            ..cx(&main)
+        };
+        // (where, units, lanes, the lane of the unit without `lane:`). From
+        // outside the repository, `-p` puts it in the main lane, and without `-p`
+        // it has none.
+        let refused = [
+            (
+                cx(&main),
+                ["review:worker", "worker"],
+                json!(["demo@1", "demo@0"]),
+                json!("demo@0"),
+            ),
+            (
+                outside,
+                ["review:worker", "worker"],
+                json!(["demo@1", "demo@0"]),
+                json!("demo@0"),
+            ),
+            (
+                review,
+                ["0:worker", "worker"],
+                json!(["demo@0", "demo@1"]),
+                json!("demo@1"),
+            ),
+            (
+                cx(&tmp.path),
+                ["demo@1:worker", "worker"],
+                json!(["demo@1"]),
+                Value::Null,
+            ),
+        ];
+        for (context, units, lanes, bare_lane) in refused {
+            let error = h
+                .call(Method::Stop, json!({"units": units}), context)
+                .await
+                .expect_err("mixed lanes");
+            assert_eq!(
+                (error.code.as_str(), error.exit_code),
+                ("mixed_lanes", 2),
+                "{units:?}: {error:?}"
+            );
+            assert_eq!(error.data["units"], json!(units));
+            assert_eq!(error.data["lanes"], lanes, "{units:?}");
+            assert_eq!(error.data.get("bare_lane"), Some(&bare_lane), "{units:?}");
+        }
+        assert_eq!(workers().await, both_up);
+
+        let stopped = h
+            .call(
+                Method::Stop,
+                json!({"units": ["1:worker", "demo@1:worker"]}),
+                cx(&main),
+            )
+            .await
+            .expect("one lane in two words");
+        let items: Vec<_> = stopped["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| (&item["name"], &item["lane"], &item["state"]))
+            .collect();
+        assert_eq!(
+            items,
+            [(&json!("worker"), &json!("demo@1"), &json!("stopped"))]
+        );
+        let one_up = [
+            ("demo@0".to_owned(), "ready".to_owned()),
+            ("demo@1".to_owned(), "stopped".to_owned()),
+        ];
+        assert_eq!(workers().await, one_up);
+
+        // A refused start, from a worktree with no lane yet, starts the stopped
+        // worker of neither lane and gives the worktree no lane.
+        let wt = tmp.path.join("wt");
+        worktree(&main, &wt, "feat/wt");
+        let error = h
+            .call(
+                Method::Start,
+                json!({"units": ["review:worker", "worker"]}),
+                cx(&wt),
+            )
+            .await
+            .expect_err("mixed lanes");
+        assert_eq!(error.code, "mixed_lanes", "{error:?}");
+        assert_eq!(workers().await, one_up);
+        let indexed: Vec<String> = status(&h, cx(&main), json!({}))
+            .await
+            .into_iter()
+            .filter(|lane| lane.index.is_some())
+            .map(|lane| lane.reference)
+            .collect();
+        assert_eq!(indexed, ["demo@0", "demo@1"]);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// `exec` adopts a command as a unit whose logs and terminal are reachable.
 async fn exec_logs_and_attach() {
     tokio::time::timeout(LIMIT, async {

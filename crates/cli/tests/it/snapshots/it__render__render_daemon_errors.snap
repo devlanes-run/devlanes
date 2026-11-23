@@ -52,6 +52,9 @@ error: acme@2:probe is already running; stop it first, or restart it
 hint: devlanes restart acme@2:probe
 error: the worktree /work/gone no longer exists
 hint: devlanes lane gc
+error: 2:api, web belong to different lanes (acme@2, acme@1): units without a lane prefix are in acme@1; prefix each unit with its lane or use --lane
+error: 2:api, web belong to different lanes (acme@2): units without a lane prefix have no lane here; prefix each unit with its lane or use --lane
+error: 1:api, 2:web belong to different lanes; name units of one lane per command
 error: the setup phase failed: task migrate failed with exit code 2
 hint: devlanes logs acme@2:migrate --tail 200
 error: acme@2 did not become ready: acme@2:api
