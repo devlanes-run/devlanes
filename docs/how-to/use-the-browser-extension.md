@@ -47,7 +47,7 @@ When more than one machine has a lane, such as your machine and a box, the lane 
 
 When the lane runs on your machine, the popup asks before it stops it. "Stop and switch" stops the lane and then switches. When the lane's containers hold its ports, the popup lists the commands that stop them, each with a copy button. Run them, then click "Switch again".
 
-## If your browser isn't on the list
+## If setup doesn't register your browser
 
 Setup also keeps the manifest at `~/.devlanes/browser/run.devlanes.browser.json`, `%USERPROFILE%\.devlanes\browser\run.devlanes.browser.json` on Windows, for any other Chromium-based browser. Point the browser at it by hand.
 
