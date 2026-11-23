@@ -45,9 +45,9 @@ Check first. This reads and changes nothing:
 devlanes setup --check
 ```
 
-Each line is `ok`, `todo` or `skip` with a step (`ca`, `hosts`, `resolver`); it exits 0 when nothing is missing and 1 otherwise.
+Each line is `ok`, `todo`, `info` or `skip` with a step (`ca`, `hosts`, `resolver`, `browser`). It exits 0 when nothing is `todo` and 1 otherwise.
 
-The `browser` step registers devlanes as the native host of the devlanes browser extension for Chrome, Chromium, Brave and Edge. It is `info` when setup would write or refresh a registration, and it is never `todo`: it never counts in `missing` or the exit code. Any `devlanes setup` that runs applies it. With nothing else `todo`, plain `devlanes setup` applies it without asking and exits 0, also without a terminal. It needs no `sudo` and no dialog. It is `skip` for `uvx` and `pipx run`, whose cache paths a browser can't rely on. `devlanes setup --remove` deletes only the registrations that start this install.
+The `browser` step registers devlanes as the native host of the devlanes browser extension for Chrome, Chromium, Brave and Edge. It is `info` when setup would write or refresh a registration, and it is never `todo`: it never counts in `missing` or the exit code. With nothing else `todo`, plain `devlanes setup` applies it without asking and exits 0, also without a terminal. It needs no `sudo` and no dialog. It is `skip` for `uvx` and `pipx run`, whose cache paths a browser can't rely on. `devlanes setup --remove` deletes only the registrations that start this install.
 
 When something is `todo`:
 
