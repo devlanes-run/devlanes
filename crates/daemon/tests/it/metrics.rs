@@ -661,16 +661,17 @@ async fn only_subscribers_that_keep_the_daemon_awake_sample_fast() {
         .await;
         let quiet = crate::shutdown::subscribed(&h, json!({"keeps_awake": false})).await;
         let before = samples(&source);
-        // The window must stay under five 1 s ticks, so it holds at most one
-        // slow sample.
+        // 4 s is shorter than the 5 s slow tick, so the window holds at most
+        // one slow sample.
         tokio::time::sleep(Duration::from_secs(4)).await;
         let slow = samples(&source) - before;
         assert!(slow <= 1, "{slow} samples with a quiet subscriber");
 
         let tui = crate::shutdown::subscribed(&h, json!({})).await;
         let before = samples(&source);
-        // The slow tick takes at most one sample in 5 s, so two need the fast one.
-        tokio::time::timeout(Duration::from_secs(5), async {
+        // The slow tick takes one sample every 5 s, so two samples within 4 s
+        // need the 1 s tick.
+        tokio::time::timeout(Duration::from_secs(4), async {
             while samples(&source) < before + 2 {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }

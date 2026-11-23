@@ -57,6 +57,13 @@ impl<'a> Subscription<'a> {
             quiet,
         }
     }
+
+    /// The receiver, which stays in place until the guard drops.
+    fn receiver(&mut self) -> &mut broadcast::Receiver<Event> {
+        self.receiver
+            .as_mut()
+            .expect("only Drop takes the receiver")
+    }
 }
 
 impl Drop for Subscription<'_> {
@@ -211,9 +218,7 @@ impl EventBus {
             forwarding.handled(seq);
             (Subscription::new(self, !keeps_awake), seq, forwarding)
         };
-        let Some(receiver) = subscription.receiver.as_mut() else {
-            return;
-        };
+        let receiver = subscription.receiver();
         let disconnected = session.disconnected();
         for event in initial(seq) {
             if session.event(event).await.is_err() {
@@ -317,8 +322,8 @@ mod tests {
         _frames: tokio::sync::mpsc::Receiver<devlanes_ipc::Frame>,
     }
 
-    /// Starts a forward on `bus` and returns once its first frame arrived,
-    /// when its subscription exists.
+    /// Starts a forward on `bus` and returns once its first frame arrives. By
+    /// then its subscription exists.
     async fn join(bus: &std::sync::Arc<EventBus>, id: u64, keeps_awake: bool) -> Joined {
         let (session, mut frames) = Session::local(id);
         let forward = {
@@ -357,8 +362,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// Quiet forwards never count as awake while they join and leave, and
-    /// plain ones always do.
+    /// `awake_subscribers` leaves out quiet forwards and counts plain ones,
+    /// whatever order forwards join and leave in.
     async fn awake_subscribers_leave_out_quiet_forwards() {
         let bus = std::sync::Arc::new(EventBus::default());
         assert_eq!((bus.subscribers(), bus.awake_subscribers()), (0, 0));
