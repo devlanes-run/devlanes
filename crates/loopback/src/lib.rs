@@ -45,8 +45,8 @@ pub async fn connect(address: SocketAddr, timeout: Duration) -> io::Result<TcpSt
                 format!("connecting to {address} timed out"),
             ))
         })?;
-    // Callers relay interactive traffic (WebSockets, database clients), where
-    // Nagle would hold a small write until the previous one is acknowledged.
+    // Some callers relay interactive traffic (WebSockets, database clients),
+    // where Nagle would hold a small write until the previous one is acknowledged.
     // A failure only costs latency, so it is ignored.
     let _ = stream.set_nodelay(true);
     Ok(stream)

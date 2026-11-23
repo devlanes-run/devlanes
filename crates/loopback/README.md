@@ -23,7 +23,7 @@ async fn reach(port: u16) -> std::io::Result<()> {
 - `connect_loopback(port, per_address_timeout)`: `127.0.0.1`, else `::1`. When both fail, a refusal wins over the other error, since callers retry refusals.
 - `connect(address, timeout)`: one address.
 
-Both set `TCP_NODELAY`, since the streams carry interactive traffic such as WebSockets.
+Both set `TCP_NODELAY`, since the proxy and the box's transport relay interactive traffic such as WebSockets through them.
 
 ## Windows
 
