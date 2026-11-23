@@ -41,7 +41,9 @@ The app's window opens once the first Rust build finishes, which takes longer th
 
 ## If you want several copies in one lane
 
-Set `replicas: 2` on the app. The replica number in the identifier keeps the copies' data apart, and [Run workers and replicas](../services/workers.md) has more on replicas.
+Set `replicas: 2` on the app. The replica number in the identifier keeps the copies' data apart, and each copy after the first builds the app in a folder of its own, so its first start is a full Rust build. [Run workers and replicas](../services/workers.md) has more on replicas.
+
+A second lane in the same folder builds the app where the first one does; point the app's `CARGO_TARGET_DIR` at the lane's data folder as [Run a folder as two lanes](../lanes/two-lanes-one-folder.md) shows.
 
 ## Related
 
