@@ -10,9 +10,10 @@
 // functions, and one small crate adds about 1%. `-no_compact_unwind` would
 // give up the compact table for every frame, and `opt-level = 1` for every
 // dependency removes only 9% of the functions while it slows debug builds
-// and debugging. So the lint is allowed here, for this crate on macOS only.
+// and debugging. So the lint is allowed here, for this crate's debug builds
+// on macOS only.
 #![cfg_attr(
-    target_os = "macos",
+    all(target_os = "macos", debug_assertions),
     allow(
         linker_messages,
         reason = "ld's __eh_frame size note on debug builds, rust-lang/rust#159105"
