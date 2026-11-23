@@ -6,7 +6,7 @@ kind: how-to
 
 Use this when your lanes share test accounts and you sign in on each lane again. The fill is part of the devlanes browser extension, which [Use the browser extension](use-the-browser-extension.md) sets up.
 
-## Fill test logins on other lanes
+## Save a login and fill it on another lane
 
 When you sign in with a form on an HTTPS lane page, the extension saves the username and password for the project. On any lane of the project, focus a field marked as a username, an email or a current password, and pick a login from the menu with the mouse, or with the arrow keys and Enter. The extension fills both fields.
 
