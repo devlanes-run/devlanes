@@ -69,7 +69,7 @@ $ ln -s ~/.devlanes/browser/run.devlanes.browser.json "<user data folder>/Native
 ```
 :::
 :::tab[Windows]
-The copy is `%USERPROFILE%\.devlanes\browser\run.devlanes.browser.json`. Most Chromium-based browsers read Chromium's key and then Chrome's, not a key under their own name. Point Chromium's key at the copy. A browser whose documentation names a key of its own reads that one instead.
+The copy is `%USERPROFILE%\.devlanes\browser\run.devlanes.browser.json`. Most Chromium-based browsers read Chromium's key and then Chrome's, so a browser may already find devlanes when setup registered Chrome, Chromium or Brave. Otherwise point Chromium's key at the copy. A browser whose documentation names a key of its own reads that key first.
 
 ```console
 PS> reg add "HKCU\Software\Chromium\NativeMessagingHosts\run.devlanes.browser" /ve /t REG_SZ /d "$env:USERPROFILE\.devlanes\browser\run.devlanes.browser.json" /f
@@ -77,7 +77,7 @@ PS> reg add "HKCU\Software\Chromium\NativeMessagingHosts\run.devlanes.browser" /
 :::
 ::::
 
-Each run of setup keeps the copy current, so the link or key keeps working. `devlanes setup --remove` deletes the copy, so a link or key you made stops working. Delete the link or key yourself. A key at Chromium's or Chrome's location counts as devlanes' own registration, and `--remove` deletes it.
+Each run of setup keeps the copy current, so the link or key keeps working. `devlanes setup --remove` deletes the copy and any key under Chromium's or Chrome's location that points at it. Delete any other link or key you made yourself.
 
 ## Related
 
