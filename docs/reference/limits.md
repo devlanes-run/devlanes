@@ -38,6 +38,7 @@ What devlanes does not do, with the issue that tracks each limit. An empty Issue
 | The extension runs in Chrome, Chromium, Brave and Edge, not in Firefox. | [browser#1](https://github.com/devlanes-run/browser/issues/1) |
 | A browser installed as a Snap or Flatpak can't start devlanes, so the extension can't reach it. | [browser#2](https://github.com/devlanes-run/browser/issues/2) |
 | The extension only knows hostnames ending in `.localhost`, not a `hostnames.tld` such as `.test`. | [browser#5](https://github.com/devlanes-run/browser/issues/5) |
+| Installs run with uvx or pipx run can't register the browser extension's host. Install with uv tool install or pipx install. | |
 | The browser starts devlanes with its own environment, so a `DEVLANES_HOME` set only in a shell doesn't reach it and the extension uses the default home. | |
 
 ## Remote boxes
