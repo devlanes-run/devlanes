@@ -185,8 +185,15 @@ impl Install {
     }
 
     /// Why this install can't be registered: uvx and pipx run devlanes from a
-    /// cache, which they may clear or replace at any time.
+    /// cache, which they may clear or replace at any time, and a relative
+    /// entry means devlanes couldn't find its own binary.
     fn refusal(&self) -> Option<String> {
+        if !self.entry.is_absolute() {
+            return Some(format!(
+                "devlanes can't find the path of its own binary, only {}, so the browser extension couldn't start it. Run devlanes setup again by its full path",
+                self.entry.display()
+            ));
+        }
         let (runner, install) = match self.method {
             InstallMethod::Uvx => ("uvx", "uv tool install devlanes"),
             InstallMethod::PipxRun => ("pipx run", "pipx install devlanes"),
@@ -1066,8 +1073,9 @@ mod tests {
         }
     }
 
-    /// uvx and pipx run installs are refused. Builds from a checkout get a
-    /// note that the host runs that build.
+    /// uvx and pipx run installs are refused, and so is an entry that isn't
+    /// an absolute path. Builds from a checkout get a note that the host
+    /// runs that build.
     #[test]
     fn caches_are_refused_and_builds_are_named() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1088,6 +1096,20 @@ mod tests {
                 Err(BrowserError::Refused(_))
             ));
         }
+        // `current_with_entry` falls back to a bare `devlanes` when the
+        // binary's own path can't be read.
+        let relative = Install::new(
+            InstallMethod::Script(PathBuf::new()),
+            PathBuf::from("devlanes"),
+        );
+        let Facts::Refused(reason) = facts(Some(&location), relative.clone()) else {
+            panic!("not refused");
+        };
+        assert!(reason.contains("by its full path"), "{reason}");
+        assert!(matches!(
+            apply(&location, &relative, &inspect(&location, &relative)),
+            Err(BrowserError::Refused(_))
+        ));
         assert!(!location.unix_manifest(Browser::Chromium).exists());
         let build = temp.path().join("target").join("debug").join("devlanes");
         let install = Install::new(InstallMethod::Source, build.clone());
