@@ -1,6 +1,6 @@
 # devlanes-transport-ssh
 
-## 0.6.0 ... 0.6.1 — 2026-11-16
+## 0.6.0 ... 0.6.2 — 2026-11-23
 
 Version bump only, to follow other packages.
 

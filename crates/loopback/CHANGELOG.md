@@ -1,5 +1,11 @@
 # devlanes-loopback
 
+## 0.2.1 — 2026-11-23
+
+### Patch changes
+
+- [1ed9cccc](https://github.com/devlanes-run/devlanes/commit/1ed9cccc55b9dc00d11434307ec3074ba99da3cf) Fixed small writes through box ports and the proxy, such as WebSocket messages, arriving late.
+
 ## 0.2.0 — 2026-11-09
 
 ### Patch changes
