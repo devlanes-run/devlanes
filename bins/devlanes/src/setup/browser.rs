@@ -197,14 +197,24 @@ impl Install {
         ))
     }
 
-    /// A note for builds that may move or go away, such as a checkout's
-    /// `target/` folder.
-    fn note(&self) -> Option<String> {
+    /// Whether this is a `Source` or `Local` build, whose binary may move or
+    /// go away.
+    fn is_build(&self) -> bool {
         matches!(
             self.method,
             InstallMethod::Source | InstallMethod::Local { .. }
         )
-        .then(|| format!("the host runs this build at {}", self.entry.display()))
+    }
+
+    /// A note for `Source` and `Local` builds, whose binary may move or go
+    /// away.
+    fn note(&self) -> Option<String> {
+        self.is_build().then(|| {
+            format!(
+                "the host runs this build at {}. Run devlanes setup again if you move or delete it",
+                self.entry.display()
+            )
+        })
     }
 
     /// The manifest that registers this install.
@@ -234,6 +244,12 @@ pub(crate) enum Found {
         runs: Option<PathBuf>,
         ours: bool,
     },
+    /// Another install's working registration, which a `Source` or `Local`
+    /// build leaves alone: `runs` exists. A stable install replaces it as
+    /// [`Found::Stale`], so the last setup wins.
+    Kept {
+        runs: PathBuf,
+    },
     /// The manifest or the key can't be read.
     Unreadable(String),
 }
@@ -250,7 +266,10 @@ pub(crate) struct Registration {
 impl Registration {
     /// Whether setup writes this registration.
     fn to_write(&self) -> bool {
-        !matches!(self.found, Found::NoBrowser | Found::Current)
+        !matches!(
+            self.found,
+            Found::NoBrowser | Found::Current | Found::Kept { .. }
+        )
     }
 }
 
@@ -298,7 +317,8 @@ fn read_manifest(file: &Path, expected: &Value) -> Manifest {
     }
 }
 
-/// What a manifest means for a registration of `install`.
+/// What a manifest means for a registration of `install`. Blocking, since it
+/// checks whether another install's program exists.
 fn found_of(manifest: Manifest, install: &Install) -> Found {
     match manifest {
         Manifest::Missing => Found::Stale {
@@ -307,10 +327,19 @@ fn found_of(manifest: Manifest, install: &Install) -> Found {
         },
         Manifest::Unreadable(reason) => Found::Unreadable(reason),
         Manifest::Runs { current: true, .. } => Found::Current,
-        Manifest::Runs { path, .. } => Found::Stale {
-            ours: same_path(&path, &install.entry),
-            runs: Some(path),
-        },
+        Manifest::Runs { path, .. } => {
+            let ours = same_path(&path, &install.entry);
+            // A build may move or go away, so it doesn't take a working
+            // registration from another install.
+            if !ours && install.is_build() && path.is_file() {
+                Found::Kept { runs: path }
+            } else {
+                Found::Stale {
+                    ours,
+                    runs: Some(path),
+                }
+            }
+        }
     }
 }
 
@@ -423,16 +452,34 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
     let registered = names(&|found| *found == Found::Current);
     let missing = names(&|found| *found == Found::Missing);
     let stale = names(&|found| matches!(found, Found::Stale { .. } | Found::Unreadable(_)));
-    let note = install
-        .note()
-        .map(|note| format!(". {}", capitalise(&note)))
-        .unwrap_or_default();
+    let kept: Vec<String> = registrations
+        .iter()
+        .filter_map(|registration| match &registration.found {
+            Found::Kept { runs } => Some(format!(
+                "left {} on {}",
+                registration.browser.name(),
+                runs.display()
+            )),
+            _ => None,
+        })
+        .collect();
+    let kept = (!kept.is_empty()).then(|| {
+        format!(
+            "{}. Run devlanes setup from that install to change it",
+            kept.join(", ")
+        )
+    });
+    let note = [kept.as_deref(), install.note().as_deref()]
+        .into_iter()
+        .flatten()
+        .map(|sentence| format!(". {}", capitalise(sentence)))
+        .collect::<String>();
     if registered.is_none() && missing.is_none() && stale.is_none() {
-        return (
-            false,
-            false,
-            "no Chrome, Chromium, Brave or Edge folder in your home".into(),
-        );
+        let reason = match kept {
+            Some(kept) => capitalise(&kept),
+            None => "no Chrome, Chromium, Brave or Edge folder in your home".into(),
+        };
+        return (false, false, reason);
     }
     let host = "the browser extension host";
     let mut reason = match (missing, stale) {
@@ -643,7 +690,8 @@ pub(crate) fn removal(location: &Location, install: &Install) -> Removal {
             Found::NoBrowser | Found::Missing | Found::Current => continue,
             Found::Stale {
                 runs: Some(runs), ..
-            } => {
+            }
+            | Found::Kept { runs } => {
                 format!("it runs {}, not this devlanes", runs.display())
             }
             Found::Stale { runs: None, .. } => "the manifest it names is missing".into(),
@@ -778,6 +826,7 @@ pub(crate) fn report(location: &Location, install: &Install) -> Value {
         .filter_map(|registration| {
             let (runs, error) = match &registration.found {
                 Found::Stale { runs, .. } => (runs.as_ref(), None),
+                Found::Kept { runs } => (Some(runs), None),
                 Found::Unreadable(reason) => (None, Some(reason)),
                 _ => return None,
             };
@@ -1047,11 +1096,86 @@ mod tests {
         assert_eq!(
             reason,
             format!(
-                "setup registers the browser extension host for Chromium. The host runs this build at {}",
+                "setup registers the browser extension host for Chromium. The host runs this build at {}. Run devlanes setup again if you move or delete it",
                 build.display()
             )
         );
         assert!(!plan(&facts(None, script(&build))).0);
+    }
+
+    /// A `Source` or `Local` build leaves another install's working
+    /// registration alone and says so. A registration whose program is gone
+    /// is still refreshed. A stable install takes over either one.
+    #[test]
+    fn builds_leave_a_working_registration_alone() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let location = Location {
+            home: temp.path().join("user"),
+            layout: Layout::Linux,
+            registry_root: String::new(),
+        };
+        let other = temp.path().join("opt").join("devlanes");
+        std::fs::create_dir_all(other.parent().expect("parent")).expect("opt");
+        std::fs::write(&other, "").expect("other binary");
+        let gone = temp.path().join("gone").join("devlanes");
+        for (browser, runs) in [(Browser::Chrome, &other), (Browser::Brave, &gone)] {
+            let file = location.unix_manifest(browser);
+            std::fs::create_dir_all(file.parent().expect("parent")).expect("hosts folder");
+            std::fs::write(&file, other_manifest(runs)).expect("manifest");
+        }
+        let build = temp.path().join("target").join("debug").join("devlanes");
+        for install in [
+            Install::new(InstallMethod::Source, build.clone()),
+            Install::new(
+                InstallMethod::Local {
+                    manifest: temp.path().join("package.json"),
+                },
+                build.clone(),
+            ),
+        ] {
+            let registrations = inspect(&location, &install);
+            assert_eq!(
+                registrations[0].found,
+                Found::Kept {
+                    runs: other.clone()
+                }
+            );
+            let (needed, done, reason) = plan(&Facts::Found {
+                install: install.clone(),
+                registrations: registrations.clone(),
+            });
+            assert!(needed && !done);
+            assert!(
+                reason.starts_with(&format!(
+                    "setup refreshes the browser extension host for Brave. Left Chrome on {}. Run devlanes setup from that install to change it. ",
+                    other.display()
+                )),
+                "{reason}"
+            );
+            let lines = apply(&location, &install, &registrations).expect("apply");
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            assert_eq!(
+                std::fs::read_to_string(location.unix_manifest(Browser::Chrome)).expect("read"),
+                other_manifest(&other)
+            );
+            // Put Brave back for the next install.
+            std::fs::write(
+                location.unix_manifest(Browser::Brave),
+                other_manifest(&gone),
+            )
+            .expect("manifest");
+        }
+        let stable = script(&temp.path().join("bin").join("devlanes"));
+        let registrations = inspect(&location, &stable);
+        assert_eq!(
+            registrations[0].found,
+            Found::Stale {
+                runs: Some(other.clone()),
+                ours: false
+            }
+        );
+        apply(&location, &stable, &registrations).expect("apply");
+        assert_eq!(founds(&location, &stable)[0], Found::Current);
     }
 
     /// Deletes a test key on drop, so a failed test leaves nothing behind.
