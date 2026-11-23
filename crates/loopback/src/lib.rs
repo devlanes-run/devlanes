@@ -22,8 +22,9 @@ pub async fn connect_loopback(port: u16, per_address_timeout: Duration) -> io::R
         .map_err(|v6| refusal_first(v4, v6))
 }
 
-/// Connects to `address` within `timeout`. A refused loopback address fails at
-/// once on every OS, so trying the next address costs nothing.
+/// Connects to `address` within `timeout`, with `TCP_NODELAY` set. A refused
+/// loopback address fails at once on every OS, so trying the next address
+/// costs nothing.
 pub async fn connect(address: SocketAddr, timeout: Duration) -> io::Result<TcpStream> {
     let socket = if address.is_ipv4() {
         TcpSocket::new_v4()?
@@ -36,14 +37,19 @@ pub async fn connect(address: SocketAddr, timeout: Duration) -> io::Result<TcpSt
     if address.ip().is_loopback() {
         let _ = devlanes_sys_windows::net::skip_syn_retransmissions(&socket);
     }
-    tokio::time::timeout(timeout, socket.connect(address))
+    let stream = tokio::time::timeout(timeout, socket.connect(address))
         .await
         .unwrap_or_else(|_| {
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("connecting to {address} timed out"),
             ))
-        })
+        })?;
+    // Some callers relay interactive traffic (WebSockets, database clients),
+    // where Nagle would hold a small write until the previous one is acknowledged.
+    // A failure only costs latency, so it is ignored.
+    let _ = stream.set_nodelay(true);
+    Ok(stream)
 }
 
 /// The IPv4 error unless only IPv6 was refused, as when IPv4 loopback times out.

@@ -385,6 +385,9 @@ impl Proxy {
             if !self.config.lan && !is_loopback(peer.ip()) {
                 continue;
             }
+            // WebSocket frames such as HMR updates leave at once instead of
+            // waiting on Nagle. A failure only costs latency.
+            let _ = stream.set_nodelay(true);
             let proxy = self.clone();
             let tls = tls.clone();
             let shutdown = shutdown.clone();

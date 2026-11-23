@@ -1330,6 +1330,9 @@ pub(super) async fn accept_loop(
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
+                // Small writes (keystrokes, WebSocket frames) leave at once
+                // instead of waiting on Nagle. A failure only costs latency.
+                let _ = stream.set_nodelay(true);
                 if let Some(owner) = target.current()
                     && let Some(conn) = owner.conn.upgrade()
                 {
