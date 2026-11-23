@@ -354,15 +354,21 @@ fn inspect_key(
         Err(error) => Found::Unreadable(format!(r"HKCU\{key}: {error}")),
         Ok(Some(named)) => {
             let named = PathBuf::from(named);
+            let own_file = same_path(&named, &location.windows_manifest());
             match found_of(read_manifest(&named, expected), install) {
+                // A key that names the file setup writes, after that file
+                // was deleted with `.devlanes`, is devlanes' own to clean up.
+                // While the file exists, its `path` says whose it is.
+                Found::Stale { runs: None, .. } if own_file => Found::Stale {
+                    runs: None,
+                    ours: true,
+                },
                 // Another manifest that runs this install still gets the
                 // key pointed at the one setup keeps current.
-                Found::Current if !same_path(&named, &location.windows_manifest()) => {
-                    Found::Stale {
-                        runs: Some(install.entry.clone()),
-                        ours: true,
-                    }
-                }
+                Found::Current if !own_file => Found::Stale {
+                    runs: Some(install.entry.clone()),
+                    ours: true,
+                },
                 found => found,
             }
         }
@@ -1131,5 +1137,59 @@ mod tests {
             registry::read_string(&edge, "").expect("read"),
             Some(other.display().to_string())
         );
+    }
+
+    /// After `.devlanes` was deleted, the keys still name the file setup
+    /// writes there. They are devlanes' own, so `--remove` deletes them. A
+    /// key that names a missing file elsewhere stays.
+    #[cfg(windows)]
+    #[test]
+    fn windows_removes_its_keys_once_the_manifest_is_gone() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = TestKey(format!(
+            r"Software\devlanes-test-browser-gone-{}",
+            std::process::id()
+        ));
+        let location = Location {
+            home: temp.path().join("user"),
+            layout: Layout::Windows,
+            registry_root: root.0.clone(),
+        };
+        std::fs::create_dir_all(&location.home).expect("home");
+        let install = script(&temp.path().join("bin").join("devlanes.exe"));
+        apply(&location, &install, &inspect(&location, &install)).expect("apply");
+        std::fs::remove_dir_all(location.home.join(".devlanes")).expect("delete .devlanes");
+        let elsewhere = temp.path().join("missing.json");
+        let edge = location.key(Browser::Edge);
+        registry::write_string(&edge, "", &elsewhere.display().to_string()).expect("edge key");
+        assert_eq!(
+            founds(&location, &install)[..3],
+            vec![
+                Found::Stale {
+                    runs: None,
+                    ours: true
+                };
+                3
+            ]
+        );
+        let removal = removal(&location, &install);
+        assert_eq!(
+            removal.delete,
+            [Browser::Chrome, Browser::Chromium, Browser::Brave]
+                .map(|browser| Target::Key(location.key(browser)))
+        );
+        assert_eq!(removal.keep.len(), 1, "{removal:?}");
+        assert!(
+            removal.keep[0].contains("the manifest it names is missing"),
+            "{removal:?}"
+        );
+        delete(&removal).expect("delete");
+        for browser in [Browser::Chrome, Browser::Chromium, Browser::Brave] {
+            assert_eq!(
+                registry::read_string(&location.key(browser), "").expect("read"),
+                None
+            );
+        }
+        assert!(registry::read_string(&edge, "").expect("read").is_some());
     }
 }
