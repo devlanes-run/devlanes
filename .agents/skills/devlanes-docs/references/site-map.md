@@ -116,6 +116,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 
 | Page | Title | Goal |
 |---|---|---|
+| `use-the-browser-extension.md` | Use the browser extension | See lanes and their URLs in the browser, open a page in another lane, switch boxes. |
 | `wsl.md` | Run devlanes in WSL | devlanes in a WSL distribution with the browser on Windows. |
 | `update.md` | Update and uninstall | New releases, builds of `main`, removing devlanes. |
 | `report-a-bug.md` | Report a bug | Collect what a bug report needs. |
