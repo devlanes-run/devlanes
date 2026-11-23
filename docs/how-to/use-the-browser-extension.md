@@ -47,6 +47,38 @@ When more than one machine has a lane, such as your machine and a box, the lane 
 
 When the lane runs on your machine, the popup asks before it stops it. "Stop and switch" stops the lane and then switches. When the lane's containers hold its ports, the popup lists the commands that stop them, each with a copy button. Run them, then click "Switch again".
 
+## If your browser isn't on the list
+
+Setup also keeps the manifest at `~/.devlanes/browser/run.devlanes.browser.json`, `%USERPROFILE%\.devlanes\browser\run.devlanes.browser.json` on Windows, for any other Chromium-based browser. Point the browser at it by hand.
+
+::::tabs{sync="os"}
+:::tab[macOS]
+The browser's `chrome://version` page shows its Profile Path. Its user data folder is that path without the profile folder at the end, such as Default. Link the manifest into `NativeMessagingHosts` there:
+
+```console
+$ mkdir -p "<user data folder>/NativeMessagingHosts"
+$ ln -s ~/.devlanes/browser/run.devlanes.browser.json "<user data folder>/NativeMessagingHosts/"
+```
+:::
+:::tab[Linux]
+The browser's `chrome://version` page shows its Profile Path. Its user data folder is that path without the profile folder at the end, such as Default. Link the manifest into `NativeMessagingHosts` there:
+
+```console
+$ mkdir -p "<user data folder>/NativeMessagingHosts"
+$ ln -s ~/.devlanes/browser/run.devlanes.browser.json "<user data folder>/NativeMessagingHosts/"
+```
+:::
+:::tab[Windows]
+Add a key that names the manifest. The key depends on the browser, so check its documentation. Some browsers also read Chrome's key, `HKCU\Software\Google\Chrome\NativeMessagingHosts`.
+
+```console
+PS> reg add "HKCU\Software\<Vendor>\<Browser>\NativeMessagingHosts\run.devlanes.browser" /ve /t REG_SZ /d "$env:USERPROFILE\.devlanes\browser\run.devlanes.browser.json" /f
+```
+:::
+::::
+
+Each run of setup keeps the manifest current, so the link or key keeps working. `devlanes setup --remove` doesn't delete a link or key you made for another browser, so delete it yourself.
+
 ## Related
 
 - [Install devlanes](../install.md)
