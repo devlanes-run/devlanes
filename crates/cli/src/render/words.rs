@@ -1156,13 +1156,21 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             with_message("ports could not be allocated".into()),
             Some(Hint::command(["doctor"])),
         ),
-        "mixed_lanes" => (
-            format!(
-                "{} belong to different lanes; name units of one lane per command",
-                names("units")
-            ),
-            None,
-        ),
+        "mixed_lanes" => {
+            // Older daemons send no lanes, and a lane of a project nobody
+            // registered has no reference to show.
+            let lanes = match list(data, "lanes").len() {
+                0 | 1 => String::new(),
+                _ => format!(" ({})", names("lanes")),
+            };
+            (
+                format!(
+                    "{} belong to different lanes{lanes}; name units of one lane per command",
+                    names("units")
+                ),
+                None,
+            )
+        }
         "not_running" => {
             let unit = target(data);
             (
