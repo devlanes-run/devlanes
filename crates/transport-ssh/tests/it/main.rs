@@ -203,8 +203,9 @@ async fn ssh_tunnel_session() -> TestResult {
             }
             return Err("devlanes is not installed on the box".into());
         }
-        // A tunnel that exits at once after its preamble fails the session
-        // below with its stderr, as `Session::establish` reports a dead pipe.
+        // This connect only decides the skip: a box whose tunnel reports
+        // not_supported_yet fails it. A tunnel that exits at once after its
+        // preamble fails the `Session::connect` below with its stderr instead.
         let connection = match transport.connect().await {
             Ok(connection) => connection,
             Err(error) => {
