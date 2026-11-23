@@ -30,10 +30,12 @@ fn unit<'a>(lane: &'a LaneSummary, name: &str) -> &'a UnitSummary {
 
 /// Starts every unit in a first daemon, then "crashes" it: the second daemon
 /// on the same home sees `alive` as still running (by pid), the rest gone.
+/// Both daemons use the port pool `range`, which each test takes for its own.
 async fn crashed(
     tmp: &crate::Temp,
     main: &std::path::Path,
     alive: &[&str],
+    range: &str,
 ) -> (
     crate::Harness,
     FakeProcesses,
@@ -44,7 +46,7 @@ async fn crashed(
     let first = harness(
         &home,
         Setup {
-            user: crate::pool("12250-12499"),
+            user: crate::pool(range),
             ..Setup::default()
         },
     )
@@ -70,7 +72,7 @@ async fn crashed(
         Setup {
             processes: Some(processes.clone()),
             logs: Some(tmp.path.join("logs-after-crash")),
-            user: crate::pool("12250-12499"),
+            user: crate::pool(range),
             ..Setup::default()
         },
     )
@@ -100,7 +102,7 @@ async fn a_crashed_daemons_units_stay_running_as_orphans() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
-        let (h, processes, pids) = crashed(&tmp, &main, &["web", "worker"]).await;
+        let (h, processes, pids) = crashed(&tmp, &main, &["web", "worker"], "12250-12299").await;
         let home = tmp.path.join("home");
 
         assert!(
@@ -372,7 +374,7 @@ async fn reset_state_terminates_orphans_before_resetting() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
-        let (h, processes, pids) = crashed(&tmp, &main, &["web"]).await;
+        let (h, processes, pids) = crashed(&tmp, &main, &["web"], "12300-12349").await;
         let home = tmp.path.join("home");
         // A run of a lane the daemon does not know (no project config directory).
         let store = devlanes_state::Store::open(home.join("state.db"))
@@ -462,7 +464,7 @@ async fn lane_stop_and_liveness_clear_orphans() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
-        let (h, processes, pids) = crashed(&tmp, &main, &["web", "worker"]).await;
+        let (h, processes, pids) = crashed(&tmp, &main, &["web", "worker"], "12350-12399").await;
 
         processes
             .alive

@@ -202,13 +202,13 @@ pub struct Setup {
 /// or an orphan's stop waits until the unit's old ports are free on this
 /// machine, and `why` reports a port another program listens on. A test that
 /// does any of these takes a range of its own, outside the default pool other
-/// programs here may listen in.
+/// programs here may listen in. Tests run side by side and the fake `serve`
+/// binds its port, so two tests never share a range.
 ///
-/// Ranges: 10100-10949 in blocks of 50, one per test (`hosts.rs` and
-/// `profiles.rs`'s `with_infra` take one for their file). It starts at 10100
-/// because browsers refuse 10080 and the pool skips it. `reload.rs` 11000-11249, `engine.rs`
-/// 12000-12249, `orphans.rs` 12250-12499, `pacing.rs` 12500-12999. No other
-/// test in this binary uses 10100-10949, 11000-11249 or 12000-12999.
+/// Ranges: 10100-10999 and 11250-11299 in blocks of 50, one per test.
+/// `reload.rs` 11000-11249, `engine.rs` 12000-12249, `orphans.rs`
+/// 12250-12399 in blocks of 50, `pacing.rs` 12500-12999. No other test in
+/// this binary uses 10100-11299 or 12000-12999.
 /// `profiles.rs` takes 15000-15249 for a port nothing may listen on, between
 /// `remote_choice.rs`'s 13000-14999 and `remote_pairing.rs`'s 15400-15799.
 pub fn pool(range: &str) -> Option<devlanes_config::UserConfig> {
