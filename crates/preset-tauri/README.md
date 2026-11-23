@@ -59,7 +59,7 @@ services:
 
 Each replica's overlay goes to `<lane data>/tauri/<service>.<replica>.conf.json`, in the lane data folder (`${{ lane.data_path }}`) rather than the worktree, so lanes that run from one folder do not overwrite each other's overlay. The contributor returns it as a prepared file and the daemon writes it before spawning. It sets the top-level `identifier` and `productName` plus `build.devUrl` and `build.beforeDevCommand`, which Tauri merges over `tauri.conf.json`.
 
-Unless `isolate_target_dir` is `false`, each replica also builds into `<lane data>/tauri/target/<service>.<replica>` through `CARGO_TARGET_DIR`, which overrides the shell's value; a value in the service's `env` still wins. Tauri compiles the overlay into the binary, so copies that share one target folder rebuild each other's app, and Windows refuses to replace a running executable.
+Unless `isolate_target_dir` is `false`, each replica also builds into `<lane data>/tauri/target/<service>.<replica>` through `CARGO_TARGET_DIR`. That replaces a value from the shell, mise or direnv, with a note on the service. A `CARGO_TARGET_DIR` in the project file's `env` (the service's, a profile's or `global_env`) wins, and must still differ per lane and replica. Tauri compiles the overlay into the binary, so copies that share one target folder rebuild each other's app, and Windows refuses to replace a running executable.
 
 ## License
 

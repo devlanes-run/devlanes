@@ -30,7 +30,8 @@ pub const NAME: &str = "tauri";
 /// themselves and do not forward extra arguments.
 pub const CONFIG_ENV: &str = "DEVLANES_TAURI_CONFIG";
 
-/// Cargo's target folder variable, set per lane and replica.
+/// Cargo's target folder variable, set per lane and replica unless
+/// `isolate_target_dir: false`.
 pub const TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
 
 /// Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per
@@ -72,9 +73,13 @@ pub struct TauriOptions {
     /// folder (`${{ lane.data_path }}`), so each lane and replica builds its own copy of the
     /// app. Tauri compiles the identifier and dev URL into the app, so copies that share a
     /// target folder rebuild each other's app, and on Windows the rebuild fails while another
-    /// copy runs. The first start of each lane and replica is a full build. Set `false` to
-    /// leave the target folder to your shell or Cargo's config, or set `CARGO_TARGET_DIR` in
-    /// the service's `env`, with a folder that differs per lane and replica. Default: `true`.
+    /// copy runs. The cost is about one full Cargo target folder on disk per lane and replica,
+    /// and the first start of each is a full build. This replaces a `CARGO_TARGET_DIR` from
+    /// the shell, mise or direnv. One set in the project file's `env` (the service's, a
+    /// profile's or `global_env`) wins; it must still differ per lane and replica. Build
+    /// scripts and `externalBin` or `resources` paths that point into `../target/` need the
+    /// same folder. Set `false` to leave the target folder to your shell or Cargo's config.
+    /// Default: `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = [true,false]))]
     pub isolate_target_dir: Option<bool>,
@@ -365,6 +370,18 @@ impl Contributor for TauriPreset {
             .map_err(|e| Error::Integration(format!("cannot render the tauri overlay: {e}")))?;
         contents.push(b'\n');
         draft.files.push(PreparedFile { path, contents });
+        // A folder from the shell, mise or direnv is replaced; say so.
+        if let Some(folder) = launch.contribution.env.get(TARGET_DIR_ENV)
+            && let Some(previous) = draft
+                .env
+                .get(TARGET_DIR_ENV)
+                .or_else(|| cx.client_env.get(TARGET_DIR_ENV))
+            && previous != folder
+        {
+            draft.notes.push(format!(
+                "CARGO_TARGET_DIR ({previous}) replaced by this replica's own folder; set `tauri: {{ isolate_target_dir: false }}` to keep it, or set CARGO_TARGET_DIR per lane and replica in the service env"
+            ));
+        }
         // Presets require `run_script`; its runner places the arguments for the tool.
         draft.args.extend(launch.contribution.args);
         draft.env.extend(launch.contribution.env);
@@ -480,6 +497,7 @@ mod tests {
                 panic!("expected one prepared file, got {}", draft.files.len());
             };
             assert_eq!(file.path, Path::new(&expected));
+            assert!(draft.notes.is_empty(), "{:?}", draft.notes);
             let written: Value = serde_json::from_slice(&file.contents).expect("overlay json");
             assert_eq!(
                 written["identifier"],
@@ -488,20 +506,23 @@ mod tests {
             assert_eq!(written["build"]["devUrl"], "http://127.0.0.1:20014");
         }
 
-        // A folder set before the preset runs (by mise, say) is the user's to keep.
+        // A shared folder from mise would bring the clash back, so it is replaced and reported.
         let prior = BTreeMap::from([(TARGET_DIR_ENV.to_owned(), "/set/by/mise".to_owned())]);
-        let options = serde_json::json!({
-            "identifier": "com.acme.app.dev.lane1.client3",
-            "isolate_target_dir": false,
-        });
+        let options = serde_json::json!({ "identifier": "com.acme.app.dev.lane1.client3" });
         let draft = apply_replica(&memo, Some(options), 3, prior)
             .await
             .expect("apply");
         assert_eq!(
             draft.env.get(TARGET_DIR_ENV).map(String::as_str),
-            Some("/set/by/mise")
+            Some("/data/acme/5/tauri/target/desktop.3")
         );
-        assert_eq!(draft.args.first().map(String::as_str), Some("--config"));
+        let [note] = draft.notes.as_slice() else {
+            panic!("expected one note, got {:?}", draft.notes);
+        };
+        assert!(
+            note.contains("/set/by/mise") && note.contains("isolate_target_dir: false"),
+            "{note}"
+        );
     }
 
     /// Replicas sharing an identifier, a missing identifier and unknown keys fail.
@@ -581,10 +602,11 @@ mod tests {
         );
     }
 
-    /// `--config` and the env variable point at the same file.
+    /// `--config` and the env variable point at the same file; `isolate_target_dir: false`
+    /// leaves `CARGO_TARGET_DIR` unset.
     #[test]
     fn contribution_points_at_overlay() {
-        let options = options("com.acme.app.dev.client1");
+        let mut options = options("com.acme.app.dev.client1");
         let path = overlay_path(Path::new("/data/acme/5"), "desktop", 1);
         let target = target_dir(Path::new("/data/acme/5"), "desktop", 1);
         let launch = contribution(&TauriInput {
@@ -600,6 +622,20 @@ mod tests {
             launch.contribution.env.get(CONFIG_ENV).map(String::as_str),
             Some(path.display().to_string().as_str())
         );
+
+        options.isolate_target_dir = Some(false);
+        let launch = contribution(&TauriInput {
+            options: &options,
+            overlay_path: &path,
+            target_dir: &target,
+        })
+        .expect("valid options");
+        assert!(
+            !launch.contribution.env.contains_key(TARGET_DIR_ENV),
+            "{:?}",
+            launch.contribution.env
+        );
+        assert!(launch.contribution.env.contains_key(CONFIG_ENV));
     }
 
     /// Service names are file names as they are on Unix; Windows encodes the

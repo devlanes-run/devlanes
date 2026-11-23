@@ -39,15 +39,6 @@ $ devlanes start
 
 The app's window opens once the first Rust build finishes, which takes longer than the start itself. Each lane and each copy builds the app in its own folder, so the first start of each is a full Rust build.
 
-To choose the build folder yourself, set `CARGO_TARGET_DIR` in the app's `env`. The folder has to differ per lane and copy:
-
-```yaml devlanes
-services:
-  desktop:
-    env:
-      CARGO_TARGET_DIR: "${{ lane.data_path }}/target/${{ replica.index }}"
-```
-
 ## If you want several copies in one lane
 
 Set `replicas: 2` on the app. The replica number in the identifier keeps the copies' data apart, and [Run workers and replicas](../services/workers.md) has more on replicas.
