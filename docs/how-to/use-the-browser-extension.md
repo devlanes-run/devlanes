@@ -26,13 +26,13 @@ Open `chrome://extensions`, or `edge://extensions` in Edge, and turn on Develope
 $ devlanes setup
 ```
 
-Setup registers devlanes as the extension's native host, next to its other steps. The browser starts devlanes from that registration when the extension connects, so there is no port or token to set up. Reopen the popup afterwards. The browser doesn't need a restart.
+Setup registers devlanes as the extension's native host. Reopen the popup afterwards. The browser doesn't need a restart.
 
 ## Open the popup
 
 Click the devlanes icon in the toolbar. The popup shows whether the daemon runs, then each project with its lanes, their branch, state and routes. The lane of the current tab is highlighted.
 
-The extension doesn't keep the daemon running. When you close the TUI, its exit summary may say the daemon stops soon, even with the popup open. Run `devlanes` in a terminal to start it again.
+The extension doesn't keep the daemon running, so the daemon can stop while the popup is open, as the TUI's exit summary says. Run `devlanes` in a terminal to start it again.
 
 ## Open this page in another lane
 
@@ -40,9 +40,10 @@ On a lane's page, pick another lane of the project under "Open this page in". Th
 
 ## Switch which box serves a lane
 
-When a box runs the same lane as your machine, the lane offers a box picker. Pick the box, or this machine, as `devlanes remote use` does. When the lane runs on your machine, the popup asks before it stops it and switches.
+When a box runs the same lane as your machine, the lane offers a box picker. Pick the box, or this machine. [Work with several boxes](remote/several-boxes.md) covers what that changes. When the lane runs on your machine, the popup asks before it stops it and switches.
 
 ## Related
 
 - [Install devlanes](../install.md)
+- [Work with several boxes](remote/several-boxes.md)
 - [Limits](../reference/limits.md)
