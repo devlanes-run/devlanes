@@ -1080,7 +1080,8 @@ fn fact_checks(data: &Value) -> Vec<Check> {
 
 /// The browser extension's host (`browser`: `{registered, stale, found}`,
 /// added by the CLI): the browsers it is registered for, and a warning per
-/// registration that runs a program that is gone or another devlanes.
+/// registration that runs a program that is gone or another devlanes. A
+/// `kept` one, which a build leaves alone, gets a fix for that install.
 /// Nothing when no browser was found.
 fn browser_checks(browser: &Value) -> Vec<Check> {
     let names =
@@ -1111,13 +1112,20 @@ fn browser_checks(browser: &Value) -> Vec<Check> {
             (Some(runs), _) => format!("runs {}, another devlanes install", clean(runs)),
             (None, None) => "names a manifest that is missing".to_owned(),
         };
+        // A build leaves another install's registration alone, so setup
+        // from here wouldn't change it.
+        let fix = if entry["kept"] == true {
+            "run devlanes setup --remove from that install first"
+        } else {
+            "devlanes setup"
+        };
         checks.push(
             Check::new(
                 "browser",
                 Outcome::Skip,
                 format!("{}'s extension host {why}", text(entry, "browser")),
             )
-            .fix("devlanes setup"),
+            .fix(fix),
         );
     }
     checks

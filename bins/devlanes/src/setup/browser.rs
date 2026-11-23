@@ -873,8 +873,9 @@ pub(super) async fn removal_lines(location: Option<&Location>) -> Vec<(String, b
 }
 
 /// Doctor's facts: `{registered: [names], stale: [{browser, place, runs,
-/// gone, error}], found: [names]}`, where `found` lists the browsers the
-/// step looked at. Read-only.
+/// gone, error, kept}], found: [names]}`, where `found` lists the browsers
+/// the step looked at and `kept` marks another install's registration that
+/// this build leaves alone. Read-only.
 pub(crate) async fn doctor_report() -> Value {
     let Some(location) = Location::current() else {
         return Value::Null;
@@ -909,6 +910,8 @@ pub(crate) fn report(location: &Location, install: &Install) -> Value {
                 "runs": runs.map(|runs| runs.display().to_string()),
                 "gone": runs.is_some_and(|runs| !runs.exists()),
                 "error": error,
+                // A build leaves it alone, so `devlanes setup` wouldn't fix it.
+                "kept": matches!(registration.found, Found::Kept { .. }),
             }))
         })
         .collect();
@@ -1248,6 +1251,10 @@ mod tests {
                     build.display()
                 )
             );
+            let report = report(&location, &install);
+            assert_eq!(report["stale"][0]["browser"], "Chrome", "{report}");
+            assert_eq!(report["stale"][0]["kept"], true, "{report}");
+            assert_eq!(report["stale"][1]["kept"], false, "{report}");
             let lines = apply(&location, &install, &registrations).expect("apply");
             assert_eq!(lines.len(), 1, "{lines:?}");
             assert_eq!(

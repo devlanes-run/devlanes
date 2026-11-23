@@ -1460,6 +1460,18 @@ fn doctor_words_the_browser_host() {
         "{text}"
     );
     assert!(text.contains("fix: devlanes setup"), "{text}");
+    assert!(!text.contains("--remove"), "{text}");
+
+    // A build leaves another install's registration alone, so the fix names
+    // that install, not a setup from here.
+    data["browser"]["stale"] = json!([{"browser": "Chrome", "place": "/x", "runs": "/opt/devlanes",
+        "gone": false, "error": null, "kept": true}]);
+    let text = render_text(Method::Doctor, &data);
+    assert!(
+        text.contains("fix: run devlanes setup --remove from that install first"),
+        "{text}"
+    );
+    assert!(!text.contains("fix: devlanes setup\n"), "{text}");
 
     data["browser"] = json!({"registered": [], "found": ["Chrome"], "stale": []});
     let text = render_text(Method::Doctor, &data);
