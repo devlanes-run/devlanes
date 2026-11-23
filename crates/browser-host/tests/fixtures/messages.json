@@ -31,7 +31,7 @@
       "event": "daemon",
       "data": {
         "state": "outdated",
-        "message": "The running devlanes daemon is too old for the browser extension. Restart the daemon with devlanes daemon restart."
+        "message": "The devlanes daemon is too old for this extension. Restart the daemon with devlanes daemon restart."
       }
     },
     {

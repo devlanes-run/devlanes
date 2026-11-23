@@ -112,7 +112,10 @@ where
                         let error = HostError::plain("invalid_request", invalid.message);
                         inner.send_error(id, error).await;
                     }
-                    None => eprintln!("devlanes browser host: {}", invalid.message),
+                    None => eprintln!(
+                        "devlanes: the browser host ignored a message: {}",
+                        invalid.message
+                    ),
                 }
                 continue;
             }
@@ -268,12 +271,12 @@ impl<D: Daemon> Inner<D> {
         let body = match serde_json::to_vec(message) {
             Ok(body) => body,
             Err(error) => {
-                eprintln!("devlanes browser host: a message didn't encode: {error}");
+                eprintln!("devlanes: the browser host couldn't encode a message: {error}");
                 return false;
             }
         };
         if let Err(error) = frame::check_out(&body) {
-            eprintln!("devlanes browser host: {error}");
+            eprintln!("devlanes: the browser host dropped a message: {error}");
             return false;
         }
         self.out.send(body).await.is_ok()
@@ -369,7 +372,7 @@ impl<D: Daemon> Inner<D> {
             Ok(view) => view,
             // The subscription sees the daemon go away and reports it.
             Err(error) => {
-                eprintln!("devlanes browser host: the view couldn't be built: {error:?}");
+                eprintln!("devlanes: the browser host couldn't build the view: {error:?}");
                 return;
             }
         };

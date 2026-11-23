@@ -43,7 +43,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("devlanes: {error}");
+            eprintln!("devlanes: the browser host stopped: {error}");
             ExitCode::from(1)
         }
     }

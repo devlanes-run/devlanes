@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 pub const STOPPED: &str = "devlanes isn't running. Run devlanes in a terminal.";
 
 /// What the `daemon` event says when the daemon is too old for the host.
-pub const OUTDATED: &str = "The running devlanes daemon is too old for the browser extension. Restart the daemon with devlanes daemon restart.";
+pub const OUTDATED: &str = "The devlanes daemon is too old for this extension. Restart the daemon with devlanes daemon restart.";
 
 /// Why the host has no usable daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +83,7 @@ impl Local {
     /// Connects without spawning, and refuses a daemon without the features
     /// the host relies on.
     async fn connect() -> Result<Client, Unavailable> {
-        // Resolving the home reads the filesystem.
+        // Paths::discover reads the filesystem, so it runs off the runtime thread.
         let paths = tokio::task::spawn_blocking(Paths::discover)
             .await
             .map_err(devlanes_client::Error::from)
