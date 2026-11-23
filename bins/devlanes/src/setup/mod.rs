@@ -1375,6 +1375,7 @@ mod tests {
             .map(|(browser, found)| browser::Registration {
                 browser,
                 place: format!("/home/a/{}", browser.name()),
+                key: None,
                 found: found.clone(),
                 installed: *found != browser::Found::NoBrowser,
                 linked: false,
