@@ -2326,6 +2326,19 @@ fn daemon_errors_are_worded_with_hints() {
             1,
         ),
         RpcError::new("worktree_missing", json!({"path": "/work/gone"}), 3),
+        // Units without a lane went to the request's lane, found none, or (from an
+        // older daemon) are not described.
+        RpcError::new(
+            "mixed_lanes",
+            json!({"units": ["2:api", "web"], "lanes": ["acme@2", "acme@1"], "bare_lane": "acme@1"}),
+            2,
+        ),
+        RpcError::new(
+            "mixed_lanes",
+            json!({"units": ["2:api", "web"], "lanes": ["acme@2"], "bare_lane": null}),
+            2,
+        ),
+        RpcError::new("mixed_lanes", json!({"units": ["1:api", "2:web"]}), 2),
         RpcError::new(
             "phase_failed",
             json!({"lane": "acme@2", "phase": "setup", "error": {"code": "task_failed", "data": {"task": "migrate", "exit_code": 2}}}),

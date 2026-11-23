@@ -761,19 +761,34 @@ impl Inner {
             sources[..=at].rotate_right(1);
         }
         let lane_ref = sources.first().cloned().flatten();
+        let bare = sources.iter().position(Option::is_none);
+        // Each source's lane as found before any effect, by index in `sources`.
+        let mut peeked: Vec<Option<LanePair>> = Vec::new();
         if sources.len() > 1 {
             // Refuse lanes that already differ before anything registers, relists or
             // claims. A lookup that fails or finds nothing may only succeed after the
-            // primary's effects (a first `start 0:api web`), so it waits.
-            let mut peeked = Vec::new();
+            // primary's effects (a first `start 0:api web`), so it waits; a refusal
+            // found only then keeps those effects. These lanes are read before
+            // `start`'s relist, so a branch moved between worktrees since the last
+            // listing can be refused, which is safe.
+            let mut unregistered = false;
             for source in &sources {
-                if let Ok(Some(pair)) = self.peek_lane(source.as_deref(), context, policy).await {
-                    peeked.push(pair);
-                }
+                let lane = match self.peek_lane(source.as_deref(), context, policy).await {
+                    Ok(Some(pair)) => Some(pair),
+                    Ok(None) => {
+                        unregistered = true;
+                        None
+                    }
+                    Err(_) => None,
+                };
+                peeked.push(lane);
             }
-            let lanes = distinct_lanes(peeked);
-            if lanes.len() > 1 {
-                return Err(mixed_lanes(units, &lanes));
+            let lanes = distinct_lanes(peeked.iter().flatten().cloned().collect());
+            // Under a policy that registers nothing, a project nobody registered
+            // stays without lanes, so it is never the lane another source found.
+            if lanes.len() > 1 || (unregistered && !policy.register && !lanes.is_empty()) {
+                let bare = bare.map(|at| peeked[at].as_ref());
+                return Err(mixed_lanes(units, &lanes, bare));
             }
         }
         let lane_named = lane_ref.is_some() || context.lane.is_some();
@@ -792,17 +807,36 @@ impl Inner {
             return Ok(None);
         };
         let mut lanes = vec![pair.clone()];
-        let mut unregistered = false;
-        for source in sources.iter().skip(1) {
-            match self.peek_lane(source.as_deref(), context, policy).await? {
-                Some(other) => lanes.push(other),
-                // A lane of a project nobody registered cannot be the primary's.
-                None => unregistered = true,
+        let mut bare_lane = None;
+        let mut lost = false;
+        for (at, source) in sources.iter().enumerate().skip(1) {
+            // A lane runtime stays the same for its worktree, so a lane found before
+            // the effects is reused; one cleaned meanwhile only makes a false refusal.
+            let lane = match peeked.get(at).cloned().flatten() {
+                Some(lane) => Some(lane),
+                None => match self.peek_lane(source.as_deref(), context, policy).await {
+                    Ok(lane) => lane,
+                    // Units without a lane next to a named one, where the request has
+                    // no lane (no project file, several projects): mixed, not that
+                    // lookup's error.
+                    Err(_) if source.is_none() && context.lane.is_none() => None,
+                    Err(error) => return Err(error),
+                },
+            };
+            match lane {
+                Some(lane) => {
+                    if source.is_none() {
+                        bare_lane = Some(lane.clone());
+                    }
+                    lanes.push(lane);
+                }
+                // No lane, or one of a project nobody registered: not the primary's.
+                None => lost = true,
             }
         }
         let lanes = distinct_lanes(lanes);
-        if lanes.len() > 1 || unregistered {
-            return Err(mixed_lanes(units, &lanes));
+        if lanes.len() > 1 || lost {
+            return Err(mixed_lanes(units, &lanes, bare.map(|_| bare_lane.as_ref())));
         }
         // A lone selector with no lane named may be a lane meant as `--lane`.
         if policy.selector_lanes
@@ -823,8 +857,9 @@ impl Inner {
     }
 
     /// The lane `reference` names, or for `None` the request's own lane as
-    /// [`Self::lane_or_nothing`] finds it, without registering, relisting or
-    /// claiming anything. `None` when its project is one nobody registered.
+    /// [`Self::lane_or_nothing`] finds it. It registers and claims nothing, but may
+    /// sync a project's worktrees as [`Self::find`] does. `None` when its project is
+    /// one nobody registered.
     async fn peek_lane(
         self: &Arc<Self>,
         reference: Option<&str>,
@@ -1017,16 +1052,22 @@ fn distinct_lanes(lanes: Vec<LanePair>) -> Vec<LanePair> {
 }
 
 /// `mixed_lanes` for `units`, naming the `lanes` they resolved to. `units` stays
-/// as sent, which is all older clients render.
-fn mixed_lanes(units: &[String], lanes: &[LanePair]) -> RpcError {
-    let lanes: Vec<String> = lanes
-        .iter()
-        .map(|(project, lane)| {
-            let name = project.name();
-            lane.st().reference(&name)
-        })
-        .collect();
-    RpcError::new("mixed_lanes", json!({"units": units, "lanes": lanes}), 2)
+/// as sent, which is all older clients render. When some units name no lane,
+/// `bare` is the request's lane they went to, and `bare_lane` is its reference,
+/// or null when they have none.
+fn mixed_lanes(units: &[String], lanes: &[LanePair], bare: Option<Option<&LanePair>>) -> RpcError {
+    let reference = |(project, lane): &LanePair| {
+        let name = project.name();
+        lane.st().reference(&name)
+    };
+    let mut data = json!({
+        "units": units,
+        "lanes": lanes.iter().map(reference).collect::<Vec<_>>(),
+    });
+    if let Some(bare) = bare {
+        data["bare_lane"] = json!(bare.map(reference));
+    }
+    RpcError::new("mixed_lanes", data, 2)
 }
 
 /// `project`'s main lane (index 0), else its only assigned lane; `ambiguous`

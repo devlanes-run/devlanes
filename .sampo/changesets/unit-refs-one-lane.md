@@ -4,6 +4,6 @@ cargo/devlanes-daemon: patch
 cargo/devlanes-cli: patch
 ---
 
-Fixed `start`, `stop`, `restart`, `reload`, `logs` and `with` applying one unit's `lane:` to units named without one.
+Fixed `start`, `stop`, `restart`, `reload`, `logs` and `with` sending units named without `lane:` to another unit's lane instead of the current one.
 
-Units that name one lane in different words, such as `1:api myapp@1:web`, work.
+To act on another lane, prefix every unit with it or use `--lane`. One lane written two ways, such as `1:api myapp@1:web`, now works.
