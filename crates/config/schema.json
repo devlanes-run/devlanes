@@ -1280,15 +1280,16 @@
     },
     "InjectedPresetOptions3": {
       "additionalProperties": false,
-      "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
+      "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`. Each instance builds into its own Cargo target folder unless `isolate_target_dir` is `false`.",
       "examples": [
         {
           "before_dev_command": "",
           "dev_url": "${{ services.desktop_web.url }}",
-          "identifier": "io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"
+          "identifier": "io.acme.app.lane${{ lane.index }}.client${{ replica.index }}",
+          "isolate_target_dir": true
         }
       ],
-      "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
+      "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`. Each instance builds into its own Cargo target folder unless `isolate_target_dir` is `false`.",
       "properties": {
         "before_dev_command": {
           "description": "Replaces `build.beforeDevCommand`, the command Tauri runs before the app. Set it to `\"\"` when the frontend runs as its own devlanes service; otherwise every replica starts its own frontend on the port from `tauri.conf.json`. Default: the command in `tauri.conf.json`.",
@@ -1321,6 +1322,18 @@
           "markdownDescription": "Bundle identifier for this lane and replica, which keys the app data, webview data and keychain entries. Required and must differ per lane and replica, for example `com.acme.app.dev.lane${{ lane.index }}.client${{ replica.index }}`; two instances with the same value are refused at start. Only letters, digits, `-` and `.` are allowed, with no empty part between dots.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "isolate_target_dir": {
+          "description": "Points `CARGO_TARGET_DIR` at `tauri/target/<service>.<replica>` in the lane's data folder (`${{ lane.data_path }}`), so each lane and replica builds its own copy of the app. Tauri compiles the identifier and dev URL into the app, so copies that share a target folder rebuild each other's app, and on Windows the rebuild fails while another copy runs. The first start of each lane and replica is a full build. Set `false` to leave the target folder to your shell or Cargo's config, or set `CARGO_TARGET_DIR` in the service's `env`, with a folder that differs per lane and replica. Default: `true`.",
+          "examples": [
+            true,
+            false
+          ],
+          "markdownDescription": "Points `CARGO_TARGET_DIR` at `tauri/target/<service>.<replica>` in the lane's data folder (`${{ lane.data_path }}`), so each lane and replica builds its own copy of the app. Tauri compiles the identifier and dev URL into the app, so copies that share a target folder rebuild each other's app, and on Windows the rebuild fails while another copy runs. The first start of each lane and replica is a full build. Set `false` to leave the target folder to your shell or Cargo's config, or set `CARGO_TARGET_DIR` in the service's `env`, with a folder that differs per lane and replica. Default: `true`.",
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -2601,15 +2614,16 @@
         },
         "tauri": {
           "$ref": "#/$defs/InjectedPresetOptions3",
-          "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
+          "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`. Each instance builds into its own Cargo target folder unless `isolate_target_dir` is `false`.",
           "examples": [
             {
               "before_dev_command": "",
               "dev_url": "${{ services.desktop_web.url }}",
-              "identifier": "io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"
+              "identifier": "io.acme.app.lane${{ lane.index }}.client${{ replica.index }}",
+              "isolate_target_dir": true
             }
           ],
-          "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`."
+          "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`. Each instance builds into its own Cargo target folder unless `isolate_target_dir` is `false`."
         },
         "vite": {
           "$ref": "#/$defs/InjectedPresetOptions0",

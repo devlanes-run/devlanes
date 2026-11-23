@@ -4,6 +4,9 @@
 //! data, webview data and keychain entries, plus its own `build.devUrl`. Both
 //! go into a JSON overlay passed with `tauri dev --config <file>`, which Tauri
 //! v2 merges over `tauri.conf.json` (<https://v2.tauri.app/reference/cli/#dev>).
+//! Each lane and replica also builds into its own Cargo target folder in the
+//! lane data folder (`CARGO_TARGET_DIR`); `isolate_target_dir: false` turns
+//! that off.
 //!
 //! Local only: the app runs on the machine that runs the lane. Remote boxes
 //! need GUI streaming, which is out of scope for v1.
@@ -27,13 +30,17 @@ pub const NAME: &str = "tauri";
 /// themselves and do not forward extra arguments.
 pub const CONFIG_ENV: &str = "DEVLANES_TAURI_CONFIG";
 
+/// Cargo's target folder variable, set per lane and replica.
+pub const TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
+
 /// Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per
 /// lane and replica. The values go into a config overlay at
 /// `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and
-/// in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.
+/// in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`. Each instance builds
+/// into its own Cargo target folder unless `isolate_target_dir` is `false`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[schemars(extend("examples" = [{"identifier":"io.acme.app.lane${{ lane.index }}.client${{ replica.index }}","dev_url":"${{ services.desktop_web.url }}","before_dev_command":""}]))]
+#[schemars(extend("examples" = [{"identifier":"io.acme.app.lane${{ lane.index }}.client${{ replica.index }}","dev_url":"${{ services.desktop_web.url }}","before_dev_command":"","isolate_target_dir":true}]))]
 pub struct TauriOptions {
     /// Bundle identifier for this lane and replica, which keys the app data, webview data and
     /// keychain entries. Required and must differ per lane and replica, for example
@@ -61,6 +68,16 @@ pub struct TauriOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = ["","pnpm dev"]))]
     pub before_dev_command: Option<String>,
+    /// Points `CARGO_TARGET_DIR` at `tauri/target/<service>.<replica>` in the lane's data
+    /// folder (`${{ lane.data_path }}`), so each lane and replica builds its own copy of the
+    /// app. Tauri compiles the identifier and dev URL into the app, so copies that share a
+    /// target folder rebuild each other's app, and on Windows the rebuild fails while another
+    /// copy runs. The first start of each lane and replica is a full build. Set `false` to
+    /// leave the target folder to your shell or Cargo's config, or set `CARGO_TARGET_DIR` in
+    /// the service's `env`, with a folder that differs per lane and replica. Default: `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("examples" = [true,false]))]
+    pub isolate_target_dir: Option<bool>,
 }
 
 impl TauriOptions {
@@ -71,6 +88,7 @@ impl TauriOptions {
             product_name,
             dev_url,
             before_dev_command,
+            isolate_target_dir,
         } = overlay;
         if identifier.is_some() {
             self.identifier = identifier;
@@ -83,6 +101,9 @@ impl TauriOptions {
         }
         if before_dev_command.is_some() {
             self.before_dev_command = before_dev_command;
+        }
+        if isolate_target_dir.is_some() {
+            self.isolate_target_dir = isolate_target_dir;
         }
     }
 }
@@ -101,6 +122,8 @@ pub struct TauriInput<'a> {
     pub options: &'a TauriOptions,
     /// Absolute path the overlay is written to; one per lane and replica.
     pub overlay_path: &'a Path,
+    /// Cargo target folder for this lane and replica, from [`target_dir`].
+    pub target_dir: &'a Path,
 }
 
 /// The launch additions plus the overlay the caller writes with
@@ -157,6 +180,16 @@ pub fn overlay_path(lane_data: &Path, service: &str, replica: u32) -> PathBuf {
         .join(format!("{service}.{replica}.conf.json"))
 }
 
+/// Returns the Cargo target folder for `service` replica `replica`:
+/// `tauri/target/<service>.<replica>` in the lane data folder.
+pub fn target_dir(lane_data: &Path, service: &str, replica: u32) -> PathBuf {
+    let service = devlanes_core::paths::name_on_disk(service);
+    lane_data
+        .join("tauri")
+        .join("target")
+        .join(format!("{service}.{replica}"))
+}
+
 /// Builds the Tauri v2 config overlay: top-level `identifier` and
 /// `productName`, `build.devUrl` and `build.beforeDevCommand`.
 pub fn overlay(options: &TauriOptions) -> Result<Value, TauriError> {
@@ -186,14 +219,23 @@ pub fn overlay(options: &TauriOptions) -> Result<Value, TauriError> {
     Ok(Value::Object(root))
 }
 
-/// Renders `--config <overlay_path>` and the overlay to write there.
+/// Renders `--config <overlay_path>`, the overlay to write there and, unless
+/// `isolate_target_dir` is `false`, `CARGO_TARGET_DIR`.
 pub fn contribution(input: &TauriInput<'_>) -> Result<TauriLaunch, TauriError> {
     let overlay = overlay(input.options)?;
     let path = input.overlay_path.to_string_lossy().into_owned();
+    let mut env = BTreeMap::new();
+    if input.options.isolate_target_dir != Some(false) {
+        env.insert(
+            TARGET_DIR_ENV.to_owned(),
+            devlanes_core::paths::forward_slashes(input.target_dir),
+        );
+    }
+    env.insert(CONFIG_ENV.to_owned(), path.clone());
     Ok(TauriLaunch {
         contribution: Contribution {
-            args: vec!["--config".to_owned(), path.clone()],
-            env: BTreeMap::from([(CONFIG_ENV.to_owned(), path)]),
+            args: vec!["--config".to_owned(), path],
+            env,
         },
         overlay,
     })
@@ -299,8 +341,9 @@ impl Contributor for TauriPreset {
         100
     }
 
-    /// Adds `--config <overlay>` and the overlay file for this replica, after
-    /// checking that no other replica in the lane uses the same identifier.
+    /// Adds `--config <overlay>`, the overlay file and, unless `isolate_target_dir: false`,
+    /// this replica's `CARGO_TARGET_DIR`, after checking that no other replica in the lane
+    /// uses the same identifier.
     async fn apply(&self, draft: &mut LaunchDraft, cx: &ContribCx<'_>) -> Result<(), Error> {
         if cx.preset != Some(NAME) {
             return Ok(());
@@ -308,9 +351,11 @@ impl Contributor for TauriPreset {
         let options = parse_options(cx.preset_options)?;
         let replica = cx.replica.unwrap_or(1);
         let path = overlay_path(cx.lane_data_path, cx.name, u32::from(replica));
+        let target = target_dir(cx.lane_data_path, cx.name, u32::from(replica));
         let launch = contribution(&TauriInput {
             options: &options,
             overlay_path: &path,
+            target_dir: &target,
         })
         .map_err(|e| Error::InvalidInput(e.to_string()))?;
         if let Some(identifier) = options.identifier.as_deref() {
@@ -360,11 +405,13 @@ mod tests {
     use devlanes_core::contrib::{ContribMemo, DraftCommand, UnitKind};
     use std::collections::BTreeSet;
 
-    /// Runs [`TauriPreset`] for replica `replica` of `desktop` in lane 1.
+    /// Runs [`TauriPreset`] for replica `replica` of `desktop` in lane 1, over a draft
+    /// whose environment starts as `env`.
     async fn apply_replica(
         memo: &ContribMemo,
         options: Option<Value>,
         replica: u16,
+        env: BTreeMap<String, String>,
     ) -> Result<LaunchDraft, Error> {
         let ports = BTreeMap::new();
         let empty = BTreeMap::new();
@@ -394,7 +441,7 @@ mod tests {
             command: DraftCommand::Shell("pnpm --filter @acme/desktop dev".to_owned()),
             args: Vec::new(),
             cwd: PathBuf::from("/lanes/acme-1"),
-            env: BTreeMap::new(),
+            env,
             remove: BTreeSet::new(),
             files: Vec::new(),
             notes: Vec::new(),
@@ -403,7 +450,8 @@ mod tests {
         Ok(draft)
     }
 
-    /// Each replica gets its own overlay file, `--config` and env pointer.
+    /// Each replica gets its own overlay file, `--config`, env pointer and Cargo
+    /// target folder; `isolate_target_dir: false` leaves an existing folder alone.
     #[tokio::test]
     async fn adapter_prepares_overlay_per_replica() {
         let memo = ContribMemo::default();
@@ -414,9 +462,13 @@ mod tests {
                 "before_dev_command": "",
                 "product_name": null,
             });
-            let draft = apply_replica(&memo, Some(options), replica)
+            let draft = apply_replica(&memo, Some(options), replica, BTreeMap::new())
                 .await
                 .expect("apply");
+            assert_eq!(
+                draft.env.get(TARGET_DIR_ENV).map(String::as_str),
+                Some(format!("/data/acme/5/tauri/target/desktop.{replica}").as_str())
+            );
             let expected = Path::new("/data/acme/5")
                 .join("tauri")
                 .join(format!("desktop.{replica}.conf.json"))
@@ -435,6 +487,21 @@ mod tests {
             );
             assert_eq!(written["build"]["devUrl"], "http://127.0.0.1:20014");
         }
+
+        // A folder set before the preset runs (by mise, say) is the user's to keep.
+        let prior = BTreeMap::from([(TARGET_DIR_ENV.to_owned(), "/set/by/mise".to_owned())]);
+        let options = serde_json::json!({
+            "identifier": "com.acme.app.dev.lane1.client3",
+            "isolate_target_dir": false,
+        });
+        let draft = apply_replica(&memo, Some(options), 3, prior)
+            .await
+            .expect("apply");
+        assert_eq!(
+            draft.env.get(TARGET_DIR_ENV).map(String::as_str),
+            Some("/set/by/mise")
+        );
+        assert_eq!(draft.args.first().map(String::as_str), Some("--config"));
     }
 
     /// Replicas sharing an identifier, a missing identifier and unknown keys fail.
@@ -442,11 +509,11 @@ mod tests {
     async fn adapter_rejects_bad_options() {
         let memo = ContribMemo::default();
         let same = || Some(serde_json::json!({ "identifier": "com.acme.app.dev" }));
-        apply_replica(&memo, same(), 1)
+        apply_replica(&memo, same(), 1, BTreeMap::new())
             .await
             .expect("first replica");
         // `LaunchDraft` has no `Debug` (it may hold secrets), so no `expect_err`.
-        let duplicate = apply_replica(&memo, same(), 2)
+        let duplicate = apply_replica(&memo, same(), 2, BTreeMap::new())
             .await
             .err()
             .expect("duplicate");
@@ -456,7 +523,7 @@ mod tests {
                 .contains("`desktop#1` and `desktop#2`"),
             "{duplicate}"
         );
-        let missing = apply_replica(&ContribMemo::default(), None, 1)
+        let missing = apply_replica(&ContribMemo::default(), None, 1, BTreeMap::new())
             .await
             .err()
             .expect("missing");
@@ -468,6 +535,7 @@ mod tests {
             &ContribMemo::default(),
             Some(serde_json::json!({ "bundle_id": "x" })),
             1,
+            BTreeMap::new(),
         )
         .await;
         assert!(matches!(unknown, Err(Error::InvalidInput(_))));
@@ -486,6 +554,7 @@ mod tests {
             dev_url: Some("http://127.0.0.1:20014".to_owned()),
             before_dev_command: Some(String::new()),
             product_name: None,
+            isolate_target_dir: None,
         }
     }
 
@@ -517,9 +586,11 @@ mod tests {
     fn contribution_points_at_overlay() {
         let options = options("com.acme.app.dev.client1");
         let path = overlay_path(Path::new("/data/acme/5"), "desktop", 1);
+        let target = target_dir(Path::new("/data/acme/5"), "desktop", 1);
         let launch = contribution(&TauriInput {
             options: &options,
             overlay_path: &path,
+            target_dir: &target,
         })
         .expect("valid options");
         // Snapshots use `/`; Windows joins below the lane data folder with `\`.

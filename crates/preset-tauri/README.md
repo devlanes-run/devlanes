@@ -1,20 +1,22 @@
 # devlanes-preset-tauri
 
-`preset: tauri` runs several Tauri v2 dev apps side by side on one machine, one per lane and replica, each with its own bundle identifier and dev URL. Lane resolution applies it through `TauriPreset`, a `devlanes-core` `Contributor`; the composition root registers it and feeds `options_schema()` to the config. The app runs where the lane runs, so the preset is for local lanes only.
+`preset: tauri` runs several Tauri v2 dev apps side by side on one machine, one per lane and replica, each with its own bundle identifier, dev URL and Cargo target folder. Lane resolution applies it through `TauriPreset`, a `devlanes-core` `Contributor`; the composition root registers it and feeds `options_schema()` to the config. The app runs where the lane runs, so the preset is for local lanes only.
 
 ## Usage
 
 ```rust
 use std::path::Path;
-use devlanes_preset_tauri::{TauriInput, TauriOptions, contribution, overlay_path};
+use devlanes_preset_tauri::{TauriInput, TauriOptions, contribution, overlay_path, target_dir};
 
 let options = TauriOptions {
     identifier: Some("com.acme.app.dev.lane1.client1".to_owned()),
     dev_url: Some("http://127.0.0.1:20014".to_owned()),
     ..TauriOptions::default()
 };
-let path = overlay_path(Path::new("/lanes/acme-1"), "desktop", 1);
-let launch = contribution(&TauriInput { options: &options, overlay_path: &path })?;
+let lane_data = Path::new("/data/acme/5");
+let path = overlay_path(lane_data, "desktop", 1);
+let target = target_dir(lane_data, "desktop", 1);
+let launch = contribution(&TauriInput { options: &options, overlay_path: &path, target_dir: &target })?;
 // launch.overlay: {"identifier": "...", "build": {"devUrl": "http://127.0.0.1:20014"}}
 ```
 
@@ -25,6 +27,7 @@ let launch = contribution(&TauriInput { options: &options, overlay_path: &path }
 - `overlay` and `contribution`: the config overlay and launch additions without a draft.
 - `ensure_distinct`: rejects identifiers shared across lanes, which a single lane's resolution cannot see.
 - `write_overlay`: atomic write for callers outside lane resolution.
+- `target_dir`: the per-lane, per-replica Cargo target folder.
 
 ## Config example
 
@@ -47,6 +50,7 @@ services:
       # The frontend runs as its own service.
       before_dev_command: ""
       # product_name: Acme Dev
+      # isolate_target_dir: false    # default: true
 ```
 
 `identifier` is required. It keys the app data, webview data and keychain entries, so it must differ per lane and replica; replicas of one lane that share it fail to start. The preset adds `--config <overlay>` and sets `DEVLANES_TAURI_CONFIG` to the same path, for wrapper scripts that start `tauri dev` themselves and do not forward arguments.
@@ -54,6 +58,8 @@ services:
 ## Behaviour
 
 Each replica's overlay goes to `<lane data>/tauri/<service>.<replica>.conf.json`, in the lane data folder (`${{ lane.data_path }}`) rather than the worktree, so lanes that run from one folder do not overwrite each other's overlay. The contributor returns it as a prepared file and the daemon writes it before spawning. It sets the top-level `identifier` and `productName` plus `build.devUrl` and `build.beforeDevCommand`, which Tauri merges over `tauri.conf.json`.
+
+Unless `isolate_target_dir` is `false`, each replica also builds into `<lane data>/tauri/target/<service>.<replica>` through `CARGO_TARGET_DIR`, which overrides the shell's value; a value in the service's `env` still wins. Tauri compiles the overlay into the binary, so copies that share one target folder rebuild each other's app, and Windows refuses to replace a running executable.
 
 ## License
 

@@ -252,6 +252,7 @@ fn preset_arg_rendering_matrix() {
         ..tauri::TauriOptions::default()
     };
     let overlay = tauri::overlay_path(data, "desktop", 1);
+    let target = tauri::target_dir(data, "desktop", 1);
     let presets: Vec<(&str, Vec<String>)> = vec![
         (
             "vite",
@@ -278,6 +279,7 @@ fn preset_arg_rendering_matrix() {
             tauri::contribution(&tauri::TauriInput {
                 options: &tauri_options,
                 overlay_path: &overlay,
+                target_dir: &target,
             })
             .expect("tauri contribution")
             .contribution
