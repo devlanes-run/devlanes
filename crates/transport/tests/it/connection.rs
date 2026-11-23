@@ -178,6 +178,65 @@ async fn max_streams_stay_open_at_once(pair: Pair) -> TestResult {
     Ok(())
 }
 
+/// Streams opened and dropped one after another next to `MAX_STREAMS - 1`
+/// held ones never wait in `open`: the transport frees dropped streams fast
+/// enough for its headroom, as the session expects when it frees a slot and
+/// opens again at once.
+async fn open_never_waits_while_streams_churn_at_the_limit(pair: Pair) -> TestResult {
+    const HELD: usize = MAX_STREAMS - 1;
+    const CYCLES: usize = 128;
+    // A transport that runs out of stream credit waits in `open` forever, so
+    // the bound only names the failing cycle; it is generous because a
+    // loaded CI runner may deschedule the mux driver for a while.
+    const OPEN_WAIT: Duration = Duration::from_secs(5);
+    let mut server = pair.server;
+    // The box answers every stream, holds the first `HELD` and drops each
+    // later one right after its answer.
+    let answering = tokio::spawn(async move {
+        let mut held = Vec::new();
+        for index in 0..HELD + CYCLES {
+            let mut stream = server.accept().await.ok_or("the connection closed")?;
+            expect(&mut stream, b"o").await?;
+            stream.write_all(b"k").await?;
+            if index < HELD {
+                held.push(stream);
+            }
+        }
+        Ok::<_, BoxError>((server, held))
+    });
+    let mut open = Vec::new();
+    for _ in 0..HELD {
+        let mut stream = pair.client.open().await?;
+        stream.write_all(b"o").await?;
+        open.push(stream);
+    }
+    for stream in &mut open {
+        expect(stream, b"k").await?;
+    }
+    for cycle in 0..CYCLES {
+        let Ok(opened) = tokio::time::timeout(OPEN_WAIT, pair.client.open()).await else {
+            return Err(format!("open {cycle} waited with {HELD} streams held").into());
+        };
+        let mut stream = opened?;
+        stream.write_all(b"o").await?;
+        expect(&mut stream, b"k").await?;
+    }
+    let _held = answering.await??;
+    Ok(())
+}
+
+/// The stream the client opened and wrote first is the first one the box
+/// accepts, which is how the box finds the control stream.
+async fn the_first_stream_written_is_accepted_first(mut pair: Pair) -> TestResult {
+    let mut first = pair.client.open().await?;
+    first.write_all(b"first").await?;
+    let mut second = pair.client.open().await?;
+    second.write_all(b"other").await?;
+    let mut accepted = pair.server.accept().await.ok_or("no stream")?;
+    expect(&mut accepted, b"first").await?;
+    Ok(())
+}
+
 /// A message the box wrote and shut down before it dropped the connection
 /// reaches the client, as a refusal does; a clean close has no failure
 /// reason, and the closed connection opens no more streams.
@@ -199,11 +258,13 @@ async fn finished_bytes_survive_the_box_dropping_the_connection(mut pair: Pair) 
     Ok(())
 }
 
-/// After the client shuts the connection down, it opens nothing and the box
-/// accepts nothing.
+/// After the client shuts the connection down, it has no failure reason,
+/// opens nothing, and the box accepts nothing.
 async fn a_client_shutdown_ends_the_connection(mut pair: Pair) -> TestResult {
     pair.client.shutdown();
     pair.client.closed().await;
+    let failure = pair.client.failure_within(Duration::from_secs(1)).await;
+    assert_eq!(failure, None);
     assert!(
         matches!(pair.client.open().await, Err(ConnectionError::Closed)),
         "a stream opened on a closed connection"
@@ -250,6 +311,19 @@ async fn memory_max_streams_stay_open_at_once() -> TestResult {
         max_streams_stay_open_at_once(memory().await?).await
     })
     .await?
+}
+
+#[tokio::test]
+async fn memory_open_never_waits_while_streams_churn_at_the_limit() -> TestResult {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        open_never_waits_while_streams_churn_at_the_limit(memory().await?).await
+    })
+    .await?
+}
+
+#[tokio::test]
+async fn memory_the_first_stream_written_is_accepted_first() -> TestResult {
+    bounded(async { the_first_stream_written_is_accepted_first(memory().await?).await }).await
 }
 
 #[tokio::test]
