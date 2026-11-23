@@ -39,13 +39,13 @@ The extension doesn't keep the daemon running, so the daemon can stop while the 
 
 ## Open this page in another lane
 
-On a lane's page, pick another lane of the project under "Open this page in". The extension opens the same service on that lane and keeps the path, query and hash. On a wildcard hostname, such as a tenant page, it keeps the tenant.
+On a lane's page, open the popup and pick another lane of the project under "Open this page in". The extension opens the same service on that lane and keeps the path, query and hash. On a wildcard hostname, such as a tenant page, it keeps the tenant.
 
 ## Switch which box serves a lane
 
 When more than one machine has a lane, such as your machine and a box, the lane shows a "Served by" row with "This machine" and each box. Pick the one that should serve the lane. [Work with several boxes](remote/several-boxes.md) covers what that changes.
 
-When the lane runs on your machine, the popup asks before it stops it. "Stop and switch" stops the lane and then switches, which can take 30 seconds. When the lane's containers hold its ports, the popup lists the commands that stop them, each with a copy button. Run them, then click "Switch again".
+When the lane runs on your machine, the popup asks before it stops it. "Stop and switch" stops the lane and then switches, which can take up to 30 seconds. When the lane's containers hold its ports, the popup lists the commands that stop them, each with a copy button. Run them, then click "Switch again".
 
 ## Fill test logins on other lanes
 
@@ -59,7 +59,7 @@ The fill reads only fields marked with the standard `autocomplete` tokens `usern
 
 ## Change the login settings
 
-Click "Login settings", the sliders button in the popup's header:
+Click "Login settings", the sliders button in the popup's header. Both switches are on until you turn them off.
 
 - "Fill logins on lanes" turns the menu on or off.
 - "Remember passwords" turns saving on or off. The logins already saved stay.
