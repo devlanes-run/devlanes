@@ -1468,7 +1468,9 @@ fn doctor_words_the_browser_host() {
         "gone": false, "error": null, "kept": true}]);
     let text = render_text(Method::Doctor, &data);
     assert!(
-        text.contains("fix: run devlanes setup --remove from that install first"),
+        text.contains(
+            "fix: devlanes setup --remove from that install, then devlanes setup from this build"
+        ),
         "{text}"
     );
     assert!(!text.contains("fix: devlanes setup\n"), "{text}");

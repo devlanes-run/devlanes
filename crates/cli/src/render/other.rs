@@ -1115,7 +1115,7 @@ fn browser_checks(browser: &Value) -> Vec<Check> {
         // A build leaves another install's registration alone, so setup
         // from here wouldn't change it.
         let fix = if entry["kept"] == true {
-            "run devlanes setup --remove from that install first"
+            "devlanes setup --remove from that install, then devlanes setup from this build"
         } else {
             "devlanes setup"
         };
