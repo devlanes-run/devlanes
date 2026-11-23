@@ -78,7 +78,7 @@ async fn serve() {
         pairing: Arc::new(devlanes_transport::NoPairing),
     };
     let served = devlanes_transport::serve(
-        devlanes_transport::stdio(),
+        devlanes_transport::mux_server(Box::new(devlanes_transport::stdio())),
         services,
         ServeOptions::new("fake-box"),
     )

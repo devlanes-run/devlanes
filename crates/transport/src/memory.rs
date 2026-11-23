@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
 use tokio::sync::mpsc;
 
-use crate::mux::mux_client;
-use crate::transport::{BoxConnection, Transport, TransportError};
+use crate::mux::{mux_client, mux_server};
+use crate::transport::{BoxConnection, BoxServerConnection, Transport, TransportError};
 
 /// Buffer per direction; large enough that yamux frames rarely block.
 const BUFFER: usize = 256 * 1024;
@@ -110,9 +110,11 @@ pub struct MemoryListener {
 }
 
 impl MemoryListener {
-    /// Waits for the next link; `None` once every transport clone is dropped.
-    pub async fn accept(&mut self) -> Option<MemoryStream> {
-        self.accept_rx.recv().await
+    /// Waits for the next link and runs yamux over its box end; `None` once
+    /// every transport clone is dropped.
+    pub async fn accept(&mut self) -> Option<BoxServerConnection> {
+        let pipe = self.accept_rx.recv().await?;
+        Some(mux_server(Box::new(pipe)))
     }
 }
 

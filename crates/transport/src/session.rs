@@ -817,7 +817,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::mux::{self, mux_client};
+    use crate::mux::{self, mux_client, mux_server};
     use crate::registry::{RegistrySnapshot, SharedRegistry};
     use crate::server::{BoxServices, LoopbackDialer, ServeError, ServeOptions, serve};
     use crate::sync::NoSync;
@@ -981,7 +981,11 @@ mod tests {
     async fn box_refuses_other_protocol_revisions() -> Result<(), Box<dyn std::error::Error>> {
         timeout(Duration::from_secs(5), async {
             let (client_io, box_io) = tokio::io::duplex(64 * 1024);
-            let server = tokio::spawn(serve(box_io, services(), ServeOptions::new("box 9")));
+            let server = tokio::spawn(serve(
+                mux_server(Box::new(box_io)),
+                services(),
+                ServeOptions::new("box 9"),
+            ));
             let mux = mux::client(Box::new(client_io));
             let mut control = wire::channel(mux.open().await?);
             let hello = OpenRequest::Control {
@@ -1184,7 +1188,11 @@ mod tests {
             pairing: gate,
             ..services()
         };
-        let server = tokio::spawn(serve(box_io, services, ServeOptions::new("box")));
+        let server = tokio::spawn(serve(
+            mux_server(Box::new(box_io)),
+            services,
+            ServeOptions::new("box"),
+        ));
         (Box::new(client_io), server)
     }
 
@@ -1303,7 +1311,11 @@ mod tests {
                 pairing: Arc::new(OneCode::default()),
                 ..services()
             };
-            let server = tokio::spawn(serve(box_io, services, ServeOptions::new("box")));
+            let server = tokio::spawn(serve(
+                mux_server(Box::new(box_io)),
+                services,
+                ServeOptions::new("box"),
+            ));
             let mux = mux::client(Box::new(client_io));
             let mut control = wire::channel(mux.open().await?);
             let hello = OpenRequest::Control {
@@ -1400,7 +1412,11 @@ mod tests {
             let (client_io, box_io) = tokio::io::duplex(64 * 1024);
             let reason =
                 "the box does not accept connections. Set remote.allow_connections to true there";
-            let server = tokio::spawn(crate::refuse(box_io, reason.into(), Timing::default()));
+            let server = tokio::spawn(crate::refuse(
+                mux_server(Box::new(box_io)),
+                reason.into(),
+                Timing::default(),
+            ));
             let options = SessionOptions::new("client");
             let registry = options.registry.clone();
             let Err(error) = Session::establish(mux_client(Box::new(client_io)), options).await

@@ -551,7 +551,7 @@ mod tests {
     use futures_util::FutureExt;
 
     use super::*;
-    use crate::mux::{self, mux_client};
+    use crate::mux::{self, mux_client, mux_server};
     use crate::registry::{RegistrySnapshot, SharedRegistry};
     use crate::server::{BoxServices, LoopbackDialer, ServeOptions, serve};
     use crate::session::{Session, SessionOptions};
@@ -667,7 +667,7 @@ mod tests {
         let mut options = ServeOptions::new("box");
         options.features = names(box_features);
         tokio::spawn(async move {
-            let _ = serve(io, services, options).await;
+            let _ = serve(mux_server(Box::new(io)), services, options).await;
         })
     }
 

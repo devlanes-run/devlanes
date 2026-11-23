@@ -226,7 +226,7 @@ pub async fn run_stdio(
     let mut options = ServeOptions::new(label);
     options.box_info = box_info;
     devlanes_transport::serve(
-        devlanes_transport::stdio(),
+        devlanes_transport::mux_server(Box::new(devlanes_transport::stdio())),
         services(paths, client, require_pairing),
         options,
     )
@@ -243,7 +243,7 @@ pub async fn run_stdio(
 pub async fn refuse_stdio(reason: &str) -> Result<(), TunnelError> {
     write_preamble(&mut tokio::io::stdout()).await?;
     devlanes_transport::refuse(
-        devlanes_transport::stdio(),
+        devlanes_transport::mux_server(Box::new(devlanes_transport::stdio())),
         reason.to_owned(),
         devlanes_transport::Timing::default(),
     )

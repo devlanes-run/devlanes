@@ -2569,7 +2569,7 @@ mod tests {
             pairing: Arc::new(devlanes_transport::NoPairing),
         };
         tokio::spawn(devlanes_transport::serve(
-            box_io,
+            devlanes_transport::mux_server(Box::new(box_io)),
             services,
             devlanes_transport::ServeOptions::new("box"),
         ));
