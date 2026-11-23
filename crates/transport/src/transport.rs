@@ -36,6 +36,14 @@ pub trait Connection: Send + Sync {
     /// Opens a protocol stream. Shutting down its write half ends what the box
     /// reads and keeps the other direction; dropping it ends the stream, and the
     /// box still reads every byte written before.
+    ///
+    /// The session counts its streams and holds at most
+    /// [`crate::MAX_STREAMS`] at once; while it holds fewer, `open` must not
+    /// wait for the box to close one. A transport frees a stream later than
+    /// the session frees its slot (yamux once both ends closed it, QUIC once
+    /// both directions finished and the box returned the credit), so its own
+    /// limit needs headroom above [`crate::MAX_STREAMS`]; yamux uses
+    /// `MAX_STREAMS + 64`.
     async fn open(&self) -> Result<BoxDuplex, ConnectionError>;
 
     /// When the box last delivered bytes on any stream of this connection, on
@@ -43,8 +51,11 @@ pub trait Connection: Send + Sync {
     fn last_inbound(&self) -> Instant;
 
     /// Waits up to `limit` for the reason the connection failed, such as the
-    /// stderr of an SSH tunnel that exited. `None` when it closed cleanly or no
-    /// reason arrived in time.
+    /// stderr of an SSH tunnel that exited. `None` when it closed cleanly, by
+    /// either side (including after this side's own [`Connection::shutdown`]),
+    /// or when no reason arrived in time. A close the transport starts itself,
+    /// such as dropping a path it may not use or a box that breaks the
+    /// protocol, is a failure and returns its reason.
     async fn failure_within(&self, limit: Duration) -> Option<String>;
 
     /// Starts closing the connection and its streams; returns at once.
@@ -56,12 +67,19 @@ pub trait Connection: Send + Sync {
 
 /// The box's side of one connection: it accepts the streams the client opens.
 ///
-/// Dropping it closes the connection. A message a stream wrote and shut down
-/// before that, such as a refusal, still reaches the client; a box with more
-/// to send waits for the client to close first, as [`crate::refuse`] does.
+/// Dropping it closes the connection. One control message a stream wrote and
+/// shut down before the drop, such as `Incompatible`, `PairingRefused` or
+/// `Refused` (a few hundred bytes), still reaches the client while the
+/// process keeps running. Nothing larger is promised, and nothing once the
+/// process exits: a box that must be sure the client read its last words
+/// waits for the client to close first, as [`crate::refuse`] does.
 #[async_trait]
 pub trait ServerConnection: Send {
     /// The next stream the client opened; `None` once the connection is gone.
+    ///
+    /// A stream the client opened and wrote to before opening any other is
+    /// accepted first, which is how the box finds the control stream. Nothing
+    /// else about the order of accepted streams is promised.
     async fn accept(&mut self) -> Option<BoxDuplex>;
 
     /// When the client last delivered bytes on any stream of this connection,

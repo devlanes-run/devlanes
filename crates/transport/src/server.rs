@@ -299,8 +299,9 @@ pub async fn refuse(
     })
     .await
     .map_err(|_| ServeError::ClientTimeout)??;
-    // The client closes the session once it read the refusal; dropping the
-    // connection before then could cut the frame off on its way out.
+    // The client closes the session once it read the refusal. Dropping the
+    // connection sends the frame, but `refuse_stdio` exits the process right
+    // after this returns, which can end the close before the frame is out.
     let _ = timeout(timing.handshake_timeout, async {
         while connection.accept().await.is_some() {}
     })
