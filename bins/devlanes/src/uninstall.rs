@@ -625,22 +625,21 @@ async fn plan_service(paths: &Paths) -> (Step, bool) {
     }
 }
 
-/// The setup step: what `setup --remove` changes.
+/// The setup step: what `setup --remove` changes, and what it leaves in
+/// place.
 async fn plan_setup(paths: &Paths) -> Step {
     let plan = crate::setup::removal_plan(paths, false).await;
-    if plan.is_empty() {
+    let lines = plan
+        .iter()
+        .map(|item| format!("{}: {}", item.step, item.what));
+    if plan.iter().all(|item| item.kept) {
         return Step::new(
             "setup",
             State::Skip,
-            ["devlanes setup changed nothing on this machine".into()],
+            std::iter::once("devlanes setup changed nothing on this machine".into()).chain(lines),
         );
     }
-    Step::new(
-        "setup",
-        State::Todo,
-        plan.into_iter()
-            .map(|item| format!("{}: {}", item.step, item.what)),
-    )
+    Step::new("setup", State::Todo, lines)
 }
 
 /// The data step of the plan.

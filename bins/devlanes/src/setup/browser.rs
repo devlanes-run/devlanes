@@ -792,18 +792,22 @@ pub(super) async fn remove(runtime: &Runtime, location: Option<&Location>) -> Re
     Ok(0)
 }
 
-/// What `--remove` deletes, one `remove <place>` line each. Read-only.
-pub(super) async fn removal_lines(location: Option<&Location>) -> Vec<String> {
+/// What `--remove` does, as `(line, kept)` pairs: `remove <place>` for each
+/// registration it deletes, then a `left <place> in place` line with `kept`
+/// for each one it leaves. Read-only.
+pub(super) async fn removal_lines(location: Option<&Location>) -> Vec<(String, bool)> {
     let Some(location) = location.cloned() else {
         return Vec::new();
     };
     blocking(move || removal(&location, &Install::current()))
         .await
         .map(|removal| {
-            removal
+            let deletes = removal
                 .delete
                 .iter()
-                .map(|target| format!("remove {target}"))
+                .map(|target| (format!("remove {target}"), false));
+            deletes
+                .chain(removal.keep.into_iter().map(|line| (line, true)))
                 .collect()
         })
         .unwrap_or_default()

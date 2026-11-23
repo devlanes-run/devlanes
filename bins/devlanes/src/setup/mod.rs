@@ -655,10 +655,14 @@ pub(crate) struct Removal {
     pub(crate) what: String,
     /// Whether it runs sudo.
     pub(crate) sudo: bool,
+    /// Whether this is something `--remove` leaves in place, such as another
+    /// install's browser registration, listed so the user knows it stays.
+    pub(crate) kept: bool,
 }
 
-/// What `setup --remove` changes on this machine, without changing anything
-/// or prompting; steps with nothing to undo are left out.
+/// What `setup --remove` changes on this machine, and what it leaves in
+/// place, without changing anything or prompting; steps with nothing to undo
+/// are left out.
 pub(crate) async fn removal_plan(paths: &Paths, keep_ca: bool) -> Vec<Removal> {
     removal_plan_in(paths, browser::Location::current().as_ref(), keep_ca).await
 }
@@ -670,7 +674,12 @@ async fn removal_plan_in(
     keep_ca: bool,
 ) -> Vec<Removal> {
     let config = crate::user_config::load(paths).await;
-    let item = |step: &'static str, what: String, sudo: bool| Removal { step, what, sudo };
+    let item = |step: &'static str, what: String, sudo: bool| Removal {
+        step,
+        what,
+        sudo,
+        kept: false,
+    };
     let failed = |error: RpcError| {
         error.data["message"]
             .as_str()
@@ -707,7 +716,10 @@ async fn removal_plan_in(
         browser::removal_lines(location)
             .await
             .into_iter()
-            .map(|what| item(StepKind::BrowserHost.name(), what, false)),
+            .map(|(what, kept)| Removal {
+                kept,
+                ..item(StepKind::BrowserHost.name(), what, false)
+            }),
     );
     if !keep_ca {
         match config {
