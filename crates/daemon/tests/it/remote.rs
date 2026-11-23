@@ -50,10 +50,10 @@ use devlanes_proto::{
 };
 use devlanes_state::Store;
 use devlanes_transport::{
-    AuthorizedTarget, Backoff, BoxDuplex, Dialer, LoopbackDialer, ServeOptions, SessionOptions,
-    Transport,
+    AuthorizedTarget, Backoff, BoxConnection, BoxDuplex, Dialer, LoopbackDialer, ServeOptions,
+    SessionOptions, Transport,
     memory::{MemoryTransport, memory_transport},
-    serve,
+    mux_client, serve,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -554,7 +554,7 @@ struct SignIn {
 impl Transport for SignIn {
     /// Asks first when a sign-in is required, then connects, counting the
     /// new link's writes from zero.
-    async fn connect(&self) -> Result<BoxDuplex, devlanes_transport::TransportError> {
+    async fn connect(&self) -> Result<BoxConnection, devlanes_transport::TransportError> {
         if self.controls.sign_in.load(Ordering::SeqCst) {
             let answer = self
                 .prompts
@@ -573,12 +573,12 @@ impl Transport for SignIn {
                 ));
             }
         }
-        let inner = self.inner.connect().await?;
+        let pipe = self.inner.connect_pipe()?;
         self.controls.writes.written.store(0, Ordering::SeqCst);
-        Ok(Box::new(Metered {
-            inner,
+        Ok(mux_client(Box::new(Metered {
+            inner: Box::new(pipe),
             controls: self.controls.clone(),
-        }))
+        })))
     }
 }
 

@@ -159,9 +159,9 @@ struct StoppedThenRunning {
 
 #[async_trait]
 impl Transport for StoppedThenRunning {
-    async fn connect(&self) -> Result<BoxDuplex, TransportError> {
+    async fn connect(&self) -> Result<BoxConnection, TransportError> {
         if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-            return Ok(Box::new(Stopped));
+            return Ok(mux_client(Box::new(Stopped)));
         }
         self.box_side.connect().await
     }

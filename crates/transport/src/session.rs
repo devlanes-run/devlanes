@@ -15,7 +15,6 @@ use tokio::sync::watch;
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
-use crate::mux::mux_client;
 use crate::pairing::PairingClient;
 use crate::registry::ClientRegistry;
 use crate::sync::SyncSubscription;
@@ -384,8 +383,8 @@ impl Session {
         transport: &dyn Transport,
         options: SessionOptions,
     ) -> Result<Self, SessionError> {
-        let io = transport.connect().await?;
-        Self::establish(mux_client(io), options).await
+        let connection = transport.connect().await?;
+        Self::establish(connection, options).await
     }
 
     /// Runs the handshake over an existing pipe.
@@ -818,7 +817,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::mux;
+    use crate::mux::{self, mux_client};
     use crate::registry::{RegistrySnapshot, SharedRegistry};
     use crate::server::{BoxServices, LoopbackDialer, ServeError, ServeOptions, serve};
     use crate::sync::NoSync;

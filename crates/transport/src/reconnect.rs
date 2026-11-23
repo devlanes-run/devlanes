@@ -242,8 +242,8 @@ async fn supervise(
         attempt = attempt.saturating_add(1);
         state.send_replace(LinkState::Connecting { attempt });
         let connecting = async {
-            let io = transport.connect().await?;
-            Session::establish(crate::mux_client(io), options.clone()).await
+            let connection = transport.connect().await?;
+            Session::establish(connection, options.clone()).await
         };
         // A transport that hangs (a stuck ssh, a dead network path) must not
         // stall the link forever; the attempt fails and the backoff continues.
@@ -328,7 +328,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Transport for Hanging {
-        async fn connect(&self) -> Result<crate::BoxDuplex, crate::TransportError> {
+        async fn connect(&self) -> Result<crate::BoxConnection, crate::TransportError> {
             std::future::pending().await
         }
     }
@@ -367,7 +367,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Transport for SignInRequired {
-        async fn connect(&self) -> Result<crate::BoxDuplex, crate::TransportError> {
+        async fn connect(&self) -> Result<crate::BoxConnection, crate::TransportError> {
             self.attempts
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Err(crate::TransportError::needs_auth(
@@ -514,7 +514,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Transport for Refused {
-        async fn connect(&self) -> Result<crate::BoxDuplex, crate::TransportError> {
+        async fn connect(&self) -> Result<crate::BoxConnection, crate::TransportError> {
             Err(crate::TransportError::permanent(
                 "devlanes is not installed",
             ))

@@ -17,13 +17,13 @@ pub trait Duplex: AsyncRead + AsyncWrite + Send + Unpin {}
 
 impl<T: AsyncRead + AsyncWrite + Send + Unpin> Duplex for T {}
 
-/// Type-erased duplex returned by [`Transport::connect`].
+/// Type-erased duplex, such as one stream of a [`Connection`].
 pub type BoxDuplex = Box<dyn Duplex>;
 
-/// Type-erased client side of a connection.
+/// Type-erased client side of a connection, returned by [`Transport::connect`].
 pub type BoxConnection = Box<dyn Connection>;
 
-/// Type-erased box side of a connection.
+/// Type-erased box side of a connection, taken by [`crate::serve`] and [`crate::refuse`].
 pub type BoxServerConnection = Box<dyn ServerConnection>;
 
 /// The client's side of one connection to a box. Only the client opens streams.
@@ -76,12 +76,14 @@ pub enum ConnectionError {
     Closed,
 }
 
-/// Produces one authenticated duplex byte stream to a box per call.
+/// Produces one authenticated connection to a box per call.
 ///
-/// Implementations do not interpret the bytes; the mux and protocol run on top.
+/// Implementations do not interpret the bytes on its streams; the protocol
+/// runs on top. A transport with one byte pipe to the box wraps it with
+/// [`crate::mux_client`].
 #[async_trait]
 pub trait Transport: Send + Sync {
-    /// Opens a fresh pipe to the box.
+    /// Opens a fresh connection to the box.
     ///
     /// Return [`TransportError::Permanent`] when retrying cannot help (missing
     /// binary) so reconnect loops stop instead of spinning,
@@ -89,10 +91,10 @@ pub trait Transport: Send + Sync {
     /// never connected, and [`TransportError::NeedsAuth`] when a person has to
     /// sign in again to a box that worked before, so [`crate::Link`] waits for
     /// them.
-    async fn connect(&self) -> Result<BoxDuplex, TransportError>;
+    async fn connect(&self) -> Result<BoxConnection, TransportError>;
 }
 
-/// Failure to produce a pipe, classified for reconnect decisions.
+/// Failure to produce a connection, classified for reconnect decisions.
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     /// Local or network I/O failed; retrying later may succeed.

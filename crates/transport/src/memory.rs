@@ -12,7 +12,8 @@ use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
 use tokio::sync::mpsc;
 
-use crate::transport::{BoxDuplex, Transport, TransportError};
+use crate::mux::mux_client;
+use crate::transport::{BoxConnection, Transport, TransportError};
 
 /// Buffer per direction; large enough that yamux frames rarely block.
 const BUFFER: usize = 256 * 1024;
@@ -65,11 +66,11 @@ impl MemoryTransport {
     fn lock(&self) -> std::sync::MutexGuard<'_, TransportState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
-}
 
-#[async_trait]
-impl Transport for MemoryTransport {
-    async fn connect(&self) -> Result<BoxDuplex, TransportError> {
+    /// Creates a fresh link and returns its client end as a raw pipe, for
+    /// tests that put their own wrapper between the pipe and the mux.
+    /// [`Transport::connect`] runs yamux over the same pipe.
+    pub fn connect_pipe(&self) -> Result<MemoryStream, TransportError> {
         match self.lock().refuse {
             Some(true) => return Err(TransportError::permanent("memory transport refused")),
             Some(false) => return Err(TransportError::transient("memory transport refused")),
@@ -87,11 +88,19 @@ impl Transport for MemoryTransport {
             .map_err(|_| TransportError::transient("memory listener closed"))?;
         let control = LinkControl { gate: gate.clone() };
         self.lock().links.push(control);
-        Ok(Box::new(MemoryStream {
+        Ok(MemoryStream {
             inner: client,
             gate,
             end: 0,
-        }))
+        })
+    }
+}
+
+#[async_trait]
+impl Transport for MemoryTransport {
+    /// yamux over a fresh link from [`MemoryTransport::connect_pipe`].
+    async fn connect(&self) -> Result<BoxConnection, TransportError> {
+        Ok(mux_client(Box::new(self.connect_pipe()?)))
     }
 }
 

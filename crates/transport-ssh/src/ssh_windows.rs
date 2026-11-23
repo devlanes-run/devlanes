@@ -28,7 +28,9 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use devlanes_transport::{BoxDuplex, PreambleError, Prefixed, Transport, TransportError};
+use devlanes_transport::{
+    BoxConnection, PreambleError, Prefixed, Transport, TransportError, mux_client,
+};
 use devlanes_transport_command::{
     CommandError, CommandOptions, CommandStream, CommandTransport, Exit, Output, Ready,
 };
@@ -600,8 +602,9 @@ impl Drop for SshTransport {
 
 #[async_trait]
 impl Transport for SshTransport {
-    async fn connect(&self) -> Result<BoxDuplex, TransportError> {
-        Ok(Box::new(self.open().await?))
+    /// yamux over a fresh `ssh.exe` session that runs the tunnel.
+    async fn connect(&self) -> Result<BoxConnection, TransportError> {
+        Ok(mux_client(Box::new(self.open().await?)))
     }
 }
 
@@ -1214,7 +1217,7 @@ mod tests {
                 let transport =
                     local_windows_box(dir.path(), (shell, &program), &echoing_tunnel())?;
                 for _ in 0..2 {
-                    let stream = transport.connect().await?;
+                    let stream = transport.open().await?;
                     let (mut reader, mut writer) = tokio::io::split(stream);
                     let sent = payload.clone();
                     let writing = tokio::spawn(async move { writer.write_all(&sent).await });
@@ -1268,7 +1271,7 @@ mod tests {
                 let transport = local_windows_box(dir.path(), (shell, &program), &stopped)?;
                 let mut last = String::new();
                 for _ in 0..2 {
-                    let mut stream = transport.connect().await?;
+                    let mut stream = transport.open().await?;
                     let mut rest = Vec::new();
                     let Err(error) = stream.read_to_end(&mut rest).await else {
                         panic!("{shell:?}: the tunnel ended without its exit status");
