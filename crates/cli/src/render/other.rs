@@ -1081,7 +1081,8 @@ fn fact_checks(data: &Value) -> Vec<Check> {
 /// The browser extension's host (`browser`: `{registered, stale, found}`,
 /// added by the CLI): the browsers it is registered for, and a warning per
 /// registration that runs a program that is gone or another devlanes. A
-/// `kept` one, which a build leaves alone, gets a fix for that install.
+/// `kept` one, which a build leaves alone, gets a fix for that install, and
+/// an `ours` one is this install's own and only out of date.
 /// Nothing when no browser was found.
 fn browser_checks(browser: &Value) -> Vec<Check> {
     let names =
@@ -1106,6 +1107,9 @@ fn browser_checks(browser: &Value) -> Vec<Check> {
     for entry in stale {
         let why = match (entry["runs"].as_str(), entry["error"].as_str()) {
             (_, Some(error)) => format!("can't be read: {}", clean(error)),
+            // This install's own manifest, written by an older devlanes or
+            // changed by hand.
+            (Some(_), _) if entry["ours"] == true => "is out of date".to_owned(),
             (Some(runs), _) if entry["gone"] == true => {
                 format!("runs {}, which is gone", clean(runs))
             }

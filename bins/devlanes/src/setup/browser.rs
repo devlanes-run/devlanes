@@ -873,9 +873,10 @@ pub(super) async fn removal_lines(location: Option<&Location>) -> Vec<(String, b
 }
 
 /// Doctor's facts: `{registered: [names], stale: [{browser, place, runs,
-/// gone, error, kept}], found: [names]}`, where `found` lists the browsers
-/// the step looked at and `kept` marks another install's registration that
-/// this build leaves alone. Read-only.
+/// gone, error, kept, ours}], found: [names]}`, where `found` lists the
+/// browsers the step looked at, `kept` marks another install's registration
+/// that this build leaves alone, and `ours` marks this install's own
+/// registration that is out of date. Read-only.
 pub(crate) async fn doctor_report() -> Value {
     let Some(location) = Location::current() else {
         return Value::Null;
@@ -912,6 +913,8 @@ pub(crate) fn report(location: &Location, install: &Install) -> Value {
                 "error": error,
                 // A build leaves it alone, so `devlanes setup` wouldn't fix it.
                 "kept": matches!(registration.found, Found::Kept { .. }),
+                // This install's own registration, only out of date.
+                "ours": matches!(registration.found, Found::Stale { ours: true, .. }),
             }))
         })
         .collect();
@@ -1117,6 +1120,34 @@ mod tests {
             );
             assert_eq!(report["stale"][1]["browser"], "Edge", "{report}");
             assert_eq!(report["stale"][1]["gone"], false, "{report}");
+            assert_eq!(report["stale"][0]["ours"], true, "{report}");
+            assert_eq!(report["stale"][1]["ours"], false, "{report}");
+            // Doctor words this install's outdated manifest as its own, and
+            // only Edge as another install.
+            let lines: Vec<String> =
+                devlanes_cli::doctor_checks_of(&json!({"browser": report.clone()}))
+                    .into_iter()
+                    .map(|check| check.text)
+                    .collect();
+            assert!(
+                lines.contains(&"Chromium's extension host is out of date".to_owned()),
+                "{lines:?}"
+            );
+            assert!(
+                lines.contains(&format!(
+                    "Edge's extension host runs {}, another devlanes install",
+                    other.display()
+                )),
+                "{lines:?}"
+            );
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|line| line.contains("another devlanes install"))
+                    .count(),
+                1,
+                "{lines:?}"
+            );
 
             let removal = removal(&location, &install);
             assert_eq!(

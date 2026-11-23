@@ -1462,6 +1462,17 @@ fn doctor_words_the_browser_host() {
     assert!(text.contains("fix: devlanes setup"), "{text}");
     assert!(!text.contains("--remove"), "{text}");
 
+    // This install's own manifest, only out of date, is never another install.
+    data["browser"]["stale"] = json!([{"browser": "Chromium", "place": "/y", "runs": "/usr/local/bin/devlanes",
+        "gone": false, "error": null, "kept": false, "ours": true}]);
+    let text = render_text(Method::Doctor, &data);
+    assert!(
+        text.contains("Chromium's extension host is out of date"),
+        "{text}"
+    );
+    assert!(!text.contains("another devlanes install"), "{text}");
+    assert!(text.contains("fix: devlanes setup"), "{text}");
+
     // A build leaves another install's registration alone, so the fix names
     // that install, not a setup from here.
     data["browser"]["stale"] = json!([{"browser": "Chrome", "place": "/x", "runs": "/opt/devlanes",
