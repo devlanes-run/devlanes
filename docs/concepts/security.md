@@ -58,9 +58,9 @@ A box's services see your connections as coming from the box itself. A service t
 
 ## The browser extension holds test passwords
 
-The browser extension saves the usernames and passwords you sign in with on lanes. They are stored unencrypted in the extension's local storage in that browser. The extension's background answers only a frame on a lane route, and only with the logins of that lane's project. The extension reaches devlanes through its native host, the devlanes command the browser starts. The host passes on four kinds of request, to read the lanes and to switch boxes, and never sends the extension environments, secrets or logs.
+The browser extension saves the usernames and passwords you sign in with on lanes. They are stored unencrypted in that browser. A page gets saved logins only when it is on an HTTPS lane route, and only those of that lane's project. Through devlanes, the extension can read your lanes, switch boxes and stop a lane on this machine before a switch. It never receives environments, secrets or logs.
 
-A lane page still has some reach. In browsers that can't restrict the extension's storage to its own pages, such as Chrome 120, a compromised page process could read the saved logins, though page code can't. A lane page can submit its own form with values it chooses, and the extension saves them. One such submit replaces the saved password of a username, and 20 push out every real login of that project. A page can also draw its own content over the login menu and line up a click on one of its options. That needs a real click, and any extension's frame on a page has the same exposure. Keep the fill for test accounts.
+A lane page still has some reach. In browsers that can't restrict the extension's storage to its own pages, such as Chrome 120, a compromised page process could read the saved logins. Page code can't. A lane page can submit its own form with values it chooses, and the extension saves them. One such submit replaces the saved password of a username. Twenty push out every real login of the project. A page can also draw its own content over the login menu and line up a click on one of its options. That needs a real click, and any extension's frame on a page has the same exposure.
 
 ## The daemon looks for new releases
 
