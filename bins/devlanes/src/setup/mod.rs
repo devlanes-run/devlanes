@@ -1356,15 +1356,21 @@ mod tests {
                 devlanes_update::InstallMethod::Script("/opt/devlanes".into()),
                 "/opt/devlanes/devlanes".into(),
             ),
-            registrations: browser::Browser::ALL
-                .into_iter()
-                .zip(found)
-                .map(|(browser, found)| browser::Registration {
-                    browser,
-                    place: format!("/home/a/{}", browser.name()),
-                    found: found.clone(),
-                })
-                .collect(),
+            registrations: [
+                browser::Browser::CHROME,
+                browser::Browser::CHROMIUM,
+                browser::Browser::BRAVE,
+                browser::Browser::EDGE,
+            ]
+            .into_iter()
+            .zip(found)
+            .map(|(browser, found)| browser::Registration {
+                browser,
+                place: format!("/home/a/{}", browser.name()),
+                found: found.clone(),
+                installed: *found != browser::Found::NoBrowser,
+            })
+            .collect(),
             held: None,
         }
     }
@@ -1452,7 +1458,7 @@ mod tests {
         );
         assert_eq!(
             reason(&[NoBrowser]),
-            "no Chrome, Chromium, Brave or Edge folder in your home"
+            "none of the browsers devlanes registers is installed"
         );
     }
 
@@ -1461,6 +1467,7 @@ mod tests {
     fn temp_location(home: &std::path::Path) -> browser::Location {
         browser::Location {
             home: home.to_path_buf(),
+            local_app_data: home.join("AppData").join("Local"),
             layout: browser::Layout::Linux,
             registry_root: String::new(),
         }
