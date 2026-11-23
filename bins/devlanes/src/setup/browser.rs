@@ -513,7 +513,7 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
         (missing, stale) = (None, None);
         if let Some(blocked) = blocked {
             kept.push(format!(
-                "{blocked} would need {}, which runs {}, and a build doesn't replace it",
+                "{blocked} can't be registered: the shared manifest {} runs {}, another devlanes install, and a build doesn't replace it",
                 held.manifest.display(),
                 held.runs.display()
             ));
@@ -1423,7 +1423,7 @@ mod tests {
         assert!(!needed && !done, "{reason}");
         assert!(
             reason.contains(&format!(
-                "Edge would need {}, which runs {}, and a build doesn't replace it. To register this build",
+                "Edge can't be registered: the shared manifest {} runs {}, another devlanes install, and a build doesn't replace it. To register this build",
                 shared.display(),
                 other.display()
             )),
