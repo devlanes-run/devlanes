@@ -203,10 +203,8 @@ async fn ssh_tunnel_session() -> TestResult {
             }
             return Err("devlanes is not installed on the box".into());
         }
-        // A working tunnel writes its preamble (which `connect` reads), then waits
-        // for the client's hello or starts the mux (yamux opens with an RTT ping);
-        // an unimplemented one exits at once, which closes the connection with
-        // its stderr as the reason.
+        // A tunnel that exits at once after its preamble fails the session
+        // below with its stderr, as `Session::establish` reports a dead pipe.
         let connection = match transport.connect().await {
             Ok(connection) => connection,
             Err(error) => {
@@ -221,17 +219,6 @@ async fn ssh_tunnel_session() -> TestResult {
                 return Err(error.into());
             }
         };
-        if tokio::time::timeout(Duration::from_secs(3), connection.closed())
-            .await
-            .is_ok()
-        {
-            return Err(
-                match connection.failure_within(Duration::from_secs(1)).await {
-                    Some(error) => error.into(),
-                    None => "tunnel closed its output without an error".into(),
-                },
-            );
-        }
         drop(connection);
         let session = Session::connect(&transport, SessionOptions::new("ssh-test")).await?;
         assert!(!session.server().is_empty());
