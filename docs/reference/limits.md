@@ -41,8 +41,8 @@ What devlanes does not do, with the issue that tracks each limit. An empty Issue
 | The extension only knows hostnames ending in `.localhost`, not a `hostnames.tld` such as `.test`. | [browser#5](https://github.com/devlanes-run/browser/issues/5) |
 | Installs run with `uvx` or `pipx run` can't register the browser extension's host. Install with `uv tool install devlanes` or `pipx install devlanes`. | |
 | The browser starts devlanes with its own environment, so a `DEVLANES_HOME` set only in a shell doesn't reach it and the extension uses the default home. | |
-| The login fill saves a login only when the form sends a real `submit` event, so a form sent with `form.submit()` or plain `fetch` isn't saved. | |
-| A sign-in split across two pages is saved only when the password page keeps the username in a hidden field with `autocomplete="username"`. | |
+| The login fill saves a login only when the browser fires a `submit` event, so a form sent with `form.submit()` or plain `fetch` isn't saved. | |
+| A sign-in split across two pages is saved only when the password page keeps the username in a hidden field marked `autocomplete="username"` or `"email"`. | |
 | A sign-in the site refuses is still saved, so a wrong password replaces the right one until the next sign-in that works. | |
 
 ## Remote boxes
