@@ -257,7 +257,6 @@ pub type DataStream = Prefixed<BoxDuplex>;
 pub const MAX_STREAMS: usize = 512;
 
 /// The session's connection and the streams it counts against [`MAX_STREAMS`].
-#[derive(Clone)]
 struct Streams {
     connection: Arc<dyn Connection>,
     open: Arc<AtomicUsize>,
