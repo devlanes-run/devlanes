@@ -1208,21 +1208,29 @@ pub(crate) fn report(location: &Location, install: &Install) -> Value {
         .iter()
         .filter(|registration| registration.installed)
         .collect();
-    let mut reported: Vec<&str> = Vec::new();
-    let stale: Vec<Value> = registrations
+    let bad: Vec<&Registration> = registrations
         .iter()
-        // Doctor says what is wrong with a browser, so a browser with two
-        // stale keys gets one entry.
+        .copied()
         .filter(|registration| {
-            let name = registration.browser.name();
-            let first = matches!(
+            matches!(
                 registration.found,
                 Found::Stale { .. } | Found::Kept { .. } | Found::Unreadable(_)
-            ) && !reported.contains(&name);
-            if first {
-                reported.push(name);
-            }
-            first
+            )
+        })
+        .collect();
+    // Doctor says what is wrong with a browser, so a browser with two bad
+    // keys gets one entry. It is kept only when every bad key is, since
+    // setup rewrites any other one.
+    let stale: Vec<Value> = browser_names(&bad, &|_| true)
+        .into_iter()
+        .filter_map(|name| {
+            let mut of_browser = bad.iter().filter(|r| r.browser.name() == name);
+            let first = of_browser.clone().next()?;
+            Some(
+                *of_browser
+                    .find(|r| !matches!(r.found, Found::Kept { .. }))
+                    .unwrap_or(first),
+            )
         })
         .filter_map(|registration| {
             let (runs, error) = match &registration.found {
@@ -2038,6 +2046,42 @@ mod tests {
         delete(&removal(&location, &install)).expect("delete");
         assert_eq!(written_keys(&location), Vec::<&str>::new());
         assert!(!location.copy().exists());
+    }
+
+    /// Doctor names Brave once when both its keys are wrong, and says a build
+    /// leaves it alone only when it would leave both: here Chromium's key
+    /// runs another working install, which a build keeps, but Chrome's runs
+    /// a program that is gone, which setup rewrites.
+    #[cfg(windows)]
+    #[test]
+    fn doctor_reports_a_browser_as_kept_only_when_every_bad_key_is() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = TestKey(format!(
+            r"Software\devlanes-test-browser-kept-{}",
+            std::process::id()
+        ));
+        let location = location(&temp.path().join("user"), Layout::Windows, root.0.clone());
+        install_browsers(&location, &[Browser::BRAVE]);
+        let other = temp.path().join("other").join("devlanes.exe");
+        std::fs::create_dir_all(other.parent().expect("parent")).expect("other");
+        std::fs::write(&other, "").expect("other binary");
+        let gone = temp.path().join("gone").join("devlanes.exe");
+        for (key, runs, file) in [
+            ("Chromium", &other, temp.path().join("other.json")),
+            ("Google/Chrome", &gone, temp.path().join("gone.json")),
+        ] {
+            std::fs::write(&file, other_manifest(runs)).expect("manifest");
+            registry::write_string(&location.key(key), "", &file.display().to_string())
+                .expect("key");
+        }
+        let build = temp.path().join("target").join("devlanes.exe");
+        let install = Install::new(InstallMethod::Source, build);
+        let report = report(&location, &install);
+        let stale = report["stale"].as_array().expect("stale");
+        assert_eq!(stale.len(), 1, "{report}");
+        assert_eq!(stale[0]["browser"], "Brave", "{report}");
+        assert_eq!(stale[0]["kept"], false, "{report}");
+        assert_eq!(stale[0]["gone"], true, "{report}");
     }
 
     /// A `Source` build leaves the shared manifest alone while it runs
