@@ -34,7 +34,8 @@ pub struct UseParams {
 }
 
 /// A frame that isn't a protocol 1 request. `id` is the request's id when it
-/// had a readable one, so the error can answer it.
+/// had a readable numeric one, so `invalid_request` can answer it. Without
+/// one the host only writes a line on stderr.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invalid {
     pub id: Option<u64>,
@@ -210,8 +211,10 @@ impl HostError {
         }
     }
 
-    /// `daemon_failed`: the daemon answered `code`, which the host doesn't
-    /// map, with `message`.
+    /// `daemon_failed`: the request couldn't be answered by the daemon.
+    /// `code` is the daemon's own code for an error the host doesn't map, or
+    /// one of the host's codes when the daemon couldn't be asked:
+    /// `daemon_not_running`, `daemon_outdated` or `daemon_connection_lost`.
     pub fn daemon_failed(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: "daemon_failed".into(),
@@ -221,10 +224,11 @@ impl HostError {
     }
 }
 
-/// An error reply. `id` is `null` when the request had no readable id.
+/// An error reply. A message without a readable id gets none, since nothing
+/// could match it to a request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ErrorReply {
-    pub id: Option<u64>,
+    pub id: u64,
     pub error: HostError,
 }
 

@@ -17,7 +17,7 @@
           ],
           "routes": [
             { "host": "app.acme.localhost", "url": "https://app.acme.localhost:8443", "service": "web", "state": "ready" },
-            { "host": "*.app.acme.localhost", "url": "https://*.app.acme.localhost:8443", "service": "web", "state": "ready" }
+            { "host": "*.app.acme.localhost", "url": null, "service": "web", "state": "ready" }
           ]
         },
         {

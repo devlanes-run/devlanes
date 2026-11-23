@@ -72,7 +72,9 @@ pub struct Skipped {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Route {
     pub host: String,
-    pub url: String,
+    /// `None` for a wildcard host such as `*.app.acme.localhost`, which has
+    /// no single address to open.
+    pub url: Option<String>,
     pub service: String,
     pub state: String,
 }
@@ -238,23 +240,6 @@ fn box_state<'a>(states: impl Iterator<Item = &'a str>) -> &'static str {
     }
 }
 
-/// The URL of a `hosts` route. A wildcard host has no single address, so the
-/// daemon sends no URL, and it gets `https://<pattern>` with the proxy's port
-/// taken from another route of the reply. The extension never opens it.
-fn route_url(route: &HostRoute, port: Option<&str>) -> String {
-    match &route.url {
-        Some(url) => url.clone(),
-        None => format!("https://{}{}", route.host, port.unwrap_or_default()),
-    }
-}
-
-/// `:<port>` of an `https://host:port` URL, or `None` without a port.
-fn url_port(url: &str) -> Option<&str> {
-    let rest = url.strip_prefix("https://")?;
-    let authority = rest.split('/').next()?;
-    authority.rfind(':').map(|colon| &authority[colon..])
-}
-
 /// One lane while it is built: the local summary and each box's lane.
 #[derive(Default)]
 struct Building<'a> {
@@ -306,14 +291,10 @@ pub fn compose(status: &Page<LaneSummary>, hosts: &Hosts, host_list: &HostList) 
         .iter()
         .map(|yielded| yielded.lane.as_str())
         .collect();
-    let port = hosts
-        .items
-        .iter()
-        .find_map(|route| route.url.as_deref().and_then(url_port));
     let mut projects: BTreeMap<String, Vec<Lane>> = BTreeMap::new();
     for ((project, index), by_reference) in lanes {
         for (reference, building) in by_reference {
-            let lane = compose_lane(&reference, index, &building, &yielded, hosts, port);
+            let lane = compose_lane(&reference, index, &building, &yielded, hosts);
             projects.entry(project.clone()).or_default().push(lane);
         }
     }
@@ -333,7 +314,6 @@ fn compose_lane(
     building: &Building,
     yielded: &BTreeSet<&str>,
     hosts: &Hosts,
-    port: Option<&str>,
 ) -> Lane {
     let mut sources = Vec::new();
     let mut served_by = None;
@@ -402,7 +382,7 @@ fn compose_lane(
         .filter(|route| route.lane == reference)
         .map(|route| Route {
             host: route.host.clone(),
-            url: route_url(route, port),
+            url: route.url.clone(),
             service: route.unit.clone(),
             state: route.state.clone(),
         })
@@ -502,12 +482,5 @@ mod tests {
     fn lane_names_follow_the_daemon() {
         assert_eq!(lane_name(0), "main");
         assert_eq!(lane_name(3), "lane3");
-    }
-
-    #[test]
-    fn wildcard_urls_take_the_proxy_port() {
-        assert_eq!(url_port("https://app.acme.localhost:8443"), Some(":8443"));
-        assert_eq!(url_port("https://app.acme.localhost:8443/x"), Some(":8443"));
-        assert_eq!(url_port("https://app.acme.localhost"), None);
     }
 }

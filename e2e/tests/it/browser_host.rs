@@ -203,9 +203,13 @@ fn the_view_lists_a_started_lane_with_its_routes() -> Result<()> {
         .collect();
     viewed.sort();
     assert_eq!(viewed, hosts, "{lane}");
+    // A wildcard host has no single URL, and every other route has one.
     for route in lane["routes"].as_array().into_iter().flatten() {
-        let url = need(route["url"].as_str(), "a route URL")?;
-        assert!(url.starts_with("https://"), "{route}");
+        let wildcard = route["host"].as_str().is_some_and(|h| h.starts_with("*."));
+        match route["url"].as_str() {
+            Some(url) => assert!(!wildcard && url.starts_with("https://"), "{route}"),
+            None => assert!(wildcard, "{route}"),
+        }
     }
 
     let status = host.close(&lab)?;

@@ -104,13 +104,16 @@ where
         };
         let request = match Request::parse(&body) {
             Ok(request) => request,
+            // A reply without an id can't be matched to anything, so a
+            // message without one only gets a line on stderr.
             Err(invalid) => {
-                inner
-                    .send_error(
-                        invalid.id,
-                        HostError::plain("invalid_request", invalid.message),
-                    )
-                    .await;
+                match invalid.id {
+                    Some(id) => {
+                        let error = HostError::plain("invalid_request", invalid.message);
+                        inner.send_error(id, error).await;
+                    }
+                    None => eprintln!("devlanes browser host: {}", invalid.message),
+                }
                 continue;
             }
         };
@@ -118,7 +121,7 @@ where
         match (request.call, hello.clone()) {
             (Call::Hello { protocol, .. }, _) if !crate::message::SUPPORTED.contains(&protocol) => {
                 inner
-                    .send_error(Some(id), HostError::protocol_mismatch(protocol))
+                    .send_error(id, HostError::protocol_mismatch(protocol))
                     .await;
             }
             (Call::Hello { .. }, _) => {
@@ -135,11 +138,7 @@ where
                     .await;
                 hello = Some(status);
             }
-            (_, None) => {
-                inner
-                    .send_error(Some(id), HostError::hello_required())
-                    .await
-            }
+            (_, None) => inner.send_error(id, HostError::hello_required()).await,
             (Call::Watch, Some(status)) => {
                 inner
                     .send(&Reply {
@@ -169,7 +168,7 @@ where
             }
             (Call::Unknown(method), Some(_)) => {
                 inner
-                    .send_error(Some(id), HostError::unknown_method(&method))
+                    .send_error(id, HostError::unknown_method(&method))
                     .await;
             }
         }
@@ -269,7 +268,7 @@ impl<D: Daemon> Inner<D> {
     }
 
     /// Sends an error reply.
-    async fn send_error(&self, id: Option<u64>, error: HostError) {
+    async fn send_error(&self, id: u64, error: HostError) {
         self.send(&ErrorReply { id, error }).await;
     }
 
@@ -279,7 +278,7 @@ impl<D: Daemon> Inner<D> {
             Ok(result) => {
                 self.send(&Reply { id, result }).await;
             }
-            Err(error) => self.send_error(Some(id), error).await,
+            Err(error) => self.send_error(id, error).await,
         }
     }
 
@@ -455,7 +454,11 @@ fn daemon_message(error: &RpcError) -> Option<String> {
     error.data["message"].as_str().map(str::to_owned)
 }
 
-/// The host error for a failed request that has no mapping of its own.
+/// The host error for a failed request that has no mapping of its own:
+/// `daemon_failed`, with the daemon's code when it answered, else
+/// `daemon_not_running` when no daemon runs, `daemon_outdated` when it is too
+/// old for the host, and `daemon_connection_lost` when the connection broke
+/// or the reply didn't parse.
 fn unmapped(error: CallError) -> HostError {
     match error {
         CallError::Rpc(error) => {

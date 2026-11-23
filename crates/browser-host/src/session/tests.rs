@@ -256,10 +256,15 @@ async fn hello_must_come_first() {
     let unknown = port.recv().await;
     assert_eq!(unknown["id"], 4);
     assert_eq!(unknown["error"]["code"], "unknown_method");
+    // Without a readable id nothing could match a reply, so none comes.
     port.to_host.write_all(&2u32.to_ne_bytes()).await.ok();
     port.to_host.write_all(b"{]").await.ok();
+    port.send(json!({"id": "5", "method": "watch"})).await;
+    assert!(port.quiet(Duration::from_secs(1)).await);
+    port.send(json!({"id": 6, "method": "use", "params": {"lane": "acme@0"}}))
+        .await;
     let invalid = port.recv().await;
-    assert_eq!(invalid["id"], Value::Null);
+    assert_eq!(invalid["id"], 6);
     assert_eq!(invalid["error"]["code"], "invalid_request");
 }
 
@@ -596,7 +601,7 @@ fn the_messages_fixture_matches_the_host() {
         .expect_err("a use without a box is invalid");
     let errors = [
         ErrorReply {
-            id: Some(3),
+            id: 3,
             error: use_error(CallError::Rpc(RpcError::new(
                 "local_lane_running",
                 json!({
@@ -608,18 +613,18 @@ fn the_messages_fixture_matches_the_host() {
             ))),
         },
         ErrorReply {
-            id: Some(5),
+            id: 5,
             error: containers_hold_ports(
                 "acme@0",
                 vec!["docker compose -p acme-lane0 stop".into()],
             ),
         },
         ErrorReply {
-            id: Some(1),
+            id: 1,
             error: HostError::protocol_mismatch(2),
         },
         ErrorReply {
-            id: Some(3),
+            id: 3,
             error: use_error(CallError::Rpc(RpcError::new(
                 "invalid_reference",
                 json!({"reference": "acme@"}),
@@ -627,33 +632,33 @@ fn the_messages_fixture_matches_the_host() {
             ))),
         },
         ErrorReply {
-            id: Some(2),
+            id: 2,
             error: HostError::hello_required(),
         },
         ErrorReply {
-            id: invalid.id,
+            id: invalid.id.unwrap_or_default(),
             error: HostError::plain("invalid_request", invalid.message),
         },
         ErrorReply {
-            id: Some(6),
+            id: 6,
             error: HostError::unknown_method("lane.clean"),
         },
         ErrorReply {
-            id: Some(3),
+            id: 3,
             error: use_error(refusal(
                 "box_unknown",
                 "this machine knows no box called fork-b. Run devlanes remote ls to see the boxes",
             )),
         },
         ErrorReply {
-            id: Some(3),
+            id: 3,
             error: use_error(refusal(
                 "lane_not_on_box",
                 "box fork-b has no lane acme@0. Run devlanes remote ls to see its lanes",
             )),
         },
         ErrorReply {
-            id: Some(4),
+            id: 4,
             error: use_error(refusal(
                 "local_lane_unknown",
                 "this machine has no lane acme@0. Run devlanes remote use <box> acme@0 to choose a box",
