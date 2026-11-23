@@ -1280,7 +1280,7 @@
     },
     "InjectedPresetOptions3": {
       "additionalProperties": false,
-      "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
+      "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`. Replicas 2 and up build in their own Cargo target folder in the lane data folder.",
       "examples": [
         {
           "before_dev_command": "",
@@ -1288,7 +1288,7 @@
           "identifier": "io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"
         }
       ],
-      "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
+      "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`. Replicas 2 and up build in their own Cargo target folder in the lane data folder.",
       "properties": {
         "before_dev_command": {
           "description": "Replaces `build.beforeDevCommand`, the command Tauri runs before the app. Set it to `\"\"` when the frontend runs as its own devlanes service; otherwise every replica starts its own frontend on the port from `tauri.conf.json`. Default: the command in `tauri.conf.json`.",
@@ -2601,7 +2601,7 @@
         },
         "tauri": {
           "$ref": "#/$defs/InjectedPresetOptions3",
-          "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
+          "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`. Replicas 2 and up build in their own Cargo target folder in the lane data folder.",
           "examples": [
             {
               "before_dev_command": "",
@@ -2609,7 +2609,7 @@
               "identifier": "io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"
             }
           ],
-          "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`."
+          "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`. Replicas 2 and up build in their own Cargo target folder in the lane data folder."
         },
         "vite": {
           "$ref": "#/$defs/InjectedPresetOptions0",
