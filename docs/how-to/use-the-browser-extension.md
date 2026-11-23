@@ -63,7 +63,8 @@ Click "Login settings", the sliders button in the popup's header. Both switches 
 
 - "Fill logins on lanes" turns the menu on or off.
 - "Remember passwords" turns saving on or off. The logins already saved stay.
-- "Saved logins" lists each project with its count. Click "Delete" twice to delete a project's logins.
+
+"Saved logins" lists each project with its count. Click "Delete", then click it again within 4 seconds to delete a project's logins.
 
 A project keeps one login per username, so a new password for the same username replaces the old one on every lane. A project keeps 20 logins. A new one replaces the login used least recently. [Limits](../reference/limits.md#browser-extension) lists the sign-ins the fill doesn't save, and [Security](../concepts/security.md#the-browser-extension-holds-test-passwords) says what a lane page can do with the saved logins.
 
