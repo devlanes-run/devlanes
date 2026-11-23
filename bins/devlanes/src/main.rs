@@ -2,6 +2,23 @@
 //! Client commands run here; `devlanes daemon run` builds the daemon from the same binary
 //! so client and daemon versions match on a fresh install.
 
+// The macOS linker notes that a debug build of this binary has more than
+// 16 MB of `__eh_frame`, past what its compact unwind table can point into.
+// Panics still unwind, and only frames past that offset are looked up more
+// slowly. The Rust team labels the note a false positive of `linker_messages`
+// (rust-lang/rust#159105). The debug binary sits at that size: about 480,000
+// functions, and one small crate adds about 1%. `-no_compact_unwind` would
+// give up the compact table for every frame, and `opt-level = 1` for every
+// dependency removes only 9% of the functions while it slows debug builds
+// and debugging. So the lint is allowed here, for this crate on macOS only.
+#![cfg_attr(
+    target_os = "macos",
+    allow(
+        linker_messages,
+        reason = "ld's __eh_frame size note on debug builds, rust-lang/rust#159105"
+    )
+)]
+
 mod attach;
 mod bundle;
 mod choose;
