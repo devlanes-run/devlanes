@@ -46,7 +46,7 @@ tokio.workspace = true
 # from JavaScript.
 [target.'cfg(target_family = "wasm")'.dependencies]
 bitflags = "2"
-jiff = { version = "0.2", features = ["js"] }
+jiff = { version = "1.0", features = ["js"] }
 ratatui = { version = "0.30", default-features = false, features = ["all-widgets", "layout-cache", "macros", "std", "underline-color"] }
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 
