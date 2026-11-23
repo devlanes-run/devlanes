@@ -10,7 +10,7 @@ publish.workspace = true
 [dependencies]
 devlanes-version = { path = "../version" }
 async-trait.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 bytes.workspace = true
 devlanes-client = { path = "../client" }
 # The daemon page words doctor checks exactly as `devlanes doctor` does.

@@ -834,13 +834,31 @@ fn prune(home: &Path, keep: &str) {
 /// The lowercase hex SHA-256 of a file. Blocking.
 pub fn sha256_file(path: &Path) -> Result<String, InstallError> {
     let mut file = File::open(path).map_err(InstallError::io(path.display().to_string()))?;
-    let mut hasher = Sha256::new();
+    let mut hasher = HashWriter(Sha256::new());
     io::copy(&mut file, &mut hasher).map_err(InstallError::io(path.display().to_string()))?;
     Ok(hasher
+        .0
         .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
+}
+
+/// Lets `io::copy` feed a SHA-256, since digest 0.11 hashers no longer
+/// implement `io::Write`.
+struct HashWriter(Sha256);
+
+impl io::Write for HashWriter {
+    /// Hashes `bytes`; never fails.
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    /// Nothing is buffered.
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The version `<exe> --version` prints after `devlanes `, or `None` when it
