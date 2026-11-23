@@ -643,9 +643,9 @@ enum Decision {
     Ask { missing: usize, browser: bool },
 }
 
-/// Whether `setup` asks before it runs `steps`. A step that never counts is
-/// asked about only with the missing ones, and runs without a question when
-/// it is alone, so it never needs `--yes`. `yes` skips the question.
+/// What a plain `setup` does with `steps`. A step that never counts is asked
+/// about only with the missing ones, and runs without a question when it is
+/// alone, so it never needs `--yes`. `yes` skips the question.
 fn decide(steps: &[Step], yes: bool) -> Decision {
     let missing = steps.iter().filter(|step| step.todo()).count();
     let runs = steps.iter().filter(|step| step.applies()).count();
