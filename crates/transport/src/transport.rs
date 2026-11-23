@@ -56,8 +56,9 @@ pub trait Connection: Send + Sync {
 
 /// The box's side of one connection: it accepts the streams the client opens.
 ///
-/// Dropping it closes the connection. Bytes a stream wrote and shut down before
-/// that still reach the client.
+/// Dropping it closes the connection. A message a stream wrote and shut down
+/// before that, such as a refusal, still reaches the client; a box with more
+/// to send waits for the client to close first, as [`crate::refuse`] does.
 #[async_trait]
 pub trait ServerConnection: Send {
     /// The next stream the client opened; `None` once the connection is gone.

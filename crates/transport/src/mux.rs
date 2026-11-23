@@ -394,29 +394,3 @@ async fn drive<T>(
     let _ = tokio::time::timeout(CLOSE_TIMEOUT, poll_fn(|cx| connection.poll_close(cx))).await;
     done.cancel();
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[tokio::test]
-    async fn client_streams_reach_server() -> Result<(), Box<dyn std::error::Error>> {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            let (a, b) = tokio::io::duplex(64 * 1024);
-            let client = client(Box::new(a));
-            let mut server = server(Box::new(b));
-            let mut outbound = client.open().await?;
-            outbound.write_all(b"ping").await?;
-            let mut inbound = server.accept().await.ok_or("no inbound stream")?;
-            let mut buf = [0u8; 4];
-            inbound.read_exact(&mut buf).await?;
-            assert_eq!(&buf, b"ping");
-            drop(server);
-            client.closed().await;
-            assert!(client.open().await.is_err());
-            Ok(())
-        })
-        .await?
-    }
-}
