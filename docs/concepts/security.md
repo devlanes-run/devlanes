@@ -72,3 +72,4 @@ The daemon reads the latest version from the registry devlanes was installed fro
 - [Trust the devlanes CA](../how-to/hostnames/trust-the-ca.md)
 - [Connect to a box](../how-to/remote/connect.md)
 - [Remote mirroring](remote-mirroring.md)
+- [Fill test logins on lanes](../how-to/fill-test-logins.md)
