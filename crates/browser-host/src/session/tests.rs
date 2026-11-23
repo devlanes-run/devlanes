@@ -269,6 +269,17 @@ async fn hello_must_come_first() {
 }
 
 #[tokio::test]
+async fn finished_tasks_are_dropped_before_the_next_spawn() {
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..100 {
+        spawn_reaped(&mut tasks, async {});
+        // Lets the task just spawned run to its end.
+        tokio::task::yield_now().await;
+    }
+    assert!(tasks.len() <= 2, "{} tasks kept", tasks.len());
+}
+
+#[tokio::test]
 async fn the_host_exits_cleanly_at_end_of_input() {
     let port = Port::open(Scripted::new(|_, _, _| Ok(json!({}))));
     drop(port.to_host);

@@ -41,7 +41,7 @@ const REFRESH_EVENTS: &[&str] = &[
 
 /// How long the host waits after the first event of a burst before it
 /// composes the view again.
-const DEBOUNCE: Duration = Duration::from_millis(100);
+const THROTTLE: Duration = Duration::from_millis(100);
 
 /// How often the host tries to reach a daemon that is down or outdated.
 const RECONNECT: Duration = Duration::from_secs(2);
@@ -54,7 +54,7 @@ const SWITCH_WAIT: Duration = Duration::from_secs(30);
 const SWITCH_RETRY: Duration = Duration::from_secs(1);
 
 /// Frames waiting for the writer. Replies are small and the view goes out
-/// at most once per [`DEBOUNCE`], so this only fills when Chrome stops reading.
+/// at most once per [`THROTTLE`], so this only fills when Chrome stops reading.
 const OUT_QUEUE: usize = 64;
 
 /// What the session's tasks share.
@@ -149,19 +149,19 @@ where
                 // One view stream per port: a second watch only gets its reply.
                 if !watching {
                     watching = true;
-                    tasks.spawn(watch(inner.clone(), status));
+                    spawn_reaped(&mut tasks, watch(inner.clone(), status));
                 }
             }
             (Call::Use(params), Some(_)) => {
                 let inner = inner.clone();
-                tasks.spawn(async move {
+                spawn_reaped(&mut tasks, async move {
                     let result = inner.use_lane(&params).await;
                     inner.answer(id, result).await;
                 });
             }
             (Call::StopAndUse(params), Some(_)) => {
                 let inner = inner.clone();
-                tasks.spawn(async move {
+                spawn_reaped(&mut tasks, async move {
                     let result = inner.stop_and_use(&params).await;
                     inner.answer(id, result).await;
                 });
@@ -175,6 +175,17 @@ where
     };
     tasks.abort_all();
     ended
+}
+
+/// Spawns `task` into `tasks` after dropping the tasks that already ended. A
+/// `JoinSet` keeps every finished task until it is joined, so a port that
+/// sends `use` after `use` would otherwise grow without bound.
+fn spawn_reaped(
+    tasks: &mut tokio::task::JoinSet<()>,
+    task: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    while tasks.try_join_next().is_some() {}
+    tasks.spawn(task);
 }
 
 /// The `daemon` status for a daemon the host can't use.
@@ -215,8 +226,9 @@ async fn watch<D: Daemon>(inner: Arc<Inner<D>>, mut reported: DaemonStatus) {
         };
         inner.report(&mut reported, running()).await;
         inner.refresh(&mut sent).await;
-        // The first event of a burst sets the deadline and later ones leave it,
-        // so a daemon that changes all the time still gets a view every 100 ms.
+        // Refreshes are throttled: the first event of a burst sets a 100 ms
+        // deadline and later ones leave it, so a daemon that changes all the
+        // time still gets a view every 100 ms.
         let mut due: Option<Instant> = None;
         loop {
             tokio::select! {
@@ -233,7 +245,7 @@ async fn watch<D: Daemon>(inner: Arc<Inner<D>>, mut reported: DaemonStatus) {
                         inner.send(&Event::Notice(notice)).await;
                     }
                     if due.is_none() && REFRESH_EVENTS.contains(&event.event.as_str()) {
-                        due = Some(Instant::now() + DEBOUNCE);
+                        due = Some(Instant::now() + THROTTLE);
                     }
                 }
                 () = sleep_until(due.unwrap_or_else(Instant::now)), if due.is_some() => {
