@@ -49,7 +49,7 @@ mod sync;
 mod transport;
 mod wire;
 
-pub use mux::{MuxError, MuxStream};
+pub use mux::{mux_client, mux_server};
 pub use pairing::{NoPairing, PairingCheck, PairingClaim, PairingClient, PairingGate};
 pub use preamble::{PREAMBLE_LIMIT, Preamble, PreambleError, TUNNEL_PREAMBLE, read_preamble};
 pub use reconnect::{Backoff, Link, LinkError, LinkState};
@@ -62,7 +62,7 @@ pub use server::{
     BoxServices, ClientInfo, Dialer, LoopbackDialer, ServeError, ServeOptions, refuse, serve,
 };
 pub use session::{
-    DataStream, OpenError, Session, SessionEnd, SessionError, SessionOptions, Timing,
+    DataStream, MAX_STREAMS, OpenError, Session, SessionEnd, SessionError, SessionOptions, Timing,
 };
 pub use splice::{HALF_CLOSE_IDLE, splice};
 pub use sync::{

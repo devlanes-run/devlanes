@@ -8,25 +8,25 @@
 use std::future::poll_fn;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tokio_util::sync::CancellationToken;
 
-use crate::transport::BoxDuplex;
-
-/// Streams per session; browsers plus database pools rarely exceed this.
-pub(crate) const MAX_STREAMS: usize = 512;
+use crate::session::MAX_STREAMS;
+use crate::transport::{
+    BoxConnection, BoxDuplex, BoxServerConnection, Connection, ConnectionError, ServerConnection,
+};
 
 /// yamux's own limit sits above [`MAX_STREAMS`]: yamux treats hitting it on an
 /// open as fatal for the whole connection, and it forgets dropped streams only
-/// when the driver next polls, so the client refuses opens itself with headroom.
+/// when the driver next polls, so the session refuses opens itself with headroom.
 const YAMUX_STREAMS: usize = MAX_STREAMS + 64;
 
 /// yamux auto-tunes each stream window from 256 KiB; this budget lets every
@@ -43,13 +43,10 @@ const BOX_STREAM_LIMIT: usize = 8;
 
 /// The mux failed or is gone.
 #[derive(Debug, thiserror::Error)]
-pub enum MuxError {
+pub(crate) enum MuxError {
     /// The connection is closed; no further streams can be opened.
     #[error("mux connection closed")]
     Closed,
-    /// Every stream slot is in use; this open failed but the connection lives on.
-    #[error("too many open streams ({MAX_STREAMS}); close some connections and retry")]
-    TooManyStreams,
     /// yamux reported a connection-level failure.
     #[error("mux: {0}")]
     Connection(#[from] yamux::ConnectionError),
@@ -126,68 +123,6 @@ impl AsyncWrite for Watched {
     }
 }
 
-/// One multiplexed stream.
-pub struct MuxStream {
-    inner: Compat<yamux::Stream>,
-    _slot: Option<Slot>,
-}
-
-/// A client stream slot, released when the stream drops.
-struct Slot(Arc<AtomicUsize>);
-
-impl Drop for Slot {
-    /// Frees the slot.
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-impl std::fmt::Debug for MuxStream {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MuxStream")
-            .field("id", &self.inner.get_ref().id())
-            .finish()
-    }
-}
-
-impl MuxStream {
-    fn new(stream: yamux::Stream) -> Self {
-        Self {
-            inner: stream.compat(),
-            _slot: None,
-        }
-    }
-}
-
-impl AsyncRead for MuxStream {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_read(cx, buf)
-    }
-}
-
-impl AsyncWrite for MuxStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
-    }
-
-    /// Half-closes the stream (yamux FIN); reading continues until the peer closes.
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
-    }
-}
-
 type OpenReply = oneshot::Sender<Result<yamux::Stream, MuxError>>;
 
 /// Client-side handle; the only side allowed to open streams.
@@ -198,20 +133,41 @@ pub(crate) struct MuxClient {
     done: CancellationToken,
     failure: watch::Receiver<Option<String>>,
     activity: Arc<Activity>,
-    open_streams: Arc<AtomicUsize>,
 }
 
 impl MuxClient {
     /// Why the connection failed, once the driver saw an I/O or protocol error.
-    pub(crate) fn failure(&self) -> Option<String> {
+    fn failure(&self) -> Option<String> {
         self.failure.borrow().clone()
+    }
+}
+
+#[async_trait]
+impl Connection for MuxClient {
+    /// Opens a new outbound stream; yamux announces it with its first frame.
+    async fn open(&self) -> Result<BoxDuplex, ConnectionError> {
+        let (reply, response) = oneshot::channel();
+        self.open
+            .send(reply)
+            .await
+            .map_err(|_| ConnectionError::Closed)?;
+        let stream = response
+            .await
+            .map_err(|_| ConnectionError::Closed)?
+            .map_err(|_| ConnectionError::Closed)?;
+        Ok(Box::new(stream.compat()))
+    }
+
+    /// When the box last sent anything on any stream.
+    fn last_inbound(&self) -> Instant {
+        self.activity.last()
     }
 
     /// Waits up to `limit` for the driver to report why the connection ended.
     ///
     /// Streams can see EOF before the driver records the pipe's error (such as
     /// the remote tunnel's stderr), so callers that just lost a stream wait here.
-    pub(crate) async fn failure_within(&self, limit: Duration) -> Option<String> {
+    async fn failure_within(&self, limit: Duration) -> Option<String> {
         let mut failure = self.failure.clone();
         let wait = async {
             tokio::select! {
@@ -225,37 +181,13 @@ impl MuxClient {
         }
     }
 
-    /// Opens a new outbound stream.
-    ///
-    /// A full stream table fails this open with [`MuxError::TooManyStreams`]; the
-    /// connection and its other streams are unaffected.
-    pub(crate) async fn open(&self) -> Result<MuxStream, MuxError> {
-        let taken = self.open_streams.fetch_add(1, Ordering::AcqRel);
-        let slot = Slot(self.open_streams.clone());
-        if taken >= MAX_STREAMS {
-            return Err(MuxError::TooManyStreams);
-        }
-        let (reply, response) = oneshot::channel();
-        self.open.send(reply).await.map_err(|_| MuxError::Closed)?;
-        let stream = response.await.map_err(|_| MuxError::Closed)??;
-        Ok(MuxStream {
-            inner: stream.compat(),
-            _slot: Some(slot),
-        })
-    }
-
-    /// When the box last sent anything on any stream.
-    pub(crate) fn last_inbound(&self) -> Instant {
-        self.activity.last()
-    }
-
     /// Asks the driver to close the connection.
-    pub(crate) fn shutdown(&self) {
+    fn shutdown(&self) {
         self.shutdown.cancel();
     }
 
     /// Resolves once the driver task has exited.
-    pub(crate) async fn closed(&self) {
+    async fn closed(&self) {
         self.done.cancelled().await;
     }
 }
@@ -267,22 +199,36 @@ pub(crate) struct MuxServer {
     activity: Arc<Activity>,
 }
 
-impl MuxServer {
+#[async_trait]
+impl ServerConnection for MuxServer {
     /// Waits for the next client stream; `None` once the connection is gone.
-    pub(crate) async fn accept(&mut self) -> Option<MuxStream> {
-        self.inbound.recv().await.map(MuxStream::new)
+    async fn accept(&mut self) -> Option<BoxDuplex> {
+        let stream = self.inbound.recv().await?;
+        Some(Box::new(stream.compat()))
     }
 
     /// When the client last sent anything on any stream.
-    pub(crate) fn last_inbound(&self) -> Instant {
+    fn last_inbound(&self) -> Instant {
         self.activity.last()
     }
 }
 
 impl Drop for MuxServer {
+    /// Starts yamux's graceful close, which still sends what streams queued.
     fn drop(&mut self) {
         self.shutdown.cancel();
     }
+}
+
+/// yamux over `pipe`, client side: the connection of a transport that has one
+/// byte pipe to the box, such as SSH or a command.
+pub fn mux_client(pipe: BoxDuplex) -> BoxConnection {
+    Box::new(client(pipe))
+}
+
+/// yamux over `pipe`, box side, for `devlanes tunnel --stdio`.
+pub fn mux_server(pipe: BoxDuplex) -> BoxServerConnection {
+    Box::new(server(pipe))
 }
 
 /// Builds the shared yamux configuration.
@@ -325,7 +271,6 @@ pub(crate) fn client(io: BoxDuplex) -> MuxClient {
         done,
         failure,
         activity,
-        open_streams: Arc::new(AtomicUsize::new(0)),
     }
 }
 
@@ -470,79 +415,6 @@ mod tests {
             drop(server);
             client.closed().await;
             assert!(client.open().await.is_err());
-            Ok(())
-        })
-        .await?
-    }
-
-    #[tokio::test]
-    async fn a_full_stream_table_fails_only_that_open() -> Result<(), Box<dyn std::error::Error>> {
-        tokio::time::timeout(Duration::from_secs(20), async {
-            let (a, b) = tokio::io::duplex(1024 * 1024);
-            let client = client(Box::new(a));
-            let mut server = server(Box::new(b));
-            // Like the real box, answer every stream: yamux stops opening streams
-            // while too many wait for their first reply (ACK).
-            let (held_tx, mut held) = mpsc::unbounded_channel();
-            let answering = tokio::spawn(async move {
-                while let Some(mut stream) = server.accept().await {
-                    if stream.write_all(b"k").await.is_err() {
-                        break;
-                    }
-                    if held_tx.send(stream).is_err() {
-                        break;
-                    }
-                }
-            });
-            let mut open = Vec::new();
-            let refused = loop {
-                match client.open().await {
-                    Ok(mut stream) => {
-                        // yamux announces a stream with its first frame, as the open
-                        // request does in the real protocol.
-                        stream.write_all(b"o").await?;
-                        let mut ack = [0u8; 1];
-                        stream.read_exact(&mut ack).await?;
-                        open.push(stream);
-                    }
-                    Err(error) => break error,
-                }
-                assert!(
-                    open.len() <= MAX_STREAMS,
-                    "the stream limit was not enforced"
-                );
-            };
-            assert!(matches!(refused, MuxError::TooManyStreams), "{refused:?}");
-            // The first stream still carries data, and freed slots open again.
-            open[0].write_all(b"alive").await?;
-            let mut inbound = held.recv().await.ok_or("no inbound stream")?;
-            let mut opened = [0u8; 1];
-            inbound.read_exact(&mut opened).await?;
-            let mut buf = [0u8; 5];
-            inbound.read_exact(&mut buf).await?;
-            assert_eq!(&buf, b"alive");
-            // Both ends must close a stream before yamux frees its slot.
-            drop(inbound);
-            open.clear();
-            while let Ok(Some(stream)) =
-                tokio::time::timeout(Duration::from_millis(50), held.recv()).await
-            {
-                drop(stream);
-            }
-            let reopened = tokio::time::timeout(Duration::from_secs(5), async {
-                loop {
-                    if let Ok(mut stream) = client.open().await
-                        && stream.write_all(b"o").await.is_ok()
-                    {
-                        return true;
-                    }
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-            })
-            .await
-            .unwrap_or(false);
-            assert!(reopened, "a closed stream frees its slot");
-            answering.abort();
             Ok(())
         })
         .await?

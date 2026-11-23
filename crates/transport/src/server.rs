@@ -14,12 +14,12 @@ use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
-use crate::mux::{self, MuxServer, MuxStream};
+use crate::mux::{self, MuxServer};
 use crate::pairing::{PairingCheck, PairingClaim, PairingGate};
 use crate::registry::{AuthorizedTarget, Registry, RegistrySource, RegistryUpdate};
 use crate::session::Timing;
 use crate::sync::{self, SyncSource};
-use crate::transport::{BoxDuplex, BoxError, Duplex};
+use crate::transport::{BoxDuplex, BoxError, Duplex, ServerConnection};
 use crate::wire::{
     self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, MIRROR_REPORT,
     OpenReply, OpenRequest, PROTOCOL_VERSION, RejectReason, SYNC_ZSTD, WireError, negotiate,
@@ -228,7 +228,7 @@ struct Hello {
 async fn hello(
     mux: &mut MuxServer,
     timing: Timing,
-) -> Result<(Channel<MuxStream>, Hello), ServeError> {
+) -> Result<(Channel<BoxDuplex>, Hello), ServeError> {
     let first = timeout(timing.handshake_timeout, mux.accept())
         .await
         .map_err(|_| ServeError::HandshakeTimeout)?
@@ -482,7 +482,7 @@ async fn refusing_streams<T>(mux: &mut MuxServer, work: impl Future<Output = T>)
 /// The new token goes to the client before the welcome. A refused code and a
 /// client that leaves without one end the session.
 async fn pair(
-    control: &mut Channel<MuxStream>,
+    control: &mut Channel<BoxDuplex>,
     services: &BoxServices,
     peer: &ClientInfo,
     token: Option<String>,
@@ -564,7 +564,7 @@ async fn forward_reports(
 
 /// Writes a control message; a write stalled past the ping timeout ends the session.
 async fn send_control(
-    control: &mut Channel<MuxStream>,
+    control: &mut Channel<BoxDuplex>,
     message: &BoxControl,
     timing: Timing,
 ) -> Result<(), ServeError> {
@@ -580,7 +580,7 @@ fn write(registry: &RwLock<Registry>) -> std::sync::RwLockWriteGuard<'_, Registr
 }
 
 /// Reads the open frame of a non-control stream and dispatches it.
-async fn handle_stream(stream: MuxStream, context: Arc<StreamContext>) {
+async fn handle_stream(stream: BoxDuplex, context: Arc<StreamContext>) {
     let mut channel = wire::channel(stream);
     let open = match timeout(
         context.handshake_timeout,
@@ -605,7 +605,7 @@ async fn handle_stream(stream: MuxStream, context: Arc<StreamContext>) {
 const NOT_REGISTERED: &str = "target is not registered on this box";
 
 /// Authorizes, dials and splices one data stream.
-async fn serve_data(mut channel: Channel<MuxStream>, target: DialTarget, context: &StreamContext) {
+async fn serve_data(mut channel: Channel<BoxDuplex>, target: DialTarget, context: &StreamContext) {
     let authorized = context
         .registry
         .read()
@@ -679,7 +679,7 @@ async fn serve_data(mut channel: Channel<MuxStream>, target: DialTarget, context
 }
 
 /// Tells the client why its open failed, then closes the stream.
-async fn reject(channel: &mut Channel<MuxStream>, reason: RejectReason, message: String) {
+async fn reject(channel: &mut Channel<BoxDuplex>, reason: RejectReason, message: String) {
     let _ = wire::send(channel, &OpenReply::Rejected { reason, message }).await;
     let _ = channel.close().await;
 }
@@ -694,6 +694,7 @@ mod tests {
         UnitKey, UnitKind,
     };
     use crate::sync::{NoSync, SyncFeed, SyncInput};
+    use crate::transport::Connection;
     use crate::wire::{OpenRequest, PROTOCOL_VERSION};
 
     type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;

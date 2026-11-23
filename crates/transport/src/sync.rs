@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::mux::MuxStream;
+use crate::transport::BoxDuplex;
 use crate::wire::{
     self, Channel, MAX_FRAME_LEN, PayloadEncoding, SyncClientFrame, SyncFrame, WireError,
 };
@@ -31,7 +31,7 @@ const ZSTD_LEVEL: i32 = 3;
 const MIN_COMPRESSED: usize = 256;
 
 /// The write half of a sync stream.
-type SyncSink = SplitSink<Channel<MuxStream>, wire::Frame>;
+type SyncSink = SplitSink<Channel<BoxDuplex>, wire::Frame>;
 
 /// One sync message from the box.
 #[derive(Debug, Clone, PartialEq)]
@@ -138,7 +138,7 @@ impl SyncSource for NoSync {
 /// Serves one sync stream until the feed ends or the client goes away;
 /// `compress` when the client negotiated [`crate::SYNC_ZSTD`].
 pub(crate) async fn serve_subscription(
-    channel: Channel<MuxStream>,
+    channel: Channel<BoxDuplex>,
     request: Value,
     source: Arc<dyn SyncSource>,
     compress: bool,
@@ -418,7 +418,7 @@ pub enum SyncStreamError {
 pub struct SyncSubscription {
     // Closing the write side would read as cancellation, so it stays open.
     sink: SyncSink,
-    stream: SplitStream<Channel<MuxStream>>,
+    stream: SplitStream<Channel<BoxDuplex>>,
     /// Whether input values may go compressed, as negotiated with the box.
     compress: bool,
     /// The path of a compressed chunk being decompressed off the executor, and
@@ -432,7 +432,7 @@ pub struct SyncSubscription {
 impl SyncSubscription {
     /// Wraps a stream whose subscription frame was already sent; `compress`
     /// when the session negotiated [`crate::SYNC_ZSTD`].
-    pub(crate) fn new(channel: Channel<MuxStream>, compress: bool) -> Self {
+    pub(crate) fn new(channel: Channel<BoxDuplex>, compress: bool) -> Self {
         let (sink, stream) = channel.split();
         Self {
             sink,
@@ -551,10 +551,11 @@ mod tests {
     use futures_util::FutureExt;
 
     use super::*;
-    use crate::mux;
+    use crate::mux::{self, mux_client};
     use crate::registry::{RegistrySnapshot, SharedRegistry};
     use crate::server::{BoxServices, LoopbackDialer, ServeOptions, serve};
     use crate::session::{Session, SessionOptions};
+    use crate::transport::{Connection, ServerConnection};
     use crate::wire::{BoxControl, BoxInfo, FEATURES, OpenRequest, PROTOCOL_VERSION, SYNC_ZSTD};
 
     type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -822,7 +823,7 @@ mod tests {
         let server = serve_box(box_io, box_features, files);
         let mut options = SessionOptions::new("client");
         options.features = names(client_features);
-        let session = Session::establish(Box::new(client_io), options).await?;
+        let session = Session::establish(mux_client(Box::new(client_io)), options).await?;
         assert_eq!(
             session.has_feature(SYNC_ZSTD),
             box_features.contains(&SYNC_ZSTD) && client_features.contains(&SYNC_ZSTD),
@@ -1053,8 +1054,11 @@ mod tests {
             while let Ok(Some(_)) = wire::recv::<_, Value>(&mut control).await {}
             Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
         });
-        let session =
-            Session::establish(Box::new(client_io), SessionOptions::new("client")).await?;
+        let session = Session::establish(
+            mux_client(Box::new(client_io)),
+            SessionOptions::new("client"),
+        )
+        .await?;
         let sync = session.subscribe_sync(Value::Null).await?;
         Ok((session, sync))
     }

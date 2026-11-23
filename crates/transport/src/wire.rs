@@ -239,10 +239,18 @@ where
 ///
 /// Needed when a stream switches from framed messages to raw bytes: the peer
 /// may have sent data right after its last frame, such as a server greeting.
-#[derive(Debug)]
 pub struct Prefixed<S> {
     prefix: Bytes,
     inner: S,
+}
+
+impl<S> std::fmt::Debug for Prefixed<S> {
+    /// Shows how many buffered bytes are left; a boxed stream has no `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Prefixed")
+            .field("prefix", &self.prefix.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<S> Prefixed<S> {

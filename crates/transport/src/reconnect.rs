@@ -243,7 +243,7 @@ async fn supervise(
         state.send_replace(LinkState::Connecting { attempt });
         let connecting = async {
             let io = transport.connect().await?;
-            Session::establish(io, options.clone()).await
+            Session::establish(crate::mux_client(io), options.clone()).await
         };
         // A transport that hangs (a stuck ssh, a dead network path) must not
         // stall the link forever; the attempt fails and the backoff continues.

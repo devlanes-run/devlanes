@@ -2573,7 +2573,11 @@ mod tests {
             services,
             devlanes_transport::ServeOptions::new("box"),
         ));
-        Ok(BoxSession::establish(Box::new(client_io), SessionOptions::new("client")).await?)
+        Ok(BoxSession::establish(
+            devlanes_transport::mux_client(Box::new(client_io)),
+            SessionOptions::new("client"),
+        )
+        .await?)
     }
 
     /// A daemon is idle only with no box it would cut off and no pairing code
