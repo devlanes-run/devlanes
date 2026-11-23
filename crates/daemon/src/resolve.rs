@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use crate::{
     engine::Inner,
     integrations::{ContainerDecl, InfraPortNeed, InfraSpec, PortScope, SharedInfraSpec},
-    model::{ConfigState, EnvMap, LaneRt, ProjectRt, Unassigned, unassigned},
+    model::{ConfigState, EnvMap, LaneRt, ProjectRt, Unassigned, elsewhere_error, unassigned},
     registry::{PrimaryWorktree, lane_context, read_dotenv, store_error},
 };
 
@@ -591,17 +591,13 @@ impl Inner {
         })
     }
 
-    /// The project's [`SharedInfraSpec`], from what the project owns: the shared
-    /// fields of the primary worktree's file (whose project-wide settings apply
-    /// to every lane), evaluated against lane 0's provisional facts and `env`,
-    /// the client environment of the request that needs it (never persisted).
-    /// The primary path needs no lane record or block, so it works whichever
-    /// lane is the last. A file that does not load is read as of its last good
-    /// load. When the primary worktree has no file for the project and none
-    /// loaded before, the shared fields of `fallback`'s own file, evaluated as
-    /// its start evaluates them (this needs `fallback`'s record and block). An
-    /// error when there is no such lane, the primary's file does not load, or a
-    /// shared value does not evaluate.
+    /// The project's [`SharedInfraSpec`]: from the primary worktree's file (or
+    /// its last good load), evaluated as for a provisional lane 0 with `env`,
+    /// the request's client environment (never persisted). When the primary has
+    /// no file for the project, from `fallback`'s own file as its start
+    /// evaluated it, with the client environment that start stored; `env` is
+    /// not used then. Errors when the primary's file is invalid, there
+    /// is no usable fallback, or a shared value does not evaluate.
     pub(crate) async fn shared_infra_spec(
         &self,
         project: &ProjectRt,
@@ -649,12 +645,15 @@ impl Inner {
             .await
     }
 
-    /// `lane`'s own shared fields, evaluated as its start evaluated them, for a
-    /// project whose primary worktree has no file, so a clean or `infra down`
-    /// stops what the lane brought up. Uses the lane's stored client env, as
-    /// [`Self::infra_spec`] does; the callers of [`Self::shared_infra_spec`]
-    /// pass that same env, so ignoring theirs changes nothing.
-    /// `None` when the lane has no config, record or ports to evaluate them with.
+    /// `lane`'s own shared fields, evaluated as its start evaluated them (with
+    /// its stored client env), for a project whose primary worktree has no file,
+    /// so a clean or `infra down` stops what the lane brought up. `None` when the
+    /// lane has no file, record or ports; the error of a file that does not load
+    /// or names another project.
+    ///
+    /// Only this lane's file counts. When it declares nothing shared and a lane
+    /// on another branch declared shared containers without ports, so no shared
+    /// port block remains, the clean finds nothing to stop and they keep running.
     async fn lane_shared_spec(
         &self,
         project: &ProjectRt,
@@ -662,16 +661,19 @@ impl Inner {
     ) -> Result<Option<SharedInfraSpec>, RpcError> {
         let config = {
             let st = lane.st();
-            st.config().loaded().or(st.last_good.as_ref()).cloned()
+            if st.record().is_none() || st.allocation().is_none() {
+                return Ok(None);
+            }
+            match (st.config().loaded().or(st.last_good.as_ref()), st.config()) {
+                (Some(config), _) => config.clone(),
+                (None, ConfigState::Invalid(error)) => return Err(error.clone()),
+                (None, ConfigState::Elsewhere(other)) => {
+                    return Err(elsewhere_error(other, Some(&st.reference(&project.name()))));
+                }
+                (None, _) => return Ok(None),
+            }
         };
-        let Some(config) = config else {
-            return Ok(None);
-        };
-        let ctx = match self.lane_infra_context(project, lane).await {
-            Ok(ctx) => ctx,
-            Err(error) if error.code == "unassigned" => return Ok(None),
-            Err(error) => return Err(error),
-        };
+        let ctx = self.lane_infra_context(project, lane).await?;
         shared_fields(&config, project.name(), ctx.primary_dir, &ctx.context).map(Some)
     }
 

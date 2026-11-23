@@ -6,4 +6,4 @@ cargo/devlanes-cli: patch
 
 Fixed `devlanes lane clean` leaving shared containers running when the primary worktree has no project file.
 
-It no longer reports that the project file does not load, and `devlanes infra down` works from a lane's worktree in that setup too.
+`devlanes infra down` also works from a lane's worktree in that setup.

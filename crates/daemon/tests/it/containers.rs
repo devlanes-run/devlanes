@@ -1239,10 +1239,24 @@ fn app_only_in_worktree(parent: &std::path::Path, config: &str) -> std::path::Pa
     app
 }
 
+/// `infra down --yes` from `dir`: the provider calls it made.
+async fn infra_down_calls(h: &crate::Harness, dir: &std::path::Path) -> Vec<String> {
+    let before = h.infra.calls.entries().len();
+    let context = devlanes_proto::Context {
+        yes: true,
+        ..cx(dir)
+    };
+    h.call(Method::InfraDown, json!({}), context)
+        .await
+        .expect("infra down");
+    h.infra.calls.entries()[before..].to_vec()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// With no project file in the primary worktree, the clean of a project's last
 /// lane and `infra down` read the lane's own file: nothing to stop when it
-/// declares nothing shared, its shared containers stop when it does.
+/// declares nothing shared, its shared containers stop when it does, and a file
+/// that does not load is reported instead of read as missing.
 async fn without_a_primary_file_the_lanes_own_file_says_what_to_stop() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -1272,50 +1286,63 @@ async fn without_a_primary_file_the_lanes_own_file_says_what_to_stop() {
             let unit = started["started"][0].as_str().expect("started unit");
             let (lane, _) = unit.split_once(':').expect("unit reference");
             let (_, index) = lane.split_once('@').expect("lane reference");
-            let created = h
-                .call(Method::LaneNew, json!({"name": "review"}), cx(&app))
+            assert_eq!(infra_down_calls(&h, &app).await, ["down", "down done"]);
+
+            let plan = h
+                .call(Method::LaneCleanPlan, json!({}), cx(&app))
                 .await
-                .expect("lane new");
-            let review = &created["lane"]["index"];
-
-            let before = h.infra.calls.entries().len();
-            h.call(
-                Method::InfraDown,
-                json!({}),
-                devlanes_proto::Context {
-                    yes: true,
-                    ..cx(&app)
-                },
-            )
-            .await
-            .expect("infra down");
-            assert_eq!(h.infra.calls.entries()[before..], ["down", "down done"]);
-
-            let (kept, calls) = clean_calls(&h, &app, "review").await;
-            assert_eq!(calls, [format!("remove {review}")], "{name}");
-            assert_eq!(kept.get("shared_infra"), None, "{name}: {kept}");
+                .expect("plan");
             let (last, calls) = clean_calls(&h, &app, lane).await;
             let mut expected = vec![format!("remove {index}")];
             if shared {
                 expected.extend(["down".to_owned(), "down done".to_owned()]);
+                assert_eq!(plan["shared_infra"], "stop", "{plan}");
                 assert_eq!(last["shared_infra"], json!({"stopped": ["db"]}), "{last}");
-                // The way out a skipped stop points to: `infra down` still
-                // works once the last clean forgot the project.
-                h.call(
-                    Method::InfraDown,
-                    json!({}),
-                    devlanes_proto::Context {
-                        yes: true,
-                        ..cx(&app)
-                    },
-                )
-                .await
-                .expect("infra down after the last clean");
             } else {
+                assert_eq!(plan.get("shared_infra"), None, "{plan}");
                 assert_eq!(last.get("shared_infra"), None, "{last}");
             }
             assert_eq!(calls, expected, "{name}");
+            if shared {
+                // The way out a skipped stop points to: `infra down` still
+                // works once the last clean forgot the project.
+                assert_eq!(infra_down_calls(&h, &app).await, ["down", "down done"]);
+            }
         }
+
+        // A lane whose own file does not load, with no good load since the
+        // daemon started: the clean cannot tell what to stop and says why.
+        let broken =
+            app_only_in_worktree(&tmp.path.join("broken"), &SHARED.replace("demo", "broken"));
+        let started = h
+            .call(Method::Start, json!({}), cx(&broken))
+            .await
+            .expect("start");
+        let unit = started["started"][0].as_str().expect("started unit");
+        let (lane, _) = unit.split_once(':').expect("unit reference");
+        let lane = lane.to_owned();
+        h.call(Method::Stop, json!({}), cx(&broken))
+            .await
+            .expect("stop");
+        h.close().await;
+        std::fs::write(
+            broken.join("devlanes.yaml"),
+            "project: broken\nservices: 3\n",
+        )
+        .expect("break");
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        let (cleaned, _) = clean_calls(&h, &broken, &lane).await;
+        assert_eq!(
+            cleaned["shared_infra"]["skipped"], "config_error",
+            "{cleaned}"
+        );
         h.close().await;
     })
     .await

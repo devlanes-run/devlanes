@@ -27,9 +27,9 @@ pub(crate) enum SharedOnClean {
     None,
     /// No other lane uses them: stop them with this spec.
     Stop(SharedInfraSpec),
-    /// Cannot tell what to stop: the primary worktree's file does not load,
-    /// neither it nor the leaving lane has one, a value of the spec does not
-    /// evaluate, or the provider cannot read it.
+    /// Cannot tell what to stop: the file it is read from (the primary
+    /// worktree's, else the leaving lane's) does not load, neither has one, a
+    /// value of the spec does not evaluate, or the provider cannot read it.
     Unknown(RpcError),
 }
 

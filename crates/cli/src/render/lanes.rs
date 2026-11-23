@@ -1215,13 +1215,15 @@ fn shared_infra_line(shared: &Value) -> String {
             clean(&text(error, "message"))
         )
     } else if shared.get("skipped").is_some() {
-        let when = match text(shared, "skipped").as_str() {
-            "docker_unavailable" => "once it is",
-            "no_config" => "from a lane whose project file loads",
-            _ => "once the file loads",
+        let way_out = match text(shared, "skipped").as_str() {
+            "docker_unavailable" => format!("{infra_down} stops them once it is"),
+            "no_config" => {
+                format!("{infra_down} in a worktree whose project file loads stops them")
+            }
+            _ => format!("{infra_down} stops them once the file loads"),
         };
         format!(
-            "shared containers not stopped: {}; {infra_down} stops them {when}",
+            "shared containers not stopped: {}; {way_out}",
             shared_skipped(shared)
         )
     } else {
