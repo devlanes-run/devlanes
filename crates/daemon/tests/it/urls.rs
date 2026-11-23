@@ -59,6 +59,7 @@ async fn public_urls_use_the_bound_https_port() {
             &tmp.path.join("home"),
             Setup {
                 routes: Some(Arc::new(BoundAt(8443))),
+                user: crate::pool("10850-10899"),
                 ..Setup::default()
             },
         )
@@ -101,6 +102,7 @@ async fn public_urls_use_the_bound_https_port() {
             &tmp.path.join("home2"),
             Setup {
                 routes: Some(Arc::new(BoundAt(443))),
+                user: crate::pool("10850-10899"),
                 ..Setup::default()
             },
         )
@@ -249,6 +251,7 @@ async fn hosts_outside_the_ca_are_warned_about() {
             &tmp.path.join("home"),
             Setup {
                 ca_permitted: Some(constrained),
+                user: crate::pool("10900-10949"),
                 ..Setup::default()
             },
         )

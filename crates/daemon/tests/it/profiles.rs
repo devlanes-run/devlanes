@@ -52,6 +52,7 @@ async fn with_infra(home: &std::path::Path) -> crate::Harness {
         home,
         Setup {
             infra: true,
+            user: crate::pool("10600-10649"),
             ..Setup::default()
         },
     )
@@ -389,7 +390,14 @@ async fn autostart_expression_decides_per_lane() {
         let main = repo(&tmp.path, "r", AUTOSTART);
         let other = tmp.path.join("wt");
         worktree(&main, &other, "feat/other");
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("10650-10699"),
+                ..Setup::default()
+            },
+        )
+        .await;
         // Registers both lanes, so the main worktree gets index 0.
         h.call(Method::LaneList, json!({}), cx(&main))
             .await

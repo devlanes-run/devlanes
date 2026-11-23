@@ -701,6 +701,7 @@ async fn restarted_shared_container_refreshes_ports_and_drift() {
             &tmp.path.join("home"),
             Setup {
                 infra: true,
+                user: crate::pool("10100-10149"),
                 ..Setup::default()
             },
         )

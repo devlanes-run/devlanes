@@ -93,6 +93,8 @@ async fn engine(home: &Path, executor: Arc<FakeExecutor>) -> Engine {
     let store = Store::open(home.join("state.db")).await.expect("store");
     let mut options = EngineOptions::new(home, home.join("d.sock"));
     options.watch = false;
+    // `why` reports a unit's port as in use when another program listens on it.
+    options.user.ports.range = "10550-10599".into();
     let engine = Engine::new(options, store, integ, CancellationToken::new());
     engine.reconcile().await.expect("reconcile");
     engine

@@ -472,7 +472,14 @@ services:
   api: { run: "echo api${{ replica.index }}; sleep", replicas: 2, ready: started }
 "#;
         let main = repo(&tmp.path, "r", config);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("10750-10799"),
+                ..Setup::default()
+            },
+        )
+        .await;
         h.call(Method::Start, json!({}), cx(&main))
             .await
             .expect("start");

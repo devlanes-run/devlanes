@@ -250,7 +250,14 @@ async fn spawn_failure_stays_failed() {
         let config =
             "project: acme\nservices:\n  api: { run: sleep }\n  missing: { run: nospawn }\n";
         let main = repo(&tmp.path, "r", config);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("10300-10349"),
+                ..Setup::default()
+            },
+        )
+        .await;
         let _ = h.call(Method::Start, json!({}), cx(&main)).await;
 
         let lane = first_lane(&h, &main).await;
@@ -309,7 +316,14 @@ async fn ready_timeout_then_exit_is_recorded() {
         let tmp = temp();
         let config = "project: acme\nservices:\n  slow: { run: \"hold; exit 3\", ready: { log: never, timeout: 100ms } }\n";
         let main = repo(&tmp.path, "r", config);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("10350-10399"),
+                ..Setup::default()
+            },
+        )
+        .await;
         let _ = h.call(Method::Start, json!({}), cx(&main)).await;
         let timed_out = crate::eventually(std::time::Duration::from_secs(5), || async {
             let reason = unit_summary(&h, &main, "slow").await?.reason?;
@@ -348,7 +362,14 @@ async fn crash_counts_follow_what_ended_each_run() {
         let home = tmp.path.join("home");
         let config = "project: acme\nservices:\n  polite: { run: \"onstop 3; sleep\" }\n  dies: { run: \"killed 11\" }\ntasks:\n  slow: { run: \"onstop 0; sleep\", timeout: 300ms }\n";
         let main = repo(&tmp.path, "r", config);
-        let h = harness(&home, Setup::default()).await;
+        let h = harness(
+            &home,
+            Setup {
+                user: crate::pool("10400-10449"),
+                ..Setup::default()
+            },
+        )
+        .await;
         let _ = h.call(Method::Start, json!({}), cx(&main)).await;
         h.call(Method::Stop, json!({"units": ["polite"]}), cx(&main))
             .await

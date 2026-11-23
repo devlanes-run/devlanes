@@ -40,7 +40,14 @@ async fn reload_applies_only_what_the_file_changed() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", BEFORE);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("10700-10749"),
+                ..Setup::default()
+            },
+        )
+        .await;
         h.call(Method::Start, json!({}), cx(&main))
             .await
             .expect("start");
