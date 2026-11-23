@@ -463,23 +463,23 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
     let registered = names(&|found| *found == Found::Current);
     let missing = names(&|found| *found == Found::Missing);
     let stale = names(&|found| matches!(found, Found::Stale { .. } | Found::Unreadable(_)));
-    let kept: Vec<String> = registrations
+    let mut kept: Vec<String> = registrations
         .iter()
         .filter_map(|registration| match &registration.found {
             Found::Kept { runs } => Some(format!(
-                "left {} on {}",
+                "{} runs {}, another devlanes install, and a build doesn't replace it",
                 registration.browser.name(),
                 runs.display()
             )),
             _ => None,
         })
         .collect();
-    let kept = (!kept.is_empty()).then(|| {
-        format!(
-            "{}. Run devlanes setup from that install to change it",
-            kept.join(", ")
-        )
-    });
+    if !kept.is_empty() {
+        kept.push(
+            "To register this build, run devlanes setup --remove from that install first".into(),
+        );
+    }
+    let kept = (!kept.is_empty()).then(|| kept.join(". "));
     let note = [kept.as_deref(), install.note().as_deref()]
         .into_iter()
         .flatten()
@@ -487,7 +487,7 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
         .collect::<String>();
     if registered.is_none() && missing.is_none() && stale.is_none() {
         let reason = match kept {
-            Some(kept) => capitalise(&kept),
+            Some(kept) => kept,
             None => "no Chrome, Chromium, Brave or Edge folder in your home".into(),
         };
         return (false, false, reason);
@@ -1186,12 +1186,17 @@ mod tests {
                 registrations: registrations.clone(),
             });
             assert!(needed && !done);
-            assert!(
-                reason.starts_with(&format!(
-                    "setup refreshes the browser extension host for Brave. Left Chrome on {}. Run devlanes setup from that install to change it. ",
-                    other.display()
-                )),
-                "{reason}"
+            // The whole line, so a doubled ". " or a trailing space shows.
+            assert_eq!(
+                reason,
+                format!(
+                    "setup refreshes the browser extension host for Brave. \
+                     Chrome runs {}, another devlanes install, and a build doesn't replace it. \
+                     To register this build, run devlanes setup --remove from that install first. \
+                     The host runs this build at {}. Run devlanes setup again if you move or delete it",
+                    other.display(),
+                    build.display()
+                )
             );
             let lines = apply(&location, &install, &registrations).expect("apply");
             assert_eq!(lines.len(), 1, "{lines:?}");
