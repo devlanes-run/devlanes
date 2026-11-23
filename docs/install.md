@@ -80,7 +80,7 @@ $ devlanes setup
 
 The command lists what it is about to change, asks once and adds the CA to your system's trust store. Your operating system then asks for a password or a confirmation. `devlanes setup --remove` undoes it.
 
-Setup also registers devlanes as the native host of the devlanes browser extension, for Chrome, Chromium, Brave and Edge. On macOS and Linux it writes a small file into the folder of each of these browsers you have. On Windows it writes one file in `~\.devlanes\browser` and a key per browser under `HKCU\Software`. The registration only lets the extension start devlanes, and it needs no password. `devlanes setup --remove` deletes the registrations that start this install.
+Setup also registers devlanes as the native host of the devlanes browser extension, in each of these browsers you have installed: Chrome, Chrome Beta, Dev and Canary, Chromium, Edge, Edge Beta, Dev and Canary, Brave, Vivaldi, and Arc on macOS. On macOS and Linux it writes a small file into each browser's folder. On Windows it writes a key per browser under `HKCU\Software`. In every case it keeps the same file in `~/.devlanes/browser`, which another Chromium browser can use as [Use the browser extension](how-to/use-the-browser-extension.md) shows. The registration only lets the extension start devlanes, and it needs no password. `devlanes setup --remove` deletes the registrations that start this install, and that file.
 
 Browsers on Linux and some command-line tools keep certificate stores of their own. [Trust the devlanes CA](how-to/hostnames/trust-the-ca.md) covers those.
 
