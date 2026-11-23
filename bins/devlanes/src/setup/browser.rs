@@ -91,8 +91,10 @@ impl Browser {
         windows: Some(("Chromium/User Data", "Chromium")),
     };
     // Edge's channels: the folders are Microsoft's "Chrome DevTools MCP"
-    // page, and the key is its "Native messaging" page, which names one key
-    // for Edge. Edge has no Canary on Linux.
+    // page (https://learn.microsoft.com/en-us/microsoft-edge/web-platform/devtools-mcp-server),
+    // and the key is its "Native messaging" page
+    // (https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/native-messaging),
+    // which names one key for Edge. Edge has no Canary on Linux.
     pub(crate) const EDGE: Self = Self {
         name: "Edge",
         macos: Some("Microsoft Edge"),
