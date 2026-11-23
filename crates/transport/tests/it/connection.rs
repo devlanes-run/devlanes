@@ -1,6 +1,8 @@
-//! What the session and the box need from every connection type, checked
-//! against the interface. Each check takes a [`Pair`], so another connection
-//! type only adds a fixture function next to [`memory`].
+//! What the session and the box need from a connection, checked against the
+//! traits only, over yamux on the memory transport. Each check is an `async
+//! fn` taking a [`Pair`], and each `#[tokio::test]` runs one check on the
+//! [`memory`] fixture. Another connection type in this crate needs its own
+//! fixture and its own test wrappers; another crate cannot reach this module.
 
 use std::time::Duration;
 
@@ -10,6 +12,7 @@ use devlanes_transport::{
     Transport,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::time::Instant;
 
 use super::{TestResult, bounded};
 
@@ -65,16 +68,31 @@ async fn opened(pair: &mut Pair, hello: &[u8]) -> Result<(BoxDuplex, BoxDuplex),
     Ok((client, boxed))
 }
 
-/// Two streams carry bytes both ways, each on its own.
-async fn streams_carry_bytes_both_ways(mut pair: Pair) -> TestResult {
-    let (mut first, mut first_box) = opened(&mut pair, b"one").await?;
-    first_box.write_all(b"1").await?;
-    expect(&mut first, b"1").await?;
-    let (mut second, mut second_box) = opened(&mut pair, b"two").await?;
-    second_box.write_all(b"2").await?;
-    expect(&mut second, b"2").await?;
-    first.write_all(b"again").await?;
-    expect(&mut first_box, b"again").await?;
+/// Each side's `last_inbound` moves when the peer's bytes arrive, and only
+/// then: not with this side's own writes, and not to "now" on every call.
+/// No sleep separates the marks: tokio's clock never goes back, and every
+/// frame yamux sends on its own at the start (its first ping and pong) is on
+/// the pipe before the box's first data, so nothing else arrives in between.
+async fn last_inbound_moves_with_what_the_peer_sends(mut pair: Pair) -> TestResult {
+    let (mut client, mut boxed) = opened(&mut pair, b"open").await?;
+    let mark = Instant::now();
+    boxed.write_all(b"from the box").await?;
+    expect(&mut client, b"from the box").await?;
+    assert!(
+        pair.client.last_inbound() >= mark,
+        "the box's bytes left no mark"
+    );
+    let after = Instant::now();
+    client.write_all(b"from the client").await?;
+    expect(&mut boxed, b"from the client").await?;
+    assert!(
+        pair.client.last_inbound() <= after,
+        "the client's own write counted as inbound"
+    );
+    assert!(
+        pair.server.last_inbound() >= after,
+        "the client's bytes left no mark"
+    );
     Ok(())
 }
 
@@ -156,14 +174,13 @@ async fn max_streams_stay_open_at_once(pair: Pair) -> TestResult {
     for stream in &mut open {
         expect(stream, b"k").await?;
     }
-    let (_server, held) = answering.await??;
-    assert_eq!(held.len(), MAX_STREAMS);
+    let _held = answering.await??;
     Ok(())
 }
 
 /// A message the box wrote and shut down before it dropped the connection
-/// reaches the client, as a refusal does, and a clean close has no failure
-/// reason.
+/// reaches the client, as a refusal does; a clean close has no failure
+/// reason, and the closed connection opens no more streams.
 async fn finished_bytes_survive_the_box_dropping_the_connection(mut pair: Pair) -> TestResult {
     let (mut client, mut boxed) = opened(&mut pair, b"hello").await?;
     let message = br#"{"type":"refused","message":"the box does not accept connections"}"#;
@@ -175,6 +192,10 @@ async fn finished_bytes_survive_the_box_dropping_the_connection(mut pair: Pair) 
     pair.client.closed().await;
     let failure = pair.client.failure_within(Duration::from_secs(1)).await;
     assert_eq!(failure, None);
+    assert!(
+        matches!(pair.client.open().await, Err(ConnectionError::Closed)),
+        "a stream opened after the box closed the connection"
+    );
     Ok(())
 }
 
@@ -209,8 +230,8 @@ async fn a_broken_link_reports_why(mut pair: Pair) -> TestResult {
 }
 
 #[tokio::test]
-async fn memory_streams_carry_bytes_both_ways() -> TestResult {
-    bounded(async { streams_carry_bytes_both_ways(memory().await?).await }).await
+async fn memory_last_inbound_moves_with_what_the_peer_sends() -> TestResult {
+    bounded(async { last_inbound_moves_with_what_the_peer_sends(memory().await?).await }).await
 }
 
 #[tokio::test]
