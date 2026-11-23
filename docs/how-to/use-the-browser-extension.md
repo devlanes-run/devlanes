@@ -49,24 +49,24 @@ When the lane runs on your machine, the popup asks before it stops it. "Stop and
 
 ## Fill test logins on other lanes
 
-When you sign in with a form on a lane, the extension saves the username and password for the project. On any lane of the project, focus a field marked as a username, an email or a current password, and pick a login from the menu, with the mouse or the arrow keys and Enter. The extension fills both fields. The fill works on HTTPS lane pages.
+When you sign in with a form on an HTTPS lane page, the extension saves the username and password for the project. On any lane of the project, focus a field marked as a username, an email or a current password, and pick a login from the menu with the mouse, or with the arrow keys and Enter. The extension fills both fields.
 
 :::caution
 Passwords are stored unencrypted in this browser. Use the fill for test accounts only.
 :::
 
-The fill reads only fields with a standard `autocomplete` token for a username, an email or a password. It never saves one-time codes or card numbers.
+The fill reads only fields with a standard `autocomplete` token for a username, an email or a password, and never saves one-time codes or card numbers.
 
 ## Change the login settings
 
-Click "Login settings", the sliders button in the popup's header. Both switches are on until you turn them off.
+Click "Login settings", the sliders button in the popup's header. Both switches start on.
 
 - "Fill logins on lanes" turns the menu on or off.
-- "Remember passwords" turns saving on or off. The logins already saved stay.
+- "Remember passwords" turns saving on or off, and keeps the logins already saved.
 
 "Saved logins" lists each project with its count. Click "Delete", then click it again within 4 seconds to delete a project's logins.
 
-A project keeps one login per username, so a new password for the same username replaces the old one on every lane. A project keeps 20 logins. A new one replaces the login used least recently. [Limits](../reference/limits.md#browser-extension) lists the sign-ins the fill doesn't save, and [Security](../concepts/security.md#the-browser-extension-holds-test-passwords) says what a lane page can do with the saved logins.
+A project keeps 20 logins, one per username. A new password for a username replaces the old one on every lane, and a 21st login replaces the one used least recently. [Limits](../reference/limits.md#browser-extension) lists the sign-ins the fill doesn't save, and [Security](../concepts/security.md#the-browser-extension-holds-test-passwords) says what a lane page can do with them.
 
 ## If a sign-in form gets no menu
 
