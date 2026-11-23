@@ -10,15 +10,25 @@ use std::{
 };
 
 use devlanes_proto::{Context, LaneWarning, Method, RpcError};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    engine::Inner,
+    engine::{Inner, params},
     integrations::{RouteEntry, RouteStatus},
     model::{LaneRt, LaneSt, ProjectRt},
     target::{Policy, ReadScope},
     units::UnitState,
 };
+
+/// `hosts` parameters.
+#[derive(Debug, Default, Deserialize)]
+struct HostsParams {
+    /// Every project's routes, whatever the cwd, as `status`'s `all`. The
+    /// browser extension's host asks for it, since Chrome picks its cwd.
+    #[serde(default)]
+    all: bool,
+}
 
 /// Coalesces route publications. Callers mark the snapshot dirty; one caller at
 /// a time rebuilds it from the current state and hands it to the sinks until no
@@ -395,17 +405,20 @@ impl Inner {
             .collect()
     }
 
-    /// `hosts`: the routes of the request's scope (as `status`'s) with their lane,
-    /// unit, port and state, and for this machine's own routes the URL each
-    /// reporting client opens it at. A box route counts by its project and the box
-    /// lane's reference, so `--lane` on a local lane that yielded its hostnames to a
-    /// box lane with another reference lists none of them.
+    /// `hosts`: the routes of the request's scope (as `status`'s, every project
+    /// with `all`) with their lane, unit, port and state, and for this machine's
+    /// own routes the URL each reporting client opens it at. A box route counts
+    /// by its project and the box lane's reference, so `--lane` on a local lane
+    /// that yielded its hostnames to a box lane with another reference lists
+    /// none of them.
     pub(crate) async fn hosts_method(
         self: &Arc<Self>,
+        value: Value,
         context: &Context,
     ) -> Result<Value, RpcError> {
+        let args: HostsParams = params(value)?;
         let scope = self
-            .read_scope(context, false, Policy::of(Method::Hosts))
+            .read_scope(context, args.all, Policy::of(Method::Hosts))
             .await?;
         let references: Option<BTreeSet<String>> = match &scope {
             ReadScope::All(_) => None,

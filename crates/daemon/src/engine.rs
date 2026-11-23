@@ -590,7 +590,7 @@ impl Inner {
             Method::InfraDown => self.infra_down_method(&context).await,
             Method::InfraStatus => self.infra_status_method(&context).await,
             Method::InfraLogs => self.infra_logs_method(params, &context, &session).await,
-            Method::Hosts => self.hosts_method(&context).await,
+            Method::Hosts => self.hosts_method(params, &context).await,
             Method::Env => self.env_method(params, &context).await,
             Method::Errors => self.errors_method(params, &context).await,
             Method::Why => self.why_method(params, &context).await,
