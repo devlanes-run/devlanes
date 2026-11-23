@@ -49,7 +49,7 @@ When the lane runs on your machine, the popup asks before it stops it. "Stop and
 
 ## Fill test logins on other lanes
 
-When you sign in with a form on a lane, the extension saves the username and password for the project. On any lane of the project, focus the username, email or password field and pick a login from the menu, with the mouse or the arrow keys and Enter. The extension fills both fields.
+When you sign in with a form on a lane, the extension saves the username and password for the project. On any lane of the project, focus a field marked as a username, an email or a current password, and pick a login from the menu, with the mouse or the arrow keys and Enter. The extension fills both fields. The fill works on HTTPS lane pages.
 
 :::caution
 Passwords are stored unencrypted in this browser. Use the fill for test accounts only.
