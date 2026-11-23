@@ -80,7 +80,14 @@ async fn a_folder_can_hold_several_lanes() {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
         let home = tmp.path.join("home");
-        let h = harness(&home, Setup::default()).await;
+        let h = harness(
+            &home,
+            Setup {
+                user: crate::pool("10450-10499"),
+                ..Setup::default()
+            },
+        )
+        .await;
         let created = h
             .call(Method::LaneNew, json!({"name": "review"}), cx(&main))
             .await
@@ -666,7 +673,14 @@ async fn summaries_and_pipe_units() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("10500-10549"),
+                ..Setup::default()
+            },
+        )
+        .await;
         let idle = status(&h, cx(&main)).await;
         let web = idle[0].units.iter().find(|u| u.name == "web").expect("web");
         assert_eq!(web.display_name.as_deref(), Some("Web shop"));

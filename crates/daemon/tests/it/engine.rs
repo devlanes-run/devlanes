@@ -1448,7 +1448,14 @@ async fn exec_keeps_the_last_good_config_while_the_lane_runs() {
         let tmp = temp();
         let config = BASIC.replace("services:\n", "global_env:\n  GREETING: hi\nservices:\n");
         let main = repo(&tmp.path, "r", &config);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("10150-10199"),
+                ..Setup::default()
+            },
+        )
+        .await;
         h.call(Method::Start, json!({}), cx(&main))
             .await
             .expect("start");
@@ -1678,7 +1685,14 @@ async fn requests_without_env_use_the_lanes_env() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", BASIC);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("10200-10249"),
+                ..Setup::default()
+            },
+        )
+        .await;
         let bare = Context {
             env: None,
             ..cx(&main)
@@ -2014,6 +2028,7 @@ async fn explain_shows_launch_notes() {
             &tmp.path.join("home"),
             Setup {
                 contributors: vec![std::sync::Arc::new(crate::NoteContributor)],
+                user: crate::pool("10250-10299"),
                 ..Setup::default()
             },
         )

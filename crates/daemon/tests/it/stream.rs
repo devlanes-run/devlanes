@@ -69,7 +69,14 @@ async fn a_start_streams_its_events_before_the_response() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("10800-10849"),
+                ..Setup::default()
+            },
+        )
+        .await;
 
         let (session, mut frames) = h.session();
         let value = h

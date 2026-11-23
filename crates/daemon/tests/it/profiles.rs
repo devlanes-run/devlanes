@@ -46,12 +46,14 @@ fn running(summary: &LaneSummary) -> Vec<&str> {
         .collect()
 }
 
-/// A harness over `home` with fake infra, for [`CONFIG`]'s container.
-async fn with_infra(home: &std::path::Path) -> crate::Harness {
+/// A harness over `home` with fake infra, for [`CONFIG`]'s container, and the
+/// port pool `range`, which each test takes for its own (see [`crate::pool`]).
+async fn with_infra(home: &std::path::Path, range: &str) -> crate::Harness {
     harness(
         home,
         Setup {
             infra: true,
+            user: crate::pool(range),
             ..Setup::default()
         },
     )
@@ -76,14 +78,7 @@ async fn several_profiles_select_merge_and_persist() {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
         let home = tmp.path.join("home");
-        let h = harness(
-            &home,
-            Setup {
-                infra: true,
-                ..Setup::default()
-            },
-        )
-        .await;
+        let h = with_infra(&home, "10600-10649").await;
         h.call(Method::Status, json!({}), cx(&main))
             .await
             .expect("status registers the project");
@@ -154,7 +149,7 @@ async fn several_profiles_select_merge_and_persist() {
         .expect("start");
         // A daemon that stops without a `devlanes stop` keeps the lane's selection.
         h.close().await;
-        let again = with_infra(&home).await;
+        let again = with_infra(&home, "10600-10649").await;
         assert_eq!(lane(&again, &main).await.profiles, ["front", "back"]);
         again.close().await;
     })
@@ -178,7 +173,7 @@ async fn plain_start_restores_what_ran_before_the_daemon_stopped() {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
         let home = tmp.path.join("home");
-        let h = with_infra(&home).await;
+        let h = with_infra(&home, "10950-10999").await;
         h.call(Method::Start, json!({"profiles": ["front"]}), cx(&main))
             .await
             .expect("start front");
@@ -213,7 +208,7 @@ async fn plain_start_restores_what_ran_before_the_daemon_stopped() {
         assert_eq!(running_sorted(&before), ["api", "web"]);
         h.close().await;
 
-        let again = with_infra(&home).await;
+        let again = with_infra(&home, "10950-10999").await;
         assert!(lane(&again, &main).await.needs_env);
         let started: StartResult = serde_json::from_value(
             again
@@ -229,14 +224,14 @@ async fn plain_start_restores_what_ran_before_the_daemon_stopped() {
         again.close().await;
 
         // Naming one service on an idle lane keeps the others it never stopped.
-        let third = with_infra(&home).await;
+        let third = with_infra(&home, "10950-10999").await;
         third
             .call(Method::Start, json!({"units": ["web"]}), cx(&main))
             .await
             .expect("start web");
         assert_eq!(running_sorted(&lane(&third, &main).await), ["web"]);
         third.close().await;
-        let fourth = with_infra(&home).await;
+        let fourth = with_infra(&home, "10950-10999").await;
         fourth
             .call(Method::Start, json!({}), cx(&main))
             .await
@@ -268,7 +263,7 @@ async fn plain_start_names_other_lanes_to_resume() {
             &CONFIG.replace("project: demo", "project: other"),
         );
         let home = tmp.path.join("home");
-        let h = with_infra(&home).await;
+        let h = with_infra(&home, "11250-11299").await;
         h.call(Method::LaneList, json!({}), cx(&main))
             .await
             .expect("lane list");
@@ -279,7 +274,7 @@ async fn plain_start_names_other_lanes_to_resume() {
         }
         h.close().await;
 
-        let again = with_infra(&home).await;
+        let again = with_infra(&home, "11250-11299").await;
         let started = again
             .call(Method::Start, json!({}), cx(&main))
             .await
@@ -389,7 +384,14 @@ async fn autostart_expression_decides_per_lane() {
         let main = repo(&tmp.path, "r", AUTOSTART);
         let other = tmp.path.join("wt");
         worktree(&main, &other, "feat/other");
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: crate::pool("10650-10699"),
+                ..Setup::default()
+            },
+        )
+        .await;
         // Registers both lanes, so the main worktree gets index 0.
         h.call(Method::LaneList, json!({}), cx(&main))
             .await
