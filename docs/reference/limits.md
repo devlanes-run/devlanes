@@ -36,11 +36,15 @@ What devlanes does not do, with the issue that tracks each limit. An empty Issue
 | Limit | Issue |
 |---|---|
 | The extension runs in Chromium-based browsers, not in Firefox. | [browser#1](https://github.com/devlanes-run/browser/issues/1) |
-| `devlanes setup` registers only the browsers [Install devlanes](../install.md) lists. Another Chromium browser, such as Opera, needs the copy in `~/.devlanes/browser` linked into its `NativeMessagingHosts` folder by hand. | |
+| `devlanes setup` registers only the browsers [Install devlanes](../install.md) lists. Another Chromium browser, such as Opera, is registered by hand, as [Use the browser extension](../how-to/use-the-browser-extension.md#if-setup-doesnt-register-your-browser) shows. | |
 | A browser installed as a Snap or Flatpak can't start devlanes, so the extension can't reach it. | [browser#2](https://github.com/devlanes-run/browser/issues/2) |
 | The extension only knows hostnames ending in `.localhost`, not a `hostnames.tld` such as `.test`. | [browser#5](https://github.com/devlanes-run/browser/issues/5) |
 | Installs run with `uvx` or `pipx run` can't register the browser extension's host. Install with `uv tool install devlanes` or `pipx install devlanes`. | |
 | The browser starts devlanes with its own environment, so a `DEVLANES_HOME` set only in a shell doesn't reach it and the extension uses the default home. | |
+| With many lanes and hostnames, the popup can stop updating and keep showing the last view. | |
+| The login fill saves a login only when the browser fires a `submit` event, so a form sent with `form.submit()` or plain `fetch` isn't saved. | |
+| A sign-in split across two pages is saved only when the password page keeps the username in a hidden field marked `autocomplete="username"` or `"email"`. | |
+| A sign-in the site refuses is still saved, so a wrong password replaces the right one until the next sign-in that works. | |
 
 ## Remote boxes
 

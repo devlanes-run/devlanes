@@ -117,7 +117,7 @@ A wrong page is worse than a missing one, and a short page is easier to keep rig
 - A `yaml devlanes` block uses only keys the schema has, and a whole file passes `devlanes config check`.
 - A claim about behaviour comes from the code or from running it, not from another page.
 - A claim about another tool comes from that tool's documentation.
-- A guide nobody has completed carries `publish: false` and is left out of `docs/nav.yaml`, which may only name published pages. Today those are `how-to/projects/tauri.md`, `how-to/services/gui-tools.md`, `how-to/use-the-browser-extension.md` and `how-to/wsl.md`.
+- A guide nobody has completed carries `publish: false` and is left out of `docs/nav.yaml`, which may only name published pages. Today those are `how-to/projects/tauri.md`, `how-to/services/gui-tools.md` and `how-to/wsl.md`.
 
 ## Generated pages
 

@@ -56,6 +56,12 @@ The token is a bearer secret: any process running as you on the paired machine c
 
 A box's services see your connections as coming from the box itself. A service there that trusts local connections without a password, such as an admin page or a database, trusts every machine the box serves.
 
+## The browser extension holds test passwords
+
+The browser extension saves the usernames and passwords you sign in with on lanes. They are stored unencrypted in that browser. A page gets saved logins only when it is on an HTTPS lane route, and only those of that lane's project. Through devlanes, the extension can read your lanes, switch boxes and stop a lane on your machine before a switch. It never receives environments, secrets or logs. devlanes answers any extension with the id `pggffblellmckocpflaaeligadjpkahj`, which comes from a public key in the extension's manifest, so any extension loaded with that key gets the same access. Load the extension only from devlanes-run/browser.
+
+A lane page still has some reach. In browsers that can't restrict the extension's storage to its own pages, such as Chrome 120, a compromised page process could read the saved logins. On any version, a compromised page process on a lane can get the saved password of a username it knows, for that lane's project only. Page code can't do either. A lane page can submit its own form with values it chooses, and the extension saves them. One such submit replaces the saved password of a username. Twenty push out every real login of the project. A page can also draw its own content over the login menu and line up a click on one of its options. That needs a real click, and any extension's frame on a page has the same exposure.
+
 ## The daemon looks for new releases
 
 The daemon reads the latest version from the registry devlanes was installed from, and installs patch releases from there in the background. The request carries nothing that identifies your machine or your projects. [Update and uninstall](../how-to/update.md) says how to turn this off.
@@ -66,3 +72,4 @@ The daemon reads the latest version from the registry devlanes was installed fro
 - [Trust the devlanes CA](../how-to/hostnames/trust-the-ca.md)
 - [Connect to a box](../how-to/remote/connect.md)
 - [Remote mirroring](remote-mirroring.md)
+- [Fill test logins on lanes](../how-to/fill-test-logins.md)
