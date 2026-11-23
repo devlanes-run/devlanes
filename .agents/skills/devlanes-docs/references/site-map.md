@@ -116,7 +116,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 
 | Page | Title | Goal |
 |---|---|---|
-| `use-the-browser-extension.md` | Use the browser extension | See lanes and their URLs in the browser, open a page in another lane, switch boxes. |
+| `use-the-browser-extension.md` | Use the browser extension | See lanes and their URLs in the browser, open a page in another lane, switch boxes, register a Chromium browser setup doesn't list. |
 | `fill-test-logins.md` | Fill test logins on lanes | Save and fill test logins across a project's lanes, the settings, the fields a form needs. |
 | `wsl.md` | Run devlanes in WSL | devlanes in a WSL distribution with the browser on Windows. |
 | `update.md` | Update and uninstall | New releases, builds of `main`, removing devlanes. |
