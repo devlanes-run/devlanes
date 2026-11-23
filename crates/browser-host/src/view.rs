@@ -136,7 +136,8 @@ pub struct HostList {
 pub struct HostItem {
     pub host: String,
     pub state: String,
-    /// Absent while the link is down.
+    /// Absent once the link ended, failed or stopped. A reconnecting box
+    /// keeps it.
     #[serde(default)]
     pub registry: Option<Registry>,
     #[serde(default)]
@@ -179,13 +180,28 @@ impl LaneKey {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RegistryUnit {
     pub key: UnitKey,
+    /// A box sends no hidden units, so this is only ever false in practice.
+    #[serde(default)]
+    pub hidden: bool,
     pub state: String,
+}
+
+impl RegistryUnit {
+    /// Whether this machine mirrors the unit's ports: it isn't hidden and it
+    /// isn't a task. The daemon's `mirror::mirrorable_units` filters on
+    /// `devlanes_transport::UnitInfo::mirrorable`, and this is its rule,
+    /// copied because the host doesn't depend on the transport crate.
+    fn mirrorable(&self) -> bool {
+        !self.hidden && self.key.kind != "task"
+    }
 }
 
 /// Names a box unit.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UnitKey {
     pub lane: LaneKey,
+    /// `service`, `container`, `task` or `external`.
+    pub kind: String,
 }
 
 /// A box lane this machine doesn't mirror.
@@ -249,6 +265,15 @@ struct Building<'a> {
 
 /// Composes the view from `status {all: true}`, `hosts {all: true}` and
 /// `host.list`.
+///
+/// A lane's sources are this machine, when it has the lane, and every box
+/// whose `host.list` item has a `registry` with it. A reconnecting box keeps
+/// its registry, so it keeps its sources and can still serve. A box whose
+/// link ended, failed or stopped has none and appears only in `boxes`.
+///
+/// A box source serves when its lane has a unit the daemon mirrors and isn't
+/// in the box's `skipped_lanes`. This machine's source serves when no box
+/// does and the reference isn't in `yielded_local_lanes`.
 pub fn compose(status: &Page<LaneSummary>, hosts: &Hosts, host_list: &HostList) -> View {
     let boxes = host_list
         .items
@@ -272,7 +297,8 @@ pub fn compose(status: &Page<LaneSummary>, hosts: &Hosts, host_list: &HostList) 
             .local = Some(summary);
     }
     for item in &host_list.items {
-        // A box whose link is down has no registry, so it adds no sources.
+        // A box whose link ended, failed or stopped has no registry, so it
+        // adds no sources. A reconnecting box keeps its registry.
         let Some(registry) = &item.registry else {
             continue;
         };
@@ -326,19 +352,23 @@ fn compose_lane(
                 cause: skipped.cause.clone(),
                 can_use: skipped.can_use,
             });
-        // The daemon's assignment skips a clashing lane on every box but one,
-        // so a second box that serves would be a daemon bug. Only the first
-        // one counts, since the popup takes one serving source at most.
-        let serving = skipped.is_none() && served_by.is_none();
+        let units: Vec<&RegistryUnit> = item
+            .registry
+            .iter()
+            .flat_map(|registry| &registry.units)
+            .filter(|unit| unit.key.lane == lane.key)
+            .collect();
+        // The daemon neither mirrors nor skips a lane without a unit it
+        // mirrors, so such a lane serves nothing. The assignment skips a
+        // clashing lane on every box but one, so a second box that serves
+        // would be a daemon bug. Only the first counts, since the popup takes
+        // one serving source at most.
+        let serving =
+            skipped.is_none() && served_by.is_none() && units.iter().any(|unit| unit.mirrorable());
         if serving {
             served_by = Some(Some(item.host.clone()));
         }
-        let units = item.registry.iter().flat_map(|registry| &registry.units);
-        let state = box_state(
-            units
-                .filter(|unit| unit.key.lane == lane.key)
-                .map(|unit| unit.state.as_str()),
-        );
+        let state = box_state(units.iter().map(|unit| unit.state.as_str()));
         sources.push(Source {
             host: Some(item.host.clone()),
             state: state.into(),
@@ -432,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn local_lanes_with_a_box_whose_link_is_down() {
+    fn a_failed_box_adds_no_sources_and_a_reconnecting_one_still_serves() {
         let (composed, fixture) = case(
             include_str!("../tests/daemon/local.json"),
             include_str!("../tests/fixtures/view-local.json"),
@@ -465,6 +495,55 @@ mod tests {
             include_str!("../tests/fixtures/view-two-boxes.json"),
         );
         assert_eq!(composed, fixture);
+    }
+
+    #[test]
+    fn a_box_lane_serves_only_with_a_unit_this_machine_mirrors() {
+        let unit = |lane: &str, kind: &str, hidden: bool| {
+            serde_json::json!({
+                "key": {"lane": {"project": "acme", "lane": lane}, "kind": kind, "name": "u"},
+                "hidden": hidden, "state": "running", "ports": [], "hosts": [],
+            })
+        };
+        let lane = |lane: &str, index: u32| serde_json::json!({"key": {"project": "acme", "lane": lane}, "index": index, "domain": null});
+        let host_list: HostList = serde_json::from_value(serde_json::json!({
+            "items": [{
+                "host": "fork-a",
+                "state": "connected",
+                "registry": {
+                    "lanes": [lane("0", 0), lane("1", 1), lane("2", 2), lane("3", 3), lane("4", 4)],
+                    "units": [
+                        unit("0", "task", false),
+                        unit("2", "service", true),
+                        unit("3", "container", false),
+                        unit("4", "external", false),
+                    ],
+                },
+            }],
+        }))
+        .expect("host.list parses");
+        let view = compose(&Page::complete(Vec::new()), &Hosts::default(), &host_list);
+        let serving: Vec<(&str, bool, bool)> = view.projects[0]
+            .lanes
+            .iter()
+            .map(|lane| {
+                (
+                    lane.reference.as_str(),
+                    lane.sources[0].serving,
+                    lane.served_by.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            serving,
+            [
+                ("acme@0", false, false),
+                ("acme@1", false, false),
+                ("acme@2", false, false),
+                ("acme@3", true, true),
+                ("acme@4", true, true),
+            ]
+        );
     }
 
     #[test]

@@ -88,6 +88,18 @@
         "host_header_upstream": false,
         "state": "failed",
         "clients": []
+      },
+      {
+        "host": "app.acme3.localhost",
+        "url": "https://app.acme3.localhost:8443",
+        "project": "acme",
+        "lane": "acme@3",
+        "unit": "web",
+        "port": 41030,
+        "fallback": false,
+        "host_header_upstream": false,
+        "state": "reconnecting",
+        "clients": []
       }
     ],
     "warnings": [],
@@ -98,8 +110,7 @@
     "items": [
       {
         "host": "fork-a",
-        "state": "reconnecting",
-        "retry_in_ms": 4000,
+        "state": "failed",
         "error": "ssh: connect to host fork-a.example.invalid port 22: Connection refused",
         "transport": "ssh",
         "https_port": 443,
@@ -111,6 +122,48 @@
         "syncs": [],
         "warnings": [],
         "connected_since_ms": null,
+        "chosen_lanes": []
+      },
+      {
+        "host": "fork-b",
+        "state": "reconnecting",
+        "retry_in_ms": 4000,
+        "error": "ssh: connect to host fork-b.example.invalid port 22: Connection timed out",
+        "transport": "ssh",
+        "https_port": 443,
+        "lanes": 2,
+        "ports": [],
+        "routes": [
+          { "host": "app.acme3.localhost", "port": 41030, "lane": "acme@3", "unit": "web", "url": "https://app.acme3.localhost:8443", "state": "reconnecting" }
+        ],
+        "skipped_lanes": [],
+        "skipped_hosts": [],
+        "syncs": [],
+        "warnings": [],
+        "connected_since_ms": 1700000000000,
+        "daemon_version": "devlanes 0.15.1",
+        "registry": {
+          "lanes": [
+            { "key": { "project": "acme", "lane": "3" }, "index": 3, "domain": "acme3.localhost" },
+            { "key": { "project": "acme", "lane": "4" }, "index": 4, "domain": null }
+          ],
+          "units": [
+            {
+              "key": { "lane": { "project": "acme", "lane": "3" }, "kind": "service", "name": "web" },
+              "hidden": false,
+              "state": "ready",
+              "ports": [{ "name": "default", "port": 41030 }],
+              "hosts": [{ "host": "app.acme3.localhost", "port": 41030, "fallback": false, "host_header": "keep" }]
+            },
+            {
+              "key": { "lane": { "project": "acme", "lane": "4" }, "kind": "task", "name": "migrate" },
+              "hidden": false,
+              "state": "running",
+              "ports": [],
+              "hosts": []
+            }
+          ]
+        },
         "chosen_lanes": []
       }
     ],
