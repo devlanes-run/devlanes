@@ -309,9 +309,10 @@ impl Handler for Engine {
         self.inner.bus.flushed().await;
     }
 
-    /// With `idle_exit`, resolves once no subscriber is left and nothing ran
-    /// or was in flight for the whole grace period, or for
-    /// [`UNWATCHED_IDLE_FACTOR`] grace periods when no subscriber ever came.
+    /// With `idle_exit`, resolves once no subscriber that keeps the daemon
+    /// awake is left and nothing ran or was in flight for the whole grace
+    /// period, or for [`UNWATCHED_IDLE_FACTOR`] grace periods when no such
+    /// subscriber ever came. Quiet subscribers count as none.
     async fn idle(&self) {
         let Some(grace) = self.inner.opts.idle_exit else {
             return std::future::pending().await;
@@ -320,7 +321,7 @@ impl Handler for Engine {
         let mut quiet_since: Option<Instant> = None;
         loop {
             tick.tick().await;
-            if self.inner.bus.subscribers() > 0 {
+            if self.inner.bus.awake_subscribers() > 0 {
                 self.inner.watched.store(true, Ordering::Relaxed);
                 quiet_since = None;
                 continue;
@@ -477,12 +478,12 @@ impl Inner {
     /// `daemon.status`'s `idle_exit`: `null` for a daemon that never exits on
     /// its own, else `{after_ms, idle, watchers}`: how long it waits once the
     /// last event subscriber left, whether nothing but subscribers keeps it up
-    /// ([`Self::is_idle`]), and how many subscribers it has now.
+    /// ([`Self::is_idle`]), and how many subscribers keep it awake now.
     fn idle_exit_status(&self) -> Value {
         let Some(grace) = self.opts.idle_exit else {
             return Value::Null;
         };
-        let watchers = self.bus.subscribers();
+        let watchers = self.bus.awake_subscribers();
         let after = if watchers > 0 || self.watched.load(Ordering::Relaxed) {
             grace
         } else {
@@ -590,7 +591,7 @@ impl Inner {
             Method::InfraDown => self.infra_down_method(&context).await,
             Method::InfraStatus => self.infra_status_method(&context).await,
             Method::InfraLogs => self.infra_logs_method(params, &context, &session).await,
-            Method::Hosts => self.hosts_method(&context).await,
+            Method::Hosts => self.hosts_method(params, &context).await,
             Method::Env => self.env_method(params, &context).await,
             Method::Errors => self.errors_method(params, &context).await,
             Method::Why => self.why_method(params, &context).await,

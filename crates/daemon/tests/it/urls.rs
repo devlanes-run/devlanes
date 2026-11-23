@@ -314,3 +314,62 @@ async fn hosts_outside_the_ca_are_warned_about() {
     .await
     .expect("timeout");
 }
+
+/// The hostnames `hosts` lists with `params` from `cwd`, sorted.
+async fn listed(h: &crate::Harness, params: Value, cwd: &std::path::Path) -> Vec<String> {
+    let hosts = h.call(Method::Hosts, params, cx(cwd)).await.expect("hosts");
+    let mut listed: Vec<String> = hosts["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter_map(|item| item["host"].as_str().map(String::from))
+        .collect();
+    listed.sort();
+    listed
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `hosts` with `all` lists every project's routes from any cwd, a project's
+/// own folder included. Without it, the cwd's project is the scope.
+async fn hosts_with_all_lists_every_project() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let acme = repo(
+            &tmp.path,
+            "acme",
+            "project: acme\nservices:\n  web: { run: serve, hosts: [\"web.${{ lane.domain }}\"] }\n",
+        );
+        let other = repo(
+            &tmp.path,
+            "other",
+            "project: other\nservices:\n  web: { run: serve, hosts: [\"web.${{ lane.domain }}\"] }\n",
+        );
+        let outside = tmp.path.join("outside");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        for project in [&acme, &other] {
+            h.call(Method::Start, json!({}), cx(project))
+                .await
+                .expect("start");
+        }
+        let both = ["web.acme.localhost", "web.other.localhost"];
+
+        assert_eq!(listed(&h, json!({"all": true}), &outside).await, both);
+        assert_eq!(listed(&h, json!({"all": true}), &acme).await, both);
+        assert_eq!(
+            listed(&h, json!({}), &acme).await,
+            ["web.acme.localhost"],
+            "the cwd scope stays the default"
+        );
+        assert_eq!(listed(&h, Value::Null, &other).await, ["web.other.localhost"]);
+
+        for project in [&acme, &other] {
+            h.call(Method::Stop, json!({}), cx(project))
+                .await
+                .expect("stop");
+        }
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}

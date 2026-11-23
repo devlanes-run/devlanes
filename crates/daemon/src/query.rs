@@ -86,10 +86,32 @@ struct EnvParams {
 }
 
 /// `subscribe` parameters.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct SubscribeParams {
     #[serde(default)]
     follow: Option<bool>,
+    /// Whether this subscriber holds the daemon past its idle exit and keeps
+    /// the sampler on its fast tick, as a TUI does. A subscriber that only
+    /// listens sends `false` ([`devlanes_proto::features::QUIET_SUBSCRIBE`]).
+    #[serde(default = "keeps_awake_default")]
+    keeps_awake: bool,
+}
+
+impl Default for SubscribeParams {
+    /// What a `subscribe` with no params asks for: a following subscriber
+    /// that keeps the daemon awake.
+    fn default() -> Self {
+        Self {
+            follow: None,
+            keeps_awake: keeps_awake_default(),
+        }
+    }
+}
+
+/// Subscribers keep the daemon awake unless they say otherwise, so clients
+/// that predate `keeps_awake` behave as before.
+fn keeps_awake_default() -> bool {
+    true
 }
 
 /// Byte budget of a log query that names none (the logs crate's default).
@@ -323,7 +345,7 @@ impl Inner {
             // By project rather than by the snapshot's lanes, so a lane the project
             // gains later (`lane new`, a new worktree) shows too.
             self.bus
-                .forward_from(session, snapshot, |event| {
+                .forward_from(session, true, snapshot, |event| {
                     let lane = &event.data["lane"];
                     event.event == events::LANE_CHANGED
                         && scope.covers(
@@ -1269,8 +1291,10 @@ impl Inner {
         }))
     }
 
-    /// `subscribe`: streams every event until disconnect; `follow: false` returns
-    /// the recent events instead.
+    /// `subscribe`: streams every event until disconnect. `follow: false`
+    /// returns the recent events instead. With `keeps_awake: false` the
+    /// subscription neither holds the daemon past its idle exit nor keeps the
+    /// sampler fast.
     pub(crate) async fn subscribe_method(
         self: &Arc<Self>,
         value: Value,
@@ -1290,7 +1314,9 @@ impl Inner {
                 data: json!({"reason": "subscribed"}),
             }]
         };
-        self.bus.forward_from(session, resync, |_| true).await;
+        self.bus
+            .forward_from(session, args.keeps_awake, resync, |_| true)
+            .await;
         Ok(json!({}))
     }
 
@@ -1537,6 +1563,18 @@ mod tests {
         assert_eq!(parse_duration("x"), None);
         // Overflow is no duration rather than a panic (debug) or a wrap (release).
         assert_eq!(parse_duration(&format!("{}d", u64::MAX)), None);
+    }
+
+    #[test]
+    /// A `subscribe` without `keeps_awake`, or without params, keeps the daemon
+    /// awake, so older clients behave as before.
+    fn keeps_awake_defaults_to_true() {
+        for value in [Value::Null, json!({}), json!({"follow": true})] {
+            let args: SubscribeParams = params(value.clone()).expect("params");
+            assert!(args.keeps_awake, "{value}");
+        }
+        let quiet: SubscribeParams = params(json!({"keeps_awake": false})).expect("params");
+        assert!(!quiet.keeps_awake);
     }
 
     #[test]

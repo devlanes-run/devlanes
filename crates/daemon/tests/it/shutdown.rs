@@ -110,6 +110,102 @@ async fn an_unwatched_engine_goes_idle_after_more_grace_periods() {
     .expect("timeout");
 }
 
+/// Subscribes on a session of its own with `params` and returns the session
+/// once the subscription's own resync arrived, so the subscriber is counted.
+pub(crate) async fn subscribed(h: &crate::Harness, params: Value) -> devlanes_daemon::Session {
+    let (session, mut frames) = h.session();
+    let request = devlanes_proto::Request {
+        id: 1,
+        method: Method::Subscribe,
+        params,
+        context: devlanes_proto::Context::default(),
+    };
+    let engine = h.engine.clone();
+    let running = session.clone();
+    tokio::spawn(async move {
+        let _ = engine.handle(request, running).await;
+    });
+    loop {
+        match tokio::time::timeout(Duration::from_secs(5), frames.recv()).await {
+            Ok(Some(devlanes_ipc::Frame::Control(devlanes_proto::Control::Event(event))))
+                if event.event == devlanes_proto::events::RESYNC =>
+            {
+                break;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("the subscription ended before its resync"),
+            Err(_) => panic!("no resync within 5 s"),
+        }
+    }
+    // Drained so a full session queue never stalls the forward.
+    tokio::spawn(async move { while frames.recv().await.is_some() {} });
+    session
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A `keeps_awake: false` subscriber neither holds the engine past its idle
+/// exit nor marks it watched, so the unwatched wait still applies. A plain
+/// `subscribe` keeps the engine up and marks it watched.
+async fn a_quiet_subscriber_lets_the_engine_go_idle() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let grace = Duration::from_millis(200);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                idle_exit: Some(grace),
+                ..Setup::default()
+            },
+        )
+        .await;
+        let unwatched = grace * devlanes_daemon::UNWATCHED_IDLE_FACTOR;
+
+        let quiet = subscribed(&h, json!({"keeps_awake": false})).await;
+        let status = h
+            .call(
+                Method::DaemonStatus,
+                json!({}),
+                devlanes_proto::Context::default(),
+            )
+            .await
+            .expect("status");
+        assert_eq!(status["idle_exit"]["watchers"], 0, "{status}");
+        assert_eq!(
+            status["idle_exit"]["after_ms"],
+            json!(unwatched.as_millis()),
+            "{status}"
+        );
+        let begun = std::time::Instant::now();
+        tokio::time::timeout(unwatched * 3, h.engine.idle())
+            .await
+            .expect("idle with only a quiet subscriber");
+        assert!(begun.elapsed() >= unwatched, "{:?}", begun.elapsed());
+
+        let tui = subscribed(&h, json!({})).await;
+        // 800 ms covers four 200 ms idle ticks.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(800), h.engine.idle())
+                .await
+                .is_err(),
+            "a plain subscriber keeps the engine up"
+        );
+        tui.close();
+        let begun = std::time::Instant::now();
+        tokio::time::timeout(unwatched * 3, h.engine.idle())
+            .await
+            .expect("idle once the plain subscriber left");
+        assert!(
+            begun.elapsed() < unwatched,
+            "a plain subscriber marks the engine watched: {:?}",
+            begun.elapsed()
+        );
+        quiet.close();
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 /// One `daemon.stopping` event as (step, state, total, left, lanes).
 type StepRow = (
     StoppingStep,

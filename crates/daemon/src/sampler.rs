@@ -247,7 +247,7 @@ impl Inner {
                 _ = tick.tick() => {}
             }
             count += 1;
-            let interested = self.bus.subscribers() > 0
+            let interested = self.bus.awake_subscribers() > 0
                 || lock(&self.metrics)
                     .interest_until
                     .is_some_and(|until| until > Instant::now());

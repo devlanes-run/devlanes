@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
         Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -30,6 +30,52 @@ pub struct EventBus {
     /// sent or skipped, for [`Self::flushed`].
     forwarded: watch::Sender<BTreeMap<u64, u64>>,
     next_forward: AtomicU64,
+    /// Subscribers that asked not to keep the daemon awake, for
+    /// [`Self::awake_subscribers`].
+    quiet: AtomicUsize,
+}
+
+/// A forward's receiver, counted in [`EventBus::quiet`] when it is quiet.
+struct Subscription<'a> {
+    bus: &'a EventBus,
+    /// Taken out only by [`Drop`], so it can drop before the count does.
+    receiver: Option<broadcast::Receiver<Event>>,
+    quiet: bool,
+}
+
+impl<'a> Subscription<'a> {
+    /// Subscribes to `bus`. The caller holds [`EventBus::recent`], so
+    /// [`EventBus::awake_subscribers`] sees the receiver and the quiet count
+    /// change together.
+    fn new(bus: &'a EventBus, quiet: bool) -> Self {
+        if quiet {
+            bus.quiet.fetch_add(1, Ordering::Relaxed);
+        }
+        Self {
+            bus,
+            receiver: Some(bus.sender.subscribe()),
+            quiet,
+        }
+    }
+
+    /// The receiver, which stays in place until the guard drops.
+    fn receiver(&mut self) -> &mut broadcast::Receiver<Event> {
+        self.receiver
+            .as_mut()
+            .expect("only Drop takes the receiver")
+    }
+}
+
+impl Drop for Subscription<'_> {
+    /// Drops the receiver and the quiet count under one lock, so
+    /// [`EventBus::awake_subscribers`] never sees one without the other.
+    fn drop(&mut self) {
+        let _counts = crate::model::lock(&self.bus.recent);
+        self.receiver.take();
+        if self.quiet {
+            self.bus.quiet.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
 }
 
 /// Removes a forward from [`EventBus::forwarded`] when it ends.
@@ -72,6 +118,7 @@ impl EventBus {
             recent: Mutex::new(VecDeque::with_capacity(RECENT)),
             forwarded: watch::channel(BTreeMap::new()).0,
             next_forward: AtomicU64::new(1),
+            quiet: AtomicUsize::new(0),
         }
     }
 
@@ -124,27 +171,42 @@ impl EventBus {
             .unwrap_or_default()
     }
 
-    /// Current subscriber count, used to decide whether sampling is wanted.
+    /// Current subscriber count, quiet ones included, for `doctor`.
     pub fn subscribers(&self) -> usize {
         self.sender.receiver_count()
     }
 
+    /// Counts the subscribers that keep the daemon awake, leaving out those
+    /// that subscribed with `keeps_awake: false`. The idle exit and the
+    /// sampler's fast tick read it.
+    pub fn awake_subscribers(&self) -> usize {
+        // Quiet forwards join and leave under this lock, so both reads agree.
+        let _counts = crate::model::lock(&self.recent);
+        self.sender
+            .receiver_count()
+            .saturating_sub(self.quiet.load(Ordering::Relaxed))
+    }
+
     /// Forwards events accepted by `filter` to `session` until it disconnects.
     pub async fn forward(&self, session: &Session, filter: impl Fn(&Event) -> bool) {
-        self.forward_from(session, |_| Vec::new(), filter).await;
+        self.forward_from(session, true, |_| Vec::new(), filter)
+            .await;
     }
 
     /// Like [`Self::forward`], but subscribes first and then sends `initial` to
     /// this session only, so a snapshot never misses a change and other
     /// subscribers never see it. `initial` gets a sequence number of its own,
     /// after every event the subscription missed and before every one it gets.
+    /// Without `keeps_awake`, the subscription is left out of
+    /// [`Self::awake_subscribers`].
     pub async fn forward_from(
         &self,
         session: &Session,
+        keeps_awake: bool,
         initial: impl FnOnce(u64) -> Vec<Event>,
         filter: impl Fn(&Event) -> bool,
     ) {
-        let (mut receiver, seq, forwarding) = {
+        let (mut subscription, seq, forwarding) = {
             // Emits take their number under this lock, so none falls in between.
             let _emits = crate::model::lock(&self.recent);
             let seq = self.seq.fetch_add(1, Ordering::Relaxed);
@@ -154,8 +216,9 @@ impl EventBus {
             };
             // Events before `seq` are not this forward's to send.
             forwarding.handled(seq);
-            (self.subscribe(), seq, forwarding)
+            (Subscription::new(self, !keeps_awake), seq, forwarding)
         };
+        let receiver = subscription.receiver();
         let disconnected = session.disconnected();
         for event in initial(seq) {
             if session.event(event).await.is_err() {
@@ -250,5 +313,73 @@ mod tests {
         }
         assert_eq!(sent, ["first", "last"]);
         forward.abort();
+    }
+
+    /// A forward on `bus` that runs until its session closes.
+    struct Joined {
+        session: Session,
+        forward: tokio::task::JoinHandle<()>,
+        _frames: tokio::sync::mpsc::Receiver<devlanes_ipc::Frame>,
+    }
+
+    /// Starts a forward on `bus` and returns once its first frame arrives. By
+    /// then its subscription exists.
+    async fn join(bus: &std::sync::Arc<EventBus>, id: u64, keeps_awake: bool) -> Joined {
+        let (session, mut frames) = Session::local(id);
+        let forward = {
+            let bus = bus.clone();
+            let session = session.clone();
+            tokio::spawn(async move {
+                let marker = |seq| {
+                    vec![Event {
+                        seq,
+                        event: "joined".into(),
+                        data: Value::Null,
+                    }]
+                };
+                bus.forward_from(&session, keeps_awake, marker, |_| true)
+                    .await;
+            })
+        };
+        let first = tokio::time::timeout(std::time::Duration::from_secs(10), frames.recv())
+            .await
+            .expect("the marker arrives");
+        assert!(first.is_some(), "the forward sends its marker");
+        Joined {
+            session,
+            forward,
+            _frames: frames,
+        }
+    }
+
+    /// Closes the forward's session and returns once the forward ended.
+    async fn leave(joined: Joined) {
+        joined.session.close();
+        tokio::time::timeout(std::time::Duration::from_secs(10), joined.forward)
+            .await
+            .expect("the forward ends")
+            .expect("the forward ran");
+    }
+
+    #[tokio::test]
+    /// `awake_subscribers` leaves out quiet forwards and counts plain ones,
+    /// whatever order forwards join and leave in.
+    async fn awake_subscribers_leave_out_quiet_forwards() {
+        let bus = std::sync::Arc::new(EventBus::default());
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (0, 0));
+
+        let quiet = join(&bus, 1, false).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (1, 0));
+        let plain = join(&bus, 2, true).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (2, 1));
+        let second_quiet = join(&bus, 3, false).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (3, 1));
+
+        leave(quiet).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (2, 1));
+        leave(plain).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (1, 0));
+        leave(second_quiet).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (0, 0));
     }
 }
