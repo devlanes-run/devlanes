@@ -45,7 +45,7 @@ On a lane's page, open the popup and pick another lane of the project under "Ope
 
 When more than one machine has a lane, such as your machine and a box, the lane shows a "Served by" row with "This machine" and each box. Pick the one that should serve the lane. [Work with several boxes](remote/several-boxes.md) covers what that changes.
 
-When the lane runs on your machine, the popup asks before it stops it. "Stop and switch" stops the lane and then switches, which can take up to 30 seconds. When the lane's containers hold its ports, the popup lists the commands that stop them, each with a copy button. Run them, then click "Switch again".
+When the lane runs on your machine, the popup asks before it stops it. "Stop and switch" stops the lane and then switches. When the lane's containers hold its ports, the popup lists the commands that stop them, each with a copy button. Run them, then click "Switch again".
 
 ## Fill test logins on other lanes
 
