@@ -35,21 +35,39 @@ pub struct EventBus {
     quiet: AtomicUsize,
 }
 
-/// Counts one quiet subscriber in [`EventBus::quiet`] while it lives.
-struct Quiet<'a>(&'a AtomicUsize);
+/// A forward's receiver, counted in [`EventBus::quiet`] when it is quiet.
+struct Subscription<'a> {
+    bus: &'a EventBus,
+    /// Taken out only by [`Drop`], so it can drop before the count does.
+    receiver: Option<broadcast::Receiver<Event>>,
+    quiet: bool,
+}
 
-impl<'a> Quiet<'a> {
-    /// Counts a quiet subscriber until the guard drops.
-    fn new(quiet: &'a AtomicUsize) -> Self {
-        quiet.fetch_add(1, Ordering::Relaxed);
-        Self(quiet)
+impl<'a> Subscription<'a> {
+    /// Subscribes to `bus`. The caller holds [`EventBus::recent`], so
+    /// [`EventBus::awake_subscribers`] sees the receiver and the quiet count
+    /// change together.
+    fn new(bus: &'a EventBus, quiet: bool) -> Self {
+        if quiet {
+            bus.quiet.fetch_add(1, Ordering::Relaxed);
+        }
+        Self {
+            bus,
+            receiver: Some(bus.sender.subscribe()),
+            quiet,
+        }
     }
 }
 
-impl Drop for Quiet<'_> {
-    /// The subscriber left, so it no longer counts as quiet.
+impl Drop for Subscription<'_> {
+    /// Drops the receiver and the quiet count under one lock, so
+    /// [`EventBus::awake_subscribers`] never sees one without the other.
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        let _counts = crate::model::lock(&self.bus.recent);
+        self.receiver.take();
+        if self.quiet {
+            self.bus.quiet.fetch_sub(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -151,13 +169,12 @@ impl EventBus {
         self.sender.receiver_count()
     }
 
-    /// The subscribers that keep the daemon awake: every one but those that
-    /// subscribed with `keeps_awake: false`. The idle exit and the sampler's
-    /// fast tick read this count.
+    /// Counts the subscribers that keep the daemon awake, leaving out those
+    /// that subscribed with `keeps_awake: false`. The idle exit and the
+    /// sampler's fast tick read it.
     pub fn awake_subscribers(&self) -> usize {
-        // A quiet forward counts itself before it subscribes and stops counting
-        // after its receiver dropped, so this may read too low for a moment but
-        // never too high.
+        // Quiet forwards join and leave under this lock, so both reads agree.
+        let _counts = crate::model::lock(&self.recent);
         self.sender
             .receiver_count()
             .saturating_sub(self.quiet.load(Ordering::Relaxed))
@@ -182,9 +199,7 @@ impl EventBus {
         initial: impl FnOnce(u64) -> Vec<Event>,
         filter: impl Fn(&Event) -> bool,
     ) {
-        // Declared before the receiver so it drops after it.
-        let _quiet = (!keeps_awake).then(|| Quiet::new(&self.quiet));
-        let (mut receiver, seq, forwarding) = {
+        let (mut subscription, seq, forwarding) = {
             // Emits take their number under this lock, so none falls in between.
             let _emits = crate::model::lock(&self.recent);
             let seq = self.seq.fetch_add(1, Ordering::Relaxed);
@@ -194,7 +209,10 @@ impl EventBus {
             };
             // Events before `seq` are not this forward's to send.
             forwarding.handled(seq);
-            (self.subscribe(), seq, forwarding)
+            (Subscription::new(self, !keeps_awake), seq, forwarding)
+        };
+        let Some(receiver) = subscription.receiver.as_mut() else {
+            return;
         };
         let disconnected = session.disconnected();
         for event in initial(seq) {
@@ -290,5 +308,73 @@ mod tests {
         }
         assert_eq!(sent, ["first", "last"]);
         forward.abort();
+    }
+
+    /// A forward on `bus` that runs until its session closes.
+    struct Joined {
+        session: Session,
+        forward: tokio::task::JoinHandle<()>,
+        _frames: tokio::sync::mpsc::Receiver<devlanes_ipc::Frame>,
+    }
+
+    /// Starts a forward on `bus` and returns once its first frame arrived,
+    /// when its subscription exists.
+    async fn join(bus: &std::sync::Arc<EventBus>, id: u64, keeps_awake: bool) -> Joined {
+        let (session, mut frames) = Session::local(id);
+        let forward = {
+            let bus = bus.clone();
+            let session = session.clone();
+            tokio::spawn(async move {
+                let marker = |seq| {
+                    vec![Event {
+                        seq,
+                        event: "joined".into(),
+                        data: Value::Null,
+                    }]
+                };
+                bus.forward_from(&session, keeps_awake, marker, |_| true)
+                    .await;
+            })
+        };
+        let first = tokio::time::timeout(std::time::Duration::from_secs(10), frames.recv())
+            .await
+            .expect("the marker arrives");
+        assert!(first.is_some(), "the forward sends its marker");
+        Joined {
+            session,
+            forward,
+            _frames: frames,
+        }
+    }
+
+    /// Closes the forward's session and returns once the forward ended.
+    async fn leave(joined: Joined) {
+        joined.session.close();
+        tokio::time::timeout(std::time::Duration::from_secs(10), joined.forward)
+            .await
+            .expect("the forward ends")
+            .expect("the forward ran");
+    }
+
+    #[tokio::test]
+    /// Quiet forwards never count as awake while they join and leave, and
+    /// plain ones always do.
+    async fn awake_subscribers_leave_out_quiet_forwards() {
+        let bus = std::sync::Arc::new(EventBus::default());
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (0, 0));
+
+        let quiet = join(&bus, 1, false).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (1, 0));
+        let plain = join(&bus, 2, true).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (2, 1));
+        let second_quiet = join(&bus, 3, false).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (3, 1));
+
+        leave(quiet).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (2, 1));
+        leave(plain).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (1, 0));
+        leave(second_quiet).await;
+        assert_eq!((bus.subscribers(), bus.awake_subscribers()), (0, 0));
     }
 }
