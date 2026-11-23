@@ -2,6 +2,24 @@
 //! Client commands run here; `devlanes daemon run` builds the daemon from the same binary
 //! so client and daemon versions match on a fresh install.
 
+// The macOS linker notes that a debug build of this binary has more than
+// 16 MB of `__eh_frame`, past what its compact unwind table can point into.
+// Panics still unwind, and only frames past that offset are looked up more
+// slowly. The Rust team labels the note a false positive of `linker_messages`
+// (rust-lang/rust#159105). The debug binary sits at that size: about 480,000
+// functions, and one small crate adds about 1%. `-no_compact_unwind` would
+// give up the compact table for every frame, and `opt-level = 1` for every
+// dependency removes only 9% of the functions while it slows debug builds
+// and debugging. So the lint is allowed here, for this crate's debug builds
+// on macOS only.
+#![cfg_attr(
+    all(target_os = "macos", debug_assertions),
+    allow(
+        linker_messages,
+        reason = "ld's __eh_frame size note on debug builds, rust-lang/rust#159105"
+    )
+)]
+
 mod attach;
 mod bundle;
 mod choose;
@@ -64,6 +82,15 @@ fn main() -> ExitCode {
         .is_some_and(|arg| arg == devlanes_mcp::shell_env::PAYLOAD_ARG)
     {
         return devlanes_mcp::shell_env::print_payload(std::env::args_os().skip(2));
+    }
+    // Chrome starts a native messaging host as `<path> chrome-extension://<id>/`.
+    // stdout carries the host's frames, so nothing below may run first: no
+    // completion, no console of its own and no CLI parsing.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| devlanes_browser_host::is_origin(&arg))
+    {
+        return devlanes_browser_host::run(std::env::args_os().skip(1));
     }
     // CompleteEnv must run before any thread exists; it exits when completing.
     completion::install();

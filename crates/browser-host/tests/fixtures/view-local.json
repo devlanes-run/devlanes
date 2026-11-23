@@ -1,0 +1,79 @@
+{
+  "boxes": [
+    { "name": "fork-a", "state": "failed" },
+    { "name": "fork-b", "state": "reconnecting" }
+  ],
+  "projects": [
+    {
+      "name": "acme",
+      "lanes": [
+        {
+          "ref": "acme@0",
+          "index": 0,
+          "name": "main",
+          "domain": "acme.localhost",
+          "served_by": null,
+          "sources": [
+            { "box": null, "state": "running", "branch": "main", "serving": true }
+          ],
+          "routes": [
+            { "host": "app.acme.localhost", "url": "https://app.acme.localhost:8443", "service": "web", "state": "ready" },
+            { "host": "*.app.acme.localhost", "url": null, "service": "web", "state": "ready" }
+          ]
+        },
+        {
+          "ref": "acme@2",
+          "index": 2,
+          "name": "review",
+          "domain": "acme2.localhost",
+          "served_by": null,
+          "sources": [
+            { "box": null, "state": "failed", "branch": "main", "serving": true }
+          ],
+          "routes": [
+            { "host": "app.acme2.localhost", "url": "https://app.acme2.localhost:8443", "service": "web", "state": "failed" }
+          ]
+        },
+        {
+          "ref": "acme@3",
+          "index": 3,
+          "name": "lane3",
+          "domain": "acme3.localhost",
+          "served_by": "fork-b",
+          "sources": [
+            { "box": "fork-b", "state": "running", "branch": null, "serving": true }
+          ],
+          "routes": [
+            { "host": "app.acme3.localhost", "url": "https://app.acme3.localhost:8443", "service": "web", "state": "reconnecting" }
+          ]
+        },
+        {
+          "ref": "acme@4",
+          "index": 4,
+          "name": "lane4",
+          "domain": null,
+          "sources": [
+            { "box": "fork-b", "state": "running", "branch": null, "serving": false }
+          ],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "tools",
+      "lanes": [
+        {
+          "ref": "tools@0",
+          "index": 0,
+          "name": "main",
+          "domain": null,
+          "served_by": null,
+          "sources": [
+            { "box": null, "state": "running", "branch": "main", "serving": true }
+          ],
+          "routes": []
+        }
+      ]
+    }
+  ]
+}

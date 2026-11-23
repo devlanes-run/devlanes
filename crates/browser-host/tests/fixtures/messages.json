@@ -1,0 +1,122 @@
+{
+  "requests": [
+    { "id": 1, "method": "hello", "params": { "protocol": 1, "extension": "0.1.0" } },
+    { "id": 2, "method": "watch" },
+    { "id": 3, "method": "use", "params": { "lane": "acme@0", "box": "fork-b" } },
+    { "id": 4, "method": "use", "params": { "lane": "acme@0", "box": null } },
+    { "id": 5, "method": "stop_and_use", "params": { "lane": "acme@0", "box": "fork-b" } }
+  ],
+  "replies": [
+    { "id": 1, "result": { "protocol": 1, "devlanes": "0.15.0", "daemon": "running" } },
+    { "id": 1, "result": { "protocol": 1, "devlanes": "0.15.0", "daemon": "stopped" } },
+    { "id": 2, "result": {} },
+    {
+      "id": 3,
+      "result": { "lane": "acme@0", "box": "fork-b", "previous": "fork-a", "mirrored": true, "pending": false, "waits_for": null }
+    },
+    {
+      "id": 4,
+      "result": { "lane": "acme@0", "box": null, "previous": "fork-b", "mirrored": true, "pending": false, "waits_for": null }
+    },
+    {
+      "id": 5,
+      "result": { "lane": "acme@0", "box": "fork-b", "previous": null, "mirrored": false, "pending": true, "waits_for": "connect" }
+    }
+  ],
+  "events": [
+    { "event": "view", "data": { "boxes": [], "projects": [] } },
+    { "event": "daemon", "data": { "state": "running" } },
+    { "event": "daemon", "data": { "state": "stopped", "message": "devlanes isn't running. Run devlanes in a terminal." } },
+    {
+      "event": "daemon",
+      "data": {
+        "state": "outdated",
+        "message": "The devlanes daemon is too old for this extension. Restart the daemon with devlanes daemon restart."
+      }
+    },
+    {
+      "event": "notice",
+      "data": { "code": "lane_switched", "lane": "acme@0", "from": "fork-a", "to": "fork-b", "message": "acme@0 now comes from fork-b" }
+    },
+    {
+      "event": "notice",
+      "data": {
+        "code": "choice_cleared",
+        "lane": "acme@0",
+        "local_lane": "acme@0",
+        "holds": "processes",
+        "message": "acme@0 started on this machine, so fork-b's acme@0 is no longer mirrored or chosen."
+      }
+    }
+  ],
+  "errors": [
+    {
+      "id": 3,
+      "error": {
+        "code": "local_lane_running",
+        "message": "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0. Then run devlanes remote use fork-b acme@0.",
+        "data": { "holds": "processes", "local_lane": "acme@0", "commands": ["devlanes stop --lane acme@0"] }
+      }
+    },
+    {
+      "id": 5,
+      "error": {
+        "code": "containers_hold_ports",
+        "message": "acme@0's own containers keep its ports. Stop them with docker compose -p acme-lane0 stop, then switch again.",
+        "data": { "commands": ["docker compose -p acme-lane0 stop"] }
+      }
+    },
+    {
+      "id": 1,
+      "error": {
+        "code": "protocol_mismatch",
+        "message": "The extension speaks protocol 2, and this devlanes speaks protocol 1. Update devlanes or the extension so they match.",
+        "data": { "supported": [1] }
+      }
+    },
+    {
+      "id": 3,
+      "error": {
+        "code": "daemon_failed",
+        "message": "devlanes answered invalid_reference. Run devlanes doctor.",
+        "data": { "code": "invalid_reference" }
+      }
+    },
+    {
+      "id": 2,
+      "error": { "code": "hello_required", "message": "The extension sent a request before hello. Reload the devlanes extension." }
+    },
+    {
+      "id": 7,
+      "error": {
+        "code": "invalid_request",
+        "message": "The extension sent use without a lane and a box. Update the devlanes extension and devlanes."
+      }
+    },
+    {
+      "id": 6,
+      "error": { "code": "unknown_method", "message": "This devlanes doesn't know the request lane.clean. Update devlanes." }
+    },
+    {
+      "id": 3,
+      "error": {
+        "code": "box_unknown",
+        "message": "this machine knows no box called fork-b. Run devlanes remote ls to see the boxes"
+      }
+    },
+    {
+      "id": 3,
+      "error": {
+        "code": "lane_not_on_box",
+        "message": "box fork-b has no lane acme@0. Run devlanes remote ls to see its lanes"
+      }
+    },
+    {
+      "id": 4,
+      "error": {
+        "code": "local_lane_unknown",
+        "message": "this machine has no lane acme@0. Run devlanes remote use <box> acme@0 to choose a box"
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "boxes": [
+    { "name": "fork-a", "state": "connected" },
+    { "name": "fork-b", "state": "connected" }
+  ],
+  "projects": [
+    {
+      "name": "acme",
+      "lanes": [
+        {
+          "ref": "acme@0",
+          "index": 0,
+          "name": "main",
+          "domain": "acme.localhost",
+          "served_by": "fork-a",
+          "sources": [
+            { "box": null, "state": "idle", "branch": "main", "serving": false },
+            { "box": "fork-a", "state": "running", "branch": null, "serving": true },
+            {
+              "box": "fork-b",
+              "state": "running",
+              "branch": null,
+              "serving": false,
+              "skipped": { "cause": "box_chosen", "can_use": true }
+            }
+          ],
+          "routes": [
+            { "host": "app.acme.localhost", "url": "https://app.acme.localhost", "service": "web", "state": "ready" }
+          ]
+        },
+        {
+          "ref": "acme@1",
+          "index": 1,
+          "name": "lane1",
+          "domain": null,
+          "served_by": "fork-b",
+          "sources": [
+            { "box": "fork-b", "state": "failed", "branch": null, "serving": true }
+          ],
+          "routes": []
+        }
+      ]
+    }
+  ]
+}

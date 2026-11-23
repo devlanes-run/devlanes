@@ -1,0 +1,37 @@
+{
+  "boxes": [],
+  "projects": [
+    {
+      "name": "acme",
+      "lanes": [
+        {
+          "ref": "acme@0",
+          "index": 0,
+          "name": "main",
+          "domain": "acme.localhost",
+          "served_by": null,
+          "sources": [
+            { "box": null, "state": "running", "branch": "main", "serving": true }
+          ],
+          "routes": [
+            { "host": "app.acme.localhost", "url": "https://app.acme.localhost", "service": "web", "state": "ready" },
+            { "host": "api.acme.localhost", "url": "https://api.acme.localhost", "service": "api", "state": "ready" }
+          ]
+        },
+        {
+          "ref": "acme@1",
+          "index": 1,
+          "name": "lane1",
+          "domain": "acme1.localhost",
+          "served_by": null,
+          "sources": [
+            { "box": null, "state": "idle", "branch": "feat/login", "serving": true }
+          ],
+          "routes": [
+            { "host": "app.acme1.localhost", "url": "https://app.acme1.localhost", "service": "web", "state": "idle" }
+          ]
+        }
+      ]
+    }
+  ]
+}

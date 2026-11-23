@@ -1,0 +1,81 @@
+{
+  "status": {
+    "items": [
+      {
+        "reference": "acme@0",
+        "project": "acme",
+        "index": 0,
+        "branch": "main",
+        "path": "/work/acme",
+        "state": "running",
+        "config_changed": false,
+        "units": [],
+        "domain": "acme.localhost",
+        "url": "https://acme.localhost"
+      },
+      {
+        "reference": "acme@1",
+        "project": "acme",
+        "index": 1,
+        "branch": "feat/login",
+        "path": "/work/acme-login",
+        "state": "idle",
+        "config_changed": false,
+        "units": [],
+        "domain": "acme1.localhost",
+        "url": "https://acme1.localhost"
+      }
+    ],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "hosts": {
+    "items": [
+      {
+        "host": "app.acme.localhost",
+        "url": "https://app.acme.localhost",
+        "project": "acme",
+        "lane": "acme@0",
+        "unit": "web",
+        "port": 41000,
+        "fallback": false,
+        "host_header_upstream": false,
+        "state": "ready",
+        "clients": []
+      },
+      {
+        "host": "api.acme.localhost",
+        "url": "https://api.acme.localhost",
+        "project": "acme",
+        "lane": "acme@0",
+        "unit": "api",
+        "port": 41001,
+        "fallback": false,
+        "host_header_upstream": false,
+        "state": "ready",
+        "clients": []
+      },
+      {
+        "host": "app.acme1.localhost",
+        "url": "https://app.acme1.localhost",
+        "project": "acme",
+        "lane": "acme@1",
+        "unit": "web",
+        "port": 41010,
+        "fallback": false,
+        "host_header_upstream": false,
+        "state": "idle",
+        "clients": []
+      }
+    ],
+    "warnings": [],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "host_list": {
+    "items": [],
+    "yielded_local_lanes": [],
+    "truncated": false,
+    "next_cursor": null
+  }
+}

@@ -1,5 +1,6 @@
 //! End-to-end tests: every test drives the real `devlanes` binary in its own [`Lab`].
 
+mod browser_host;
 mod cli;
 mod diagnostics;
 // Docker test names must start with `docker_` including the module path, for the CI filter.
