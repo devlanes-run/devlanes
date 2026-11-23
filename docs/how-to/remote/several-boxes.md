@@ -49,6 +49,8 @@ $ devlanes remote use fork-b myapp@0
 
 The switch keeps the lane's hostnames, but not its port numbers, since each box gave the lane ports from its own range. A browser follows the switch; a program that connects to a port number, such as a database client, needs the new box's port, which `devlanes remote ls` shows. The choice lasts until another one replaces it or you disconnect the box.
 
+The popup of the browser extension switches a lane too, as [Use the browser extension](../use-the-browser-extension.md) describes.
+
 ## If a lane on your machine runs
 
 A running local lane keeps its hostnames, so the choice is refused. Stop the lane, then choose the box again.

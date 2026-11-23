@@ -42,7 +42,7 @@ The list of a lane's units, and the terminal of the selected unit beside it.
 | `/` | Filter the units by name or `+tag` |
 | `z` | Zoom the terminal pane |
 | `c` | Select text in the pane; `v` marks, `y` copies |
-| `m` | Use a box's lane in place of the one in use here |
+| `m` | Use a box's lane in place of the one in use here, as the browser extension's popup does ([Use the browser extension](../how-to/use-the-browser-extension.md)) |
 
 ## Monitor
 
