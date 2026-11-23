@@ -1,4 +1,4 @@
-//! Box-to-client sync subscriptions over dedicated mux streams.
+//! Box-to-client sync subscriptions over dedicated streams.
 //!
 //! The transport frames messages and, with [`crate::SYNC_ZSTD`], compresses
 //! chunks and client input on the way. Manifest contents, chunk ordering and

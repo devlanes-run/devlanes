@@ -152,8 +152,9 @@ pub enum SessionError {
         /// The box's version label.
         server: String,
     },
-    /// The box side broke the connection; the text is the pipe's own report, such
-    /// as the stderr of a remote `devlanes tunnel --stdio` that exited.
+    /// The box side broke the connection; the text is the connection's own
+    /// failure reason, such as the stderr of a remote `devlanes tunnel --stdio`
+    /// that exited.
     #[error("box closed the connection: {0}")]
     Closed(String),
     /// The box serves only paired clients and nobody gave a pairing code.
@@ -528,7 +529,7 @@ impl Session {
         self.inner.cancel.cancel();
     }
 
-    /// Opens a mux stream and sends its open frame.
+    /// Opens a stream and sends its open frame.
     async fn open_stream(&self, open: &OpenRequest) -> Result<Channel<BoxDuplex>, SessionError> {
         if let Some(end) = self.end() {
             return Err(SessionError::Ended(end));
@@ -679,7 +680,7 @@ async fn pair(
 
 /// Runs one handshake exchange within `limit`. A failure other than the
 /// box's own answer (a protocol mismatch, a refusal, a refused pairing code) is replaced
-/// by the pipe's error when the pipe died, which usually says why.
+/// by the connection's failure reason when it failed, which usually says why.
 async fn within<T>(
     connection: &dyn Connection,
     limit: Duration,
@@ -700,10 +701,11 @@ async fn within<T>(
     }
 }
 
-/// How long a lost stream waits for the connection to report the pipe's error.
+/// How long a lost stream waits for the connection to report why it failed.
 const FAILURE_GRACE: Duration = Duration::from_secs(1);
 
-/// Ends a session that lost its control stream, preferring the pipe's own error.
+/// Ends a session that lost its control stream, preferring the connection's
+/// failure reason.
 async fn lost(connection: &dyn Connection) -> SessionEnd {
     match connection.failure_within(FAILURE_GRACE).await {
         Some(reason) => SessionEnd::Failed(reason),

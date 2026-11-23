@@ -1,6 +1,6 @@
-//! Per-stream framing and the messages exchanged over the mux.
+//! Per-stream framing and the messages exchanged on a connection's streams.
 //!
-//! Every mux stream starts with framed messages. A frame body is a big-endian
+//! Every stream starts with framed messages. A frame body is a big-endian
 //! `u32` header length, a JSON header, then an optional binary payload, so
 //! sync chunks travel without base64 while everything else stays inspectable.
 
@@ -100,7 +100,7 @@ impl std::fmt::Debug for Secret {
 /// Frames above this size are rejected before allocation.
 pub(crate) const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 
-/// Malformed or failed framing on one mux stream.
+/// Malformed or failed framing on one stream.
 #[derive(Debug, thiserror::Error)]
 pub enum WireError {
     /// Reading or writing the stream failed.
@@ -191,7 +191,7 @@ impl Encoder<Frame> for FrameCodec {
     }
 }
 
-/// A mux stream wrapped in [`FrameCodec`].
+/// A stream wrapped in [`FrameCodec`].
 pub(crate) type Channel<S> = Framed<S, FrameCodec>;
 
 /// Starts framing on `io`.

@@ -11,7 +11,7 @@ use tokio::time::Instant;
 
 /// How long a half-closed connection may stay silent before both sides close.
 ///
-/// A peer that sent FIN but never closes its read side would otherwise hold a mux
+/// A peer that sent FIN but never closes its read side would otherwise hold a
 /// stream (and a socket) forever.
 pub const HALF_CLOSE_IDLE: Duration = Duration::from_secs(60);
 
