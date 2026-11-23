@@ -721,8 +721,17 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
         .collect();
     let names = |keep: &dyn Fn(&Found) -> bool| join(&browser_names(&registrations, keep));
     let registered = join(&registered_names(&registrations));
-    let mut missing = names(&|found| *found == Found::Missing);
-    let mut stale = names(&|found| matches!(found, Found::Stale { .. } | Found::Unreadable(_)));
+    let is_stale = |found: &Found| matches!(found, Found::Stale { .. } | Found::Unreadable(_));
+    let stale_names = browser_names(&registrations, &is_stale);
+    // A browser with one missing key and one stale one is named once, as
+    // refreshed, since it has a registration already.
+    let mut missing = join(
+        &browser_names(&registrations, &|found| *found == Found::Missing)
+            .into_iter()
+            .filter(|name| !stale_names.contains(name))
+            .collect::<Vec<_>>(),
+    );
+    let mut stale = join(&stale_names);
     let mut kept: Vec<String> = Vec::new();
     for registration in &registrations {
         if let Found::Kept { runs } = &registration.found {
@@ -2040,7 +2049,13 @@ mod tests {
             Some(1),
             "{report}"
         );
-        registry::write_string(&location.key("Chromium"), "", &copy).expect("chromium key");
+        // With Chrome's key gone too, Brave is still named once.
+        registry::delete_tree(&location.key("Google/Chrome")).expect("delete chrome key");
+        assert_eq!(
+            check().2,
+            "setup refreshes the browser extension host for Brave"
+        );
+        apply(&location, &install, &inspect(&location, &install)).expect("apply");
 
         install_browsers(&location, &[Browser::VIVALDI]);
         apply(&location, &install, &inspect(&location, &install)).expect("apply");
