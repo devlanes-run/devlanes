@@ -1213,6 +1213,8 @@ mod tests {
 
     #[cfg(windows)]
     impl Drop for TestKey {
+        /// Deletes the key and everything under it. A failure is ignored,
+        /// since `drop` can't return it.
         fn drop(&mut self) {
             let _ = registry::delete_tree(&self.0);
         }
