@@ -1618,6 +1618,25 @@ mod tests {
         assert!(is_link(&other), "a hand-made link is the user's");
     }
 
+    /// When setup creates `~/.devlanes` for the manifest copy, only this user
+    /// can reach it, as when the client creates the devlanes home.
+    #[cfg(unix)]
+    #[test]
+    fn setup_creates_the_devlanes_folder_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let location = location(&temp.path().join("user"), Layout::Linux, String::new());
+        std::fs::create_dir_all(&location.home).expect("home");
+        let install = script(&temp.path().join("bin").join("devlanes"));
+        apply(&location, &install, &inspect(&location, &install)).expect("apply");
+        assert!(location.copy().is_file());
+        let mode = std::fs::metadata(location.home.join(".devlanes"))
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0, "{mode:o}");
+    }
+
     /// The plan of the facts at `location` for `install`.
     fn facts_plan(location: &Location, install: &Install) -> (bool, bool, String) {
         plan(&facts(Some(location), install.clone()))
