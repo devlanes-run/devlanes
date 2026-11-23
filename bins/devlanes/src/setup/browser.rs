@@ -9,6 +9,12 @@
 //! `%USERPROFILE%\.devlanes\browser\` and each installed browser's key
 //! points at it.
 //!
+//! That file, `~/.devlanes/browser/run.devlanes.browser.json`, is kept on
+//! every OS, so a user with a Chromium browser outside the list can link it
+//! into that browser's `NativeMessagingHosts` folder or point a key at it.
+//! A link to it in a listed browser's folder counts as this install's
+//! registration. A link or key for any other browser is the user's.
+//!
 //! The step never counts as missing. `setup` applies it with the other steps,
 //! `--check` only reports it, and `--remove` deletes only what runs this
 //! install.
@@ -251,8 +257,9 @@ impl Location {
         base.join(browser.folder(self.layout).unwrap_or_default())
     }
 
-    /// The one manifest of the Windows layout.
-    fn windows_manifest(&self) -> PathBuf {
+    /// The copy of the manifest setup keeps on every OS, for a browser that
+    /// isn't on the list. On Windows every key names it.
+    fn copy(&self) -> PathBuf {
         self.home
             .join(".devlanes")
             .join("browser")
@@ -390,6 +397,9 @@ pub(crate) struct Registration {
     /// Whether the browser's user data folder exists. On Windows a key can
     /// outlive its browser, and `--remove` still deletes it when it's ours.
     pub(crate) installed: bool,
+    /// macOS and Linux: the manifest is a symlink to [`Location::copy`],
+    /// so writing the copy keeps it current.
+    pub(crate) linked: bool,
 }
 
 impl Registration {
@@ -414,32 +424,52 @@ pub(crate) enum Facts {
     Found {
         install: Install,
         registrations: Vec<Registration>,
-        /// Windows: the shared manifest another working install holds,
-        /// which a build leaves alone.
-        held: Option<Held>,
+        copy: ManifestCopy,
     },
 }
 
-/// The shared Windows manifest, when it runs another install whose binary
-/// exists and setup runs from a `Source` or `Local` build. Every key names
-/// that one file, so the build can't register any browser without taking
-/// the others over.
+/// The manifest copy at [`Location::copy`], as setup found it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Held {
-    pub(crate) manifest: PathBuf,
-    /// The program the manifest starts.
-    pub(crate) runs: PathBuf,
+pub(crate) struct ManifestCopy {
+    pub(crate) path: PathBuf,
+    /// [`Found::Kept`] when another working install holds it and setup runs
+    /// from a `Source` or `Local` build, which then leaves it alone.
+    pub(crate) found: Found,
+    /// Windows: every key names this file, so while another install holds
+    /// it a build can't register any browser without taking the others over.
+    pub(crate) named_by_keys: bool,
 }
 
-/// The [`Held`] shared manifest at `location` for `install`, if any. Blocking.
-fn held(location: &Location, install: &Install) -> Option<Held> {
-    if location.layout != Layout::Windows {
-        return None;
+impl ManifestCopy {
+    /// Whether setup writes the copy.
+    fn to_write(&self) -> bool {
+        matches!(
+            self.found,
+            Found::Missing | Found::Stale { .. } | Found::Unreadable(_)
+        )
     }
-    let manifest = location.windows_manifest();
-    match found_of(read_manifest(&manifest, &install.manifest()), install) {
-        Found::Kept { runs } => Some(Held { manifest, runs }),
-        _ => None,
+
+    /// The program another install's copy starts, when a build leaves it
+    /// alone.
+    fn held(&self) -> Option<&Path> {
+        match &self.found {
+            Found::Kept { runs } => Some(runs),
+            _ => None,
+        }
+    }
+}
+
+/// The manifest copy at `location` for `install`. Blocking.
+fn copy_of(location: &Location, install: &Install) -> ManifestCopy {
+    let path = location.copy();
+    let found = match read_manifest(&path, &install.manifest()) {
+        Manifest::Missing => Found::Missing,
+        manifest => found_of(manifest, install),
+    };
+    ManifestCopy {
+        path,
+        found,
+        named_by_keys: location.layout == Layout::Windows,
     }
 }
 
@@ -512,10 +542,17 @@ pub(crate) fn inspect(location: &Location, install: &Install) -> Vec<Registratio
                 return inspect_key(location, install, &expected, browser, installed);
             }
             let file = location.unix_manifest(browser);
+            let linked = links_to(&file, &location.copy());
             let found = if !installed {
                 Found::NoBrowser
             } else {
                 match read_manifest(&file, &expected) {
+                    // A link to the copy after the copy was deleted with
+                    // `.devlanes`: devlanes' own to clean up, as on Windows.
+                    Manifest::Missing if linked => Found::Stale {
+                        runs: None,
+                        ours: true,
+                    },
                     Manifest::Missing => Found::Missing,
                     manifest => found_of(manifest, install),
                 }
@@ -525,9 +562,38 @@ pub(crate) fn inspect(location: &Location, install: &Install) -> Vec<Registratio
                 place: file.display().to_string(),
                 found,
                 installed,
+                linked,
             }
         })
         .collect()
+}
+
+/// Whether `file` is a symlink whose target is `copy`, whether or not the
+/// target exists. Blocking.
+fn links_to(file: &Path, copy: &Path) -> bool {
+    let Ok(target) = std::fs::read_link(file) else {
+        return false;
+    };
+    // A relative target is relative to the link's folder. It is resolved
+    // without the filesystem, since the copy may be gone.
+    let target = match file.parent() {
+        Some(dir) => dir.join(target),
+        None => target,
+    };
+    let mut resolved = PathBuf::new();
+    for component in target.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => resolved.push(other),
+        }
+    }
+    // A home reached through a symlink spells the same file differently.
+    let canonical = |path: &Path| dunce::canonicalize(path).ok();
+    same_path(&resolved, copy)
+        || canonical(&resolved).is_some_and(|target| Some(target) == canonical(copy))
 }
 
 /// The Windows registration of `browser`: its key, and the manifest it names.
@@ -547,7 +613,7 @@ fn inspect_key(
         Err(error) => Found::Unreadable(error.to_string()),
         Ok(Some(named)) => {
             let named = PathBuf::from(named);
-            let own_file = same_path(&named, &location.windows_manifest());
+            let own_file = same_path(&named, &location.copy());
             match found_of(read_manifest(&named, expected), install) {
                 // A key that names the file setup writes, after that file
                 // was deleted with `.devlanes`, is devlanes' own to clean up.
@@ -575,6 +641,7 @@ fn inspect_key(
         place: format!(r"HKCU\{key}"),
         found,
         installed,
+        linked: false,
     }
 }
 
@@ -588,15 +655,16 @@ pub(crate) fn facts(location: Option<&Location>, install: Install) -> Facts {
     }
     Facts::Found {
         registrations: inspect(location, &install),
-        held: held(location, &install),
+        copy: copy_of(location, &install),
         install,
     }
 }
 
 /// `(needed, done, reason)` of the step. `needed` means there is a browser to
-/// register for, and the step never counts as missing either way.
+/// register for or a manifest copy to keep, and the step never counts as
+/// missing either way.
 pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
-    let (install, registrations, held) = match facts {
+    let (install, registrations, copy) = match facts {
         Facts::NoHome => {
             return (
                 false,
@@ -608,8 +676,8 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
         Facts::Found {
             install,
             registrations,
-            held,
-        } => (install, registrations, held),
+            copy,
+        } => (install, registrations, copy),
     };
     // A key left behind for a browser that's gone is only `--remove`'s.
     let registrations: Vec<&Registration> = registrations
@@ -639,20 +707,29 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
             _ => None,
         })
         .collect();
-    // Writing any key would rewrite the shared manifest the kept keys name.
-    if let Some(held) = held {
-        let blocked = names(&|found| {
-            matches!(
-                found,
-                Found::Missing | Found::Stale { .. } | Found::Unreadable(_)
-            )
-        });
-        (missing, stale) = (None, None);
-        if let Some(blocked) = blocked {
+    if let Some(runs) = copy.held() {
+        if copy.named_by_keys {
+            // Writing any key would rewrite the shared manifest the kept
+            // keys name.
+            let blocked = names(&|found| {
+                matches!(
+                    found,
+                    Found::Missing | Found::Stale { .. } | Found::Unreadable(_)
+                )
+            });
+            (missing, stale) = (None, None);
+            if let Some(blocked) = blocked {
+                kept.push(format!(
+                    "{blocked} can't be registered: the shared manifest {} runs {}, another devlanes install, and a build doesn't replace it",
+                    copy.path.display(),
+                    runs.display()
+                ));
+            }
+        } else {
             kept.push(format!(
-                "{blocked} can't be registered: the shared manifest {} runs {}, another devlanes install, and a build doesn't replace it",
-                held.manifest.display(),
-                held.runs.display()
+                "The manifest copy {} runs {}, another devlanes install, and a build doesn't replace it",
+                copy.path.display(),
+                runs.display()
             ));
         }
     }
@@ -667,31 +744,39 @@ pub(crate) fn plan(facts: &Facts) -> (bool, bool, String) {
         .flatten()
         .map(|sentence| format!(". {}", capitalise(sentence)))
         .collect::<String>();
-    if registered.is_none() && missing.is_none() && stale.is_none() {
-        let reason = match kept {
-            Some(kept) => kept,
-            None => "none of the browsers devlanes registers is installed".into(),
-        };
-        return (false, false, reason);
-    }
     let host = "the browser extension host";
+    let verb = if copy.found == Found::Missing {
+        "writes"
+    } else {
+        "refreshes"
+    };
+    let copy_line = format!(
+        "{verb} the manifest copy for other Chromium browsers at {}",
+        copy.path.display()
+    );
     let mut reason = match (missing, stale) {
-        (None, None) => {
-            let registered = registered.unwrap_or_default();
-            return (
-                true,
-                true,
-                format!("{host} is registered for {registered}{note}"),
-            );
-        }
         (Some(missing), None) => format!("setup registers {host} for {missing}"),
         (None, Some(stale)) => format!("setup refreshes {host} for {stale}"),
         (Some(missing), Some(stale)) => {
             format!("setup registers {host} for {missing} and refreshes it for {stale}")
         }
+        // The copy is named only when it is all setup writes.
+        (None, None) if copy.to_write() => format!("setup {copy_line}"),
+        (None, None) => {
+            let reason = match (&registered, &kept) {
+                (Some(registered), _) => format!("{host} is registered for {registered}{note}"),
+                (None, Some(kept)) => return (false, false, kept.clone()),
+                (None, None) => format!(
+                    "none of the browsers devlanes registers is installed. The manifest copy for other Chromium browsers is at {}{note}",
+                    copy.path.display()
+                ),
+            };
+            return (true, true, reason);
+        }
     };
     if let Some(registered) = registered {
-        reason.push_str(&format!(", and it is registered for {registered}"));
+        let subject = if reason.contains(host) { "it" } else { host };
+        reason.push_str(&format!(", and {subject} is registered for {registered}"));
     }
     (true, false, format!("{reason}{note}"))
 }
@@ -773,8 +858,8 @@ fn write_manifest(file: &Path, manifest: &Value) -> Result<(), BrowserError> {
     Ok(())
 }
 
-/// Creates `<home>\.devlanes` private when it is missing, as the client
-/// creates the devlanes home, since the Windows manifest goes inside it.
+/// Creates `~/.devlanes` private when it is missing, as the client creates
+/// the devlanes home, since the manifest copy goes inside it.
 fn devlanes_folder(location: &Location) -> Result<(), BrowserError> {
     let folder = location.home.join(".devlanes");
     if folder.exists() {
@@ -791,15 +876,27 @@ fn devlanes_folder(location: &Location) -> Result<(), BrowserError> {
                 source,
             })
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&folder)
+            .map_err(|source| BrowserError::Write {
+                path: folder.clone(),
+                source,
+            })
+    }
+    #[cfg(not(any(unix, windows)))]
     std::fs::create_dir_all(&folder).map_err(|source| BrowserError::Write {
         path: folder.clone(),
         source,
     })
 }
 
-/// Writes the registrations of `registrations` that aren't current, and
-/// returns a line for each. Blocking.
+/// Writes the manifest copy and the registrations of `registrations` that
+/// aren't current, and returns a line for each. Blocking.
 pub(crate) fn apply(
     location: &Location,
     install: &Install,
@@ -811,17 +908,19 @@ pub(crate) fn apply(
     let manifest = install.manifest();
     let mut lines = Vec::new();
     let todo: Vec<&Registration> = registrations.iter().filter(|r| r.to_write()).collect();
-    if location.layout == Layout::Windows {
-        // Every key names the shared manifest, so with another install
-        // holding it a build writes neither the file nor any key.
-        if todo.is_empty() || held(location, install).is_some() {
-            return Ok(lines);
-        }
-        let file = location.windows_manifest();
+    let copy = copy_of(location, install);
+    // On Windows every key names the copy, so with another install holding
+    // it a build writes neither the file nor any key.
+    if copy.held().is_some() && copy.named_by_keys {
+        return Ok(lines);
+    }
+    if copy.to_write() {
         devlanes_folder(location)?;
-        write_manifest(&file, &manifest)?;
-        lines.push(format!("wrote {}", file.display()));
-        let value = file.to_string_lossy();
+        write_manifest(&copy.path, &manifest)?;
+        lines.push(format!("wrote {}", copy.path.display()));
+    }
+    if location.layout == Layout::Windows {
+        let value = copy.path.to_string_lossy();
         // A browser's channels share one key, so each key is written once.
         let mut written: Vec<String> = Vec::new();
         for registration in todo {
@@ -840,7 +939,11 @@ pub(crate) fn apply(
         return Ok(lines);
     }
     for registration in todo {
-        write_manifest(&location.unix_manifest(registration.browser), &manifest)?;
+        // A link to the copy is current once the copy is, and replacing it
+        // with a file would undo the user's link.
+        if !registration.linked {
+            write_manifest(&location.unix_manifest(registration.browser), &manifest)?;
+        }
         lines.push(registered(registration));
     }
     Ok(lines)
@@ -913,21 +1016,19 @@ pub(crate) fn removal(location: &Location, install: &Install) -> Removal {
             removal.keep.push(line);
         }
     }
-    // The Windows manifest goes with this install's keys, or alone when no
-    // key names it any more.
-    if location.layout == Layout::Windows {
-        let file = location.windows_manifest();
-        match read_manifest(&file, &install.manifest()) {
-            Manifest::Runs { path, .. } if same_path(&path, &install.entry) => {
-                removal.delete.push(Target::File(file));
-            }
-            Manifest::Runs { path, .. } => removal.keep.push(format!(
-                "left {} in place: {}",
-                file.display(),
-                another_install(&path)
-            )),
-            Manifest::Missing | Manifest::Unreadable(_) => {}
+    // The copy goes last, after the links and keys that name it. A link or
+    // key the user made for a browser outside the list is theirs to delete.
+    let file = location.copy();
+    match read_manifest(&file, &install.manifest()) {
+        Manifest::Runs { path, .. } if same_path(&path, &install.entry) => {
+            removal.delete.push(Target::File(file));
         }
+        Manifest::Runs { path, .. } => removal.keep.push(format!(
+            "left {} in place: {}",
+            file.display(),
+            another_install(&path)
+        )),
+        Manifest::Missing | Manifest::Unreadable(_) => {}
     }
     removal
 }
@@ -1228,7 +1329,7 @@ mod tests {
             let facts = Facts::Found {
                 install: install.clone(),
                 registrations: registrations.clone(),
-                held: None,
+                copy: copy_of(&location, &install),
             };
             assert_eq!(
                 plan(&facts),
@@ -1240,10 +1341,19 @@ mod tests {
                 )
             );
             let lines = apply(&location, &install, &registrations).expect("apply");
-            assert_eq!(lines.len(), 2, "{lines:?}");
-            assert!(
-                lines[0].starts_with("registered the browser extension host for Chrome: "),
+            assert_eq!(lines.len(), 3, "{lines:?}");
+            assert_eq!(
+                lines[0],
+                format!("wrote {}", location.copy().display()),
                 "{lines:?}"
+            );
+            assert!(
+                lines[1].starts_with("registered the browser extension host for Chrome: "),
+                "{lines:?}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(location.copy()).expect("copy"),
+                std::fs::read_to_string(manifest(Browser::CHROME)).expect("manifest")
             );
             let written: Value = serde_json::from_str(
                 &std::fs::read_to_string(manifest(Browser::CHROME)).expect("read"),
@@ -1270,7 +1380,7 @@ mod tests {
                 plan(&Facts::Found {
                     install: install.clone(),
                     registrations: inspect(&location, &install),
-                    held: None,
+                    copy: copy_of(&location, &install),
                 })
                 .1
             );
@@ -1334,8 +1444,12 @@ mod tests {
             let removal = removal(&location, &install);
             assert_eq!(
                 removal.delete,
-                [Browser::CHROME, Browser::CHROMIUM, Browser::BRAVE]
-                    .map(|browser| Target::File(manifest(browser)))
+                [
+                    Target::File(manifest(Browser::CHROME)),
+                    Target::File(manifest(Browser::CHROMIUM)),
+                    Target::File(manifest(Browser::BRAVE)),
+                    Target::File(location.copy()),
+                ]
             );
             assert_eq!(removal.keep.len(), 1, "{removal:?}");
             assert!(
@@ -1345,10 +1459,11 @@ mod tests {
                 )),
                 "{removal:?}"
             );
-            assert_eq!(delete(&removal).expect("delete").len(), 3);
+            assert_eq!(delete(&removal).expect("delete").len(), 4);
             for browser in [Browser::CHROME, Browser::CHROMIUM, Browser::BRAVE] {
                 assert!(!manifest(browser).exists(), "{browser:?}");
             }
+            assert!(!location.copy().exists());
             assert_eq!(
                 std::fs::read_to_string(manifest(Browser::EDGE)).expect("read"),
                 other_manifest(&other)
@@ -1416,6 +1531,91 @@ mod tests {
         );
         assert_eq!(Browser::EDGE_CANARY.key(), r"Microsoft\Edge");
         assert_eq!(folder(Browser::ARC, Layout::Windows), None);
+    }
+
+    /// A link to the manifest copy is this install's registration: setup
+    /// keeps it current by writing the copy and leaves the link in place,
+    /// `--remove` deletes the link and the copy, and a link whose copy is
+    /// gone is reported and removed like a Windows key whose manifest is
+    /// gone. A link the user made for a browser outside the list stays.
+    #[cfg(unix)]
+    #[test]
+    fn links_to_the_copy_follow_it() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().expect("tempdir");
+        let location = location(&temp.path().join("user"), Layout::Linux, String::new());
+        install_browsers(
+            &location,
+            &[Browser::CHROME, Browser::CHROMIUM, Browser::BRAVE],
+        );
+        let install = script(&temp.path().join("bin").join("devlanes"));
+        apply(&location, &install, &inspect(&location, &install)).expect("apply");
+        let copy = location.copy();
+        let is_link = |path: &Path| {
+            std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+        };
+        // Brave links to the copy by its full path, Chromium relatively.
+        let brave = location.unix_manifest(Browser::BRAVE);
+        std::fs::remove_file(&brave).expect("remove");
+        symlink(&copy, &brave).expect("link");
+        let chromium = location.unix_manifest(Browser::CHROMIUM);
+        std::fs::remove_file(&chromium).expect("remove");
+        let relative: PathBuf = ["..", "..", "..", ".devlanes", "browser"]
+            .iter()
+            .collect::<PathBuf>()
+            .join(manifest_name());
+        symlink(&relative, &chromium).expect("link");
+        // A browser outside the list, linked by hand.
+        let other = location
+            .home
+            .join(".config")
+            .join("thorium")
+            .join("NativeMessagingHosts")
+            .join(manifest_name());
+        std::fs::create_dir_all(other.parent().expect("parent")).expect("folder");
+        symlink(&copy, &other).expect("link");
+
+        // An outdated copy makes both links outdated, and setup rewrites
+        // only the copy.
+        std::fs::write(&copy, other_manifest(&install.entry)).expect("outdated copy");
+        let registrations = inspect(&location, &install);
+        for registration in registrations.iter().filter(|r| r.linked) {
+            assert_eq!(
+                registration.found,
+                Found::Stale {
+                    runs: Some(install.entry.clone()),
+                    ours: true
+                }
+            );
+        }
+        assert_eq!(registrations.iter().filter(|r| r.linked).count(), 2);
+        apply(&location, &install, &registrations).expect("apply");
+        assert!(is_link(&brave) && is_link(&chromium));
+        assert_eq!(
+            founds(&location, &install),
+            [
+                Found::Current,
+                Found::Current,
+                Found::NoBrowser,
+                Found::Current
+            ]
+        );
+
+        // The copy is gone: the links are devlanes' own to clean up.
+        std::fs::remove_file(&copy).expect("delete copy");
+        let report = report(&location, &install);
+        assert_eq!(report["stale"][0]["browser"], "Chromium", "{report}");
+        assert_eq!(report["stale"][0]["runs"], Value::Null, "{report}");
+        assert_eq!(report["stale"][0]["ours"], true, "{report}");
+        let removal = removal(&location, &install);
+        assert_eq!(
+            removal.delete,
+            [Browser::CHROME, Browser::CHROMIUM, Browser::BRAVE]
+                .map(|browser| Target::File(location.unix_manifest(browser)))
+        );
+        delete(&removal).expect("delete");
+        assert!(!is_link(&brave) && !is_link(&chromium));
+        assert!(is_link(&other), "a hand-made link is the user's");
     }
 
     /// The plan of the facts at `location` for `install`.
@@ -1510,7 +1710,7 @@ mod tests {
             let (needed, done, reason) = plan(&Facts::Found {
                 install: install.clone(),
                 registrations: registrations.clone(),
-                held: None,
+                copy: copy_of(&location, &install),
             });
             assert!(needed && !done);
             // The whole line, so a doubled ". " or a trailing space shows.
@@ -1530,7 +1730,11 @@ mod tests {
             assert_eq!(report["stale"][0]["kept"], true, "{report}");
             assert_eq!(report["stale"][1]["kept"], false, "{report}");
             let lines = apply(&location, &install, &registrations).expect("apply");
-            assert_eq!(lines.len(), 1, "{lines:?}");
+            let registered = lines
+                .iter()
+                .filter(|line| line.starts_with("registered"))
+                .count();
+            assert_eq!(registered, 1, "{lines:?}");
             assert_eq!(
                 std::fs::read_to_string(location.unix_manifest(Browser::CHROME)).expect("read"),
                 other_manifest(&other)
@@ -1666,7 +1870,7 @@ mod tests {
         let other = temp.path().join("other").join("devlanes.exe");
         std::fs::create_dir_all(other.parent().expect("parent")).expect("other");
         std::fs::write(&other, "").expect("other binary");
-        let shared = location.windows_manifest();
+        let shared = location.copy();
         std::fs::create_dir_all(shared.parent().expect("parent")).expect("browser folder");
         std::fs::write(&shared, other_manifest(&other)).expect("shared manifest");
         for browser in [Browser::CHROME, Browser::CHROMIUM, Browser::BRAVE] {
@@ -1682,19 +1886,14 @@ mod tests {
         let facts = facts(Some(&location), install.clone());
         let Facts::Found {
             registrations,
-            held,
+            copy,
             ..
         } = &facts
         else {
             panic!("{facts:?}");
         };
-        assert_eq!(
-            held,
-            &Some(Held {
-                manifest: shared.clone(),
-                runs: other.clone()
-            })
-        );
+        assert_eq!(copy.path, shared);
+        assert_eq!(copy.held(), Some(other.as_path()));
         let (needed, done, reason) = plan(&facts);
         assert!(!needed && !done, "{reason}");
         assert!(
@@ -1739,12 +1938,8 @@ mod tests {
         apply(&location, &install, &inspect(&location, &install)).expect("apply");
         // As if Vivaldi was registered, then uninstalled.
         let vivaldi = location.key(Browser::VIVALDI);
-        registry::write_string(
-            &vivaldi,
-            "",
-            &location.windows_manifest().display().to_string(),
-        )
-        .expect("vivaldi key");
+        registry::write_string(&vivaldi, "", &location.copy().display().to_string())
+            .expect("vivaldi key");
         std::fs::remove_dir_all(location.home.join(".devlanes")).expect("delete .devlanes");
         let elsewhere = temp.path().join("missing.json");
         let edge = location.key(Browser::EDGE);

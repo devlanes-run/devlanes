@@ -1348,9 +1348,17 @@ mod tests {
         );
     }
 
+    /// Where [`browser_facts`] puts the manifest copy.
+    const COPY: &str = "/home/a/.devlanes/browser/run.devlanes.browser.json";
+
     /// Browser facts with Chrome, Chromium, Brave and Edge found as `found`
-    /// says, in that order, for a script install.
+    /// says, in that order, for a script install, with a current copy.
     fn browser_facts(found: &[browser::Found]) -> browser::Facts {
+        browser_facts_with(found, browser::Found::Current)
+    }
+
+    /// [`browser_facts`] with the manifest copy found as `copy`.
+    fn browser_facts_with(found: &[browser::Found], copy: browser::Found) -> browser::Facts {
         browser::Facts::Found {
             install: browser::Install::new(
                 devlanes_update::InstallMethod::Script("/opt/devlanes".into()),
@@ -1369,9 +1377,14 @@ mod tests {
                 place: format!("/home/a/{}", browser.name()),
                 found: found.clone(),
                 installed: *found != browser::Found::NoBrowser,
+                linked: false,
             })
             .collect(),
-            held: None,
+            copy: browser::ManifestCopy {
+                path: COPY.into(),
+                found: copy,
+                named_by_keys: false,
+            },
         }
     }
 
@@ -1389,14 +1402,16 @@ mod tests {
             trust: Trust::Trusted,
             ..fresh()
         };
-        for (found, state) in [
-            (vec![Missing, NoBrowser], "info"),
-            (vec![Current, NoBrowser], "ok"),
-            (vec![stale.clone(), Current], "info"),
-            (vec![NoBrowser, NoBrowser], "skip"),
+        for (browser, state) in [
+            (browser_facts(&[Missing, NoBrowser]), "info"),
+            (browser_facts(&[Current, NoBrowser]), "ok"),
+            (browser_facts(&[stale.clone(), Current]), "info"),
+            (browser_facts(&[NoBrowser, NoBrowser]), "ok"),
+            (browser_facts_with(&[NoBrowser, NoBrowser], Missing), "info"),
+            (browser::Facts::Refused("pipx run".into()), "skip"),
         ] {
             let facts = Facts {
-                browser: browser_facts(&found),
+                browser,
                 ..done.clone()
             };
             let steps = plan(&facts);
@@ -1458,7 +1473,20 @@ mod tests {
         );
         assert_eq!(
             reason(&[NoBrowser]),
-            "none of the browsers devlanes registers is installed"
+            format!(
+                "none of the browsers devlanes registers is installed. The manifest copy for other Chromium browsers is at {COPY}"
+            )
+        );
+        // The copy is named only when it is all setup writes.
+        assert_eq!(
+            browser::plan(&browser_facts_with(&[Current], Missing)).2,
+            format!(
+                "setup writes the manifest copy for other Chromium browsers at {COPY}, and the browser extension host is registered for Chrome"
+            )
+        );
+        assert_eq!(
+            browser::plan(&browser_facts_with(&[Missing], Missing)).2,
+            "setup registers the browser extension host for Chrome"
         );
     }
 
@@ -1496,6 +1524,11 @@ mod tests {
         // A fresh home has no CA, so the exit status is 1 from the CA alone.
         assert_eq!(check().await.expect("check"), 1);
         assert!(!manifest.exists(), "--check wrote a manifest");
+        let copy = user
+            .join(".devlanes")
+            .join("browser")
+            .join("run.devlanes.browser.json");
+        assert!(!copy.exists(), "--check wrote the manifest copy");
         let stale = r#"{"name": "run.devlanes.browser", "path": "/gone/devlanes"}"#;
         std::fs::create_dir_all(&hosts).expect("hosts folder");
         std::fs::write(&manifest, stale).expect("stale manifest");
@@ -1510,6 +1543,7 @@ mod tests {
         .expect_err("needs --yes");
         assert_eq!(error.code, "confirmation_required");
         assert_eq!(std::fs::read_to_string(&manifest).expect("manifest"), stale);
+        assert!(!copy.exists(), "setup wrote the manifest copy");
         assert!(!paths.home.join("ca").exists(), "setup created the CA");
     }
 
