@@ -39,7 +39,7 @@ The extension doesn't keep the daemon running, so the daemon can stop while the 
 
 ## Open this page in another lane
 
-On a lane's page, open the popup and pick another lane of the project under "Open this page in". The extension opens the same service on that lane and keeps the path, query and hash. On a wildcard hostname, such as a tenant page, it keeps the tenant.
+On a lane's page, open the popup and pick another lane of the project under "Open this page in". The extension opens the same service on that lane and keeps the path, query and hash. On a wildcard hostname, such as a tenant page, it keeps the tenant. When the other lane has no route for the service, it opens that lane's first route.
 
 ## Switch which box serves a lane
 
