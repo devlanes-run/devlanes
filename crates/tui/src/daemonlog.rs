@@ -369,7 +369,7 @@ pub fn shown(entries: &[Entry], filters: &Filters) -> Vec<Shown> {
 pub fn local(time: &str, zone: &jiff::tz::TimeZone) -> (String, String) {
     match time.parse::<jiff::Timestamp>() {
         Ok(stamp) => {
-            let zoned = stamp.to_zoned(zone.clone());
+            let zoned = stamp.to_zoned_datetime(zone.clone());
             (
                 zoned.strftime("%Y-%m-%d").to_string(),
                 zoned.strftime("%H:%M:%S").to_string(),

@@ -1258,7 +1258,7 @@ fn when(app: &App, ms: u64) -> String {
         return String::new();
     };
     stamp
-        .to_zoned(app.time_zone.clone())
+        .to_zoned_datetime(app.time_zone.clone())
         .strftime("%Y-%m-%d %H:%M")
         .to_string()
 }
