@@ -22,7 +22,7 @@ diesel = { version = "2.3", default-features = false, features = ["sqlite", "ret
 # most tools cannot use.
 dunce = "1"
 futures-util = { version = "0.3", features = ["sink"] }
-getrandom = "0.3"
+getrandom = "0.4"
 # SCSS for the stylesheets crates/pages compiles at build time.
 grass = { version = "0.13", default-features = false }
 # Agent detection: the CLI's actor and output mode, the agent markers lane units
