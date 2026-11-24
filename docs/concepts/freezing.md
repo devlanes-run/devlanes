@@ -4,7 +4,7 @@ description: An unused lane is slowed down, then frozen, and thaws on the next r
 kind: concept
 ---
 
-A machine with several lanes runs several copies of each dev server and watcher, and many of them sit unused while you work in one lane. devlanes slows an unused lane down, then freezes it, and thaws it when something uses it again. Its processes are not stopped or restarted along the way, so the lane comes back where it was.
+A machine with several lanes runs several copies of each dev server and watcher, and many of them sit unused while you work in one lane. devlanes slows an unused lane down, then freezes it, and thaws it when something uses it again. Its processes are not stopped or restarted, so the lane comes back where it was.
 
 ## An unused lane is throttled, then frozen
 

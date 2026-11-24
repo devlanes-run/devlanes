@@ -16,7 +16,7 @@ $ git worktree add ../myapp-perf -b agent/perf
 $ devlanes start
 ```
 
-The worktree becomes lane 2, with its own database and its own hostnames, `api.myapp2.localhost` and `myapp2.localhost`. A dev server an agent starts in its shell's background tends to die with that shell, so the agent hands its services to the daemon instead. devlanes notices that an agent runs it and answers in a shorter format meant for agents.
+The worktree becomes lane 2, with its own database and its own hostnames, `api.myapp2.localhost` and `myapp2.localhost`. A dev server an agent starts in its shell's background often dies with that shell, so the agent hands its services to the daemon instead. devlanes notices that an agent runs it and answers in a shorter format meant for agents.
 
 The agent learns these commands from the devlanes skill, which [Set up a coding agent](../how-to/agents/set-up.md) installs.
 

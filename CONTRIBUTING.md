@@ -244,7 +244,7 @@ Linking client and daemon: add `trace: Option<String>` to `devlanes_proto::Conte
 
 Dependency cost: `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp` and `tracing-opentelemetry`. The OTLP exporter brings either `tonic`, `prost` and `hyper` (gRPC) or an HTTP client (`reqwest` or `hyper`) with `prost` (HTTP/protobuf). The daemon already links `hyper` through the proxy, so HTTP/protobuf over the existing `hyper` adds the least. Measure before deciding: `cargo tree -e normal -p devlanes | wc -l` and the release binary size with and without the change. If the cost matters, put it behind a cargo feature (`otel`) that release builds enable, so the runtime switch stays the environment variable.
 
-Redaction does not change: the same fields become span attributes, so the rules in the previous section apply to exported spans. Log records can be exported as span events; keep that off by default, since `debug` records are numerous.
+Redaction does not change: the same fields become span attributes, so the rules in the previous section apply to exported spans. Log records can be exported as span events; keep that off by default, since there are many `debug` records.
 
 ### Benchmarks
 
@@ -299,7 +299,7 @@ cargo/devlanes-daemon: patch
 Fixed `devlanes start` leaving services stopped after a config reload.
 ```
 
-Write one change file per feature or fix a user would look for in the changelog, not one per adjustment made along the way. Small tweaks and fixes to the same part of devlanes go in one entry, so these two:
+Write one change file per feature or fix a user would look for in the changelog, not one per adjustment made during the work. Small tweaks and fixes to the same part of devlanes go in one entry, so these two:
 
 ```markdown
 Changed the TUI monitor (`M`) to keep each project's shared infra on top and its lanes below in lane order, instead of reordering them by usage.

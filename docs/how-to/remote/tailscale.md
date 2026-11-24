@@ -4,7 +4,7 @@ description: Connect to a box on your tailnet with OpenSSH keys or Tailscale SSH
 kind: how-to
 ---
 
-Your machine reaches a box on your tailnet as it reaches any SSH host, and everything devlanes mirrors travels inside that one SSH connection, so nothing needs Tailscale Serve or Funnel.
+Your machine reaches a box on your tailnet as it reaches any SSH host, and everything devlanes mirrors is sent inside that one SSH connection, so nothing needs Tailscale Serve or Funnel.
 
 ::example{slug="remote-ssh-box"}
 

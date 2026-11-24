@@ -45,7 +45,7 @@ A shell inside the Codex sandbox on Windows cannot open the daemon's pipe, even 
 
 ## Protocol versions
 
-rmcp negotiates every revision it knows: the `initialize` handshake up to 2025-11-25, and `server/discover` with per-request metadata from 2026-07-28. Consent questions are `elicitation/create` requests before 2026-07-28 and an `InputRequiredResult` the client answers by calling again from then on. Clients without elicitation get "ask the user, then rerun with --yes".
+rmcp negotiates every revision it knows: the `initialize` handshake up to 2025-11-25, and `server/discover` with per-request metadata from 2026-07-28. Consent questions are `elicitation/create` requests before 2026-07-28 and an `InputRequiredResult` the client answers by calling again from then on. Clients without elicitation get "ask the user, then rerun with `--yes`".
 
 ## License
 
