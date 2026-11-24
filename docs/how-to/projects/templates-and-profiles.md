@@ -4,7 +4,7 @@ description: Write settings once for services that share them, group services wi
 kind: how-to
 ---
 
-Use this guide when a project has many services that repeat the same settings, and you rarely need all of them running at once.
+Use this guide when a project has many services that repeat settings, and you rarely need all of them running at once.
 
 ::example{slug="workflows-profiles-tags"}
 

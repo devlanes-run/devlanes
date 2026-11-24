@@ -30,7 +30,7 @@ $ devlanes env show api --explain
 
 The lane keeps the environment of the last shell that started, restarted, ran or executed something in it, and uses it for what it starts next. A `devlanes reload` reuses it, while a start or restart from another shell replaces it. After a change in your shell, such as a new `PATH`, restart from that shell so the lane picks it up.
 
-The daemon writes that environment to no file and no log, since it can hold tokens and other secrets. So it does not outlive the daemon: after a reboot each lane waits for one start from a shell ([The daemon](daemon.md)). It is still not hidden from your own programs, since any process running as you can ask the daemon for it ([Security](security.md)).
+The daemon writes that environment to no file and no log, since it can hold tokens and other secrets. It does not outlive the daemon: after a reboot each lane waits for one start from a shell ([The daemon](daemon.md)). It is still not hidden from your own programs, since any process running as you can ask the daemon for it ([Security](security.md)).
 
 ## Expressions are evaluated for each lane
 

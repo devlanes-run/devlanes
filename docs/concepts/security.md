@@ -8,7 +8,7 @@ devlanes runs as your user. Its daemon answers processes of your account and no 
 
 ## Only your account reaches the daemon
 
-The daemon listens on a socket, a named pipe on Windows, that only your account can open, and it turns away callers from other accounts. There is no token or password: the account check is the whole of it.
+The daemon listens on a socket, a named pipe on Windows, that only your account can open, and it turns away callers from other accounts. The daemon has no token or password: the account check is the whole of it.
 
 ```mermaid
 flowchart LR
@@ -28,7 +28,7 @@ flowchart LR
   daemon -- "SSH or a command, then the pairing check" --> boxdaemon
 ```
 
-So any process running as you can do what you can through the daemon: start and stop services, run commands in a lane, read logs and a lane's environment, your shell's secrets included. A dev server, or a dependency's install script, runs as you too and can do the same. A sandboxed process that is allowed to reach the daemon gets the daemon's rights, outside its sandbox; [Use devlanes from an agent sandbox](../how-to/agents/sandboxes.md) covers that case.
+Any process running as you can do what you can through the daemon: start and stop services, run commands in a lane, read logs and a lane's environment, your shell's secrets included. A dev server, or a dependency's install script, runs as you too and can do the same. A sandboxed process that is allowed to reach the daemon gets the daemon's rights, outside its sandbox; [Use devlanes from an agent sandbox](../how-to/agents/sandboxes.md) covers that case.
 
 ## A lane is not a sandbox
 

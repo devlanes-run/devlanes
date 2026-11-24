@@ -11,6 +11,7 @@
 // - a package's `[package.metadata.ci] inputs`, files only its tests read, select that
 //   package alone.
 // Paths are relative to the repository root; one ending in `/` covers a directory.
+// The prose job runs when a Markdown file or the Vale config (`.vale.ini`) changed.
 
 const { execFileSync } = require('node:child_process');
 
@@ -38,6 +39,7 @@ module.exports = async ({ github, context, core }) => {
     e2e: result.affected.has('devlanes') || result.affected.has('devlanes-e2e'),
     web: result.affected.has('devlanes-tui-web'),
     mcp_ui: result.changed.has('devlanes-mcp-ui'),
+    prose: result.prose,
     next: await nextNeeded(),
   };
   for (const [key, value] of Object.entries(outputs)) core.setOutput(key, String(value));
@@ -46,7 +48,7 @@ module.exports = async ({ github, context, core }) => {
   function everything(reason) {
     core.notice(`Running everything: ${reason}.`);
     core.setOutput('tests', '');
-    for (const key of ['lint', 'rust', 'e2e', 'web', 'mcp_ui', 'next']) core.setOutput(key, 'true');
+    for (const key of ['lint', 'rust', 'e2e', 'web', 'mcp_ui', 'prose', 'next']) core.setOutput(key, 'true');
   }
 
   /** The commit this change is compared with, or null to run everything. */
@@ -86,7 +88,8 @@ module.exports = async ({ github, context, core }) => {
 
   /**
    * The packages changed and affected between `from` and HEAD, or 'all'. `assets` says
-   * whether a file in `assetPaths` changed.
+   * whether a file in `assetPaths` changed, and `prose` whether a Markdown file or the
+   * Vale config did.
    */
   async function select(from, assetPaths = []) {
     const files = await changedFiles(from);
@@ -94,9 +97,11 @@ module.exports = async ({ github, context, core }) => {
     const changed = new Set();
     const read = new Set();
     let assets = false;
+    let prose = false;
     for (const file of files) {
       if (file === 'Cargo.toml' || matches(file, workspace.inputs)) return 'all';
       if (matches(file, assetPaths)) assets = true;
+      if (file.endsWith('.md') || file === '.vale.ini') prose = true;
       const pkg = workspace.packageOf(file);
       if (pkg) changed.add(pkg);
       for (const [name, { inputs = [], 'build-inputs': buildInputs = [] }] of workspace.declared) {
@@ -109,7 +114,7 @@ module.exports = async ({ github, context, core }) => {
     }
     const affected = closure(changed, workspace.dependents);
     for (const name of read) affected.add(name);
-    return { changed, affected, assets };
+    return { changed, affected, assets, prose };
   }
 
   /** Paths that differ between `from` and HEAD, or null when there are too many to list. */

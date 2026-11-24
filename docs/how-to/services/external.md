@@ -33,7 +33,7 @@ Run one start in the folder:
 $ devlanes start --no-ui
 ```
 
-There is nothing to start, but the folder becomes a lane of the project and the proxy routes the hostname to port 4800. Open `https://myapp.localhost`: while your server runs, it answers; while it is down, the proxy shows an error page saying nothing listens.
+Nothing needs starting, but the folder becomes a lane of the project and the proxy routes the hostname to port 4800. Open `https://myapp.localhost`: while your server runs, it answers; while it is down, the proxy shows an error page saying nothing listens.
 
 The proxy lives in the daemon, and a daemon that a command started exits a while after the last command. To keep the hostname answering, run the daemon as a login service, as [The daemon](../../concepts/daemon.md) describes.
 

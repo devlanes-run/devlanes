@@ -74,7 +74,7 @@ The lane keeps running as it was, and its status says the config changed and nam
 
 A start leaves running services alone and adds only those the lane lacks. A restart runs the services you name again from the file as it stands. A reload applies the difference between the file and what runs.
 
-So far a person has typed every command. Next, a coding agent gets a worktree of its own and runs a lane there.
+A person has typed every command so far. Next, a coding agent gets a worktree of its own and runs a lane there.
 
 ## On your own project
 

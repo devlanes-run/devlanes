@@ -91,6 +91,7 @@ cargo test --workspace --doc --all-features
 cargo build --workspace --all-targets --all-features
 ```
 
+- Markdown prose is checked with Vale: `vale sync` once, then `git ls-files -z '*.md' | xargs -0 vale`. `.vale.ini` has the rules; fix the text instead of turning a rule off.
 - `.cargo/config.toml` sets `build.warnings = "deny"`, so any rustc or clippy warning fails the build; fix warnings instead of allowing them.
 - Agents build in the shared `target/` directory and never set `CARGO_TARGET_DIR`.
 - Every compile goes through kache (`build.rustc-wrapper` in `.cargo/config.toml`), so it must be installed; see `CONTRIBUTING.md`.

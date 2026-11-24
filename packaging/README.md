@@ -165,7 +165,7 @@ It installs the latest stable release, or with `-Channel next` the latest build 
 
 The npm and PyPI pages show the repository's `README.md`, so they change with it. `scripts/readme.py NOTES_FILE` prints that README with the package's own section, `npm/notes.md` or `pypi/notes.md`, placed before `## Contributing`; `npm/build.sh` writes the result as the launcher's `README.md` and `pypi/build.py` as the wheels' description. Each `@devlanes/<platform>-<arch>` package gets two lines that point at `devlanes`.
 
-Both registries render the text away from the repository, where a relative link or image leads nowhere. So every link and image in `README.md` and in the notes is an absolute URL, such as `https://github.com/devlanes-run/devlanes/blob/main/CONTRIBUTING.md`, and `readme.py` fails the build on one that is not. A README change reaches npm and PyPI with the next release that publishes there.
+Both registries render the text away from the repository, where a relative link or image leads nowhere, so every link and image in `README.md` and in the notes is an absolute URL, such as `https://github.com/devlanes-run/devlanes/blob/main/CONTRIBUTING.md`, and `readme.py` fails the build on one that is not. A README change reaches npm and PyPI with the next release that publishes there.
 
 ## npm
 
