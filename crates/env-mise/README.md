@@ -16,7 +16,7 @@ let pinned: Arc<dyn Contributor> =
 
 ## Config example
 
-There is no `devlanes.yaml` key. A mise config in the lane worktree turns it on:
+It needs no `devlanes.yaml` key. A mise config in the lane worktree turns it on:
 
 ```toml
 # mise.toml

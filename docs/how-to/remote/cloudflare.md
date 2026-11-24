@@ -4,7 +4,7 @@ description: Reach a box's SSH server through Cloudflare Tunnel and Access, with
 kind: how-to
 ---
 
-A box behind Cloudflare needs one route, to its SSH server, because everything devlanes mirrors travels inside the SSH connection.
+A box behind Cloudflare needs one route, to its SSH server, because everything devlanes mirrors is sent inside the SSH connection.
 
 ::example{slug="remote-ssh-box"}
 

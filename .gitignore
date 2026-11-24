@@ -9,4 +9,6 @@ devlanes.local.yaml
 .tmp/
 .tmp-*/
 .worktrees/
+# Style packages that `vale sync` downloads
+.vale/styles/
 **/PowerShell/ModuleAnalysisCache/**

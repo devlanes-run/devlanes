@@ -40,11 +40,11 @@ Environments, secrets, logs and commands do not cross, and neither does either m
 
 The box's services got their URLs when they started, and those URLs end up in their config, in CORS lists and in cookies. Your machine passes them through unchanged: each port listens on your machine's loopback under the same number, and each hostname joins your proxy, which serves it with your CA. A browser on your machine trusts the box's hostnames once your machine trusts its own CA, and nothing in the box's code has to change.
 
-Renaming the hostnames or moving the ports on your machine would break each URL the box already handed out. So a port your machine already uses stays yours: it is reported instead of mirrored, and a client that names that number reaches your own program instead of the box. The box's hostnames still work.
+Renaming the hostnames or moving the ports on your machine would break each URL the box already handed out, so a port your machine already uses stays yours: it is reported instead of mirrored, and a client that names that number reaches your own program instead of the box. The box's hostnames still work.
 
 ## One box serves a lane at a time
 
-Two boxes made from one image run the same lane with the same hostnames and ports, and a port number on your machine can lead to only one of them. So one box serves the lane whole, and the other is skipped rather than renamed. A lane running on your machine wins over a box's lane with the same hostnames. `devlanes remote use` chooses which box serves a lane, and [Work with several boxes](../how-to/remote/several-boxes.md) covers switching.
+Two boxes made from one image run the same lane with the same hostnames and ports, and a port number on your machine can lead to only one of them, so one box serves the lane whole, and the other is skipped rather than renamed. A lane running on your machine wins over a box's lane with the same hostnames. `devlanes remote use` chooses which box serves a lane, and [Work with several boxes](../how-to/remote/several-boxes.md) covers switching.
 
 ## Related
 

@@ -41,7 +41,7 @@ On Windows, some terminals end the processes they started when they close, a dae
 
 ## A reboot leaves the lanes waiting for a shell
 
-The daemon remembers which services each lane ran. It does not keep the environment of the shell that started them, which [Environment and expressions](environment.md) explains. So after a reboot the lanes run nothing and keep their numbers, ports and hostnames, and status says each needs a start from a shell.
+The daemon remembers which services each lane ran. It does not keep the environment of the shell that started them, which [Environment and expressions](environment.md) explains. After a reboot the lanes run nothing and keep their numbers, ports and hostnames, and status says each needs a start from a shell.
 
 One command from a shell brings them back. In a worktree, a plain start brings back its own lane; anywhere, a resume brings back every lane you did not stop by hand, with the services each one ran:
 

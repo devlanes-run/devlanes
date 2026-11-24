@@ -38,6 +38,13 @@ actionlint
 sh packaging/scripts/check.sh   # release scripts and install.sh against fake binaries
 ```
 
+Changes to Markdown files are checked with [Vale](https://vale.sh/docs/install), which CI runs in its `prose` job (CI pins 3.28.1). `.vale.ini` lists the style packages, the rules turned off and the files skipped:
+
+```sh
+vale sync   # once, downloads the style packages into .vale/styles
+git ls-files -z '*.md' | xargs -0 vale
+```
+
 `install.ps1`, `package.ps1`, the npm launcher and the Windows wheel have a Windows check against a fake `devlanes.exe`, which CI runs in its `packaging-windows` job. It needs PSScriptAnalyzer (CI pins 1.25.0), both `powershell.exe` and `pwsh`, `node` and `python`. It changes your user `PATH` while it runs and writes the old value back at the end:
 
 ```powershell
@@ -186,7 +193,7 @@ The daemon owns processes, ports, proxy routes and SQLite. CLI and TUI clients e
 
 Each lane receives a non-overlapping block from the machine-wide port pool. Named service offsets persist within that block. A service must accept its assigned port; listening-socket inspection is diagnostic only. Hostnames put the lane in the registrable label, such as `api.acme2.localhost`.
 
-Startup orders infrastructure, per-lane setup, lifecycle tasks, concurrent services, then after-services tasks. There is no service dependency graph or automatic restart: a failed unit stays failed. Each lane saves the services it runs and its profiles (never the environment), so a plain start, `lane resume` or `daemon restart` from a shell brings back what ran after the daemon stopped; a whole-lane `stop` clears that. A restart starts the new daemon before it stops the old one: the new one waits for the singleton lock, with the lanes to start again and the restarting client's environment handed over in memory on its stdin, so the restart finishes even when that client goes away. Monitoring reports resource use without enforcing limits. Throttling and freezing an idle lane is neither automatic restart nor enforcement: its processes keep their state, ports and PIDs, and activity on the lane thaws them ([Throttling and freezing](docs/concepts/freezing.md)).
+Startup orders infrastructure, per-lane setup, lifecycle tasks, concurrent services, then after-services tasks. devlanes has no service dependency graph or automatic restart: a failed unit stays failed. Each lane saves the services it runs and its profiles (never the environment), so a plain start, `lane resume` or `daemon restart` from a shell brings back what ran after the daemon stopped; a whole-lane `stop` clears that. A restart starts the new daemon before it stops the old one: the new one waits for the singleton lock, with the lanes to start again and the restarting client's environment handed over in memory on its stdin, so the restart finishes even when that client goes away. Monitoring reports resource use without enforcing limits. Throttling and freezing an idle lane is neither automatic restart nor enforcement: its processes keep their state, ports and PIDs, and activity on the lane thaws them ([Throttling and freezing](docs/concepts/freezing.md)).
 
 YAML configuration merges the files a project file `extends`, each followed by its local file, then the project file and its local file. Maps merge by key and lists/scalars replace, and templates expand after the merge. `${{ ... }}` expressions use strict undefined-variable handling. Client environments stay in daemon memory; `.env` files supply expression values, not implicit process environment injection.
 
@@ -237,7 +244,7 @@ Linking client and daemon: add `trace: Option<String>` to `devlanes_proto::Conte
 
 Dependency cost: `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp` and `tracing-opentelemetry`. The OTLP exporter brings either `tonic`, `prost` and `hyper` (gRPC) or an HTTP client (`reqwest` or `hyper`) with `prost` (HTTP/protobuf). The daemon already links `hyper` through the proxy, so HTTP/protobuf over the existing `hyper` adds the least. Measure before deciding: `cargo tree -e normal -p devlanes | wc -l` and the release binary size with and without the change. If the cost matters, put it behind a cargo feature (`otel`) that release builds enable, so the runtime switch stays the environment variable.
 
-Redaction does not change: the same fields become span attributes, so the rules in the previous section apply to exported spans. Log records can be exported as span events; keep that off by default, since `debug` records are numerous.
+Redaction does not change: the same fields become span attributes, so the rules in the previous section apply to exported spans. Log records can be exported as span events; keep that off by default, since there are many `debug` records.
 
 ### Benchmarks
 
@@ -292,7 +299,7 @@ cargo/devlanes-daemon: patch
 Fixed `devlanes start` leaving services stopped after a config reload.
 ```
 
-Write one change file per feature or fix a user would look for in the changelog, not one per adjustment made along the way. Small tweaks and fixes to the same part of devlanes go in one entry, so these two:
+Write one change file per feature or fix a user would look for in the changelog, not one per adjustment made during the work. Small tweaks and fixes to the same part of devlanes go in one entry, so these two:
 
 ```markdown
 Changed the TUI monitor (`M`) to keep each project's shared infra on top and its lanes below in lane order, instead of reordering them by usage.

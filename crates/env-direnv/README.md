@@ -16,7 +16,7 @@ let pinned: Arc<dyn Contributor> =
 
 ## Config example
 
-There is no `devlanes.yaml` key. An allowed `.envrc` in the lane worktree turns it on:
+It needs no `devlanes.yaml` key. An allowed `.envrc` in the lane worktree turns it on:
 
 ```sh
 # .envrc
