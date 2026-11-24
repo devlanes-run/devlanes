@@ -25,7 +25,7 @@ Click "Login settings", the sliders button in the popup's header. Both switches 
 
 "Saved logins" lists each project with its count. Click "Delete", then click it again within 4 seconds to delete a project's logins.
 
-A project keeps 20 logins, one per username. A new password for a username replaces the old one on every lane, and a 21st login replaces the one used least recently. [Limits](../reference/limits.md#browser-extension) lists the sign-ins the fill doesn't save, and [Security](../concepts/security.md#the-browser-extension-holds-test-passwords) says what a lane page can do with them.
+A project keeps 20 logins, one per username. A new password for a username replaces the old one on every lane, and a twenty-first login replaces the one used least recently. [Limits](../reference/limits.md#browser-extension) lists the sign-ins the fill doesn't save, and [Security](../concepts/security.md#the-browser-extension-holds-test-passwords) says what a lane page can do with them.
 
 ## If a sign-in form gets no menu
 
