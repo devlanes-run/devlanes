@@ -1,5 +1,9 @@
 # devlanes-daemon
 
+## 0.16.1 — 2026-11-24
+
+Version bump only, to follow other packages.
+
 ## 0.16.0 — 2026-11-23
 
 ### Minor changes
