@@ -1,5 +1,11 @@
 # devlanes
 
+## 0.16.1 — 2026-11-24
+
+### Patch changes
+
+- [608c4413](https://github.com/devlanes-run/devlanes/commit/608c4413121feba874b738824065b3bf08ee5373) Fixed the browser extension not finding devlanes in Brave on Windows after `devlanes setup`.
+
 ## 0.16.0 — 2026-11-23
 
 ### Minor changes
