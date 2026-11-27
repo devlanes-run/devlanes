@@ -21,11 +21,13 @@ pub struct Backoff {
 
 impl Default for Backoff {
     /// Starts at half a second, so a brief network drop recovers at once,
-    /// and doubles up to 5 minutes, so a box that is off for hours costs one
-    /// attempt (a new `ssh` process) every 5 minutes. [`Link::resume`] tries
-    /// again at once when a person asks.
+    /// and doubles up to 2 minutes, so a box that is off for hours costs one
+    /// attempt (a new `ssh` process) every 2 minutes. Nothing else wakes a
+    /// waiting link, so the cap also bounds how long a box that came back
+    /// stays unreachable. [`Link::resume`] tries again at once when a
+    /// person asks.
     fn default() -> Self {
-        Self::new(Duration::from_millis(500), Duration::from_secs(5 * 60))
+        Self::new(Duration::from_millis(500), Duration::from_secs(2 * 60))
     }
 }
 
