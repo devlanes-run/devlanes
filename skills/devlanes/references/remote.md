@@ -77,6 +77,7 @@ A machine that waits in `needs_pairing` needs a new code the same way.
 
 | What you see | Cause | Fix |
 |---|---|---|
+| `reconnecting` in `remote ls` | The box is unreachable, and devlanes retries on its own with growing waits | When the user says the box is back, `devlanes remote connect my-vps --background` tries again at once. |
 | `needs_auth` in `remote ls`, `box my-vps needs you to sign in again` | SSH asks for a password, passphrase or host key | The user runs `devlanes remote connect my-vps` in a terminal. |
 | `needs_pairing`, `box my-vps needs a new pairing code` | The box has no pairing for this machine | A new code from `devlanes daemon pair` on the box, then `devlanes remote connect my-vps --code CODE`. |
 | `the pairing code is wrong, expired or already used` | A typo, an old code, or a used one | A new code. |
