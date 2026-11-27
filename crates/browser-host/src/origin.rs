@@ -5,9 +5,10 @@ use std::ffi::{OsStr, OsString};
 /// How Chrome names the calling extension in `argv[1]`.
 pub const SCHEME: &str = "chrome-extension://";
 
-/// The ids of the extensions allowed to start the host. The id comes from the
-/// public key in the extension manifest's `key`, so every unpacked build has it.
-pub const ALLOWED_IDS: &[&str] = &["pggffblellmckocpflaaeligadjpkahj"];
+/// The ids of the extensions allowed to start the host. The Chrome Web Store
+/// gave the devlanes extension this id. Its manifest carries the store's
+/// public key as `key`, so unpacked builds get the same id.
+pub const ALLOWED_IDS: &[&str] = &["konofbnhgejkgkonkleipkkpkphbfgee"];
 
 /// The origins of [`ALLOWED_IDS`], as a host manifest's `allowed_origins`
 /// lists them: `chrome-extension://<id>/`.
@@ -77,13 +78,13 @@ mod tests {
         args.iter().map(OsString::from).collect()
     }
 
-    const ORIGIN: &str = "chrome-extension://pggffblellmckocpflaaeligadjpkahj/";
+    const ORIGIN: &str = "chrome-extension://konofbnhgejkgkonkleipkkpkphbfgee/";
 
     #[test]
     fn the_extension_origin_is_accepted() {
         assert_eq!(
             parse(args(&[ORIGIN])),
-            Ok("pggffblellmckocpflaaeligadjpkahj")
+            Ok("konofbnhgejkgkonkleipkkpkphbfgee")
         );
         assert!(is_origin(OsStr::new(ORIGIN)));
         assert!(!is_origin(OsStr::new("daemon")));
@@ -93,7 +94,7 @@ mod tests {
     fn windows_parent_window_is_ignored() {
         assert_eq!(
             parse(args(&[ORIGIN, "--parent-window=0"])),
-            Ok("pggffblellmckocpflaaeligadjpkahj")
+            Ok("konofbnhgejkgkonkleipkkpkphbfgee")
         );
         assert_eq!(
             parse(args(&[ORIGIN, "--other"])),
@@ -105,9 +106,9 @@ mod tests {
     fn other_origins_are_refused() {
         for origin in [
             "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/",
-            "chrome-extension://pggffblellmckocpflaaeligadjpkahj",
-            "chrome-extension://pggffblellmckocpflaaeligadjpkahj/x/",
-            "moz-extension://pggffblellmckocpflaaeligadjpkahj/",
+            "chrome-extension://konofbnhgejkgkonkleipkkpkphbfgee",
+            "chrome-extension://konofbnhgejkgkonkleipkkpkphbfgee/x/",
+            "moz-extension://konofbnhgejkgkonkleipkkpkphbfgee/",
         ] {
             assert_eq!(
                 parse(args(&[origin])),
