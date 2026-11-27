@@ -1602,7 +1602,8 @@ mod tests {
         install_browsers(&location, &[Browser::CHROME]);
         apply(&location, &install, &inspect(&location, &install)).expect("apply");
         let mut old = install.manifest();
-        old["allowed_origins"] = json!(["chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"]);
+        // The only origin 0.16.x allowed.
+        old["allowed_origins"] = json!(["chrome-extension://pggffblellmckocpflaaeligadjpkahj/"]);
         for file in [location.unix_manifest(Browser::CHROME), location.copy()] {
             std::fs::write(file, old.to_string()).expect("write");
         }
@@ -1629,6 +1630,13 @@ mod tests {
         assert!(
             lines.contains(&"Chrome's extension host is out of date".to_owned()),
             "{lines:?}"
+        );
+        assert_eq!(
+            removal(&location, &install).delete,
+            [
+                Target::File(location.unix_manifest(Browser::CHROME)),
+                Target::File(location.copy()),
+            ]
         );
 
         apply(&location, &install, &inspect(&location, &install)).expect("apply");
