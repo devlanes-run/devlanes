@@ -23,7 +23,11 @@ fn rank(codec: CodecId) -> Option<u8> {
     }
 }
 
-/// Picks the best codec the host can encode and the viewer can decode.
+/// Picks the best codec the host can encode and one viewer can decode.
+///
+/// The host runs it per viewer. Viewers of a window that get the same codec
+/// share one encoder and one pacer; a viewer that gets another codec has an
+/// encoder and a pacer of its own for that window.
 ///
 /// The order is fixed, with no user setting: more ends in hardware first, then
 /// the newer codec, so hardware H.264 beats software H.264, which beats `raw`.

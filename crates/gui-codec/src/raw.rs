@@ -96,7 +96,8 @@ impl VideoDecoder for RawDecoder {
 
     /// Decompresses a packet into a packed frame. The size it announces bounds
     /// the memory, so a payload that inflates further is an error, not an
-    /// allocation.
+    /// allocation, and a payload whose zstd header does not promise exactly
+    /// that size is refused before anything is allocated for it.
     fn decode(&mut self, packet: &Packet<'_>) -> Result<Option<Frame>, CodecError> {
         let (width, height) = (packet.width, packet.height);
         let bad = || CodecError::BadPayload { width, height };
@@ -104,11 +105,19 @@ impl VideoDecoder for RawDecoder {
             return Err(bad());
         }
         let expected = width as usize * height as usize * 4;
+        // The encoder writes the content size into the frame header.
+        let promised = zstd::zstd_safe::get_frame_content_size(packet.payload)
+            .ok()
+            .flatten();
+        if promised != Some(expected as u64) {
+            return Err(bad());
+        }
         let pixels = zstd::bulk::decompress(packet.payload, expected).map_err(|_| bad())?;
         if pixels.len() != expected {
             return Err(bad());
         }
-        Frame::packed(width, height, pixels).map(Some)
+        let frame = Frame::packed(width, height, pixels)?;
+        Ok(Some(frame.with_timestamp(packet.timestamp)))
     }
 }
 
@@ -142,10 +151,13 @@ impl DecoderBackend for RawBackend {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     const DELTA: EncodeParams = EncodeParams {
         bitrate_bps: 1_000_000,
+        frame_interval: Duration::from_millis(33),
         quality: 50,
         keyframe: false,
     };
@@ -167,6 +179,7 @@ mod tests {
                 width: encoded.width,
                 height: encoded.height,
                 keyframe: encoded.keyframe,
+                timestamp: Duration::from_millis(40),
             })
             .expect("decodes")
             .expect("a frame")
@@ -183,6 +196,7 @@ mod tests {
         let decoded = decode(&encoded);
         assert_eq!(decoded.to_packed(), first.to_packed());
         assert_eq!(decoded.stride(), 32 * 4);
+        assert_eq!(decoded.timestamp(), Duration::from_millis(40));
 
         assert_eq!(
             encoder.encode(&first.clone(), &DELTA).expect("encodes"),
@@ -229,12 +243,22 @@ mod tests {
             .expect("encodes")
             .expect("sent");
         let mut decoder = RawDecoder::new();
-        for (width, height) in [(8, 7), (8, 9), (0, 8), (MAX_DIMENSION + 1, 1)] {
+        // The largest frame is refused from the zstd header, before 256 MiB
+        // are allocated for a payload of a few bytes.
+        let sizes = [
+            (8, 7),
+            (8, 9),
+            (0, 8),
+            (MAX_DIMENSION + 1, 1),
+            (MAX_DIMENSION, MAX_DIMENSION),
+        ];
+        for (width, height) in sizes {
             let packet = Packet {
                 payload: &encoded.payload,
                 width,
                 height,
                 keyframe: true,
+                timestamp: Duration::ZERO,
             };
             assert!(
                 matches!(decoder.decode(&packet), Err(CodecError::BadPayload { .. })),
@@ -246,6 +270,7 @@ mod tests {
             width: 8,
             height: 8,
             keyframe: true,
+            timestamp: Duration::ZERO,
         };
         assert!(decoder.decode(&garbage).is_err());
     }

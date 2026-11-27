@@ -5,13 +5,16 @@ Video codecs for devlanes GUI streaming: the BGRA frame type, the `VideoEncoder`
 ## Usage
 
 ```rust
+use std::time::Duration;
+
 use devlanes_gui_codec::{
     CodecError, EncodeParams, EncoderBackend, Frame, Packet, RawBackend, RawDecoder,
     VideoDecoder, VideoEncoder, select,
 };
 
-fn stream_one_frame(pixels: Vec<u8>) -> Result<(), CodecError> {
-    // The host lists its encoders in its welcome, the viewer its decoders in its hello.
+fn stream_one_frame(pixels: Vec<u8>, captured: Duration) -> Result<(), CodecError> {
+    // The host lists its encoders in its welcome, a viewer its decoders in its
+    // hello, and the host picks a codec per viewer.
     let backends = [RawBackend];
     let encoders: Vec<_> = backends.iter().map(EncoderBackend::offer).collect();
     let decoders = [RawDecoder::new().offer()];
@@ -19,8 +22,13 @@ fn stream_one_frame(pixels: Vec<u8>) -> Result<(), CodecError> {
     assert_eq!(chosen.codec.name(), Some("raw"));
 
     let mut encoder = backends[0].encoder()?;
-    let frame = Frame::packed(64, 32, pixels)?;
-    let params = EncodeParams { bitrate_bps: 2_000_000, quality: 60, keyframe: true };
+    let frame = Frame::packed(64, 32, pixels)?.with_timestamp(captured);
+    let params = EncodeParams {
+        bitrate_bps: 2_000_000,
+        frame_interval: Duration::from_millis(33),
+        quality: 60,
+        keyframe: true,
+    };
     let encoded = encoder.encode(&frame, &params)?.expect("a keyframe is never skipped");
 
     let decoded = RawDecoder::new().decode(&Packet {
@@ -28,6 +36,7 @@ fn stream_one_frame(pixels: Vec<u8>) -> Result<(), CodecError> {
         width: encoded.width,
         height: encoded.height,
         keyframe: encoded.keyframe,
+        timestamp: captured,
     })?;
     assert_eq!(decoded.map(|f| f.to_packed()), Some(frame.to_packed()));
     Ok(())
@@ -37,7 +46,7 @@ fn stream_one_frame(pixels: Vec<u8>) -> Result<(), CodecError> {
 ## API
 
 - `Frame`: a BGRA picture with width, height and stride, checked on creation.
-- `VideoEncoder`, `VideoDecoder`: one per window; `Send`, so they can run on a thread of their own.
+- `VideoEncoder`, `VideoDecoder`: one per window and codec; `Send` and synchronous (each call returns the output for its input), so they run on a thread of their own.
 - `EncoderBackend`, `DecoderBackend`: what a host or viewer registers per codec implementation, with its `CodecOffer` (codec and whether it is hardware).
 - `RawBackend`, `RawEncoder`, `RawDecoder`: full frames compressed with zstd; the encoder skips a picture identical to the previous one.
 - `select`: the best codec both ends have, hardware before software and `h264` before `raw`.
