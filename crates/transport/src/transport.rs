@@ -94,7 +94,9 @@ pub trait Connection: Send + Sync {
 /// limit, for the client to close after these messages before they return.
 #[async_trait]
 pub trait ServerConnection: Send {
-    /// The next stream the client opened; `None` once the connection is gone.
+    /// The next stream the client opened; `None` once the connection is gone,
+    /// which includes the client closing it, so a box can wait for that
+    /// close after writing a last message.
     ///
     /// A stream the client opened and wrote to before opening any other is
     /// accepted first, which is how the box finds the control stream. Nothing

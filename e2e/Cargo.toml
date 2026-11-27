@@ -32,6 +32,8 @@ devlanes-sys = { path = "../crates/sys" }
 devlanes-sys-windows = { path = "../crates/sys-windows" }
 
 [dev-dependencies]
+# The pairing client of a remote test.
+async-trait.workspace = true
 # The remote tests open a session to a real `devlanes tunnel --stdio` themselves.
 devlanes-transport = { path = "../crates/transport" }
 devlanes-transport-command = { path = "../crates/transport-command" }

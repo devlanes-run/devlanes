@@ -529,45 +529,24 @@ fn a_tunnel_carries_every_byte() -> Result<()> {
 }
 
 /// A client without a token that answers the box's request to pair with a
-/// code the box never issued. Written out instead of with `async_trait`,
-/// which this crate does not depend on.
+/// code the box never issued.
 struct WrongCode;
 
-/// The future type `async_trait` gives the methods of [`PairingClient`].
-type Boxed<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
-
+#[async_trait::async_trait]
 impl PairingClient for WrongCode {
     /// No token, so the box asks for a code.
-    fn token<'life0, 'async_trait>(&'life0 self) -> Boxed<'async_trait, Option<String>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(async { None })
+    async fn token(&self) -> Option<String> {
+        None
     }
 
     /// A well-formed code that no `daemon pair` printed.
-    fn code<'life0, 'async_trait>(
-        &'life0 self,
-        _: PairingReason,
-    ) -> Boxed<'async_trait, Option<String>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(async { Some("WRNG-CODE".to_owned()) })
+    async fn code(&self, _: PairingReason) -> Option<String> {
+        Some("WRNG-CODE".to_owned())
     }
 
     /// Never called: the box refuses the code.
-    fn store<'life0, 'async_trait>(
-        &'life0 self,
-        _: String,
-    ) -> Boxed<'async_trait, std::result::Result<(), BoxError>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(async { Err("the box sent a token for a wrong code".into()) })
+    async fn store(&self, _: String) -> std::result::Result<(), BoxError> {
+        Err("the box sent a token for a wrong code".into())
     }
 }
 
@@ -581,8 +560,10 @@ fn a_refused_pairing_code_reaches_the_client() -> Result<()> {
     /// on some attempts only.
     const ATTEMPTS: usize = 50;
     let boxed = Lab::without_config(BUDGET)?;
-    // Starts the box daemon, so each tunnel reaches it at once, and leaves
-    // a code pending that the client's code is not.
+    // Starts the box daemon, so each tunnel reaches it at once. The first
+    // wrong code voids the code issued here, the next ones are refused
+    // with no code pending, and from the sixth the box answers that pairing
+    // is paused: each answer is a refusal the client must read.
     pairing_code(&boxed)?;
     let env: Vec<(OsString, OsString)> = boxed
         .command(boxed.repo(), &[])?
