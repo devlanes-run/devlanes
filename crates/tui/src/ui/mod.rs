@@ -1435,13 +1435,14 @@ fn hints(app: &App) -> Vec<Hint> {
                     hints.push(("m", "use this one", ch('m')));
                 }
             } else if let Some(host) = app.boxes.selected_host() {
-                // A reconnecting box waits for its next try, so Enter only
-                // shows how it goes.
+                // Enter on a reconnecting box ends its wait for the next
+                // try; on a connecting one it only shows how it goes.
                 let enter = match host.state.as_str() {
                     "connected" => "disconnect",
                     "needs_auth" => "sign in",
                     "needs_pairing" => "type code",
-                    "connecting" | "reconnecting" => "show",
+                    "reconnecting" => "retry",
+                    "connecting" => "show",
                     _ => "connect",
                 };
                 hints.push(("enter", enter, KeyCode::Enter));

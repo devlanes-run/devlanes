@@ -20,8 +20,12 @@ pub struct Backoff {
 }
 
 impl Default for Backoff {
+    /// Starts at half a second, so a brief network drop recovers at once,
+    /// and doubles up to 5 minutes, so a box that is off for hours costs one
+    /// attempt (a new `ssh` process) every 5 minutes. [`Link::resume`] tries
+    /// again at once when a person asks.
     fn default() -> Self {
-        Self::new(Duration::from_millis(500), Duration::from_secs(30))
+        Self::new(Duration::from_millis(500), Duration::from_secs(5 * 60))
     }
 }
 
@@ -61,7 +65,7 @@ pub enum LinkState {
     },
     /// A session is up.
     Connected(Session),
-    /// Waiting before the next attempt.
+    /// Waiting before the next attempt, or until [`Link::resume`].
     Retrying {
         /// Wait before the next attempt.
         delay: Duration,
@@ -154,16 +158,16 @@ impl Link {
         self.state.clone()
     }
 
-    /// Makes a link waiting in [`LinkState::NeedsAuth`] or
-    /// [`LinkState::NeedsPairing`] try again now, with a fresh backoff. The
-    /// state is [`LinkState::Connecting`] when this returns true; false means
-    /// the link was not waiting or has stopped.
+    /// Makes a link waiting in [`LinkState::NeedsAuth`],
+    /// [`LinkState::NeedsPairing`] or [`LinkState::Retrying`] try again now,
+    /// with a fresh backoff. The state is [`LinkState::Connecting`] when this
+    /// returns true; false means the link was not waiting or has stopped.
     pub fn resume(&self) -> bool {
         let Some(state_tx) = self.state_tx.upgrade() else {
             return false;
         };
         state_tx.send_if_modified(|state| {
-            if waits_for_person(state) {
+            if waits_for_person(state) || matches!(state, LinkState::Retrying { .. }) {
                 *state = LinkState::Connecting { attempt: 1 };
                 true
             } else {
@@ -229,7 +233,8 @@ fn waits_for_person(state: &LinkState) -> bool {
 
 /// Connect, wait for the session to end, back off, repeat. A failure that
 /// needs a person parks the link in [`LinkState::NeedsAuth`] or
-/// [`LinkState::NeedsPairing`] until [`Link::resume`] moves it on.
+/// [`LinkState::NeedsPairing`] until [`Link::resume`] moves it on, which
+/// also ends a backoff wait early.
 async fn supervise(
     transport: Arc<dyn Transport>,
     options: SessionOptions,
@@ -311,8 +316,13 @@ async fn supervise(
         let delay = backoff.next_delay();
         tracing::debug!("reconnecting in {delay:?}: {error}");
         state.send_replace(LinkState::Retrying { delay, error });
+        let mut resumed = state.subscribe();
         tokio::select! {
             () = tokio::time::sleep(delay) => {}
+            _ = resumed.wait_for(|current| !matches!(current, LinkState::Retrying { .. })) => {
+                backoff.reset();
+                attempt = 0;
+            }
             () = cancel.cancelled() => break,
         }
     }
@@ -506,6 +516,51 @@ mod tests {
         .await??;
         link.shutdown().await;
         acceptor.abort();
+        Ok(())
+    }
+
+    /// A transport whose every attempt fails as an unreachable box does,
+    /// counting attempts.
+    #[derive(Default)]
+    struct Unreachable {
+        attempts: std::sync::atomic::AtomicU32,
+    }
+
+    #[async_trait::async_trait]
+    impl Transport for Unreachable {
+        async fn connect(&self) -> Result<crate::BoxConnection, crate::TransportError> {
+            self.attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(crate::TransportError::transient("connection timed out"))
+        }
+    }
+
+    /// `resume` ends a backoff wait early: a link due to retry in an hour
+    /// tries again at once, then waits again.
+    #[tokio::test]
+    async fn resume_cuts_a_backoff_wait_short() -> Result<(), Box<dyn std::error::Error>> {
+        let transport = Arc::new(Unreachable::default());
+        let hour = Duration::from_secs(60 * 60);
+        let link = Link::spawn(
+            transport.clone(),
+            SessionOptions::new("client"),
+            Backoff::new(hour, hour),
+        );
+        let mut state = link.state();
+        let retrying = |state: &LinkState| matches!(state, LinkState::Retrying { .. });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            state.wait_for(retrying).await?;
+            assert!(link.resume());
+            state.borrow_and_update();
+            state.wait_for(retrying).await?;
+            Ok::<_, watch::error::RecvError>(())
+        })
+        .await??;
+        assert_eq!(
+            transport.attempts.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+        link.shutdown().await;
         Ok(())
     }
 

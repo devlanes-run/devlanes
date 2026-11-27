@@ -648,13 +648,13 @@ impl HostConn {
         matches!(*self.state.borrow(), LinkState::NeedsPairing { .. })
     }
 
-    /// Makes a link waiting for a sign-in or pairing try again, now that a
-    /// CLI can answer its prompts or gave a code. Does nothing otherwise; true
-    /// when it resumed the link.
+    /// Makes a link waiting for a sign-in, a pairing or its next attempt try
+    /// again, now that a CLI can answer its prompts, gave a code or asked to
+    /// connect. Does nothing otherwise; true when it resumed the link.
     async fn resume(&self) -> bool {
         let resumed = self.link.lock().await.as_ref().is_some_and(Link::resume);
         if resumed {
-            tracing::info!(host = %self.name, "retrying a box that needs a sign-in or pairing");
+            tracing::info!(host = %self.name, "retrying a box now, as a client asked");
         }
         resumed
     }
@@ -1277,8 +1277,9 @@ impl Inner {
         });
         // Connecting to a box again retries a box HTTPS port that was taken.
         self.reconcile_box_ports().await;
-        // This CLI can answer prompts now, so a link waiting for one goes on,
-        // and one still trying may have asked nobody before the CLI attached.
+        // This CLI can answer prompts now, so a link waiting for one or for
+        // its next attempt goes on, and one still trying may have asked
+        // nobody before the CLI attached.
         let in_flight =
             !conn.resume().await && matches!(*conn.state.borrow(), LinkState::Connecting { .. });
         if conn.session().is_some() {

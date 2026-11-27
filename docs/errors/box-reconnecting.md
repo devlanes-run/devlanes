@@ -13,7 +13,7 @@ When a reconnect needs you to sign in, requests get [DL205](box-sign-in-needed.m
 
 ```sh
 devlanes remote ls                  # state and last error of each box
-devlanes remote connect my-box      # shows SSH prompts in this terminal
+devlanes remote connect my-box      # tries again now, with SSH prompts in this terminal
 devlanes daemon logs --tail 50
 ```
 

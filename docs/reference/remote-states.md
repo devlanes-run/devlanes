@@ -12,7 +12,7 @@ kind: reference
 |---|---|---|
 | `connecting` | Your machine is reaching the box. | Wait. |
 | `connected` | The box's lanes are mirrored here. | Nothing. |
-| `reconnecting` | The connection dropped, after sleep or a network change, and devlanes tries again on its own. The box's ports and hostnames stay in place meanwhile. | Wait. `error` says why it dropped. |
+| `reconnecting` | The connection dropped, after sleep or a network change, and devlanes tries again on its own. The box's ports and hostnames stay in place meanwhile. | Wait, or run `devlanes remote connect BOX` to try again now. `error` says why it dropped. |
 | `needs_auth` | Reconnecting needs you: SSH asks for a password, a passphrase or a host key. | Run `devlanes remote connect BOX` in a terminal. |
 | `needs_pairing` | The box no longer accepts this machine, or no pairing code was given. | Run `devlanes daemon pair` on the box, then `devlanes remote connect BOX --code CODE` here. |
 | `failed` | Trying again cannot help, for example the two machines run releases too far apart to talk, or the box turns connections away. `error` says why. | Fix the cause, then run `devlanes remote connect BOX`. |
