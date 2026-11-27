@@ -1482,7 +1482,7 @@ mod tests {
         assert_eq!(written, install.manifest());
         assert_eq!(
             written["allowed_origins"],
-            json!(["chrome-extension://pggffblellmckocpflaaeligadjpkahj/"])
+            json!(["chrome-extension://konofbnhgejkgkonkleipkkpkphbfgee/"])
         );
         assert_eq!(written["path"], json!(install.entry));
         assert_eq!(
@@ -1589,6 +1589,51 @@ mod tests {
             other_manifest(&other)
         );
         assert!(super::removal(&location, &install).delete.is_empty());
+    }
+
+    /// devlanes 0.16.x wrote manifests that allow the extension's old id. A
+    /// manifest of this install that allows another origin is stale.
+    /// `--check` and doctor report it, and setup rewrites it.
+    #[test]
+    fn another_allowed_origin_is_refreshed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let location = location(&temp.path().join("user"), Layout::Linux, String::new());
+        let install = script(&temp.path().join("bin").join("devlanes"));
+        install_browsers(&location, &[Browser::CHROME]);
+        apply(&location, &install, &inspect(&location, &install)).expect("apply");
+        let mut old = install.manifest();
+        old["allowed_origins"] = json!(["chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"]);
+        for file in [location.unix_manifest(Browser::CHROME), location.copy()] {
+            std::fs::write(file, old.to_string()).expect("write");
+        }
+
+        let stale = Found::Stale {
+            runs: Some(install.entry.clone()),
+            ours: true,
+        };
+        assert_eq!(founds(&location, &install)[0], stale);
+        assert_eq!(copy_of(&location, &install).found, stale);
+        assert_eq!(
+            facts_plan(&location, &install),
+            (
+                true,
+                false,
+                "setup refreshes the browser extension host for Chrome".into()
+            )
+        );
+        let report = report(&location, &install);
+        let lines: Vec<String> = devlanes_cli::doctor_checks_of(&json!({"browser": report}))
+            .into_iter()
+            .map(|check| check.text)
+            .collect();
+        assert!(
+            lines.contains(&"Chrome's extension host is out of date".to_owned()),
+            "{lines:?}"
+        );
+
+        apply(&location, &install, &inspect(&location, &install)).expect("apply");
+        assert_eq!(founds(&location, &install)[0], Found::Current);
+        assert_eq!(copy_of(&location, &install).found, Found::Current);
     }
 
     /// The manifest Brave reads on macOS, in Chrome's folder.

@@ -5,7 +5,7 @@ The native messaging host of the devlanes browser extension. Chrome starts the d
 ## Usage
 
 ```sh
-devlanes chrome-extension://pggffblellmckocpflaaeligadjpkahj/
+devlanes chrome-extension://konofbnhgejkgkonkleipkkpkphbfgee/
 ```
 
 Chrome runs that command line itself, from the host manifest. The binary checks for it before parsing the CLI:

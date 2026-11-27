@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::{BUDGET, need};
 
 /// The origin Chrome passes for the devlanes extension.
-const ORIGIN: &str = "chrome-extension://pggffblellmckocpflaaeligadjpkahj/";
+const ORIGIN: &str = "chrome-extension://konofbnhgejkgkonkleipkkpkphbfgee/";
 
 /// Longest wait for one message from the host.
 const MESSAGE: Duration = Duration::from_secs(30);
