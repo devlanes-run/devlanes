@@ -4,8 +4,8 @@ use bytes::{Bytes, BytesMut};
 
 use crate::error::{DecodeError, EncodeError};
 use crate::types::{
-    Buttons, CodecId, CodecOffer, CursorShape, Edge, KeyCode, LockState, Point, Role, Size,
-    WheelUnit, WindowId, WindowInfo,
+    Buttons, CodecId, CodecOffer, CursorShape, Edge, KeyCode, LockState, Point, Role, SessionId,
+    Size, Token, WheelUnit, WindowId, WindowInfo,
 };
 use crate::wire::{self, Direction, Reader, Writer};
 use crate::{MAGIC, PROTOCOL_VERSION};
@@ -32,6 +32,16 @@ pub const MAX_MESSAGE: usize = 1024;
 /// (256 MiB) plus zstd's worst-case growth on data that does not compress.
 pub const MAX_FRAME_PAYLOAD: usize = 257 * 1024 * 1024;
 
+/// Body limit of a hello. Frozen together with the frame header and the
+/// preamble: a hello of any later version must fit, so this version still
+/// reads its version and reports a mismatch instead of [`DecodeError::TooLarge`].
+pub const MAX_HELLO: u32 = 64 * 1024;
+/// Body limit of a refusal, frozen for the same reason as [`MAX_HELLO`].
+pub const MAX_REFUSAL: u32 = MAX_MESSAGE as u32 + SLACK;
+
+/// The feature that adds [`ClientMessage::Sync`] and [`HostMessage::Synced`].
+pub const SYNC_FEATURE: &str = "sync";
+
 /// Room left in each limit for fields later versions append.
 const SLACK: u32 = 1024;
 /// Limit of messages that carry only a few numbers.
@@ -39,6 +49,9 @@ const SMALL: u32 = 64 + SLACK;
 
 /// Type bytes of messages to the host. Values are never reused.
 mod to_host {
+    pub const KEEP_ALIVE: u8 = 0x0d;
+    pub const POINTER_LEFT: u8 = 0x0e;
+    pub const SYNC: u8 = 0x0f;
     pub const HELLO: u8 = 0x01;
     pub const FRAME_ACK: u8 = 0x02;
     pub const KEYFRAME_REQUEST: u8 = 0x03;
@@ -72,6 +85,8 @@ mod to_client {
     pub const INPUT_HOLDER: u8 = 0x8b;
     pub const SCREENSHOT: u8 = 0x8c;
     pub const HEARTBEAT: u8 = 0x8d;
+    pub const RESIZE_APPLIED: u8 = 0x8e;
+    pub const SYNCED: u8 = 0x8f;
     pub const ACTIVITY: u8 = 0xa0;
 }
 
@@ -79,12 +94,13 @@ mod to_client {
 fn host_limit(kind: u8) -> Option<u32> {
     use to_host::*;
     Some(match kind {
-        HELLO => 64 * 1024,
+        HELLO => MAX_HELLO,
         TEXT => MAX_TEXT as u32 + SLACK,
         CLIPBOARD => MAX_CLIPBOARD as u32 + SLACK,
         UNIT_PROCESS => MAX_MESSAGE as u32 + SLACK,
         FRAME_ACK | KEYFRAME_REQUEST | POINTER | WHEEL | KEY | RESIZE | CLOSE | FOCUS
-        | SCREENSHOT | UNIT_EXITED | LANE_FROZEN | LANE_THAWED => SMALL,
+        | SCREENSHOT | KEEP_ALIVE | POINTER_LEFT | SYNC | UNIT_EXITED | LANE_FROZEN
+        | LANE_THAWED => SMALL,
         _ => return None,
     })
 }
@@ -95,12 +111,13 @@ fn client_limit(kind: u8) -> Option<u32> {
     Some(match kind {
         WELCOME => 1024 * 1024,
         WINDOW_ADDED | WINDOW_CHANGED => 4 * 1024,
-        REFUSED => MAX_MESSAGE as u32 + SLACK,
+        REFUSED => MAX_REFUSAL,
         VIDEO_FRAME | SCREENSHOT => MAX_FRAME_PAYLOAD as u32 + SLACK,
         CURSOR => 256 * 256 * 4 + SLACK,
         CLIPBOARD => MAX_CLIPBOARD as u32 + SLACK,
         INPUT_HOLDER => (MAX_ID + MAX_NAME) as u32 + SLACK,
-        WINDOW_REMOVED | MOVE_RESIZE | LOCK_CHANGED | HEARTBEAT | ACTIVITY => SMALL,
+        WINDOW_REMOVED | MOVE_RESIZE | LOCK_CHANGED | HEARTBEAT | RESIZE_APPLIED | SYNCED
+        | ACTIVITY => SMALL,
         _ => return None,
     })
 }
@@ -201,23 +218,28 @@ fn read_window(r: &mut Reader) -> Result<WindowId, DecodeError> {
 pub struct Hello {
     /// What the connection is for.
     pub role: Role,
-    /// A stable id of the client, such as its machine and process; shown in
-    /// [`HostMessage::InputHolder`] so a viewer can tell whether it holds input.
+    /// A stable id of the client, such as its machine and process, for logs
+    /// and the input holder notice. Two clients may send the same one.
     pub client_id: String,
     /// A name for people, such as the user and machine.
     pub client_name: String,
-    /// The decoders the client has; empty for tools and the daemon.
+    /// The decoders the client has; empty for tools and the daemon. The host
+    /// picks one codec per viewer from them, and viewers that got the same
+    /// codec for a window share its encoder and its sequence numbers.
     pub decoders: Vec<CodecOffer>,
     /// Additive features the client implements. A side uses a feature only
     /// when both list it.
     pub features: Vec<String>,
     /// The token the daemon passed to the host, for [`Role::Control`].
-    pub token: Option<String>,
+    pub token: Option<Token>,
 }
 
 /// The host's answer to an accepted hello.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Welcome {
+    /// The id the host gave this connection, unique per host process; the
+    /// input holder notice names it.
+    pub session: SessionId,
     /// The service the host belongs to, such as `acme:desktop`.
     pub service: String,
     /// The encoders the host has.
@@ -301,20 +323,29 @@ pub struct Key {
 pub enum ClientMessage {
     /// The first message of every connection.
     Hello(Hello),
-    /// The viewer decoded every frame of `window` up to `seq`.
+    /// The viewer is finished with every frame of `window` up to `seq`: it
+    /// decoded it, or discarded it after a decode error. It acknowledges
+    /// discarded frames too, so the host's pacing never waits on them.
     FrameAck {
         /// The window.
         window: WindowId,
-        /// The newest frame decoded; earlier ones count as acknowledged too.
+        /// The newest frame finished with; earlier ones count as finished too.
         seq: u64,
     },
     /// The viewer needs a keyframe of `window`, such as after a decode error.
+    /// The host stops waiting for acknowledgements of frames it sent before.
     KeyframeRequest {
         /// The window.
         window: WindowId,
     },
     /// Pointer movement and buttons.
     Pointer(Pointer),
+    /// The pointer left the viewer's window with no button held, so the app
+    /// clears its hover state.
+    PointerLeft {
+        /// The window.
+        window: WindowId,
+    },
     /// A scroll.
     Wheel(Wheel),
     /// A key down or up.
@@ -358,11 +389,35 @@ pub enum ClientMessage {
         /// The window, or `None` for the host's first top-level window.
         window: Option<WindowId>,
     },
-    /// Control: the unit's process, so the host can find its windows.
+    /// Nothing but proof that the client is there. A client holding a button
+    /// or key sends it, or pointer messages, at least every
+    /// [`crate::HEARTBEAT_INTERVAL`]; a holder silent for
+    /// [`crate::HELD_INPUT_TIMEOUT`] has its keys and buttons released.
+    KeepAlive,
+    /// Asks for [`HostMessage::Synced`] with the same `request` once the host
+    /// has applied every input received before this message and captured a
+    /// frame after that. Sent only when both ends list [`SYNC_FEATURE`]; tools
+    /// use it to wait for a click to land before they type.
+    Sync {
+        /// Echoed in the answer.
+        request: u32,
+    },
+    /// Control: the unit's process, so the host can find its windows. A PID
+    /// alone can be reused, so the start time comes with it.
     UnitProcess {
         /// The process id.
         pid: u32,
-        /// The name of the unit's job object on Windows, when the runner has one.
+        /// The process start time as `devlanes-sys` reports it
+        /// (`ProcessIdentity::start_time`): clock ticks since boot on Linux,
+        /// microseconds since the epoch on macOS, the creation `FILETIME` on
+        /// Windows. Compared for equality only.
+        start_time: u64,
+        /// The name of the unit's job object on Windows, when the runner has
+        /// one. On Windows the host finds windows through the job when it is
+        /// set and through the process tree otherwise; on Linux the unit's
+        /// clients connect to the host's own display, so the identity only
+        /// names them; on macOS the host matches window owners against the
+        /// process tree.
         job: Option<String>,
     },
     /// Control: the unit's process exited.
@@ -390,13 +445,16 @@ impl ClientMessage {
                     w.string("client name", &hello.client_name, MAX_NAME)?;
                     write_offers(w, "decoders", &hello.decoders)?;
                     write_features(w, &hello.features)?;
-                    write_opt_string(w, "token", hello.token.as_deref(), MAX_ID)?;
+                    let token = hello.token.as_ref().map(Token::expose);
+                    write_opt_string(w, "token", token, MAX_ID)?;
                 }
                 Self::FrameAck { window, seq } => {
                     w.u32(window.0);
                     w.u64(*seq);
                 }
-                Self::KeyframeRequest { window } | Self::Close { window } => w.u32(window.0),
+                Self::KeyframeRequest { window }
+                | Self::Close { window }
+                | Self::PointerLeft { window } => w.u32(window.0),
                 Self::Pointer(pointer) => {
                     w.u32(pointer.window.0);
                     pointer.position.write(w);
@@ -415,7 +473,7 @@ impl ClientMessage {
                 }
                 Self::Key(key) => {
                     w.u32(key.window.0);
-                    w.u16(key.code.0);
+                    w.u32(key.code.0);
                     w.bool(key.down);
                 }
                 Self::Text { window, text } => {
@@ -438,8 +496,14 @@ impl ClientMessage {
                         w.u32(window.0);
                     }
                 }
-                Self::UnitProcess { pid, job } => {
+                Self::Sync { request } => w.u32(*request),
+                Self::UnitProcess {
+                    pid,
+                    start_time,
+                    job,
+                } => {
                     w.u32(*pid);
+                    w.u64(*start_time);
                     write_opt_string(w, "job", job.as_deref(), MAX_MESSAGE)?;
                 }
                 Self::UnitExited { code } => {
@@ -448,10 +512,47 @@ impl ClientMessage {
                         w.i32(*code);
                     }
                 }
-                Self::LaneFrozen | Self::LaneThawed => {}
+                Self::KeepAlive | Self::LaneFrozen | Self::LaneThawed => {}
             }
             Ok(())
         })
+    }
+
+    /// Whether a connection that said hello with `role` may send this message.
+    /// The host checks every message after the hello and closes connections
+    /// that break this. A hello is never allowed after the first one.
+    pub fn allowed_for(&self, role: Role) -> bool {
+        let input = matches!(
+            self,
+            Self::Pointer(_)
+                | Self::PointerLeft { .. }
+                | Self::Wheel(_)
+                | Self::Key(_)
+                | Self::Text { .. }
+                | Self::Resize { .. }
+                | Self::Close { .. }
+                | Self::Focus { .. }
+                | Self::Clipboard { .. }
+                | Self::KeepAlive
+                | Self::Sync { .. }
+        );
+        let video = matches!(self, Self::FrameAck { .. } | Self::KeyframeRequest { .. });
+        let control = matches!(
+            self,
+            Self::UnitProcess { .. }
+                | Self::UnitExited { .. }
+                | Self::LaneFrozen
+                | Self::LaneThawed
+        );
+        let screenshot = matches!(self, Self::Screenshot { .. });
+        match role {
+            Role::Viewer => input || video || screenshot,
+            Role::Tool => input || screenshot,
+            Role::Control => control,
+            // What the second connection of a viewer session will carry.
+            Role::Input => input || video,
+            Role::Unknown(_) => false,
+        }
     }
 
     /// The type byte of this message.
@@ -462,6 +563,7 @@ impl ClientMessage {
             Self::FrameAck { .. } => FRAME_ACK,
             Self::KeyframeRequest { .. } => KEYFRAME_REQUEST,
             Self::Pointer(_) => POINTER,
+            Self::PointerLeft { .. } => POINTER_LEFT,
             Self::Wheel(_) => WHEEL,
             Self::Key(_) => KEY,
             Self::Text { .. } => TEXT,
@@ -470,6 +572,8 @@ impl ClientMessage {
             Self::Focus { .. } => FOCUS,
             Self::Clipboard { .. } => CLIPBOARD,
             Self::Screenshot { .. } => SCREENSHOT,
+            Self::KeepAlive => KEEP_ALIVE,
+            Self::Sync { .. } => SYNC,
             Self::UnitProcess { .. } => UNIT_PROCESS,
             Self::UnitExited { .. } => UNIT_EXITED,
             Self::LaneFrozen => LANE_FROZEN,
@@ -483,13 +587,32 @@ impl ClientMessage {
     /// Returns `Ok(None)` until a whole frame has arrived; call it again after
     /// appending more bytes. Frames of unknown types are skipped. Each call
     /// costs time linear in the bytes it consumes, and `buf` never needs to
-    /// hold more than one frame within its type's limit. After an error, close
-    /// the connection.
+    /// hold more than one frame within its type's limit.
+    ///
+    /// After any error, close the connection. An error in a frame header
+    /// leaves the header in `buf`, so calling again returns the same error.
     pub fn decode(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError> {
         let Some((kind, body)) = wire::next_frame(buf, Direction::ToHost, host_limit)? else {
             return Ok(None);
         };
         Self::decode_body(Reader::new(kind, body)).map(Some)
+    }
+
+    /// Takes the first message of a connection, which must be a hello.
+    ///
+    /// Any other first byte is [`DecodeError::BadMagic`] as soon as it arrives,
+    /// so a peer speaking HTTP or another protocol on the port fails cleanly
+    /// instead of being skipped as an unknown type. Use [`ClientMessage::decode`]
+    /// for the messages after it.
+    pub fn decode_hello(buf: &mut BytesMut) -> Result<Option<Hello>, DecodeError> {
+        if buf.first().is_some_and(|kind| *kind != to_host::HELLO) {
+            return Err(DecodeError::BadMagic);
+        }
+        match Self::decode(buf)? {
+            Some(Self::Hello(hello)) => Ok(Some(hello)),
+            Some(_) => Err(DecodeError::BadMagic),
+            None => Ok(None),
+        }
     }
 
     /// Reads the body of a message whose type is known.
@@ -499,15 +622,13 @@ impl ClientMessage {
         Ok(match r.kind() {
             HELLO => {
                 read_preamble(r)?;
-                let role = r.u8("role")?;
-                let role = Role::from_u8(role).ok_or_else(|| r.invalid("role", role.into()))?;
                 Self::Hello(Hello {
-                    role,
+                    role: Role::from_u8(r.u8("role")?),
                     client_id: r.string("client id", MAX_ID)?,
                     client_name: r.string("client name", MAX_NAME)?,
                     decoders: read_offers(r, "decoders")?,
                     features: read_features(r)?,
-                    token: read_opt_string(r, "token", MAX_ID)?,
+                    token: read_opt_string(r, "token", MAX_ID)?.map(Token::new),
                 })
             }
             FRAME_ACK => Self::FrameAck {
@@ -523,6 +644,9 @@ impl ClientMessage {
                 buttons: Buttons(r.u8("buttons")?),
                 screen_delta: Point::read_opt(r, "screen delta")?,
             }),
+            POINTER_LEFT => Self::PointerLeft {
+                window: read_window(r)?,
+            },
             WHEEL => Self::Wheel(Wheel {
                 window: read_window(r)?,
                 position: Point::read(r, "position")?,
@@ -536,7 +660,7 @@ impl ClientMessage {
             }),
             KEY => Self::Key(Key {
                 window: read_window(r)?,
-                code: KeyCode(r.u16("key code")?),
+                code: KeyCode(r.u32("key code")?),
                 down: r.bool("key down")?,
             }),
             TEXT => Self::Text {
@@ -564,8 +688,13 @@ impl ClientMessage {
                     false => None,
                 },
             },
+            KEEP_ALIVE => Self::KeepAlive,
+            SYNC => Self::Sync {
+                request: r.u32("request")?,
+            },
             UNIT_PROCESS => Self::UnitProcess {
                 pid: r.u32("pid")?,
+                start_time: r.u64("start time")?,
                 job: read_opt_string(r, "job", MAX_MESSAGE)?,
             },
             UNIT_EXITED => Self::UnitExited {
@@ -587,7 +716,8 @@ impl ClientMessage {
 pub struct VideoFrame {
     /// The window.
     pub window: WindowId,
-    /// Increasing per window; acknowledged with [`ClientMessage::FrameAck`].
+    /// Increasing per window and codec, since viewers that use another codec
+    /// get another stream; acknowledged with [`ClientMessage::FrameAck`].
     pub seq: u64,
     /// The codec of the payload.
     pub codec: CodecId,
@@ -629,6 +759,9 @@ pub struct MoveResize {
 /// The client that holds input on the display.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Holder {
+    /// The holder's session; a viewer holds input when it equals its own
+    /// [`Welcome::session`].
+    pub session: SessionId,
     /// The holder's [`Hello::client_id`].
     pub client_id: String,
     /// The holder's [`Hello::client_name`].
@@ -709,6 +842,21 @@ pub enum HostMessage {
     /// Sent when nothing else was sent for [`crate::HEARTBEAT_INTERVAL`], so a
     /// viewer can tell a silent link from a static window.
     Heartbeat,
+    /// The host applied a size change to a window. Frames of this viewer's
+    /// stream from `from_seq` on were captured after it, whatever their size;
+    /// earlier ones may still show the old size. Sent to every viewer of the
+    /// window, each with the sequence number of its own stream.
+    ResizeApplied {
+        /// The window.
+        window: WindowId,
+        /// The first sequence number captured after the change.
+        from_seq: u64,
+    },
+    /// The answer to [`ClientMessage::Sync`].
+    Synced {
+        /// The request it answers.
+        request: u32,
+    },
     /// To the control connection: a viewer sent input, which counts as lane
     /// activity. The host sends it at most once per [`crate::HEARTBEAT_INTERVAL`].
     Activity,
@@ -723,6 +871,7 @@ impl HostMessage {
             match self {
                 Self::Welcome(welcome) => {
                     write_preamble(w);
+                    w.u64(welcome.session.0);
                     w.string("service", &welcome.service, MAX_NAME)?;
                     write_offers(w, "encoders", &welcome.encoders)?;
                     w.bool(welcome.real_desktop);
@@ -777,6 +926,7 @@ impl HostMessage {
                 Self::InputHolder(holder) => {
                     w.bool(holder.is_some());
                     if let Some(holder) = holder {
+                        w.u64(holder.session.0);
                         w.string("holder id", &holder.client_id, MAX_ID)?;
                         w.string("holder name", &holder.name, MAX_NAME)?;
                     }
@@ -804,6 +954,11 @@ impl HostMessage {
                         }
                     }
                 }
+                Self::ResizeApplied { window, from_seq } => {
+                    w.u32(window.0);
+                    w.u64(*from_seq);
+                }
+                Self::Synced { request } => w.u32(*request),
                 Self::Heartbeat | Self::Activity => {}
             }
             Ok(())
@@ -827,6 +982,8 @@ impl HostMessage {
             Self::InputHolder(_) => INPUT_HOLDER,
             Self::Screenshot { .. } => SCREENSHOT,
             Self::Heartbeat => HEARTBEAT,
+            Self::ResizeApplied { .. } => RESIZE_APPLIED,
+            Self::Synced { .. } => SYNCED,
             Self::Activity => ACTIVITY,
         }
     }
@@ -840,6 +997,17 @@ impl HostMessage {
         Self::decode_body(Reader::new(kind, body)).map(Some)
     }
 
+    /// Takes the host's answer to the hello, which must be the first message:
+    /// a welcome or a refusal. Anything else is [`DecodeError::BadMagic`] as
+    /// soon as its first byte arrives, as in [`ClientMessage::decode_hello`].
+    pub fn decode_answer(buf: &mut BytesMut) -> Result<Option<Self>, DecodeError> {
+        let answer = [to_client::WELCOME, to_client::REFUSED];
+        if buf.first().is_some_and(|kind| !answer.contains(kind)) {
+            return Err(DecodeError::BadMagic);
+        }
+        Self::decode(buf)
+    }
+
     /// Reads the body of a message whose type is known.
     fn decode_body(mut r: Reader) -> Result<Self, DecodeError> {
         use to_client::*;
@@ -847,6 +1015,7 @@ impl HostMessage {
         Ok(match r.kind() {
             WELCOME => {
                 read_preamble(r)?;
+                let session = SessionId(r.u64("session")?);
                 let service = r.string("service", MAX_NAME)?;
                 let encoders = read_offers(r, "encoders")?;
                 let real_desktop = r.bool("real desktop")?;
@@ -855,6 +1024,7 @@ impl HostMessage {
                     .map(|_| WindowInfo::read(r))
                     .collect::<Result<_, _>>()?;
                 Self::Welcome(Welcome {
+                    session,
                     service,
                     encoders,
                     real_desktop,
@@ -918,6 +1088,7 @@ impl HostMessage {
             },
             INPUT_HOLDER => Self::InputHolder(match r.bool("holder")? {
                 true => Some(Holder {
+                    session: SessionId(r.u64("holder session")?),
                     client_id: r.string("holder id", MAX_ID)?,
                     name: r.string("holder name", MAX_NAME)?,
                 }),
@@ -947,6 +1118,13 @@ impl HostMessage {
                 Self::Screenshot { request, result }
             }
             HEARTBEAT => Self::Heartbeat,
+            RESIZE_APPLIED => Self::ResizeApplied {
+                window: read_window(r)?,
+                from_seq: r.u64("sequence number")?,
+            },
+            SYNCED => Self::Synced {
+                request: r.u32("request")?,
+            },
             ACTIVITY => Self::Activity,
             // Only reached if a type gets a limit without a decoder.
             other => return Err(r.invalid("message type", other.into())),

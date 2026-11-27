@@ -1,7 +1,9 @@
-//! Pacing of one window's frames to the viewers that watch it.
+//! Pacing of one window's stream to the viewers that watch it.
 //!
-//! One encoder serves every viewer of a window, so the pacer decides for all of
-//! them: it keeps at most [`MAX_IN_FLIGHT`] unacknowledged frames per viewer,
+//! A stream is one window in one codec. Viewers that selected the same codec
+//! for a window share its encoder and its pacer; a viewer with another codec
+//! gets an encoder and a pacer of its own, with its own sequence numbers and
+//! keyframes. The pacer decides for all viewers of its stream: it keeps at most [`MAX_IN_FLIGHT`] unacknowledged frames per viewer,
 //! holds only the newest captured frame while it waits (older ones are dropped
 //! before they are encoded, never after), and picks a target rate from how
 //! fast each viewer acknowledges. The slowest viewer sets the pace; one that
@@ -39,7 +41,7 @@ pub struct Encode<F> {
     /// The frame, the newest captured or, for a keyframe with nothing new, the
     /// last one encoded.
     pub frame: F,
-    /// The frame's sequence number, increasing per window.
+    /// The frame's sequence number, increasing per stream.
     pub seq: u64,
     /// Whether the encoder must make a keyframe.
     pub keyframe: bool,
@@ -61,8 +63,9 @@ struct Viewer {
     rate: RateController,
 }
 
-/// Paces the frames of one window. `F` is the captured frame, cheap to clone
-/// (an `Arc` or `Bytes`), since the last one is kept for keyframes.
+/// Paces one stream: the frames of one window in one codec. `F` is the
+/// captured frame, cheap to clone (an `Arc` or `Bytes`), since the last one is
+/// kept for keyframes.
 #[derive(Debug)]
 pub struct Pacer<F> {
     viewers: Vec<Viewer>,
@@ -115,11 +118,25 @@ impl<F: Clone> Pacer<F> {
         !self.viewers.is_empty()
     }
 
-    /// The viewer asked for a keyframe, such as after a decode error.
+    /// The viewer asked for a keyframe, such as after a decode error. It may
+    /// never acknowledge what it already got, so the pacer stops waiting for
+    /// those frames and takes the viewer back if it was set aside.
     pub fn request_keyframe(&mut self, id: SessionId) {
         if let Some(viewer) = self.viewer(id) {
             viewer.needs_keyframe = true;
+            viewer.in_flight.clear();
+            viewer.stalled = false;
         }
+    }
+
+    /// The host applied a size change to the window. The waiting capture and
+    /// the cached frame show the old size and are dropped, so ask the backend
+    /// for a new frame. Returns the first sequence number of frames captured
+    /// after the change, for [`crate::HostMessage::ResizeApplied`].
+    pub fn resize_applied(&mut self) -> u64 {
+        self.pending = None;
+        self.last = None;
+        self.next_seq
     }
 
     /// A newly captured frame. It replaces one still waiting, which is then
@@ -606,11 +623,63 @@ mod tests {
         assert_eq!(without_b.recipients, vec![A]);
         pacer.ack(A, without_b.seq, stall_at);
 
-        // B wakes up and works through what it had.
+        // An acknowledgement after B was set aside still brings it back.
         now = stall_at + ms(500);
         pacer.ack(B, b_last, now);
         let rejoin = step(&mut pacer, 60, now, &[]).expect("frame for both");
         assert!(rejoin.keyframe);
         assert_eq!(rejoin.recipients, vec![A, B]);
+    }
+
+    #[test]
+    fn a_viewer_that_fails_to_decode_recovers_through_a_keyframe_request() {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new();
+        pacer.add_viewer(A);
+        pacer.add_viewer(B);
+        let mut now = t0;
+        for frame in 0..MAX_IN_FLIGHT as u32 {
+            step(&mut pacer, frame, now, &[(A, ms(5))]).expect("frame");
+            now += ms(200);
+        }
+        // B failed on its first frame and cannot acknowledge the deltas after it.
+        pacer.request_keyframe(B);
+        let recovery = step(&mut pacer, 70, now, &[]).expect("not held back by B");
+        assert!(recovery.keyframe);
+        assert_eq!(recovery.recipients, vec![A, B]);
+
+        // Also after B was set aside for not acknowledging.
+        let mut now = now + ms(200);
+        pacer.ack(A, recovery.seq, now);
+        for frame in 80..80 + MAX_IN_FLIGHT as u32 {
+            if let Some(encoded) = step(&mut pacer, frame, now, &[]) {
+                pacer.ack(A, encoded.seq, now);
+            }
+            now += ms(200);
+        }
+        let after_stall = now + STALL_AFTER;
+        let without_b = pacer.poll(after_stall).expect("A goes on alone");
+        assert_eq!(without_b.recipients, vec![A]);
+        pacer.request_keyframe(B);
+        let back = step(&mut pacer, 91, after_stall + ms(400), &[]).expect("frame");
+        assert!(back.keyframe);
+        assert_eq!(back.recipients, vec![A, B]);
+    }
+
+    #[test]
+    fn frames_after_a_resize_start_at_the_returned_sequence_number() {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new();
+        pacer.add_viewer(A);
+        step(&mut pacer, 1, t0, &[(A, ms(5))]).expect("frame");
+        pacer.offer(2);
+        let from = pacer.resize_applied();
+        assert_eq!(
+            pacer.poll(t0 + ms(200)),
+            None,
+            "the old-size capture is gone"
+        );
+        let next = step(&mut pacer, 3, t0 + ms(400), &[]).expect("new-size frame");
+        assert_eq!((next.frame, next.seq), (3, from));
     }
 }

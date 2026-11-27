@@ -38,7 +38,8 @@ impl Direction {
 /// Returns `None` while the frame is incomplete. Each call looks only at the
 /// header and consumes whole frames, so feeding a stream in small chunks costs
 /// time linear in its size. A body is never buffered beyond the limit of its
-/// type, and frames of unknown types are dropped once complete.
+/// type, and frames of unknown types are dropped once complete. A header
+/// error leaves the header in `buf`, so the same error comes back on every call.
 pub(crate) fn next_frame(
     buf: &mut BytesMut,
     direction: Direction,

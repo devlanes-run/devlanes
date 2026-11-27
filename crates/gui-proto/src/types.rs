@@ -14,10 +14,51 @@ pub const MAX_DIMENSION: u32 = 8192;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WindowId(pub u32);
 
-/// One connection to a host, assigned by the host. The pacer and the input
-/// arbiter key their state by it; it never travels on the wire.
+/// One connection to a host, assigned by the host and sent in the welcome.
+/// Unlike a client id, which a client picks and two clients may share, it is
+/// unique per host process. The pacer and the input arbiter key their state by
+/// it, the input holder notice names it, and a later input connection will
+/// name the session it belongs to with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionId(pub u64);
+
+/// The secret the daemon gives a host for its control connection.
+///
+/// `Debug` prints no secret and comparison takes the same time wherever the
+/// bytes differ. The daemon passes it in the host's environment; the host
+/// removes that variable from its own environment before it starts a child
+/// of its own, such as Xwayland, so no other process can read it.
+#[derive(Clone)]
+pub struct Token(String);
+
+impl Token {
+    /// A token holding `secret`.
+    pub fn new(secret: impl Into<String>) -> Self {
+        Self(secret.into())
+    }
+
+    /// The secret, for writing it to the wire.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Token {
+    /// Prints a placeholder instead of the secret.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Token(<redacted>)")
+    }
+}
+
+impl PartialEq for Token {
+    /// Compares in constant time for tokens of equal length; the length is not secret.
+    fn eq(&self, other: &Self) -> bool {
+        use subtle::ConstantTimeEq;
+        self.0.as_bytes().ct_eq(other.0.as_bytes()).into()
+    }
+}
+
+impl Eq for Token {}
 
 /// A position in window pixels, or a movement in screen pixels. Negative
 /// values are allowed, since a held pointer can leave the window.
@@ -210,6 +251,9 @@ pub enum Role {
     /// acknowledgements and small messages for an existing viewer session, so
     /// they stay responsive while video is behind. Hosts of this version refuse it.
     Input,
+    /// A role this build does not know, kept so the host can answer
+    /// [`crate::RefusalReason::RoleNotSupported`].
+    Unknown(u8),
 }
 
 impl Role {
@@ -220,17 +264,18 @@ impl Role {
             Self::Tool => 2,
             Self::Control => 3,
             Self::Input => 4,
+            Self::Unknown(value) => value,
         }
     }
 
     /// The role of a wire value.
-    pub(crate) const fn from_u8(value: u8) -> Option<Self> {
+    pub(crate) const fn from_u8(value: u8) -> Self {
         match value {
-            1 => Some(Self::Viewer),
-            2 => Some(Self::Tool),
-            3 => Some(Self::Control),
-            4 => Some(Self::Input),
-            _ => None,
+            1 => Self::Viewer,
+            2 => Self::Tool,
+            3 => Self::Control,
+            4 => Self::Input,
+            other => Self::Unknown(other),
         }
     }
 }
@@ -278,12 +323,40 @@ impl std::ops::BitOr for Buttons {
     }
 }
 
-/// A physical key: a USB HID usage ID on the keyboard page (0x07), such as
-/// `0x04` for the key labelled A on a US layout. Every viewer OS has a table
-/// from its scan codes to these, and the host maps them back, so the key means
-/// the same position on every keyboard.
+/// A physical key as a USB HID usage: the usage page in the high 16 bits and
+/// the usage ID in the low 16, such as page 0x07 usage 0x04 for the key
+/// labelled A on a US layout, or page 0x0C usage 0xE9 for volume up. Every
+/// viewer OS has a table from its scan codes to these, and the host maps them
+/// back, so the key means the same position on every keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct KeyCode(pub u16);
+pub struct KeyCode(pub u32);
+
+impl KeyCode {
+    /// The keyboard usage page: letters, digits, modifiers, function keys.
+    pub const KEYBOARD_PAGE: u16 = 0x07;
+    /// The consumer usage page: media, volume, browser keys.
+    pub const CONSUMER_PAGE: u16 = 0x0c;
+
+    /// The key with `usage` on `page`.
+    pub const fn new(page: u16, usage: u16) -> Self {
+        Self(((page as u32) << 16) | usage as u32)
+    }
+
+    /// A key on the keyboard page.
+    pub const fn keyboard(usage: u16) -> Self {
+        Self::new(Self::KEYBOARD_PAGE, usage)
+    }
+
+    /// The usage page.
+    pub const fn page(self) -> u16 {
+        (self.0 >> 16) as u16
+    }
+
+    /// The usage ID within the page.
+    pub const fn usage(self) -> u16 {
+        self.0 as u16
+    }
+}
 
 /// The unit of a wheel delta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -310,11 +383,21 @@ pub enum LockState {
     /// the host, which reports it as activity so the lane thaws; the app does
     /// not get it.
     Frozen,
-    /// The service stopped or failed.
+    /// The window is gone for good: the service stopped or failed, which is
+    /// final for this host process (a unit restart starts a new host and the
+    /// viewer connects again), or it stayed closed past
+    /// [`crate::WAITING_GRACE`], after which a new window of the service can
+    /// still appear as a window of its own.
     Closed,
+    /// Locked for a reason this build does not know, from a newer host. Shown
+    /// with generic text.
+    Locked,
 }
 
 impl LockState {
+    /// Wire value of [`LockState::Locked`]; decoders map every unknown value to it.
+    const LOCKED: u8 = 0xff;
+
     /// The wire value.
     pub(crate) const fn to_u8(self) -> u8 {
         match self {
@@ -324,10 +407,12 @@ impl LockState {
             Self::Reconnecting => 3,
             Self::Frozen => 4,
             Self::Closed => 5,
+            Self::Locked => Self::LOCKED,
         }
     }
 
-    /// Reads one byte as a lock state.
+    /// Reads one byte as a lock state. Unknown values are [`LockState::Locked`],
+    /// so a host can add states without breaking older viewers.
     pub(crate) fn read(r: &mut Reader) -> Result<Self, DecodeError> {
         Ok(match r.u8("lock state")? {
             0 => Self::Unlocked,
@@ -336,7 +421,7 @@ impl LockState {
             3 => Self::Reconnecting,
             4 => Self::Frozen,
             5 => Self::Closed,
-            other => return Err(r.invalid("lock state", other.into())),
+            _ => Self::Locked,
         })
     }
 
@@ -351,7 +436,50 @@ pub const MAX_TITLE: usize = 1024;
 /// App id length limit, in bytes.
 pub const MAX_APP_ID: usize = 256;
 
+/// What sort of window it is, which decides how a viewer shows it. Unknown
+/// values decode as [`WindowKind::Toplevel`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum WindowKind {
+    /// A main window: framed as the frame rules say, movable, focusable.
+    #[default]
+    Toplevel,
+    /// A dialog of its parent: also framed and movable, kept above the parent.
+    Dialog,
+    /// A menu or dropdown: placed at its offset from the parent, no frame, no focus.
+    Popup,
+    /// A tooltip: like a popup, and it takes no input.
+    Tooltip,
+}
+
+impl WindowKind {
+    /// The wire value.
+    const fn to_u8(self) -> u8 {
+        match self {
+            Self::Toplevel => 0,
+            Self::Dialog => 1,
+            Self::Popup => 2,
+            Self::Tooltip => 3,
+        }
+    }
+
+    /// The kind of a wire value.
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Dialog,
+            2 => Self::Popup,
+            3 => Self::Tooltip,
+            _ => Self::Toplevel,
+        }
+    }
+}
+
 /// One window of the service, as the host describes it.
+///
+/// Its size and every coordinate about it use the window's geometry: the
+/// rectangle the app calls its window, without the shadow toolkits draw
+/// around it and including a title bar the app draws above its main surface.
+/// The host crops frames to that rectangle, and pointer positions, popup
+/// offsets and grab points have their origin at its top-left corner.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WindowInfo {
     /// The window's id.
@@ -379,6 +507,8 @@ pub struct WindowInfo {
     pub offset: Point,
     /// Why the window is locked, if it is.
     pub lock: LockState,
+    /// What sort of window it is.
+    pub kind: WindowKind,
 }
 
 impl WindowInfo {
@@ -398,6 +528,7 @@ impl WindowInfo {
         };
         let offset = Point::read(&mut r, "offset")?;
         let lock = LockState::read(&mut r)?;
+        let kind = WindowKind::from_u8(r.u8("window kind")?);
         Ok(Self {
             id,
             title,
@@ -410,6 +541,7 @@ impl WindowInfo {
             parent,
             offset,
             lock,
+            kind,
         })
     }
 
@@ -429,6 +561,7 @@ impl WindowInfo {
             }
             self.offset.write(w);
             w.u8(self.lock.to_u8());
+            w.u8(self.kind.to_u8());
             Ok(())
         })
     }

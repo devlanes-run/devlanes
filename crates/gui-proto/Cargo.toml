@@ -12,4 +12,5 @@ workspace = true
 
 [dependencies]
 bytes.workspace = true
+subtle.workspace = true
 thiserror.workspace = true

@@ -12,18 +12,25 @@
 //!
 //! # Compatibility
 //!
-//! The frame header and the start of the hello, welcome and refusal bodies
-//! (magic bytes, then a `u16` [`PROTOCOL_VERSION`]) never change, so a version
-//! mismatch is always reported as [`DecodeError::VersionMismatch`]. Within one
-//! version, peers stay compatible this way:
+//! These never change, so a version mismatch is always reported as
+//! [`DecodeError::VersionMismatch`] on both ends: the frame header, the type
+//! bytes of the hello (`0x01`), the welcome (`0x81`) and the refusal (`0x82`),
+//! the start of their bodies (magic bytes, then a `u16` [`PROTOCOL_VERSION`]),
+//! and the body limits of the hello ([`MAX_HELLO`]) and the refusal
+//! ([`MAX_REFUSAL`]). A connection starts with [`ClientMessage::decode_hello`]
+//! and [`HostMessage::decode_answer`], which turn any other first frame into
+//! [`DecodeError::BadMagic`]. Within one version, peers stay compatible this way:
 //!
 //! - A frame of an unknown type is skipped, up to [`MAX_UNKNOWN_BODY`] bytes.
 //!   A peer sends a new type only when both hellos list the feature that adds it.
 //! - New fields are appended to a body, and readers ignore bytes after the
 //!   fields they know. Windows and codec offers carry a length of their own, so
 //!   they can grow inside lists.
-//! - Codec ids and cursor shapes this build does not know are kept or fall
-//!   back to the default arrow. Other enumerations need a feature or a version.
+//! - Values this build does not know fall back: codec ids are kept and never
+//!   selected, roles are kept so the host can refuse them, cursor shapes
+//!   become the arrow, lock states [`LockState::Locked`], window kinds
+//!   toplevel, refusal reasons and screenshot outcomes their generic variant.
+//!   Other enumerations (edges, wheel units, booleans) need a feature or a version.
 //!
 //! The version changes only when an older peer cannot read what a newer one
 //! sends.
@@ -38,20 +45,22 @@ mod wire;
 
 use std::time::Duration;
 
-pub use arbiter::{HOLD_AFTER_TYPING, InputArbiter, Released, Verdict};
+pub use arbiter::{
+    HELD_INPUT_TIMEOUT, HOLD_AFTER_TYPING, InputArbiter, MAX_HELD_KEYS, Released, Verdict,
+};
 pub use error::{DecodeError, EncodeError};
-pub use lock::{RECONNECT_AFTER, RESIZE_TIMEOUT, WAITING_GRACE, WindowLock};
+pub use lock::{HostLock, RECONNECT_AFTER, RESIZE_TIMEOUT, ViewerLock, WAITING_GRACE};
 pub use message::{
     ClientMessage, Cursor, Hello, Holder, HostMessage, Key, MAX_CLIPBOARD, MAX_CODECS, MAX_FEATURE,
-    MAX_FEATURES, MAX_FRAME_PAYLOAD, MAX_ID, MAX_MESSAGE, MAX_NAME, MAX_TEXT, MAX_WINDOWS,
-    MoveResize, Pointer, Refusal, RefusalReason, Screenshot, ScreenshotResult, VideoFrame, Welcome,
-    Wheel,
+    MAX_FEATURES, MAX_FRAME_PAYLOAD, MAX_HELLO, MAX_ID, MAX_MESSAGE, MAX_NAME, MAX_REFUSAL,
+    MAX_TEXT, MAX_WINDOWS, MoveResize, Pointer, Refusal, RefusalReason, SYNC_FEATURE, Screenshot,
+    ScreenshotResult, VideoFrame, Welcome, Wheel,
 };
 pub use pacer::{Encode, MAX_IN_FLIGHT, Pacer, STALL_AFTER, Target};
 pub use types::{
     Buttons, CodecId, CodecOffer, CursorImage, CursorShape, Edge, KeyCode, LockState, MAX_APP_ID,
-    MAX_CURSOR_SIDE, MAX_DIMENSION, MAX_TITLE, Point, Role, SessionId, Size, WheelUnit, WindowId,
-    WindowInfo,
+    MAX_CURSOR_SIDE, MAX_DIMENSION, MAX_TITLE, Point, Role, SessionId, Size, Token, WheelUnit,
+    WindowId, WindowInfo, WindowKind,
 };
 pub use wire::{HEADER_LEN, MAX_UNKNOWN_BODY};
 

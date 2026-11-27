@@ -1,13 +1,15 @@
 //! The wire format through the public API: round trips, chunked input,
-//! malformed and oversized frames, compatibility rules.
+//! malformed and oversized frames, compatibility rules, roles.
 
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use devlanes_gui_proto::{
     Buttons, ClientMessage, CodecId, CodecOffer, Cursor, CursorImage, CursorShape, DecodeError,
-    Edge, EncodeError, HEADER_LEN, Hello, Holder, HostMessage, Key, KeyCode, LockState,
-    MAX_FRAME_PAYLOAD, MAX_TITLE, MAX_UNKNOWN_BODY, MoveResize, PROTOCOL_VERSION, Point, Pointer,
-    Refusal, RefusalReason, Role, Screenshot, ScreenshotResult, Size, VideoFrame, Welcome, Wheel,
-    WheelUnit, WindowId, WindowInfo,
+    Edge, EncodeError, HEADER_LEN, Hello, Holder, HostMessage, Key, KeyCode, LockState, MAGIC,
+    MAX_APP_ID, MAX_CLIPBOARD, MAX_CODECS, MAX_CURSOR_SIDE, MAX_FEATURE, MAX_FEATURES,
+    MAX_FRAME_PAYLOAD, MAX_ID, MAX_MESSAGE, MAX_NAME, MAX_TEXT, MAX_TITLE, MAX_UNKNOWN_BODY,
+    MAX_WINDOWS, MoveResize, PROTOCOL_VERSION, Point, Pointer, Refusal, RefusalReason, Role,
+    Screenshot, ScreenshotResult, SessionId, Size, Token, VideoFrame, Welcome, Wheel, WheelUnit,
+    WindowId, WindowInfo, WindowKind,
 };
 
 const W: WindowId = WindowId(7);
@@ -26,29 +28,35 @@ fn window() -> WindowInfo {
         parent: Some(WindowId(3)),
         offset: Point::new(-12, 40),
         lock: LockState::Resizing,
+        kind: WindowKind::Popup,
+    }
+}
+
+/// A hello with `role`.
+fn hello(role: Role) -> Hello {
+    Hello {
+        role,
+        client_id: "box-1:4242".into(),
+        client_name: "ada on acme".into(),
+        decoders: vec![
+            CodecOffer {
+                codec: CodecId::H264,
+                hardware: true,
+            },
+            CodecOffer {
+                codec: CodecId(200),
+                hardware: false,
+            },
+        ],
+        features: vec!["later".into()],
+        token: Some(Token::new("0123abcd")),
     }
 }
 
 /// One of every client message, with values that use each field's range.
 fn client_messages() -> Vec<ClientMessage> {
     let all = vec![
-        ClientMessage::Hello(Hello {
-            role: Role::Control,
-            client_id: "box-1:4242".into(),
-            client_name: "ada on acme".into(),
-            decoders: vec![
-                CodecOffer {
-                    codec: CodecId::H264,
-                    hardware: true,
-                },
-                CodecOffer {
-                    codec: CodecId(200),
-                    hardware: false,
-                },
-            ],
-            features: vec!["later".into()],
-            token: Some("0123abcd".into()),
-        }),
+        ClientMessage::Hello(hello(Role::Control)),
         ClientMessage::FrameAck {
             window: W,
             seq: u64::MAX,
@@ -60,6 +68,7 @@ fn client_messages() -> Vec<ClientMessage> {
             buttons: Buttons::LEFT | Buttons::FORWARD,
             screen_delta: Some(Point::new(3, -4)),
         }),
+        ClientMessage::PointerLeft { window: W },
         ClientMessage::Wheel(Wheel {
             window: W,
             position: Point::new(10, 20),
@@ -69,7 +78,7 @@ fn client_messages() -> Vec<ClientMessage> {
         }),
         ClientMessage::Key(Key {
             window: W,
-            code: KeyCode(0xe1),
+            code: KeyCode::new(KeyCode::CONSUMER_PAGE, 0xe9),
             down: true,
         }),
         ClientMessage::Text {
@@ -92,8 +101,11 @@ fn client_messages() -> Vec<ClientMessage> {
             request: 9,
             window: Some(W),
         },
+        ClientMessage::KeepAlive,
+        ClientMessage::Sync { request: 4 },
         ClientMessage::UnitProcess {
             pid: 31337,
+            start_time: 1_234_567_890,
             job: Some("devlanes-acme-web".into()),
         },
         ClientMessage::UnitExited { code: Some(-1) },
@@ -101,25 +113,28 @@ fn client_messages() -> Vec<ClientMessage> {
         ClientMessage::LaneThawed,
     ];
     // Fails to compile when a variant is added, so this list grows with it.
-    let mut seen = [false; 16];
+    let mut seen = [false; 19];
     for message in &all {
         let index = match message {
             ClientMessage::Hello(_) => 0,
             ClientMessage::FrameAck { .. } => 1,
             ClientMessage::KeyframeRequest { .. } => 2,
             ClientMessage::Pointer(_) => 3,
-            ClientMessage::Wheel(_) => 4,
-            ClientMessage::Key(_) => 5,
-            ClientMessage::Text { .. } => 6,
-            ClientMessage::Resize { .. } => 7,
-            ClientMessage::Close { .. } => 8,
-            ClientMessage::Focus { .. } => 9,
-            ClientMessage::Clipboard { .. } => 10,
-            ClientMessage::Screenshot { .. } => 11,
-            ClientMessage::UnitProcess { .. } => 12,
-            ClientMessage::UnitExited { .. } => 13,
-            ClientMessage::LaneFrozen => 14,
-            ClientMessage::LaneThawed => 15,
+            ClientMessage::PointerLeft { .. } => 4,
+            ClientMessage::Wheel(_) => 5,
+            ClientMessage::Key(_) => 6,
+            ClientMessage::Text { .. } => 7,
+            ClientMessage::Resize { .. } => 8,
+            ClientMessage::Close { .. } => 9,
+            ClientMessage::Focus { .. } => 10,
+            ClientMessage::Clipboard { .. } => 11,
+            ClientMessage::Screenshot { .. } => 12,
+            ClientMessage::KeepAlive => 13,
+            ClientMessage::Sync { .. } => 14,
+            ClientMessage::UnitProcess { .. } => 15,
+            ClientMessage::UnitExited { .. } => 16,
+            ClientMessage::LaneFrozen => 17,
+            ClientMessage::LaneThawed => 18,
         };
         seen[index] = true;
     }
@@ -134,6 +149,7 @@ fn client_messages() -> Vec<ClientMessage> {
 fn host_messages() -> Vec<HostMessage> {
     let all = vec![
         HostMessage::Welcome(Welcome {
+            session: SessionId(u64::MAX),
             service: "acme:desktop".into(),
             encoders: vec![CodecOffer {
                 codec: CodecId::RAW,
@@ -144,6 +160,7 @@ fn host_messages() -> Vec<HostMessage> {
                 window(),
                 WindowInfo {
                     id: WindowId(8),
+                    kind: WindowKind::Tooltip,
                     ..window()
                 },
             ],
@@ -159,6 +176,7 @@ fn host_messages() -> Vec<HostMessage> {
             max_size: Some(Size::new(8192, 8192)),
             parent: None,
             lock: LockState::Frozen,
+            kind: WindowKind::Dialog,
             ..window()
         }),
         HostMessage::WindowRemoved { window: W },
@@ -193,6 +211,7 @@ fn host_messages() -> Vec<HostMessage> {
             text: "from the app".into(),
         },
         HostMessage::InputHolder(Some(Holder {
+            session: SessionId(2),
             client_id: "box-1:4242".into(),
             name: "ada on acme".into(),
         })),
@@ -206,10 +225,15 @@ fn host_messages() -> Vec<HostMessage> {
             }),
         },
         HostMessage::Heartbeat,
+        HostMessage::ResizeApplied {
+            window: W,
+            from_seq: 12,
+        },
+        HostMessage::Synced { request: 4 },
         HostMessage::Activity,
     ];
     // Fails to compile when a variant is added, so this list grows with it.
-    let mut seen = [false; 14];
+    let mut seen = [false; 16];
     for message in &all {
         let index = match message {
             HostMessage::Welcome(_) => 0,
@@ -225,7 +249,9 @@ fn host_messages() -> Vec<HostMessage> {
             HostMessage::InputHolder(_) => 10,
             HostMessage::Screenshot { .. } => 11,
             HostMessage::Heartbeat => 12,
-            HostMessage::Activity => 13,
+            HostMessage::ResizeApplied { .. } => 13,
+            HostMessage::Synced { .. } => 14,
+            HostMessage::Activity => 15,
         };
         seen[index] = true;
     }
@@ -265,7 +291,30 @@ fn more_host_messages() -> Vec<HostMessage> {
         grab: Point::new(4, 4),
     }));
     all.push(HostMessage::InputHolder(None));
+    all.push(HostMessage::LockChanged {
+        window: W,
+        state: LockState::Locked,
+    });
     all
+}
+
+/// Every hello role, the reserved one and an unknown one included.
+fn hellos() -> Vec<ClientMessage> {
+    [
+        Role::Viewer,
+        Role::Tool,
+        Role::Control,
+        Role::Input,
+        Role::Unknown(200),
+    ]
+    .into_iter()
+    .map(|role| {
+        ClientMessage::Hello(Hello {
+            token: None,
+            ..hello(role)
+        })
+    })
+    .collect()
 }
 
 /// The messages as one stream.
@@ -313,7 +362,8 @@ fn decode_in_chunks<M>(
 
 #[test]
 fn every_message_survives_a_round_trip_whatever_the_chunking() {
-    let client = client_messages();
+    let mut client = client_messages();
+    client.extend(hellos());
     let mut host = host_messages();
     host.extend(more_host_messages());
     let client_stream = encode_client(&client);
@@ -352,6 +402,92 @@ fn every_message_survives_a_round_trip_whatever_the_chunking() {
     }
 }
 
+#[test]
+fn the_largest_valid_messages_fit_their_limits() {
+    let full = |n: usize| "é".repeat(n / 2);
+    let full_window = |id| WindowInfo {
+        id: WindowId(id),
+        title: full(MAX_TITLE),
+        app_id: full(MAX_APP_ID),
+        max_size: Some(Size::new(8192, 8192)),
+        ..window()
+    };
+    let offers = vec![
+        CodecOffer {
+            codec: CodecId::H264,
+            hardware: true
+        };
+        MAX_CODECS
+    ];
+    let features = vec!["f".repeat(MAX_FEATURE); MAX_FEATURES];
+    let host = vec![
+        HostMessage::Welcome(Welcome {
+            session: SessionId(1),
+            service: full(MAX_NAME),
+            encoders: offers.clone(),
+            real_desktop: false,
+            windows: (0..MAX_WINDOWS as u32).map(full_window).collect(),
+            features: features.clone(),
+        }),
+        HostMessage::WindowChanged(full_window(1)),
+        HostMessage::Cursor(Cursor {
+            window: W,
+            shape: CursorShape::Image(CursorImage {
+                size: Size::new(MAX_CURSOR_SIDE, MAX_CURSOR_SIDE),
+                hotspot: Point::new(0, 0),
+                pixels: Bytes::from(vec![7; (MAX_CURSOR_SIDE * MAX_CURSOR_SIDE * 4) as usize]),
+            }),
+            position: Some(Point::new(1, 1)),
+        }),
+        HostMessage::InputHolder(Some(Holder {
+            session: SessionId(1),
+            client_id: "i".repeat(MAX_ID),
+            name: "n".repeat(MAX_NAME),
+        })),
+        HostMessage::Refused(Refusal {
+            reason: RefusalReason::Other,
+            message: "m".repeat(MAX_MESSAGE),
+        }),
+        HostMessage::Clipboard {
+            text: "c".repeat(MAX_CLIPBOARD),
+        },
+        HostMessage::Screenshot {
+            request: 1,
+            result: ScreenshotResult::Failed("m".repeat(MAX_MESSAGE)),
+        },
+    ];
+    let client = vec![
+        ClientMessage::Hello(Hello {
+            role: Role::Viewer,
+            client_id: "i".repeat(MAX_ID),
+            client_name: "n".repeat(MAX_NAME),
+            decoders: offers,
+            features,
+            token: Some(Token::new("t".repeat(MAX_ID))),
+        }),
+        ClientMessage::Text {
+            window: W,
+            text: "t".repeat(MAX_TEXT),
+        },
+        ClientMessage::Clipboard {
+            text: "c".repeat(MAX_CLIPBOARD),
+        },
+        ClientMessage::UnitProcess {
+            pid: u32::MAX,
+            start_time: u64::MAX,
+            job: Some("j".repeat(MAX_MESSAGE)),
+        },
+    ];
+    assert_eq!(
+        decode_in_chunks(&encode_host(&host), [], HostMessage::decode),
+        host
+    );
+    assert_eq!(
+        decode_in_chunks(&encode_client(&client), [], ClientMessage::decode),
+        client
+    );
+}
+
 /// Rewrites the body length in the header of a single encoded frame.
 fn with_len(frame: &[u8], len: usize) -> BytesMut {
     let mut out = BytesMut::from(&frame[..HEADER_LEN]);
@@ -362,7 +498,9 @@ fn with_len(frame: &[u8], len: usize) -> BytesMut {
 
 #[test]
 fn a_body_cut_short_anywhere_is_an_error_not_a_panic() {
-    for message in client_messages() {
+    let mut client = client_messages();
+    client.extend(hellos());
+    for message in client {
         let frame = encode_client(std::slice::from_ref(&message));
         for len in 0..frame.len() - HEADER_LEN {
             let result = ClientMessage::decode(&mut with_len(&frame, len));
@@ -387,7 +525,140 @@ fn a_body_cut_short_anywhere_is_an_error_not_a_panic() {
 }
 
 #[test]
-fn random_bodies_never_panic() {
+fn a_malformed_value_in_a_complete_body_names_its_field() {
+    /// Encodes `message` and writes `bytes` at `offset` into its body.
+    fn patched(message: Message, offset: usize, bytes: &[u8]) -> Result<(), DecodeError> {
+        let mut frame = match &message {
+            Message::Client(m) => encode_client(std::slice::from_ref(m)),
+            Message::Host(m) => encode_host(std::slice::from_ref(m)),
+        };
+        let at = HEADER_LEN + offset;
+        frame[at..at + bytes.len()].copy_from_slice(bytes);
+        match message {
+            Message::Client(_) => ClientMessage::decode(&mut frame).map(|_| ()),
+            Message::Host(_) => HostMessage::decode(&mut frame).map(|_| ()),
+        }
+    }
+    enum Message {
+        Client(ClientMessage),
+        Host(HostMessage),
+    }
+    let invalid = |kind, field, value| DecodeError::InvalidValue { kind, field, value };
+    let pointer = ClientMessage::Pointer(Pointer {
+        window: W,
+        position: Point::new(1, 1),
+        buttons: Buttons::NONE,
+        screen_delta: None,
+    });
+    let wheel = || {
+        ClientMessage::Wheel(Wheel {
+            window: W,
+            position: Point::new(1, 1),
+            delta_x: 1.0,
+            delta_y: 1.0,
+            unit: WheelUnit::Pixels,
+        })
+    };
+    let nan = f32::NAN.to_bits();
+    let host = host_messages();
+    let cursor = host[6].clone();
+    let cases: Vec<(Message, usize, Vec<u8>, DecodeError)> = vec![
+        (
+            Message::Client(ClientMessage::Focus {
+                window: W,
+                focused: true,
+            }),
+            4,
+            vec![2],
+            invalid(0x0a, "focused", 2),
+        ),
+        (
+            Message::Client(pointer),
+            13,
+            vec![3],
+            invalid(0x04, "screen delta", 3),
+        ),
+        (
+            Message::Client(wheel()),
+            12,
+            nan.to_be_bytes().to_vec(),
+            invalid(0x05, "wheel delta", nan.into()),
+        ),
+        (
+            Message::Client(wheel()),
+            20,
+            vec![2],
+            invalid(0x05, "wheel unit", 2),
+        ),
+        (
+            Message::Client(ClientMessage::Resize {
+                window: W,
+                size: Size::new(10, 10),
+            }),
+            4,
+            9000u32.to_be_bytes().to_vec(),
+            invalid(0x08, "size", 9000),
+        ),
+        (
+            Message::Client(ClientMessage::Text {
+                window: W,
+                text: "ok".into(),
+            }),
+            8,
+            vec![0xff],
+            DecodeError::InvalidUtf8 {
+                kind: 0x07,
+                field: "text",
+            },
+        ),
+        (
+            Message::Host(host[7].clone()),
+            4,
+            vec![9],
+            invalid(0x88, "edge", 9),
+        ),
+        (
+            Message::Host(host[5].clone()),
+            14,
+            vec![0; 4],
+            invalid(0x86, "frame size", 0),
+        ),
+        (
+            Message::Host(host[11].clone()),
+            9,
+            vec![0; 4],
+            invalid(0x8c, "screenshot size", 0),
+        ),
+        // The image says 2x1 (8 bytes) and its pixel string holds 4.
+        (
+            Message::Host(cursor.clone()),
+            21,
+            4u32.to_be_bytes().to_vec(),
+            invalid(0x87, "cursor pixels", 4),
+        ),
+        (
+            Message::Host(cursor),
+            5,
+            vec![0; 4],
+            invalid(0x87, "cursor size", 1),
+        ),
+        (
+            Message::Host(host[3].clone()),
+            0,
+            vec![0xff, 0xff],
+            DecodeError::Truncated {
+                kind: 0x84,
+                field: "window",
+            },
+        ),
+    ];
+    for (message, offset, bytes, expected) in cases {
+        assert_eq!(patched(message, offset, &bytes), Err(expected));
+    }
+}
+
+#[test]
+fn random_bodies_and_mutated_frames_never_panic() {
     // A fixed xorshift, so a failure reproduces.
     let mut state = 0x9e37_79b9_7f4a_7c15_u64;
     let mut next = move || {
@@ -396,19 +667,44 @@ fn random_bodies_never_panic() {
         state ^= state << 17;
         state
     };
+    let decode = |frame: &mut BytesMut| {
+        let result = match frame[0] < 0x80 {
+            true => ClientMessage::decode(frame).map(|_| ()),
+            false => HostMessage::decode(frame).map(|_| ()),
+        };
+        // Errors are fine; only reaching here without a panic matters.
+        drop(result);
+    };
     for _ in 0..20_000 {
         let kind = (next() % 0xc0) as u8;
         let len = (next() % 96) as usize;
         let mut frame = BytesMut::new();
-        frame.extend_from_slice(&[kind]);
-        frame.extend_from_slice(&(len as u32).to_be_bytes());
+        frame.put_u8(kind);
+        frame.put_u32(len as u32);
         frame.extend((0..len).map(|_| next() as u8));
-        let result = match kind < 0x80 {
-            true => ClientMessage::decode(&mut frame).map(|_| ()),
-            false => HostMessage::decode(&mut frame).map(|_| ()),
-        };
-        // Errors are fine; only reaching here without a panic matters.
-        drop(result);
+        decode(&mut frame);
+    }
+
+    // Valid frames with one byte changed reach the checks deep in each body.
+    let mut frames: Vec<BytesMut> = client_messages()
+        .iter()
+        .chain(&hellos())
+        .map(|m| encode_client(std::slice::from_ref(m)))
+        .collect();
+    frames.extend(
+        host_messages()
+            .iter()
+            .chain(&more_host_messages())
+            .map(|m| encode_host(std::slice::from_ref(m))),
+    );
+    for frame in frames {
+        for at in HEADER_LEN..frame.len() {
+            for value in [0x00, 0xff, frame[at] ^ 0x01, frame[at] ^ 0x80] {
+                let mut mutated = frame.clone();
+                mutated[at] = value;
+                decode(&mut mutated);
+            }
+        }
     }
 }
 
@@ -445,14 +741,15 @@ fn an_oversized_frame_is_refused_from_its_header_alone() {
 #[test]
 fn a_list_count_above_its_limit_is_refused_before_reading_entries() {
     let mut frame = encode_host(&[HostMessage::Welcome(Welcome {
+        session: SessionId(1),
         service: String::new(),
         encoders: Vec::new(),
         real_desktop: false,
         windows: Vec::new(),
         features: Vec::new(),
     })]);
-    // magic (4), version (2), service length (4), then the encoder count.
-    let count = HEADER_LEN + 10;
+    // magic (4), version (2), session (8), service length (4), then the encoder count.
+    let count = HEADER_LEN + 18;
     frame[count..count + 2].copy_from_slice(&u16::MAX.to_be_bytes());
     assert!(matches!(
         HostMessage::decode(&mut frame),
@@ -478,7 +775,7 @@ fn unknown_types_and_appended_fields_are_skipped() {
     assert_eq!(ClientMessage::decode(&mut stream), Ok(Some(ack)));
     assert!(stream.is_empty());
 
-    // Unknown codecs and cursor names are kept or fall back.
+    // Unknown cursor names fall back to the arrow.
     let mut frame = encode_host(&[HostMessage::Cursor(Cursor {
         window: W,
         shape: CursorShape::Text,
@@ -492,6 +789,53 @@ fn unknown_types_and_appended_fields_are_skipped() {
 }
 
 #[test]
+fn a_later_welcome_with_longer_windows_and_offers_still_decodes() {
+    // A window as this version writes it: a u16 length, then its fields.
+    let added = encode_host(&[HostMessage::WindowAdded(window())]);
+    let mut longer_window = BytesMut::new();
+    longer_window.put_u16(u16::from_be_bytes([added[HEADER_LEN], added[HEADER_LEN + 1]]) + 2);
+    longer_window.extend_from_slice(&added[HEADER_LEN + 2..]);
+    longer_window.extend_from_slice(&[0xaa, 0xbb]);
+    // An unknown window kind falls back to a top-level window.
+    let kind_at = longer_window.len() - 3;
+    longer_window[kind_at] = 0x40;
+
+    let mut body = BytesMut::new();
+    body.extend_from_slice(&MAGIC);
+    body.put_u16(PROTOCOL_VERSION);
+    body.put_u64(5);
+    body.put_u32(4);
+    body.extend_from_slice(b"acme");
+    body.put_u16(1);
+    body.extend_from_slice(&[0, 4, CodecId::H264.0, 1, 0xcc, 0xdd]);
+    body.put_u8(1);
+    body.put_u16(1);
+    body.extend_from_slice(&longer_window);
+    body.put_u16(0);
+    body.extend_from_slice(&[0xee]);
+    let mut frame = BytesMut::new();
+    frame.put_u8(0x81);
+    frame.put_u32(body.len() as u32);
+    frame.extend_from_slice(&body);
+
+    let expected = HostMessage::Welcome(Welcome {
+        session: SessionId(5),
+        service: "acme".into(),
+        encoders: vec![CodecOffer {
+            codec: CodecId::H264,
+            hardware: true,
+        }],
+        real_desktop: true,
+        windows: vec![WindowInfo {
+            kind: WindowKind::Toplevel,
+            ..window()
+        }],
+        features: Vec::new(),
+    });
+    assert_eq!(HostMessage::decode(&mut frame), Ok(Some(expected)));
+}
+
+#[test]
 fn a_message_sent_the_wrong_way_is_an_error() {
     let mut host_frame = encode_host(&[HostMessage::Heartbeat]);
     assert_eq!(
@@ -502,6 +846,43 @@ fn a_message_sent_the_wrong_way_is_an_error() {
     assert!(matches!(
         HostMessage::decode(&mut client_frame),
         Err(DecodeError::WrongDirection { .. })
+    ));
+}
+
+#[test]
+fn a_first_frame_that_is_not_the_handshake_is_bad_magic() {
+    let mut http = BytesMut::from(&b"G"[..]);
+    assert_eq!(
+        ClientMessage::decode_hello(&mut http),
+        Err(DecodeError::BadMagic)
+    );
+    let mut early = encode_client(&[ClientMessage::KeepAlive]);
+    assert_eq!(
+        ClientMessage::decode_hello(&mut early),
+        Err(DecodeError::BadMagic)
+    );
+    let mut partial = encode_client(&hellos()[..1]);
+    let whole = partial.split_off(0);
+    partial.extend_from_slice(&whole[..3]);
+    assert_eq!(ClientMessage::decode_hello(&mut partial), Ok(None));
+    partial.extend_from_slice(&whole[3..]);
+    assert!(matches!(
+        ClientMessage::decode_hello(&mut partial),
+        Ok(Some(Hello {
+            role: Role::Viewer,
+            ..
+        }))
+    ));
+
+    let mut heartbeat = encode_host(&[HostMessage::Heartbeat]);
+    assert_eq!(
+        HostMessage::decode_answer(&mut heartbeat),
+        Err(DecodeError::BadMagic)
+    );
+    let mut refusal = encode_host(&host_messages()[1..2]);
+    assert!(matches!(
+        HostMessage::decode_answer(&mut refusal),
+        Ok(Some(HostMessage::Refused(_)))
     ));
 }
 
@@ -522,7 +903,7 @@ fn a_version_mismatch_is_a_typed_error_both_ways() {
 
     let hello = encode_client(&client_messages()[..1]);
     assert_eq!(
-        ClientMessage::decode(&mut with_version(hello, theirs)),
+        ClientMessage::decode_hello(&mut with_version(hello, theirs)),
         Err(expected.clone())
     );
 
@@ -533,12 +914,12 @@ fn a_version_mismatch_is_a_typed_error_both_ways() {
         message: String::new(),
     })]);
     assert_eq!(
-        HostMessage::decode(&mut with_version(refusal, theirs)),
+        HostMessage::decode_answer(&mut with_version(refusal, theirs)),
         Err(expected.clone())
     );
     let welcome = encode_host(&host_messages()[..1]);
     assert_eq!(
-        HostMessage::decode(&mut with_version(welcome, theirs)),
+        HostMessage::decode_answer(&mut with_version(welcome, theirs)),
         Err(expected)
     );
 
@@ -548,6 +929,47 @@ fn a_version_mismatch_is_a_typed_error_both_ways() {
         ClientMessage::decode(&mut not_ours),
         Err(DecodeError::BadMagic)
     );
+}
+
+#[test]
+fn each_role_may_send_only_its_own_messages() {
+    let roles = [
+        Role::Viewer,
+        Role::Tool,
+        Role::Control,
+        Role::Input,
+        Role::Unknown(9),
+    ];
+    for message in client_messages() {
+        let allowed: Vec<Role> = roles
+            .into_iter()
+            .filter(|role| message.allowed_for(*role))
+            .collect();
+        let expected: &[Role] = match &message {
+            ClientMessage::Hello(_) => &[],
+            ClientMessage::UnitProcess { .. }
+            | ClientMessage::UnitExited { .. }
+            | ClientMessage::LaneFrozen
+            | ClientMessage::LaneThawed => &[Role::Control],
+            ClientMessage::FrameAck { .. } | ClientMessage::KeyframeRequest { .. } => {
+                &[Role::Viewer, Role::Input]
+            }
+            ClientMessage::Screenshot { .. } => &[Role::Viewer, Role::Tool],
+            _ => &[Role::Viewer, Role::Tool, Role::Input],
+        };
+        assert_eq!(allowed, expected, "{message:?}");
+    }
+}
+
+#[test]
+fn a_token_never_shows_in_debug_output() {
+    let message = ClientMessage::Hello(hello(Role::Control));
+    let printed = format!("{message:?}");
+    assert!(printed.contains("Token(<redacted>)"));
+    assert!(!printed.contains("0123abcd"));
+    assert_eq!(Token::new("0123abcd"), Token::new("0123abcd"));
+    assert_ne!(Token::new("0123abcd"), Token::new("0123abce"));
+    assert_ne!(Token::new("0123abcd"), Token::new("0123abc"));
 }
 
 #[test]
