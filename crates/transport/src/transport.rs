@@ -88,11 +88,10 @@ pub trait Connection: Send + Sync {
 /// `Refused` (a few hundred bytes), still reaches the client while the
 /// process keeps running. A transport whose close discards unsent stream
 /// data, as QUIC's does, waits a bounded time for the client to close before
-/// it closes on drop. Nothing larger is promised. When the box process exits
-/// right after [`crate::serve`] returns, as `devlanes tunnel --stdio` does
-/// after `Incompatible` and `PairingRefused`, that message is best effort; a
-/// box that must be sure the client read its last words waits for the client
-/// to close first, as [`crate::refuse`] does.
+/// it closes on drop. Nothing larger is promised. A process that exits right
+/// after the drop, as `devlanes tunnel --stdio` does, can lose the message,
+/// so [`crate::serve`] and [`crate::refuse`] wait, bounded by the handshake
+/// limit, for the client to close after these messages before they return.
 #[async_trait]
 pub trait ServerConnection: Send {
     /// The next stream the client opened; `None` once the connection is gone.

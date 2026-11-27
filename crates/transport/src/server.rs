@@ -223,7 +223,8 @@ struct Hello {
 }
 
 /// Accepts the control stream and reads the client's hello. A client of
-/// another protocol revision is told so and fails the session.
+/// another protocol revision is told so and fails the session once it
+/// closed, or after the handshake limit.
 async fn hello(
     connection: &mut BoxServerConnection,
     timing: Timing,
@@ -268,6 +269,7 @@ async fn hello(
             control.close().await
         })
         .await;
+        wait_for_close(connection, timing).await;
         return Err(ServeError::IncompatibleClient { protocol, client });
     }
     let hello = Hello {
@@ -299,20 +301,30 @@ pub async fn refuse(
     })
     .await
     .map_err(|_| ServeError::ClientTimeout)??;
-    // The client closes the session once it read the refusal. Dropping the
-    // connection sends the frame, but `refuse_stdio` exits the process right
-    // after this returns, which can end the close before the frame is out.
+    wait_for_close(&mut connection, timing).await;
+    Ok(())
+}
+
+/// Waits, at most the handshake limit, for the client to close
+/// `connection` after the box sent it its last message and closed the
+/// control stream. Stream writes only queue frames for the transport, and
+/// `devlanes tunnel --stdio` exits as soon as the session returns, which
+/// can end the process before they are out. A client closes once it read
+/// the message, so after the close nothing is left to send.
+async fn wait_for_close(connection: &mut BoxServerConnection, timing: Timing) {
     let _ = timeout(timing.handshake_timeout, async {
         while connection.accept().await.is_some() {}
     })
     .await;
-    Ok(())
 }
 
 /// Runs one box-side session over `connection` until the client leaves.
 ///
 /// The first stream must be the control stream. Returns `Ok(())` when the
-/// client closes the session; per-stream tasks are aborted on return.
+/// client closes the session; per-stream tasks are aborted on return. A
+/// client turned away for its protocol revision or its pairing code is
+/// given the handshake limit to read why and close before this fails, so
+/// the caller may drop the connection or exit at once.
 pub async fn serve(
     mut connection: BoxServerConnection,
     services: BoxServices,
@@ -337,7 +349,7 @@ pub async fn serve(
     };
     // Nothing about the box, not even its welcome, goes to a client it does
     // not serve, and nothing it opens before then is answered.
-    refusing_streams(
+    let paired = refusing_streams(
         &mut connection,
         pair(
             &mut control,
@@ -347,7 +359,11 @@ pub async fn serve(
             &options,
         ),
     )
-    .await?;
+    .await;
+    if let Err(ServeError::PairingRefused { .. }) = &paired {
+        wait_for_close(&mut connection, timing).await;
+    }
+    paired?;
     let feed = services
         .registry
         .subscribe(&peer)

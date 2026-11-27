@@ -1024,6 +1024,8 @@ mod tests {
                     .starts_with(&format!("the box speaks protocol {PROTOCOL_VERSION} but")),
                 "{error}"
             );
+            // The box waits for the client to close, as a client does once it read why.
+            drop((control, mux));
             let result = server.await?;
             assert!(matches!(result, Err(ServeError::IncompatibleClient { .. })));
             Ok(())
