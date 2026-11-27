@@ -12,6 +12,7 @@ use devlanes_gui_proto::{
 
 const W: WindowId = WindowId(7);
 
+/// A popup with every optional field set.
 fn window() -> WindowInfo {
     WindowInfo {
         id: W,
@@ -267,6 +268,7 @@ fn more_host_messages() -> Vec<HostMessage> {
     all
 }
 
+/// The messages as one stream.
 fn encode_client(messages: &[ClientMessage]) -> BytesMut {
     let mut out = BytesMut::new();
     for message in messages {
@@ -275,6 +277,7 @@ fn encode_client(messages: &[ClientMessage]) -> BytesMut {
     out
 }
 
+/// The messages as one stream.
 fn encode_host(messages: &[HostMessage]) -> BytesMut {
     let mut out = BytesMut::new();
     for message in messages {

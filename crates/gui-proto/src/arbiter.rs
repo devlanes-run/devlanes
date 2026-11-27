@@ -187,6 +187,7 @@ mod tests {
     const B: SessionId = SessionId(2);
     const KEY_A: KeyCode = KeyCode(0x04);
 
+    /// `n` milliseconds.
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
     }

@@ -62,6 +62,7 @@ pub fn select(encoders: &[CodecOffer], decoders: &[CodecOffer]) -> Option<Select
 mod tests {
     use super::*;
 
+    /// An offer of `codec`.
     fn offer(codec: CodecId, hardware: bool) -> CodecOffer {
         CodecOffer { codec, hardware }
     }

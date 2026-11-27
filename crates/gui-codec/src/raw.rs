@@ -159,6 +159,7 @@ mod tests {
         Frame::new(width, height, stride, data).expect("valid frame")
     }
 
+    /// Decodes an encoder's output with a fresh decoder.
     fn decode(encoded: &Encoded) -> Frame {
         RawDecoder::new()
             .decode(&Packet {

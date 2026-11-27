@@ -142,6 +142,7 @@ impl WindowLock {
 mod tests {
     use super::*;
 
+    /// `n` seconds.
     fn s(n: u64) -> Duration {
         Duration::from_secs(n)
     }

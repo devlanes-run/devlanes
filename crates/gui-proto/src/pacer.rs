@@ -432,6 +432,7 @@ mod tests {
     const A: SessionId = SessionId(1);
     const B: SessionId = SessionId(2);
 
+    /// `n` milliseconds.
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
     }
