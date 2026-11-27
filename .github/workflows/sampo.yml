@@ -37,7 +37,7 @@ jobs:
         with:
           tool: cargo-binstall@1.25.3
       - id: sampo
-        uses: bruits/sampo/crates/sampo-github-action@dc653d6ac85c45f139b0af898fb2dd1507f3fcd8 # cargo-sampo-github-action-v0.22.0
+        uses: bruits/sampo/crates/sampo-github-action@8494f0fd88b6b3ada5adabf8a1ac682a927a96ee # cargo-sampo-github-action-v0.22.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
