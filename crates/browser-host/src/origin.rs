@@ -6,8 +6,8 @@ use std::ffi::{OsStr, OsString};
 pub const SCHEME: &str = "chrome-extension://";
 
 /// The ids of the extensions allowed to start the host. The Chrome Web Store
-/// gave the devlanes extension this id. Its manifest carries the store's
-/// public key as `key`, so unpacked builds get the same id.
+/// gave the devlanes extension this id. The extension's manifest carries the
+/// store's public key as `key`, so unpacked builds get the same id.
 pub const ALLOWED_IDS: &[&str] = &["konofbnhgejkgkonkleipkkpkphbfgee"];
 
 /// The origins of [`ALLOWED_IDS`], as a host manifest's `allowed_origins`
