@@ -57,7 +57,7 @@
 ┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ No other machine connects here yet. Press p for a pairing code.                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- enter show   d disconnect   n new box   p pairing code   j k select   esc back                                                                                                   ? all keys   q quit
+ enter retry   d disconnect   n new box   p pairing code   j k select   esc back                                                                                                  ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183 bold underlined, 184-187 bold underlined yellow, 188-198 yellow
@@ -119,4 +119,4 @@
 56: 0 darkgray, 1-14 bold, 15-199 darkgray
 57: 0 darkgray, 2-64 dim, 199 darkgray
 58: 0-199 darkgray
-59: 1-5 bold, 6-13 dim, 14 bold, 15-28 dim, 29 bold, 30-40 dim, 41 bold, 42-57 dim, 58-60 bold, 61-70 dim, 71-73 bold, 74-81 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim
+59: 1-5 bold, 6-14 dim, 15 bold, 16-29 dim, 30 bold, 31-41 dim, 42 bold, 43-58 dim, 59-61 bold, 62-71 dim, 72-74 bold, 75-82 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

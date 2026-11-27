@@ -4411,7 +4411,7 @@ impl App {
 
     /// Enter on the boxes view: a connected box asks before disconnecting;
     /// any other one opens the connect modal, which resumes a box waiting
-    /// for a sign-in or a pairing code and asks its questions.
+    /// for a sign-in, a pairing code or its next try and asks its questions.
     fn box_enter(&mut self, effects: &mut Vec<Effect>) {
         let Some(host) = self.boxes.selected_host() else {
             if self.boxes.part == BoxPart::Clients && self.boxes.clients.current().is_some() {
