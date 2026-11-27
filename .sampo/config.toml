@@ -31,6 +31,7 @@ linked = [[
   "cargo/devlanes-env-direnv",
   "cargo/devlanes-env-mise",
   "cargo/devlanes-git",
+  "cargo/devlanes-gui-proto",
   "cargo/devlanes-infra-compose",
   "cargo/devlanes-infra-docker",
   "cargo/devlanes-ipc",

@@ -1,0 +1,15 @@
+[package]
+name = "devlanes-gui-proto"
+description = "Wire messages, framing and pacing state machines of the devlanes GUI protocol"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes.workspace = true
+thiserror.workspace = true
