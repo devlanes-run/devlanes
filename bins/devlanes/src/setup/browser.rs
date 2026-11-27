@@ -4,10 +4,10 @@
 //!
 //! Only browsers whose user data folder exists are registered. On macOS and
 //! Linux each browser reads `NativeMessagingHosts/` in that folder, so the
-//! manifest goes there. On Windows the browsers read a registry key that
-//! names the manifest, so one manifest goes under
-//! `%USERPROFILE%\.devlanes\browser\` and each installed browser's key
-//! points at it.
+//! manifest goes there, except Brave on macOS, which reads Chrome's folder.
+//! On Windows the browsers read a registry key that names the manifest, so
+//! one manifest goes under `%USERPROFILE%\.devlanes\browser\` and each
+//! installed browser's key points at it.
 //!
 //! That file, `~/.devlanes/browser/run.devlanes.browser.json`, is kept on
 //! every OS, so a user with a Chromium browser outside the list can link it
@@ -136,7 +136,8 @@ impl Browser {
     // key, then Chrome's, and never `Software\BraveSoftware`: brave-core
     // doesn't override `launch_context_win.cc`, and Brave 158 finds a host
     // under either key and not under its own. Both are written, so Brave
-    // finds this install whichever one it reads.
+    // finds this install whichever one it reads. On macOS Brave reads
+    // Chrome's folder, see [`Browser::hosts_folder`].
     pub(crate) const BRAVE: Self = Self {
         name: "Brave",
         macos: Some("BraveSoftware/Brave-Browser"),
@@ -196,6 +197,19 @@ impl Browser {
             Layout::Windows => self.windows.map(|(folder, _)| folder),
         }?;
         Some(path.split('/').collect())
+    }
+
+    /// The folder whose `NativeMessagingHosts` the browser reads on macOS and
+    /// Linux, relative to the same folder as [`Browser::folder`].
+    fn hosts_folder(self, layout: Layout) -> Option<PathBuf> {
+        // brave-core's `BraveMainDelegate::PreSandboxStartup` points Brave on
+        // macOS at `~/Library/Application Support/Google/Chrome`, whatever
+        // `--user-data-dir` says, and creates its `NativeMessagingHosts` on
+        // every start. On Linux Brave reads its own folder.
+        if layout == Layout::MacOs && self == Self::BRAVE {
+            return Self::CHROME.folder(layout);
+        }
+        self.folder(layout)
     }
 
     /// The keys setup writes for the browser under the registry root, on
@@ -266,14 +280,31 @@ impl Location {
             .filter(|browser| browser.folder(self.layout).is_some())
     }
 
-    /// `browser`'s user data folder; its existence means it is installed.
-    fn user_data(&self, browser: Browser) -> PathBuf {
-        let base = match self.layout {
+    /// The folder the browsers keep their user data under.
+    fn base(&self) -> PathBuf {
+        match self.layout {
             Layout::MacOs => self.home.join("Library").join("Application Support"),
             Layout::Linux => self.home.join(".config"),
             Layout::Windows => self.local_app_data.clone(),
-        };
-        base.join(browser.folder(self.layout).unwrap_or_default())
+        }
+    }
+
+    /// `browser`'s user data folder.
+    fn user_data(&self, browser: Browser) -> PathBuf {
+        self.base()
+            .join(browser.folder(self.layout).unwrap_or_default())
+    }
+
+    /// Whether `browser` is installed: its user data folder exists. Brave on
+    /// macOS creates Chrome's folder too, so there Chrome counts only with
+    /// `Local State`, which Chrome writes on its first start and Brave never
+    /// writes there.
+    fn installed(&self, browser: Browser) -> bool {
+        let folder = self.user_data(browser);
+        if self.layout == Layout::MacOs && browser == Browser::CHROME {
+            return folder.join("Local State").is_file();
+        }
+        folder.is_dir()
     }
 
     /// The copy of the manifest setup keeps on every OS, for a browser that
@@ -295,9 +326,11 @@ impl Location {
         )
     }
 
-    /// The manifest `browser` reads on macOS and Linux.
+    /// The manifest `browser` reads on macOS and Linux. Brave and Chrome share
+    /// one on macOS.
     fn unix_manifest(&self, browser: Browser) -> PathBuf {
-        self.user_data(browser)
+        self.base()
+            .join(browser.hosts_folder(self.layout).unwrap_or_default())
             .join("NativeMessagingHosts")
             .join(manifest_name())
     }
@@ -417,8 +450,9 @@ pub(crate) struct Registration {
     /// Windows: the key under `HKCU` that `place` names.
     pub(crate) key: Option<String>,
     pub(crate) found: Found,
-    /// Whether the browser's user data folder exists. On Windows a key can
-    /// outlive its browser, and `--remove` still deletes it when it's ours.
+    /// Whether the browser is installed, by [`Location::installed`]. On
+    /// Windows a key can outlive its browser, and `--remove` still deletes
+    /// it when it's ours.
     pub(crate) installed: bool,
     /// macOS and Linux: the manifest is a symlink to [`Location::copy`],
     /// so writing the copy keeps it current.
@@ -560,7 +594,7 @@ pub(crate) fn inspect(location: &Location, install: &Install) -> Vec<Registratio
     location
         .browsers()
         .flat_map(|browser| {
-            let installed = location.user_data(browser).is_dir();
+            let installed = location.installed(browser);
             if location.layout == Layout::Windows {
                 return browser
                     .keys()
@@ -1002,11 +1036,15 @@ pub(crate) fn apply(
         }
         return Ok(lines);
     }
+    // Brave and Chrome share a manifest on macOS, so each file is written once.
+    let mut written: Vec<PathBuf> = Vec::new();
     for registration in todo {
+        let file = location.unix_manifest(registration.browser);
         // A link to the copy is current once the copy is, and replacing it
         // with a file would undo the user's link.
-        if !registration.linked {
-            write_manifest(&location.unix_manifest(registration.browser), &manifest)?;
+        if !registration.linked && !written.contains(&file) {
+            write_manifest(&file, &manifest)?;
+            written.push(file);
         }
         lines.push(registered(registration));
     }
@@ -1360,197 +1398,365 @@ mod tests {
         }
     }
 
-    /// Creates the user data folder of each of `browsers`, as installing them
-    /// would.
+    /// Creates the user data folder of each of `browsers` with its
+    /// `Local State`, as starting them once would.
     fn install_browsers(location: &Location, browsers: &[Browser]) {
         for browser in browsers {
-            std::fs::create_dir_all(location.user_data(*browser)).expect("user data folder");
+            let folder = location.user_data(*browser);
+            std::fs::create_dir_all(&folder).expect("user data folder");
+            std::fs::write(folder.join("Local State"), "{}").expect("local state");
         }
     }
 
-    /// On the macOS and Linux layouts, setup writes a manifest into each
-    /// browser folder that exists and refreshes a stale one. `--remove`
-    /// deletes the manifests that run this install, including an outdated
-    /// one, and leaves another install's in place.
+    /// On the Linux layout, setup writes a manifest into each browser folder
+    /// that exists and refreshes a stale one. `--remove` deletes the
+    /// manifests that run this install, including an outdated one, and
+    /// leaves another install's in place. The macOS tests below cover Brave
+    /// sharing Chrome's manifest there.
     #[test]
-    fn unix_layouts_register_refresh_and_remove_only_this_install() {
-        for layout in [Layout::MacOs, Layout::Linux] {
-            let temp = tempfile::tempdir().expect("tempdir");
-            let location = location(&temp.path().join("user"), layout, String::new());
-            let install = script(&temp.path().join("bin").join("devlanes"));
-            let manifest = |browser: Browser| location.unix_manifest(browser);
-            install_browsers(&location, &[Browser::CHROME, Browser::BRAVE]);
-            let gone = temp.path().join("gone").join("devlanes");
-            std::fs::create_dir_all(manifest(Browser::BRAVE).parent().expect("parent"))
-                .expect("hosts folder");
-            std::fs::write(manifest(Browser::BRAVE), other_manifest(&gone)).expect("write");
+    fn linux_registers_refreshes_and_removes_only_this_install() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let location = location(&temp.path().join("user"), Layout::Linux, String::new());
+        let install = script(&temp.path().join("bin").join("devlanes"));
+        let manifest = |browser: Browser| location.unix_manifest(browser);
+        install_browsers(&location, &[Browser::CHROME, Browser::BRAVE]);
+        let gone = temp.path().join("gone").join("devlanes");
+        std::fs::create_dir_all(manifest(Browser::BRAVE).parent().expect("parent"))
+            .expect("hosts folder");
+        std::fs::write(manifest(Browser::BRAVE), other_manifest(&gone)).expect("write");
 
-            let registrations = inspect(&location, &install);
+        let registrations = inspect(&location, &install);
+        assert_eq!(
+            founds(&location, &install),
+            [
+                Found::Missing,
+                Found::NoBrowser,
+                Found::NoBrowser,
+                Found::Stale {
+                    runs: Some(gone.clone()),
+                    ours: false
+                },
+            ]
+        );
+        // Every other browser on the list isn't installed.
+        assert!(
+            registrations
+                .iter()
+                .filter(|registration| !FOUR.contains(&registration.browser))
+                .all(|registration| registration.found == Found::NoBrowser),
+            "{registrations:?}"
+        );
+        let facts = Facts::Found {
+            install: install.clone(),
+            registrations: registrations.clone(),
+            copy: copy_of(&location, &install),
+        };
+        assert_eq!(
+            plan(&facts),
+            (
+                true,
+                false,
+                "setup registers the browser extension host for Chrome and refreshes it for Brave"
+                    .into()
+            )
+        );
+        let lines = apply(&location, &install, &registrations).expect("apply");
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(
+            lines[0],
+            format!("wrote {}", location.copy().display()),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].starts_with("registered the browser extension host for Chrome: "),
+            "{lines:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(location.copy()).expect("copy"),
+            std::fs::read_to_string(manifest(Browser::CHROME)).expect("manifest")
+        );
+        let written: Value = serde_json::from_str(
+            &std::fs::read_to_string(manifest(Browser::CHROME)).expect("read"),
+        )
+        .expect("json");
+        assert_eq!(written, install.manifest());
+        assert_eq!(
+            written["allowed_origins"],
+            json!(["chrome-extension://pggffblellmckocpflaaeligadjpkahj/"])
+        );
+        assert_eq!(written["path"], json!(install.entry));
+        assert_eq!(
+            founds(&location, &install),
+            [
+                Found::Current,
+                Found::NoBrowser,
+                Found::NoBrowser,
+                Found::Current
+            ]
+        );
+        // Setup creates no folder for a browser that isn't installed.
+        assert!(!location.user_data(Browser::EDGE).exists());
+        assert!(
+            plan(&Facts::Found {
+                install: install.clone(),
+                registrations: inspect(&location, &install),
+                copy: copy_of(&location, &install),
+            })
+            .1
+        );
+        // Nothing to write the second time.
+        assert!(
+            apply(&location, &install, &inspect(&location, &install))
+                .expect("apply")
+                .is_empty()
+        );
+
+        // Edge runs another install that exists, and Chromium has an
+        // outdated manifest of this one.
+        let other = temp.path().join("other").join("devlanes");
+        std::fs::create_dir_all(other.parent().expect("parent")).expect("other");
+        std::fs::write(&other, "").expect("other binary");
+        for (browser, text) in [
+            (Browser::EDGE, other_manifest(&other)),
+            (Browser::CHROMIUM, other_manifest(&install.entry)),
+        ] {
+            std::fs::create_dir_all(manifest(browser).parent().expect("parent"))
+                .expect("hosts folder");
+            std::fs::write(manifest(browser), text).expect("write");
+        }
+        let report = report(&location, &install);
+        assert_eq!(report["registered"], json!(["Chrome", "Brave"]), "{report}");
+        assert_eq!(
+            report["found"],
+            json!(["Chrome", "Chromium", "Edge", "Brave"])
+        );
+        assert_eq!(report["stale"][1]["browser"], "Edge", "{report}");
+        assert_eq!(report["stale"][1]["gone"], false, "{report}");
+        assert_eq!(report["stale"][0]["ours"], true, "{report}");
+        assert_eq!(report["stale"][1]["ours"], false, "{report}");
+        // Doctor words this install's outdated manifest as its own, and
+        // only Edge as another install.
+        let lines: Vec<String> =
+            devlanes_cli::doctor_checks_of(&json!({"browser": report.clone()}))
+                .into_iter()
+                .map(|check| check.text)
+                .collect();
+        assert!(
+            lines.contains(&"Chromium's extension host is out of date".to_owned()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&format!(
+                "Edge's extension host runs {}, another devlanes install",
+                other.display()
+            )),
+            "{lines:?}"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("another devlanes install"))
+                .count(),
+            1,
+            "{lines:?}"
+        );
+
+        let removal = removal(&location, &install);
+        assert_eq!(
+            removal.delete,
+            [
+                Target::File(manifest(Browser::CHROME)),
+                Target::File(manifest(Browser::CHROMIUM)),
+                Target::File(manifest(Browser::BRAVE)),
+                Target::File(location.copy()),
+            ]
+        );
+        assert_eq!(removal.keep.len(), 1, "{removal:?}");
+        assert!(
+            removal.keep[0].ends_with(&format!(
+                "in place: it runs {}, which is another devlanes install. Run devlanes setup --remove with that install to delete it",
+                other.display()
+            )),
+            "{removal:?}"
+        );
+        assert_eq!(delete(&removal).expect("delete").len(), 4);
+        for browser in [Browser::CHROME, Browser::CHROMIUM, Browser::BRAVE] {
+            assert!(!manifest(browser).exists(), "{browser:?}");
+        }
+        assert!(!location.copy().exists());
+        assert_eq!(
+            std::fs::read_to_string(manifest(Browser::EDGE)).expect("read"),
+            other_manifest(&other)
+        );
+        assert!(super::removal(&location, &install).delete.is_empty());
+    }
+
+    /// The manifest Brave reads on macOS, in Chrome's folder.
+    fn chrome_folder_manifest(location: &Location) -> PathBuf {
+        location
+            .home
+            .join("Library")
+            .join("Application Support")
+            .join("Google")
+            .join("Chrome")
+            .join("NativeMessagingHosts")
+            .join(manifest_name())
+    }
+
+    /// Brave alone on macOS: Brave's folder, and the
+    /// `Google/Chrome/NativeMessagingHosts` it creates on every start, or
+    /// nothing in Chrome's folder when setup runs before Brave's first start.
+    /// Setup writes the manifest into Chrome's folder, never into Brave's,
+    /// and doesn't take Chrome for installed. `--remove` deletes it.
+    #[test]
+    fn macos_brave_alone_gets_chromes_manifest() {
+        for brave_started in [true, false] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let location = location(&temp.path().join("user"), Layout::MacOs, String::new());
+            install_browsers(&location, &[Browser::BRAVE]);
+            let shared = chrome_folder_manifest(&location);
+            if brave_started {
+                std::fs::create_dir_all(shared.parent().expect("parent")).expect("brave's folder");
+            }
+            let install = script(&temp.path().join("bin").join("devlanes"));
+            assert_eq!(location.unix_manifest(Browser::BRAVE), shared);
             assert_eq!(
                 founds(&location, &install),
                 [
-                    Found::Missing,
                     Found::NoBrowser,
                     Found::NoBrowser,
-                    Found::Stale {
-                        runs: Some(gone.clone()),
-                        ours: false
-                    },
+                    Found::NoBrowser,
+                    Found::Missing
                 ],
-                "{layout:?}"
+                "{brave_started}"
             );
-            // Every other browser on the list isn't installed.
-            assert!(
-                registrations
-                    .iter()
-                    .filter(|registration| !FOUR.contains(&registration.browser))
-                    .all(|registration| registration.found == Found::NoBrowser),
-                "{registrations:?}"
-            );
-            let facts = Facts::Found {
-                install: install.clone(),
-                registrations: registrations.clone(),
-                copy: copy_of(&location, &install),
-            };
             assert_eq!(
-                plan(&facts),
-                (
-                    true,
-                    false,
-                    "setup registers the browser extension host for Chrome and refreshes it for Brave"
-                        .into()
+                facts_plan(&location, &install).2,
+                "setup registers the browser extension host for Brave"
+            );
+
+            let lines = apply(&location, &install, &inspect(&location, &install)).expect("apply");
+            assert_eq!(
+                lines[1],
+                format!(
+                    "registered the browser extension host for Brave: {}",
+                    shared.display()
                 )
             );
-            let lines = apply(&location, &install, &registrations).expect("apply");
-            assert_eq!(lines.len(), 3, "{lines:?}");
-            assert_eq!(
-                lines[0],
-                format!("wrote {}", location.copy().display()),
-                "{lines:?}"
-            );
-            assert!(
-                lines[1].starts_with("registered the browser extension host for Chrome: "),
-                "{lines:?}"
-            );
-            assert_eq!(
-                std::fs::read_to_string(location.copy()).expect("copy"),
-                std::fs::read_to_string(manifest(Browser::CHROME)).expect("manifest")
-            );
-            let written: Value = serde_json::from_str(
-                &std::fs::read_to_string(manifest(Browser::CHROME)).expect("read"),
-            )
-            .expect("json");
+            assert_eq!(lines.len(), 2, "{lines:?}");
+            let written: Value =
+                serde_json::from_str(&std::fs::read_to_string(&shared).expect("read"))
+                    .expect("json");
             assert_eq!(written, install.manifest());
-            assert_eq!(
-                written["allowed_origins"],
-                json!(["chrome-extension://pggffblellmckocpflaaeligadjpkahj/"])
-            );
-            assert_eq!(written["path"], json!(install.entry));
-            assert_eq!(
-                founds(&location, &install),
-                [
-                    Found::Current,
-                    Found::NoBrowser,
-                    Found::NoBrowser,
-                    Found::Current
-                ]
-            );
-            // Setup creates no folder for a browser that isn't installed.
-            assert!(!location.user_data(Browser::EDGE).exists());
             assert!(
-                plan(&Facts::Found {
-                    install: install.clone(),
-                    registrations: inspect(&location, &install),
-                    copy: copy_of(&location, &install),
-                })
-                .1
+                !location
+                    .user_data(Browser::BRAVE)
+                    .join("NativeMessagingHosts")
+                    .exists()
             );
-            // Nothing to write the second time.
-            assert!(
-                apply(&location, &install, &inspect(&location, &install))
-                    .expect("apply")
-                    .is_empty()
+            // Chrome's folder now exists, and Chrome still isn't installed.
+            assert_eq!(
+                facts_plan(&location, &install),
+                (
+                    true,
+                    true,
+                    "the browser extension host is registered for Brave".into()
+                )
             );
-
-            // Edge runs another install that exists, and Chromium has an
-            // outdated manifest of this one.
-            let other = temp.path().join("other").join("devlanes");
-            std::fs::create_dir_all(other.parent().expect("parent")).expect("other");
-            std::fs::write(&other, "").expect("other binary");
-            for (browser, text) in [
-                (Browser::EDGE, other_manifest(&other)),
-                (Browser::CHROMIUM, other_manifest(&install.entry)),
-            ] {
-                std::fs::create_dir_all(manifest(browser).parent().expect("parent"))
-                    .expect("hosts folder");
-                std::fs::write(manifest(browser), text).expect("write");
-            }
             let report = report(&location, &install);
-            assert_eq!(report["registered"], json!(["Chrome", "Brave"]), "{report}");
-            assert_eq!(
-                report["found"],
-                json!(["Chrome", "Chromium", "Edge", "Brave"])
-            );
-            assert_eq!(report["stale"][1]["browser"], "Edge", "{report}");
-            assert_eq!(report["stale"][1]["gone"], false, "{report}");
-            assert_eq!(report["stale"][0]["ours"], true, "{report}");
-            assert_eq!(report["stale"][1]["ours"], false, "{report}");
-            // Doctor words this install's outdated manifest as its own, and
-            // only Edge as another install.
-            let lines: Vec<String> =
-                devlanes_cli::doctor_checks_of(&json!({"browser": report.clone()}))
-                    .into_iter()
-                    .map(|check| check.text)
-                    .collect();
-            assert!(
-                lines.contains(&"Chromium's extension host is out of date".to_owned()),
-                "{lines:?}"
-            );
-            assert!(
-                lines.contains(&format!(
-                    "Edge's extension host runs {}, another devlanes install",
-                    other.display()
-                )),
-                "{lines:?}"
-            );
-            assert_eq!(
-                lines
-                    .iter()
-                    .filter(|line| line.contains("another devlanes install"))
-                    .count(),
-                1,
-                "{lines:?}"
-            );
+            assert_eq!(report["registered"], json!(["Brave"]), "{report}");
+            assert_eq!(report["found"], json!(["Brave"]), "{report}");
 
-            let removal = removal(&location, &install);
+            // Another install's manifest there is what Brave starts.
+            std::fs::write(&shared, other_manifest(&temp.path().join("gone"))).expect("write");
             assert_eq!(
-                removal.delete,
-                [
-                    Target::File(manifest(Browser::CHROME)),
-                    Target::File(manifest(Browser::CHROMIUM)),
-                    Target::File(manifest(Browser::BRAVE)),
-                    Target::File(location.copy()),
-                ]
+                facts_plan(&location, &install).2,
+                "setup refreshes the browser extension host for Brave"
             );
-            assert_eq!(removal.keep.len(), 1, "{removal:?}");
-            assert!(
-                removal.keep[0].ends_with(&format!(
-                    "in place: it runs {}, which is another devlanes install. Run devlanes setup --remove with that install to delete it",
-                    other.display()
-                )),
-                "{removal:?}"
-            );
-            assert_eq!(delete(&removal).expect("delete").len(), 4);
-            for browser in [Browser::CHROME, Browser::CHROMIUM, Browser::BRAVE] {
-                assert!(!manifest(browser).exists(), "{browser:?}");
-            }
-            assert!(!location.copy().exists());
+            apply(&location, &install, &inspect(&location, &install)).expect("apply");
             assert_eq!(
-                std::fs::read_to_string(manifest(Browser::EDGE)).expect("read"),
-                other_manifest(&other)
+                removal(&location, &install).delete,
+                [Target::File(shared.clone()), Target::File(location.copy())]
             );
-            assert!(super::removal(&location, &install).delete.is_empty());
+            delete(&removal(&location, &install)).expect("delete");
+            assert!(!shared.exists());
         }
+    }
+
+    /// Chrome and Brave on macOS read the same manifest: setup writes it once
+    /// and names both, a stale one is stale for both, and `--remove` deletes
+    /// it once.
+    #[test]
+    fn macos_chrome_and_brave_share_one_manifest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let location = location(&temp.path().join("user"), Layout::MacOs, String::new());
+        install_browsers(&location, &[Browser::CHROME, Browser::BRAVE]);
+        let install = script(&temp.path().join("bin").join("devlanes"));
+        let shared = chrome_folder_manifest(&location);
+        assert_eq!(location.unix_manifest(Browser::CHROME), shared);
+        assert_eq!(
+            facts_plan(&location, &install).2,
+            "setup registers the browser extension host for Chrome and Brave"
+        );
+        let lines = apply(&location, &install, &inspect(&location, &install)).expect("apply");
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(
+            lines[2].ends_with(&shared.display().to_string()),
+            "{lines:?}"
+        );
+        assert_eq!(
+            facts_plan(&location, &install).2,
+            "the browser extension host is registered for Chrome and Brave"
+        );
+
+        let gone = temp.path().join("gone").join("devlanes");
+        std::fs::write(&shared, other_manifest(&gone)).expect("write");
+        let stale = Found::Stale {
+            runs: Some(gone),
+            ours: false,
+        };
+        assert_eq!(
+            founds(&location, &install),
+            [stale.clone(), Found::NoBrowser, Found::NoBrowser, stale]
+        );
+        apply(&location, &install, &inspect(&location, &install)).expect("apply");
+        assert_eq!(
+            founds(&location, &install),
+            [
+                Found::Current,
+                Found::NoBrowser,
+                Found::NoBrowser,
+                Found::Current
+            ]
+        );
+        let removal = removal(&location, &install);
+        assert_eq!(
+            removal.delete,
+            [Target::File(shared.clone()), Target::File(location.copy())]
+        );
+        assert_eq!(delete(&removal).expect("delete").len(), 2);
+        assert!(!shared.exists());
+    }
+
+    /// Chrome alone on macOS is registered in its own folder, and Brave,
+    /// which isn't installed, isn't named.
+    #[test]
+    fn macos_chrome_alone_is_registered_for_chrome() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let location = location(&temp.path().join("user"), Layout::MacOs, String::new());
+        install_browsers(&location, &[Browser::CHROME]);
+        let install = script(&temp.path().join("bin").join("devlanes"));
+        apply(&location, &install, &inspect(&location, &install)).expect("apply");
+        assert!(chrome_folder_manifest(&location).is_file());
+        assert_eq!(
+            facts_plan(&location, &install),
+            (
+                true,
+                true,
+                "the browser extension host is registered for Chrome".into()
+            )
+        );
+        assert!(!location.user_data(Browser::BRAVE).exists());
     }
 
     /// Setup registers each installed browser on the list, channels
