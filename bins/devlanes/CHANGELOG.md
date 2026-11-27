@@ -1,5 +1,11 @@
 # devlanes
 
+## 0.16.2 — 2026-11-27
+
+### Patch changes
+
+- [b31af00a](https://github.com/devlanes-run/devlanes/commit/b31af00ae63edba8afec2b226af49c0d339c496a) Fixed the browser extension not finding devlanes in Brave on macOS after `devlanes setup`.
+
 ## 0.16.1 — 2026-11-24
 
 ### Patch changes
