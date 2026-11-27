@@ -1,0 +1,17 @@
+[package]
+name = "devlanes-gui-codec"
+description = "Video encoder and decoder traits, the raw codec and the codec selector of devlanes GUI streaming"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+devlanes-gui-proto = { path = "../gui-proto" }
+bytes.workspace = true
+thiserror.workspace = true
+zstd.workspace = true
