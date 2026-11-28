@@ -4,8 +4,8 @@
 //! The endpoint's [`Admission`] decides in the handshake, before any
 //! stream: a session ([`Alpn::Tunnel`]) only from a key pinned in
 //! `p2p_clients`, a pairing connection ([`Alpn::Pair`]) from any key while
-//! a ticket is outstanding and wrong secrets have not paused pairing. A
-//! pairing connection gets one bounded request and one answer
+//! a ticket is outstanding. Wrong secrets pause nothing. A pairing
+//! connection gets one bounded request and one answer
 //! ([`answer_pairing`]); only a key the box pinned reaches
 //! [`devlanes_transport::serve`], and there [`PeerGate`] serves it only
 //! under the client id it paired with.
@@ -21,7 +21,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -40,7 +40,7 @@ use tokio::{
 use super::{
     feed::clean,
     identity, now_ms,
-    pairing::{self, Codes, Refusal},
+    pairing::{self, Codes},
 };
 use crate::{engine::Inner, integrations::BoxServing, model::lock};
 
@@ -48,13 +48,77 @@ use crate::{engine::Inner, integrations::BoxServing, model::lock};
 /// ticket is out, so more are dropped at once instead of queued.
 const PAIRING_SLOTS: usize = 4;
 
-/// What a client is told for a wrong, expired or used secret.
+/// How long a pairing may take before its ticket is used up: reading the
+/// user config, the first handshake label, which may run `loginctl`, and
+/// waiting for a change of the listening rule or a bind. Past it the
+/// client is refused and the ticket stays valid.
+const DECIDE_WAIT: Duration = Duration::from_secs(3);
+
+/// Wrong secrets logged one line each per [`WRONG_SECRET_WINDOW`]; the rest
+/// are counted.
+const LOGGED_WRONG_SECRETS: u32 = 3;
+/// The window [`LOGGED_WRONG_SECRETS`] counts in.
+const WRONG_SECRET_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+/// What a client is told for a wrong, expired or used secret. It does not
+/// tell them apart, so a guesser learns nothing from it.
 const WRONG_TICKET: &str = "the pairing ticket is wrong, expired or already used. Get a new one \
                             with `devlanes daemon pair` on the box";
 
-/// What a client is told while wrong codes and secrets pause pairing. The
-/// wait goes separately as `retry_after_ms`.
-const PAUSED: &str = "the box paused pairing after 5 wrong codes or tickets in 10 minutes";
+/// What a client is told when its request has no usable client id.
+const NO_CLIENT_ID: &str =
+    "this machine sent no valid client id; update devlanes here and try again";
+
+/// What a client is told when the box took too long before using the ticket.
+const BUSY: &str = "the box took too long to answer; try again with the same ticket";
+
+/// What a client is told when the box used the ticket but could not store
+/// the pairing.
+const STORE_FAILED: &str = "the box could not store the pairing; get a new ticket with `devlanes \
+                            daemon pair` on the box and try again";
+
+/// How [`Inner::note_wrong_secret`] logs one wrong secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Logged {
+    /// On a line of its own.
+    Each,
+    /// On a line of its own that says the next ones are counted.
+    Last,
+    /// Only counted.
+    Counted,
+}
+
+/// Counts wrong secrets per window, so they cannot fill the log.
+#[derive(Default)]
+struct WrongSecrets {
+    /// When the current window began.
+    since: Option<Instant>,
+    /// Wrong secrets in it.
+    seen: u32,
+}
+
+impl WrongSecrets {
+    /// Counts one wrong secret at `now`: how to log it, and how many the
+    /// window that just ended counted without logging.
+    fn note(&mut self, now: Instant) -> (Logged, u32) {
+        let mut quiet = 0;
+        if self
+            .since
+            .is_none_or(|since| now.saturating_duration_since(since) >= WRONG_SECRET_WINDOW)
+        {
+            quiet = self.seen.saturating_sub(LOGGED_WRONG_SECRETS);
+            self.since = Some(now);
+            self.seen = 0;
+        }
+        self.seen = self.seen.saturating_add(1);
+        let logged = match self.seen.cmp(&LOGGED_WRONG_SECRETS) {
+            std::cmp::Ordering::Less => Logged::Each,
+            std::cmp::Ordering::Equal => Logged::Last,
+            std::cmp::Ordering::Greater => Logged::Counted,
+        };
+        (logged, quiet)
+    }
+}
 
 /// Pinned keys and the client id each was paired under.
 type Pinned = Arc<Mutex<HashMap<PeerId, String>>>;
@@ -82,6 +146,7 @@ pub(crate) struct PeerState {
     tasks: PeerTasks,
     next_task: AtomicU64,
     pairing_slots: Arc<Semaphore>,
+    wrong_secrets: Mutex<WrongSecrets>,
 }
 
 impl Default for PeerState {
@@ -97,6 +162,7 @@ impl Default for PeerState {
             tasks: PeerTasks::default(),
             next_task: AtomicU64::new(0),
             pairing_slots: Arc::new(Semaphore::new(PAIRING_SLOTS)),
+            wrong_secrets: Mutex::default(),
         }
     }
 }
@@ -124,7 +190,7 @@ struct PeerAdmission {
 
 impl Admission for PeerAdmission {
     /// A session from a pinned key; a pairing connection from any key while
-    /// a ticket is outstanding and pairing is not paused.
+    /// a ticket is outstanding, also while wrong codes pause codes.
     fn admit(&self, peer: &PeerId, alpn: Alpn) -> bool {
         match alpn {
             Alpn::Tunnel => lock(&self.pinned).contains_key(peer),
@@ -173,8 +239,8 @@ impl PairingGate for PeerGate {
     /// never with a code over its session.
     async fn claim(&self, _: &ClientInfo, _: &str) -> Result<PairingClaim, BoxError> {
         Ok(PairingClaim::Refused {
-            message: "this machine is paired with the box by ticket; run `devlanes daemon pair` \
-                      on the box for a new one"
+            message: "this machine pairs with the box by ticket. Get a new ticket with `devlanes \
+                      daemon pair` on the box."
                 .into(),
             retry_after: None,
         })
@@ -253,9 +319,9 @@ impl Inner {
         let engine = self.clone();
         let task = tokio::spawn(async move {
             {
-                // Under the rule lock, so a revoke that read the store
-                // before this load removes its key after it.
-                let _rule = engine.remote.peer.rule.lock().await;
+                // Rows and pins change together under this lock, so the
+                // pins loaded here match the rows read.
+                let _rule = engine.pairing_rule().await;
                 match engine.store.p2p_clients().await {
                     Ok(clients) => {
                         let mut pinned = lock(&engine.remote.peer.pinned);
@@ -430,11 +496,24 @@ impl Inner {
         listed.insert(serial, (peer, alpn, task.abort_handle()));
     }
 
+    /// The lock under which `p2p_clients` rows and pinned keys change
+    /// together: whoever writes rows holds it until the pins match them, so
+    /// a pairing, a revoke, a reset and the startup load never leave a key
+    /// pinned without a row, which nothing could revoke, or a row without
+    /// its pin. Not re-entrant: [`Inner::refresh_listening`] takes it too,
+    /// so callers drop it first.
+    pub(crate) async fn pairing_rule(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.remote.peer.rule.lock().await
+    }
+
     /// Removes the pinned keys that `picked` chooses by key and client id
-    /// from the admission and returns them. Under the rule lock, so the
-    /// startup load cannot pin one of them again afterwards.
-    pub(super) async fn unpin_peers(&self, picked: impl Fn(&PeerId, &str) -> bool) -> Vec<PeerId> {
-        let _rule = self.remote.peer.rule.lock().await;
+    /// from the admission and returns them. `_rule` is the guard of
+    /// [`Inner::pairing_rule`], held since the matching rows were deleted.
+    pub(super) fn unpin_peers(
+        &self,
+        _rule: &tokio::sync::MutexGuard<'_, ()>,
+        picked: impl Fn(&PeerId, &str) -> bool,
+    ) -> Vec<PeerId> {
         let mut pinned = lock(&self.remote.peer.pinned);
         let keys: Vec<PeerId> = pinned
             .iter()
@@ -532,10 +611,14 @@ impl Inner {
         }
     }
 
-    /// Decides the pairing request `request` of key `peer`: checks the
-    /// client id and the setting, uses up the ticket, pins the key in
-    /// `p2p_clients` and answers with this box's name. The secret is never
-    /// logged.
+    /// Decides the pairing request `request` of key `peer` and answers with
+    /// this box's name. In this order: the client id; the secret, compared
+    /// without using it up, so a peer without a valid ticket learns nothing
+    /// else, not even whether connections are off; within [`DECIDE_WAIT`],
+    /// the setting, the label and [`Inner::pairing_rule`]; then the ticket
+    /// is used up and the key stored and pinned under that lock. Nothing
+    /// after the claim may be cancelled or time out, since a ticket used up
+    /// with nothing pinned is lost to its owner. The secret is never logged.
     async fn decide_pairing(self: &Arc<Self>, peer: PeerId, request: &PairRequest) -> PairAnswer {
         let Some((_, serving)) = self.peer_wiring() else {
             return refused("this box does not pair by ticket", None);
@@ -543,57 +626,61 @@ impl Inner {
         let id = clean(&request.client_id);
         let name = clean(&request.client_name);
         if !is_random_id(&id, CLIENT_ID_PREFIX) {
-            return refused("the client sent no valid client id", None);
+            return refused(NO_CLIENT_ID, None);
         }
-        let (allowed, invalid) = self.connections_allowed().await;
+        let secret = request.secret();
+        let secret = secret.as_ref().map(|secret| &secret.0);
+        if !lock(&self.remote.codes).holds_ticket(secret, Instant::now()) {
+            self.note_wrong_secret(peer, &id, &name);
+            return refused(WRONG_TICKET, None);
+        }
+        let ready = tokio::time::timeout(DECIDE_WAIT, async {
+            let allowed = self.connections_allowed().await;
+            let label = label_of(serving.clone()).await;
+            (allowed, label, self.pairing_rule().await)
+        })
+        .await;
+        let Ok(((allowed, invalid), label, rule)) = ready else {
+            tracing::warn!(peer = %peer.short(), client_id = %id, "a pairing took too long; its ticket is still valid");
+            return refused(BUSY, None);
+        };
         if !allowed {
             return refused(connections_refusal(invalid), None);
         }
-        let secret = request.secret();
-        let claimed = lock(&self.remote.codes)
-            .claim_ticket(secret.as_ref().map(|secret| &secret.0), Instant::now());
-        let ephemeral = match claimed {
-            Ok(ephemeral) => ephemeral,
-            Err(Refusal::Wrong) => {
-                tracing::warn!(peer = %peer.short(), client_id = %id, %name, "refused a pairing ticket");
-                return refused(WRONG_TICKET, None);
-            }
-            Err(Refusal::Locked { retry_after }) => {
-                let retry_after_ms = pairing::millis(retry_after);
-                tracing::warn!(
-                    peer = %peer.short(), client_id = %id, %name, retry_after_ms,
-                    "refused a pairing ticket after too many failures"
-                );
-                return refused(PAUSED, Some(retry_after_ms));
-            }
+        let Some(ephemeral) = lock(&self.remote.codes).claim_ticket(secret, Instant::now()) else {
+            // Expired, or used by another connection since the check.
+            return refused(WRONG_TICKET, None);
         };
         let at = i64::try_from(now_ms()).unwrap_or(i64::MAX);
         let stored = self
             .store
-            .add_p2p_client(P2pClient {
-                peer_key: peer.to_string(),
-                client_id: id.clone(),
-                name: name.clone(),
-                paired_at: at,
-                last_seen: Some(at),
-            })
+            .add_p2p_client(
+                P2pClient {
+                    peer_key: peer.to_string(),
+                    client_id: id.clone(),
+                    name: name.clone(),
+                    paired_at: at,
+                    last_seen: Some(at),
+                },
+                pairing::MAX_PAIRINGS,
+            )
             .await;
-        let replaced = match stored {
-            Ok(replaced) => replaced,
+        let dropped = match stored {
+            Ok(dropped) => dropped,
             Err(error) => {
+                drop(rule);
                 tracing::warn!(%error, peer = %peer.short(), client_id = %id, "cannot store a pairing by ticket");
-                return refused(
-                    "the box could not store the pairing; get a new ticket with `devlanes daemon \
-                     pair` on the box and try again",
-                    None,
-                );
+                // The used ticket may have been the last reason to listen.
+                if let Err(error) = self.refresh_listening().await {
+                    tracing::debug!(%error, "cannot apply the listening rule after a failed pairing");
+                }
+                return refused(STORE_FAILED, None);
             }
         };
         let closing = {
-            let _rule = self.remote.peer.rule.lock().await;
             let mut pinned = lock(&self.remote.peer.pinned);
-            let earlier = pinned.get(&peer).cloned();
-            let mut closing: Vec<PeerId> = replaced
+            let earlier = pinned.insert(peer, id.clone());
+            let mut closing: Vec<PeerId> = dropped
                 .iter()
                 .filter_map(|key| key.parse::<PeerId>().ok())
                 .filter(|key| *key != peer)
@@ -601,7 +688,6 @@ impl Inner {
             for key in &closing {
                 pinned.remove(key);
             }
-            pinned.insert(peer, id.clone());
             // A key paired again under another client id keeps no session
             // that still runs under the old one.
             if earlier.is_some_and(|earlier| earlier != id) {
@@ -609,6 +695,7 @@ impl Inner {
             }
             closing
         };
+        drop(rule);
         self.close_peers(&closing);
         tracing::info!(peer = %peer.short(), client_id = %id, %name, ephemeral, "paired a client by ticket");
         self.clients_changed();
@@ -617,7 +704,30 @@ impl Inner {
         }
         PairAnswer::Paired {
             name: identity::host_name(),
-            server: label_of(serving).await,
+            server: label,
+        }
+    }
+
+    /// Logs a wrong secret from `peer`, one line each for the first few of
+    /// a window and then a count, since anyone who knows the box's id can
+    /// send them.
+    fn note_wrong_secret(&self, peer: PeerId, id: &str, name: &str) {
+        let (each, quiet) = lock(&self.remote.peer.wrong_secrets).note(Instant::now());
+        if quiet > 0 {
+            tracing::warn!(
+                quiet,
+                "refused {quiet} more pairing tickets in the last 10 minutes"
+            );
+        }
+        match each {
+            Logged::Each => {
+                tracing::warn!(peer = %peer.short(), client_id = %id, %name, "refused a pairing ticket")
+            }
+            Logged::Last => tracing::warn!(
+                peer = %peer.short(), client_id = %id, %name,
+                "refused a pairing ticket; more in the next 10 minutes are counted, not logged"
+            ),
+            Logged::Counted => {}
         }
     }
 
@@ -644,5 +754,32 @@ impl Inner {
             handle.abort();
         }
         self.remote.peer.listening.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use devlanes_transport::{PeerAddr, Ticket, TicketSecret};
+
+    use super::*;
+
+    /// The smallest ticket the box mints, with no relay and no address, is
+    /// hidden from output: redaction keeps its own copy of the prefix and
+    /// its own idea of a ticket's length.
+    #[test]
+    fn output_hides_the_shortest_ticket() {
+        let ticket = Ticket {
+            addr: PeerAddr {
+                id: PeerId([7; 32]),
+                relay: None,
+                direct: Vec::new(),
+            },
+            secret: TicketSecret([9; 16]),
+            ephemeral: false,
+        };
+        let text = format!("run devlanes remote connect {} there", ticket.encode());
+        let shown =
+            devlanes_core::redact::Redactor::screen(std::iter::empty::<(&str, &str)>()).text(&text);
+        assert_eq!(shown, "run devlanes remote connect [redacted] there");
     }
 }

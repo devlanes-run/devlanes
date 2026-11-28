@@ -69,9 +69,10 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
 }
 
 #[tokio::test]
-/// Migration 016 adds `p2p_clients` to a version 15 database, which keeps
-/// one key per client and one client per key until a state reset; its down
-/// script drops it.
+/// Migration 016 adds `p2p_clients` to a version 15 database: one row per
+/// key, a pairing never replaces another key's row, a client keeps its
+/// newest keys up to the limit, and a revoke or a state reset deletes them.
+/// Its down script drops the table.
 async fn migration_adds_p2p_clients_and_down_drops_them() {
     use devlanes_state::P2pClient;
     use diesel::{migration::MigrationSource, prelude::*};
@@ -96,27 +97,20 @@ async fn migration_adds_p2p_clients_and_down_drops_them() {
         paired_at: 1,
         last_seen: None,
     };
-    let none = store
-        .add_p2p_client(client("a", "laptop", "laptop"))
-        .await
-        .expect("pin");
-    assert!(none.is_empty(), "{none:?}");
-    store
-        .add_p2p_client(client("b", "desk", "desk"))
-        .await
-        .expect("pin");
-    // The laptop pairs again with a new key, and the desk's key turns up
-    // under another client id: each replaces the rows it collides with.
-    let replaced = store
-        .add_p2p_client(client("c", "laptop", "laptop"))
-        .await
-        .expect("re-pair");
-    assert_eq!(replaced, ["a".repeat(64)]);
-    let replaced = store
-        .add_p2p_client(client("b", "other", "other"))
-        .await
-        .expect("same key");
-    assert_eq!(replaced, ["b".repeat(64)]);
+    // Two keys per client here; all pairings in one millisecond.
+    let pin = |client: P2pClient| {
+        let store = store.clone();
+        async move { store.add_p2p_client(client, 2).await.expect("pin") }
+    };
+    assert!(pin(client("a", "laptop", "laptop")).await.is_empty());
+    assert!(pin(client("b", "desk", "desk")).await.is_empty());
+    // A second key of the laptop keeps the first, and the desk's key is
+    // left alone: a pairing never replaces another key's row.
+    assert!(pin(client("c", "laptop", "laptop")).await.is_empty());
+    // A third key goes over the limit and drops the laptop's oldest.
+    assert_eq!(pin(client("d", "laptop", "laptop")).await, ["a".repeat(64)]);
+    // The desk's key paired again under another id replaces its own row.
+    assert!(pin(client("b", "other", "other")).await.is_empty());
     assert!(
         store
             .touch_p2p_client("c".repeat(64), "laptop-2".into(), 9)
@@ -133,9 +127,31 @@ async fn migration_adds_p2p_clients_and_down_drops_them() {
     assert_eq!(
         pinned,
         [
+            ("d".repeat(64), "dl_cid_laptop".into(), None),
             ("c".repeat(64), "dl_cid_laptop".into(), Some(9)),
             ("b".repeat(64), "dl_cid_other".into(), None),
         ]
+    );
+    // A revoke deletes a client's pairings of both kinds together.
+    store
+        .add_remote_pairing(
+            devlanes_state::RemotePairing {
+                client_id: "dl_cid_laptop".into(),
+                name: "laptop".into(),
+                token_sha256: "0".repeat(64),
+                paired_at: 1,
+                last_seen: None,
+            },
+            8,
+        )
+        .await
+        .expect("token pairing");
+    assert_eq!(
+        store
+            .delete_client_pairings(vec!["dl_cid_laptop".into()])
+            .await
+            .expect("revoke"),
+        (1, 2)
     );
     // `daemon reset-state` forgets every pinned key with the other pairings.
     store.reset().await.expect("reset");

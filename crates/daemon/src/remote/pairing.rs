@@ -34,6 +34,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 use super::{ClientKey, feed::clean, now_ms};
 use crate::{
@@ -127,11 +128,17 @@ struct TicketEntry {
     ephemeral: bool,
 }
 
-/// Why a code or a ticket was refused.
+impl Drop for TicketEntry {
+    /// Zeroes the secret, so a used or expired one does not stay in freed memory.
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
+}
+
+/// Why a code was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refusal {
-    /// Wrong, expired or used. A wrong code voids every outstanding code; a
-    /// wrong ticket voids nothing.
+    /// Wrong, expired or used; every outstanding code is void now.
     Wrong,
     /// Too many failures; every code is refused for `retry_after`.
     Locked { retry_after: Duration },
@@ -148,8 +155,8 @@ pub(crate) enum MintError {
 
 /// The box's outstanding codes and ticket secrets and recent failures, in
 /// memory only. The times are monotonic, so a clock change neither revives
-/// nor voids a code; every method takes the time, so tests choose it. Wrong
-/// codes and wrong ticket secrets count towards the same limit.
+/// nor voids a code; every method takes the time, so tests choose it. Only
+/// wrong codes count towards the limit, and it refuses codes only.
 #[derive(Default)]
 pub(crate) struct Codes {
     codes: Vec<Code>,
@@ -182,19 +189,11 @@ impl Codes {
     }
 
     /// A new ticket secret, valid for [`CODE_TTL`] from `now`, with the
-    /// ticket's `ephemeral` flag. While failures refuse every secret, none is
-    /// handed out.
-    pub(crate) fn mint_ticket(
-        &mut self,
-        ephemeral: bool,
-        now: Instant,
-    ) -> Result<[u8; 16], MintError> {
-        if let Some(wait) = self.locked_for(now) {
-            return Err(MintError::Paused(wait));
-        }
+    /// ticket's `ephemeral` flag. Wrong codes do not stop it: their pause
+    /// guards codes, and a ticket's 128 bits gain nothing from one.
+    pub(crate) fn mint_ticket(&mut self, ephemeral: bool, now: Instant) -> io::Result<[u8; 16]> {
         let mut secret = [0u8; 16];
-        getrandom::fill(&mut secret)
-            .map_err(|error| MintError::Random(io::Error::other(error.to_string())))?;
+        getrandom::fill(&mut secret).map_err(|error| io::Error::other(error.to_string()))?;
         if self.tickets.len() >= MAX_CODES {
             self.tickets.remove(0);
         }
@@ -252,41 +251,42 @@ impl Codes {
         Some((*oldest + FAILURE_WINDOW).saturating_duration_since(now))
     }
 
-    /// Uses up the outstanding ticket whose secret is `secret` and says
-    /// whether it was ephemeral. `None` is a secret that was not 16 bytes,
-    /// which fails like a wrong one. A failure counts towards the limit and
-    /// voids nothing: 128 random bits are not guessed, so voiding would only
-    /// let anyone who knows the box's id cancel the owner's tickets and codes.
-    /// While the limit holds, every secret is refused without being compared.
-    pub(crate) fn claim_ticket(
-        &mut self,
-        secret: Option<&[u8; 16]>,
-        now: Instant,
-    ) -> Result<bool, Refusal> {
-        if let Some(retry_after) = self.locked_for(now) {
-            return Err(Refusal::Locked { retry_after });
-        }
+    /// Where the outstanding ticket whose secret is `secret` is. `None` is
+    /// also a secret that was not 16 bytes. Every ticket is compared, so the
+    /// time does not tell which one matched.
+    fn find_ticket(&mut self, secret: Option<&[u8; 16]>, now: Instant) -> Option<usize> {
+        self.prune(now);
         let candidate = secret.copied().unwrap_or([0; 16]);
-        // Every ticket is compared, so the time does not tell which one matched.
         let mut found = None;
         for (index, ticket) in self.tickets.iter().enumerate() {
             if same(&ticket.secret, &candidate) {
                 found = Some(index);
             }
         }
-        match found.filter(|_| secret.is_some()) {
-            Some(index) => Ok(self.tickets.remove(index).ephemeral),
-            None => {
-                self.failures.push_back(now);
-                Err(Refusal::Wrong)
-            }
-        }
+        found.filter(|_| secret.is_some())
     }
 
-    /// Whether a ticket is outstanding and secrets are not refused, which is
-    /// when the box admits pairing connections from keys it does not know.
+    /// Whether `secret` is an outstanding ticket's, without using it up, so
+    /// the box answers a wrong secret before it says anything else.
+    pub(crate) fn holds_ticket(&mut self, secret: Option<&[u8; 16]>, now: Instant) -> bool {
+        self.find_ticket(secret, now).is_some()
+    }
+
+    /// Uses up the outstanding ticket whose secret is `secret` and says
+    /// whether it was ephemeral; `None` for a wrong, malformed, expired or
+    /// used secret. A miss counts nowhere and voids nothing: 128 random bits
+    /// are not guessed, so a pause or a void would only let anyone who knows
+    /// the box's id stop the owner's pairing.
+    pub(crate) fn claim_ticket(&mut self, secret: Option<&[u8; 16]>, now: Instant) -> Option<bool> {
+        let index = self.find_ticket(secret, now)?;
+        Some(self.tickets.remove(index).ephemeral)
+    }
+
+    /// Whether a ticket is outstanding, which is when the box admits pairing
+    /// connections from keys it does not know. Wrong codes do not close it.
     pub(crate) fn takes_tickets(&mut self, now: Instant) -> bool {
-        self.locked_for(now).is_none() && !self.tickets.is_empty()
+        self.prune(now);
+        !self.tickets.is_empty()
     }
 
     /// When the last outstanding ticket expires; `None` without one.
@@ -402,7 +402,7 @@ struct Paired {
     paired_at: i64,
     last_seen: Option<i64>,
     pairings: usize,
-    /// The short form of the key it paired with by ticket, if it did.
+    /// The short form of the key it last used of those it paired by ticket.
     p2p_key: Option<String>,
 }
 
@@ -410,39 +410,40 @@ struct Paired {
 /// client id, in the order of each client's first appearance there.
 fn by_client(pairings: &[RemotePairing], p2p: &[P2pClient]) -> Vec<Paired> {
     let mut clients: Vec<Paired> = Vec::new();
+    // A token pairing has no key.
     let tokens = pairings.iter().map(|pairing| {
-        let key = None;
         (
             &pairing.client_id,
             &pairing.name,
             pairing.paired_at,
             pairing.last_seen,
-            key,
+            None,
         )
     });
     let tickets = p2p.iter().map(|client| {
-        let key = client.peer_key.get(..8).map(str::to_owned);
         (
             &client.client_id,
             &client.name,
             client.paired_at,
             client.last_seen,
-            key,
+            client.peer_key.get(..8).map(str::to_owned),
         )
     });
     for (id, name, paired_at, last_seen, key) in tokens.chain(tickets) {
         let recent = last_seen.unwrap_or(paired_at);
         match clients.iter_mut().find(|c| c.id == *id) {
             Some(client) => {
-                if recent > client.last_seen.unwrap_or(client.paired_at) {
+                let newer = recent > client.last_seen.unwrap_or(client.paired_at);
+                if newer {
                     client.name.clone_from(name);
+                }
+                // The key it used last, when it has several.
+                if key.is_some() && (newer || client.p2p_key.is_none()) {
+                    client.p2p_key = key;
                 }
                 client.paired_at = client.paired_at.min(paired_at);
                 client.last_seen = client.last_seen.max(last_seen);
                 client.pairings += 1;
-                if key.is_some() {
-                    client.p2p_key = key;
-                }
             }
             None => clients.push(Paired {
                 id: id.clone(),
@@ -492,9 +493,10 @@ impl Inner {
     /// `remote.pair`: a new one-time code, and with `ticket` a pairing ticket
     /// too, which starts the peer-to-peer listener until it is used or
     /// expires. `connections_off` when this machine's user config turns
-    /// clients away, `pairing_paused` while wrong codes or secrets refuse
-    /// every one, `p2p_unavailable` when the endpoint cannot listen or tell
-    /// its address. Neither the code nor the ticket is logged.
+    /// clients away, `pairing_paused` while wrong codes refuse every code,
+    /// `p2p_unavailable` when the endpoint cannot listen or tell its address.
+    /// While codes are paused a ticket still goes out, without a code and
+    /// with `code_paused_ms`. Neither the code nor the ticket is logged.
     pub(crate) async fn pair_method(self: &Arc<Self>, value: Value) -> Result<Value, RpcError> {
         let args: PairParams = params(value)?;
         let home = self.opts.home.clone();
@@ -504,39 +506,44 @@ impl Inner {
         if !allowed {
             return Err(connections_off(invalid));
         }
+        let expires_at_ms = now_ms().saturating_add(PAIRING_CODE_TTL_MS);
+        if !args.ticket {
+            let minted = lock(&self.remote.codes).mint(Instant::now());
+            let code = match minted {
+                Ok(code) => code,
+                Err(MintError::Paused(wait)) => return Err(paused(wait)),
+                Err(MintError::Random(error)) => return Err(random_error(error)),
+            };
+            tracing::info!(expires_at_ms, "issued a pairing code");
+            return Ok(json!({
+                "code": code,
+                "expires_at_ms": expires_at_ms,
+                "valid_ms": PAIRING_CODE_TTL_MS,
+            }));
+        }
         // The ticket first: a code minted before a failed ticket would stay
         // valid with nobody to type it.
-        let ticket = if args.ticket {
-            Some(self.mint_ticket(args.ephemeral).await?)
-        } else {
-            None
-        };
-        let minted = lock(&self.remote.codes).mint(Instant::now());
-        let code = match minted {
-            Ok(code) => code,
-            Err(error) => {
-                if let Some((_, secret)) = &ticket {
-                    lock(&self.remote.codes).drop_ticket(secret);
-                    if let Err(error) = self.refresh_listening().await {
-                        tracing::debug!(%error, "cannot stop listening after a failed ticket");
-                    }
-                }
-                return Err(match error {
-                    MintError::Paused(wait) => paused(wait),
-                    MintError::Random(error) => random_error(error),
-                });
-            }
-        };
-        let expires_at_ms = now_ms().saturating_add(PAIRING_CODE_TTL_MS);
-        tracing::info!(expires_at_ms, ticket = args.ticket, "issued a pairing code");
+        let (ticket, secret) = self.mint_ticket(args.ephemeral).await?;
         let mut answer = json!({
-            "code": code,
+            "ticket": ticket,
             "expires_at_ms": expires_at_ms,
             "valid_ms": PAIRING_CODE_TTL_MS,
         });
-        if let Some((ticket, _)) = ticket {
-            answer["ticket"] = Value::from(ticket);
+        let minted = lock(&self.remote.codes).mint(Instant::now());
+        match minted {
+            Ok(code) => answer["code"] = Value::from(code),
+            // Wrong codes pause codes only: the ticket goes out without one.
+            Err(MintError::Paused(wait)) => answer["code_paused_ms"] = Value::from(millis(wait)),
+            Err(MintError::Random(error)) => {
+                self.take_back_ticket(&secret).await;
+                return Err(random_error(error));
+            }
         }
+        tracing::info!(
+            expires_at_ms,
+            code = answer.get("code").is_some(),
+            "issued a pairing ticket"
+        );
         Ok(answer)
     }
 
@@ -561,15 +568,21 @@ impl Inner {
             ));
         };
         let minted = lock(&self.remote.codes).mint_ticket(ephemeral, Instant::now());
-        let secret = match minted {
-            Ok(secret) => secret,
-            Err(MintError::Paused(wait)) => return Err(paused(wait)),
-            Err(MintError::Random(error)) => return Err(random_error(error)),
-        };
+        let secret = minted.map_err(random_error)?;
         let addr = match self.refresh_listening().await {
-            Ok(()) => endpoint.addr().await,
-            Err(error) => Err(error),
+            Ok(()) => endpoint.addr().await.map_err(|error| error.to_string()),
+            Err(error) => Err(error.to_string()),
         };
+        // A ticket without its relay works on a LAN only and fails across
+        // NATs with a reason that points elsewhere, so it is not handed out.
+        let addr = addr.and_then(|addr| match &addr.relay {
+            Some(relay) if relay.len() > Ticket::MAX_RELAY => Err(format!(
+                "the relay URL {relay} is longer than {} bytes, so a ticket cannot hold it; \
+                 shorten remote.relays",
+                Ticket::MAX_RELAY
+            )),
+            _ => Ok(addr),
+        });
         match addr {
             Ok(addr) => {
                 let ticket = Ticket {
@@ -579,18 +592,24 @@ impl Inner {
                 };
                 Ok((ticket.encode(), secret))
             }
-            Err(error) => {
-                lock(&self.remote.codes).drop_ticket(&secret);
-                if let Err(error) = self.refresh_listening().await {
-                    tracing::debug!(%error, "cannot stop listening after a failed ticket");
-                }
-                tracing::warn!(%error, "cannot hand out a pairing ticket");
+            Err(message) => {
+                self.take_back_ticket(&secret).await;
+                tracing::warn!(%message, "cannot hand out a pairing ticket");
                 Err(RpcError::new(
                     "p2p_unavailable",
-                    json!({"message": error.to_string()}),
+                    json!({"message": message}),
                     1,
                 ))
             }
+        }
+    }
+
+    /// Takes back a minted ticket nobody got, then applies the listening
+    /// rule, so it leaves no listener behind.
+    async fn take_back_ticket(self: &Arc<Self>, secret: &[u8; 16]) {
+        lock(&self.remote.codes).drop_ticket(secret);
+        if let Err(error) = self.refresh_listening().await {
+            tracing::debug!(%error, "cannot stop listening after a failed ticket");
         }
     }
 
@@ -797,19 +816,19 @@ impl Inner {
             ));
         }
         let ids: Vec<String> = found.iter().map(|client| client.id.clone()).collect();
+        // Rows and pins change together under this lock, so a pairing of
+        // the same client meanwhile is either deleted here with its pin or
+        // stored and pinned after.
+        let rule = self.pairing_rule().await;
+        // One transaction: a failure deletes neither kind of pairing.
         self.store
-            .delete_remote_pairings(ids.clone())
-            .await
-            .map_err(store_error)?;
-        self.store
-            .delete_p2p_clients(ids.clone())
+            .delete_client_pairings(ids.clone())
             .await
             .map_err(store_error)?;
         // Unpinned before anything is closed, so the endpoint refuses the
         // client's next dial while its sessions end.
-        let keys = self
-            .unpin_peers(|_, id| ids.iter().any(|revoked| revoked == id))
-            .await;
+        let keys = self.unpin_peers(&rule, |_, id| ids.iter().any(|revoked| revoked == id));
+        drop(rule);
         // Counted before the connections close, which ends the feeds too.
         let ended = self
             .remote
@@ -831,13 +850,15 @@ impl Inner {
         Ok(json!({"revoked": revoked, "ended": ended}))
     }
 
-    /// After `daemon reset-state` deleted every pairing: voids the
-    /// outstanding codes and tickets, unpins every key and ends every
-    /// client's session, so no client keeps a box that no longer knows it,
-    /// then stops listening. Recent failed attempts still count.
-    pub(crate) async fn forget_pairings(self: &Arc<Self>) {
+    /// After `daemon reset-state` deleted every pairing while holding `rule`,
+    /// the guard of [`Inner::pairing_rule`]: voids the outstanding codes and
+    /// tickets, unpins every key and ends every client's session, so no
+    /// client keeps a box that no longer knows it, then stops listening.
+    /// Recent failed attempts still count.
+    pub(crate) async fn forget_pairings(self: &Arc<Self>, rule: tokio::sync::MutexGuard<'_, ()>) {
         lock(&self.remote.codes).void();
-        let keys = self.unpin_peers(|_, _| true).await;
+        let keys = self.unpin_peers(&rule, |_, _| true);
+        drop(rule);
         let ended = self.remote.end_feeds(|_| true);
         self.close_peers(&keys);
         if ended > 0 {
@@ -1044,83 +1065,82 @@ mod tests {
     /// A ticket's secret works once, with the ticket's flag, and not after
     /// it expired; until then it opens pairing to unknown keys.
     #[test]
-    fn a_ticket_is_used_once_and_expires() -> Result<(), MintError> {
+    fn a_ticket_is_used_once_and_expires() {
         let start = Instant::now();
         let mut codes = Codes::default();
-        let secret = codes.mint_ticket(true, start)?;
+        let secret = codes.mint_ticket(true, start).expect("ticket");
         assert!(codes.takes_tickets(start));
         assert!(codes.outstanding(start), "keeps an idle daemon up");
-        assert_eq!(codes.claim_ticket(Some(&secret), start + MINUTE), Ok(true));
+        assert!(
+            codes.holds_ticket(Some(&secret), start),
+            "checked, not used"
+        );
+        assert_eq!(
+            codes.claim_ticket(Some(&secret), start + MINUTE),
+            Some(true)
+        );
         assert!(!codes.takes_tickets(start + MINUTE));
         assert_eq!(
             codes.claim_ticket(Some(&secret), start + MINUTE),
-            Err(Refusal::Wrong),
+            None,
             "used up"
         );
 
-        let late = codes.mint_ticket(false, start)?;
+        let late = codes.mint_ticket(false, start).expect("ticket");
         assert_eq!(codes.tickets_until(start), Some(start + CODE_TTL));
         assert!(codes.takes_tickets(start + CODE_TTL - Duration::from_millis(1)));
         assert_eq!(codes.tickets_until(start + CODE_TTL), None);
+        assert!(!codes.holds_ticket(Some(&late), start + CODE_TTL));
         assert_eq!(
             codes.claim_ticket(Some(&late), start + CODE_TTL),
-            Err(Refusal::Wrong),
+            None,
             "expired"
         );
-        Ok(())
     }
 
-    /// A wrong or malformed secret counts as a failure and voids no ticket
-    /// and no code; a wrong code leaves tickets alone too.
+    /// Wrong or malformed secrets, however many, count nowhere and void
+    /// nothing: the ticket and a code minted before them still work, and
+    /// codes are not paused.
     #[test]
-    fn a_wrong_secret_counts_and_voids_nothing() -> Result<(), MintError> {
+    fn wrong_secrets_pause_and_void_nothing() {
         let start = Instant::now();
         let mut codes = Codes::default();
-        let code = codes.mint(start)?;
-        let secret = codes.mint_ticket(false, start)?;
+        let code = codes.mint(start).expect("code");
+        let secret = codes.mint_ticket(false, start).expect("ticket");
         let mut wrong = secret;
         wrong[0] ^= 1;
-        assert_eq!(codes.claim_ticket(Some(&wrong), start), Err(Refusal::Wrong));
-        assert_eq!(codes.claim_ticket(None, start), Err(Refusal::Wrong));
-        assert_eq!(codes.failures.len(), 2);
+        for _ in 0..MAX_FAILURES * 2 {
+            assert_eq!(codes.claim_ticket(Some(&wrong), start), None);
+            assert_eq!(codes.claim_ticket(None, start), None);
+        }
+        assert!(codes.failures.is_empty());
+        assert_eq!(codes.locked_for(start), None);
         assert_eq!(codes.claim(&code, start), Ok(()), "the code still works");
-        assert_eq!(codes.claim_ticket(Some(&secret), start), Ok(false));
-
-        let secret = codes.mint_ticket(false, start)?;
-        assert_eq!(codes.claim("0000-0000", start), Err(Refusal::Wrong));
-        assert_eq!(codes.claim_ticket(Some(&secret), start), Ok(false));
-        Ok(())
+        assert_eq!(codes.claim_ticket(Some(&secret), start), Some(false));
     }
 
-    /// Wrong secrets and wrong codes count towards one limit, which pauses
-    /// tickets and codes alike: none is handed out or accepted, and pairing
-    /// connections from unknown keys are not let in.
+    /// Wrong codes pause codes only: pairing connections are still let in,
+    /// a ticket minted before or during the pause works, and a wrong code
+    /// voids no ticket.
     #[test]
-    fn failures_pause_tickets_and_codes_alike() -> Result<(), MintError> {
+    fn wrong_codes_pause_codes_and_leave_tickets_usable() {
         let start = Instant::now();
         let mut codes = Codes::default();
-        let secret = codes.mint_ticket(false, start)?;
-        for attempt in 0..MAX_FAILURES {
-            let refused = if attempt % 2 == 0 {
-                codes.claim_ticket(Some(&[0; 16]), start)
-            } else {
-                codes.claim("0000-0000", start).map(|()| false)
-            };
-            assert_eq!(refused, Err(Refusal::Wrong));
+        let before = codes.mint_ticket(false, start).expect("ticket");
+        for _ in 0..MAX_FAILURES {
+            assert_eq!(codes.claim("0000-0000", start), Err(Refusal::Wrong));
         }
-        assert!(!codes.takes_tickets(start));
-        assert!(matches!(
-            codes.mint_ticket(false, start),
-            Err(MintError::Paused(_))
-        ));
         assert!(matches!(codes.mint(start), Err(MintError::Paused(_))));
+        assert!(codes.takes_tickets(start));
+        let during = codes.mint_ticket(true, start).expect("ticket while paused");
         assert_eq!(
-            codes.claim_ticket(Some(&secret), start + MINUTE),
-            Err(Refusal::Locked {
-                retry_after: MINUTE * 9
-            })
+            codes.claim_ticket(Some(&before), start + MINUTE),
+            Some(false)
         );
-        Ok(())
+        assert_eq!(
+            codes.claim_ticket(Some(&during), start + MINUTE),
+            Some(true)
+        );
     }
 
     /// Codes use the unambiguous alphabet, and the letters read as digits

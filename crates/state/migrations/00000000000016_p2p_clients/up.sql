@@ -1,5 +1,6 @@
--- On a box: clients paired by ticket, by their peer key (64 lowercase hex).
--- One row per client: pairing again with a new key replaces the client's row.
+-- On a box: clients paired by ticket, one row per peer key (64 lowercase hex).
+-- Pairing a key again replaces its row; a client keeps several keys, and the
+-- daemon drops its oldest beyond its limit.
 CREATE TABLE p2p_clients (
     peer_key TEXT PRIMARY KEY NOT NULL,
     client_id TEXT NOT NULL,

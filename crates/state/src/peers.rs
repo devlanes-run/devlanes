@@ -5,8 +5,11 @@ use crate::{Error, Store, models::*, schema::*};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// A client a box paired with by ticket. One per client id: pairing again,
-/// also with a new key, replaces it.
+/// One key a box paired with by ticket, and the client it was paired for.
+/// One row per key: pairing the key again replaces its row, also under
+/// another client id. A client keeps several keys, up to the number the
+/// caller of [`Store::add_p2p_client`] keeps; a pairing never replaces
+/// another key's row, so claiming another client's id evicts nobody.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct P2pClient {
     /// The client's peer key, 64 lowercase hex digits.
@@ -35,33 +38,46 @@ impl From<P2pClientRow> for P2pClient {
 }
 
 impl Store {
-    /// Pins `client`, replacing in one transaction any row with its client id
-    /// or its key, so a client keeps one key and a key names one client.
-    /// Returns the keys of the rows it replaced.
-    pub async fn add_p2p_client(&self, client: P2pClient) -> Result<Vec<String>, Error> {
+    /// Pins `client`'s key, replacing the row of the same key, and keeps at
+    /// most `keep` keys of its client id, newest first, in one transaction.
+    /// Returns the keys it dropped to stay within that, which the caller
+    /// stops admitting.
+    pub async fn add_p2p_client(
+        &self,
+        client: P2pClient,
+        keep: usize,
+    ) -> Result<Vec<String>, Error> {
         if client.client_id.is_empty() || client.peer_key.is_empty() {
             return Err(Error::Invalid("empty client id or peer key".into()));
         }
         self.call(move |c| {
             c.immediate_transaction(|c| {
-                let same = p2p_clients::client_id
-                    .eq(&client.client_id)
-                    .or(p2p_clients::peer_key.eq(&client.peer_key));
-                let replaced: Vec<String> = p2p_clients::table
-                    .filter(same)
+                let client_id = client.client_id.clone();
+                let row = P2pClientRow {
+                    peer_key: client.peer_key,
+                    client_id: client.client_id,
+                    name: client.name,
+                    paired_at: client.paired_at,
+                    last_seen: client.last_seen,
+                };
+                // Deleted and inserted rather than updated, so the key's
+                // new row is the newest by rowid too.
+                diesel::delete(p2p_clients::table.find(&row.peer_key)).execute(c)?;
+                diesel::insert_into(p2p_clients::table)
+                    .values(&row)
+                    .execute(c)?;
+                // Pairings made within one millisecond are told apart by
+                // insertion order, so the oldest is always the one dropped.
+                let dropped: Vec<String> = p2p_clients::table
+                    .filter(p2p_clients::client_id.eq(&client_id))
+                    .order(p2p_clients::paired_at.desc())
+                    .then_order_by(diesel::dsl::sql::<diesel::sql_types::BigInt>("rowid DESC"))
+                    .offset(i64::try_from(keep).unwrap_or(i64::MAX))
                     .select(p2p_clients::peer_key)
                     .load(c)?;
-                diesel::delete(p2p_clients::table.filter(same)).execute(c)?;
-                diesel::insert_into(p2p_clients::table)
-                    .values(P2pClientRow {
-                        peer_key: client.peer_key,
-                        client_id: client.client_id,
-                        name: client.name,
-                        paired_at: client.paired_at,
-                        last_seen: client.last_seen,
-                    })
+                diesel::delete(p2p_clients::table.filter(p2p_clients::peer_key.eq_any(&dropped)))
                     .execute(c)?;
-                Ok(replaced)
+                Ok(dropped)
             })
         })
         .await
@@ -101,15 +117,25 @@ impl Store {
         .await
     }
 
-    /// Deletes the clients with `client_ids`; returns how many there were.
-    pub async fn delete_p2p_clients(&self, client_ids: Vec<String>) -> Result<usize, Error> {
+    /// Deletes every pairing of `client_ids`, by token and by ticket, in one
+    /// transaction, so a revoke never removes one kind and keeps the other;
+    /// returns how many of each there were.
+    pub async fn delete_client_pairings(
+        &self,
+        client_ids: Vec<String>,
+    ) -> Result<(usize, usize), Error> {
         self.call(move |c| {
-            Ok(
-                diesel::delete(
-                    p2p_clients::table.filter(p2p_clients::client_id.eq_any(client_ids)),
+            c.immediate_transaction(|c| {
+                let tokens = diesel::delete(
+                    remote_pairings::table.filter(remote_pairings::client_id.eq_any(&client_ids)),
                 )
-                .execute(c)?,
-            )
+                .execute(c)?;
+                let keys = diesel::delete(
+                    p2p_clients::table.filter(p2p_clients::client_id.eq_any(&client_ids)),
+                )
+                .execute(c)?;
+                Ok((tokens, keys))
+            })
         })
         .await
     }

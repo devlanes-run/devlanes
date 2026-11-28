@@ -6,7 +6,7 @@
 //! pinned, over memory peer endpoints. A child of `remote`, whose box and
 //! client harness it reuses.
 
-use std::{net::Ipv6Addr, path::Path};
+use std::{net::Ipv6Addr, path::Path, sync::Arc};
 
 use bytes::Bytes;
 use devlanes_daemon::{Handler, Session};
@@ -32,7 +32,7 @@ use super::{BOX, BoxSide, ClientSide, SOON, box_port, echo, http_get, ipv6_loopb
 use crate::{LIMIT, cx, eventually, repo, temp};
 
 // Port ranges: 15400-15799 and 16000-16999, between the DNS server's 15353
-// and `remote_sync.rs`'s 17000, and 11300-11499, which no other test in this
+// and `remote_sync.rs`'s 17000, and 11300-11699, which no other test in this
 // binary uses. Each test has its own slice, given where it starts its box.
 
 /// The `fix` of a client waiting for pairing with box `host`.
@@ -806,9 +806,10 @@ fn refused_key(error: &devlanes_transport::TransportError) -> bool {
 #[tokio::test(flavor = "multi_thread")]
 /// Pairing by ticket. A box listens only once a ticket is out. A key it
 /// never pinned is refused in the handshake and nothing about it reaches
-/// the box's services; a key that paired reaches the box's services under
-/// its own client id only, and is turned away with the reason while
-/// connections are off. A restarted box listens for its pinned clients at
+/// the box's services, and its wrong secrets pause nothing. A key that
+/// paired reaches the box's services under its own client id only. While
+/// connections are off a pairing is refused without using the ticket up,
+/// and a paired key's session is turned away with the reason. A restarted box listens for its pinned clients at
 /// once. `daemon revoke` ends a client's session and refuses its next dial,
 /// and once no client and no ticket is left the box stops listening.
 async fn a_ticket_pins_the_only_key_that_reaches_the_box_until_revoked() {
@@ -842,6 +843,16 @@ async fn a_ticket_pins_the_only_key_that_reaches_the_box_until_revoked() {
             .await
             .expect("daemon clients");
         assert_eq!(clients["items"], json!([]), "nothing reached the services");
+        // Wrong secrets from a stranger, more than pause codes, pause nothing.
+        let mut guess = ticket.clone();
+        guess.secret.0[0] ^= 1;
+        for _ in 0..6 {
+            let answer = pair_by_ticket(&stranger, &guess, &laptop_id).await;
+            assert!(
+                matches!(&answer, PairAnswer::Refused { message, retry_after_ms: None } if message.contains("wrong, expired or already used")),
+                "{answer:?}"
+            );
+        }
 
         let answer = pair_by_ticket(&laptop, &ticket, &laptop_id).await;
         assert!(
@@ -872,9 +883,21 @@ async fn a_ticket_pins_the_only_key_that_reaches_the_box_until_revoked() {
         assert_eq!(&echoed, b"ping\n");
 
         let desk_ticket = new_ticket(&side).await;
-        let answer = pair_by_ticket(&desk, &desk_ticket, &desk_id).await;
-        assert!(matches!(answer, PairAnswer::Paired { .. }), "{answer:?}");
         let config = side.h.home.join("config.yaml");
+        tokio::fs::write(&config, "remote:\n  allow_connections: false\n")
+            .await
+            .expect("config");
+        let answer = pair_by_ticket(&desk, &desk_ticket, &desk_id).await;
+        assert!(
+            matches!(&answer, PairAnswer::Refused { message, .. } if message.contains("remote.allow_connections")),
+            "{answer:?}"
+        );
+        tokio::fs::remove_file(&config).await.expect("config");
+        let answer = pair_by_ticket(&desk, &desk_ticket, &desk_id).await;
+        assert!(
+            matches!(answer, PairAnswer::Paired { .. }),
+            "the refusal left the ticket usable: {answer:?}"
+        );
         tokio::fs::write(&config, "remote:\n  allow_connections: false\n")
             .await
             .expect("config");
@@ -936,6 +959,100 @@ async fn a_ticket_pins_the_only_key_that_reaches_the_box_until_revoked() {
         };
         assert!(!gone.is_permanent(), "{gone:?}");
         side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A client that pairs by ticket from a second key keeps the first one
+/// served, and `daemon clients` counts both. Past 8 keys, as with token
+/// pairings, the box drops the oldest: its session ends, its next dial is
+/// refused, and the newest key is served.
+async fn a_client_keeps_its_newest_keys_up_to_the_limit() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let peers = MemoryPeers::new();
+        let endpoint = peers.endpoint();
+        let side = BoxSide::start_peer(&tmp, "box", "11500-11599", endpoint.clone()).await;
+        let id = format!("dl_cid_{}", "d".repeat(64));
+        let keys: Vec<Arc<MemoryPeer>> = (0..9).map(|_| peers.endpoint()).collect();
+        let mut addr = None;
+        let mut first = None;
+        for (index, key) in keys.iter().enumerate() {
+            let ticket = new_ticket(&side).await;
+            let answer = pair_by_ticket(key, &ticket, &id).await;
+            assert!(matches!(answer, PairAnswer::Paired { .. }), "{answer:?}");
+            if index == 0 {
+                first = Some(
+                    peer_session(key, &ticket.addr, &id)
+                        .await
+                        .expect("the first key's session"),
+                );
+            }
+            if index == 1 {
+                let entry = listed(&side, &id).await.expect("listed");
+                assert_eq!(entry["pairings"], 2, "{entry}");
+                assert!(
+                    first
+                        .as_ref()
+                        .is_some_and(|session| session.end().is_none()),
+                    "a second key leaves the first one's session"
+                );
+            }
+            addr = Some(ticket.addr);
+        }
+        let (Some(addr), Some(first)) = (addr, first) else {
+            panic!("no pairing ran");
+        };
+        tokio::time::timeout(SOON, first.closed())
+            .await
+            .expect("the dropped key's session ended");
+        let Err(dropped) = keys[0].connect(&addr, Alpn::Tunnel).await else {
+            panic!("the dropped key opened a session");
+        };
+        assert!(refused_key(&dropped), "{dropped:?}");
+        let newest = peer_session(&keys[8], &addr, &id).await;
+        assert!(newest.is_ok(), "{:?}", newest.err());
+        let entry = listed(&side, &id).await.expect("listed");
+        assert_eq!(entry["pairings"], 8, "{entry}");
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `daemon pair` with a ticket fails with why when the box has no
+/// peer-to-peer endpoint or its endpoint cannot listen, and codes keep
+/// working for SSH clients.
+async fn a_ticket_that_cannot_be_made_leaves_codes_working() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let plain = BoxSide::start(&tmp, "plain", "11600-11649").await;
+        let endpoint = MemoryPeers::new().endpoint();
+        let stopped = BoxSide::start_peer(&tmp, "stopped", "11650-11699", endpoint.clone()).await;
+        endpoint.close().await;
+        for (side, code) in [(&plain, "not_supported_yet"), (&stopped, "p2p_unavailable")] {
+            let failed = side
+                .h
+                .call(
+                    Method::RemotePair,
+                    json!({"ticket": true}),
+                    Context::default(),
+                )
+                .await
+                .expect_err("a ticket");
+            assert_eq!(failed.code, code, "{failed:?}");
+            let paired = side
+                .h
+                .call(Method::RemotePair, json!({}), Context::default())
+                .await
+                .expect("a code after the failed ticket");
+            assert!(paired["code"].as_str().is_some(), "{paired}");
+        }
+        plain.stop().await;
+        stopped.stop().await;
     })
     .await
     .expect("timeout");
