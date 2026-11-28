@@ -1,0 +1,30 @@
+---
+source: crates/cli/tests/it/gui.rs
+expression: text
+---
+error: devlanes gui is not supported yet
+error: acme@2:api is not a GUI service; GUI services there: desktop
+hint: devlanes gui ls --lane acme@2
+error: acme@2:desktop is not running (stopped)
+hint: devlanes start acme@2:desktop
+error: acme@2:desktop on box hetzner is not running (failed)
+hint: start it on hetzner: devlanes start acme@2:desktop
+error: acme@2:desktop has no GUI host on this machine, so its windows open on this machine's desktop
+hint: devlanes doctor
+error: the GUI host of acme@2:desktop exited, so its windows cannot be reached until it restarts
+hint: devlanes restart acme@2:desktop
+error: the GUI port of acme@2:desktop on box hetzner is not mirrored to this machine: port 26012 is not mirrored because node (pid 7) uses it here
+hint: devlanes remote ls
+error: the GUI host of acme@2:desktop at 127.0.0.1:26012 did not answer: GUI connection failed: connection refused
+hint: devlanes debug why acme@2:desktop
+error: acme@2:desktop has no window 7; its windows: 1 "Test pattern 1", 2 "Settings"
+hint: devlanes gui ls --lane acme@2
+error: several windows of acme@2:desktop are titled Twin: 1 "Test pattern 1", 2 "Settings"; name one by its id
+hint: devlanes gui ls --lane acme@2
+error: acme@2:desktop has no main window open; its windows: none
+hint: devlanes gui ls --lane acme@2
+error: window 1 "Test pattern 1" of acme@2:desktop is frozen: its lane is frozen for inactivity
+hint: devlanes debug thaw acme@2
+error: the GUI host of acme@2:desktop failed: the GUI host did not answer the screenshot in time
+error: unknown key "hyper" in "hyper+a"; known keys: ctrl, a-z, enter
+hint: devlanes gui key --help

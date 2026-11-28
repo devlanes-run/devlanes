@@ -94,7 +94,7 @@ fn every_visible_command_and_argument_has_help() {
 #[test]
 fn hidden_commands_stay_hidden() {
     let help = long_help(&[]);
-    for hidden in ["tunnel", "askpass"] {
+    for hidden in ["tunnel", "askpass", "gui"] {
         assert!(
             !help.contains(&format!("  {hidden} ")),
             "{hidden} is listed"

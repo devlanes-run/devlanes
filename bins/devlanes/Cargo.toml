@@ -73,6 +73,10 @@ devlanes-cli = { path = "../../crates/cli" }
 devlanes-client = { path = "../../crates/client" }
 devlanes-config = { path = "../../crates/config" }
 devlanes-daemon = { path = "../../crates/daemon" }
+# `devlanes gui`: the tool connection to a GUI host; no GUI libraries.
+devlanes-gui-codec = { path = "../../crates/gui-codec" }
+devlanes-gui-proto = { path = "../../crates/gui-proto" }
+devlanes-gui-tool = { path = "../../crates/gui-tool" }
 devlanes-ipc = { path = "../../crates/ipc" }
 devlanes-mcp = { path = "../../crates/mcp" }
 devlanes-mcp-ui = { path = "../../crates/mcp-ui" }

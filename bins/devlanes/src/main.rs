@@ -33,6 +33,7 @@ mod driver;
 #[cfg(windows)]
 mod follow;
 mod gui;
+mod gui_commands;
 mod lifecycle;
 mod local;
 mod local_doctor;

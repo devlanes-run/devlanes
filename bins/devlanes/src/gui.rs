@@ -29,6 +29,12 @@ pub(crate) async fn options() -> GuiOptions {
     }
 }
 
+/// Whether GUI services are on in this build and environment: the switch the
+/// daemon reads, which the `devlanes gui` commands and the MCP tools follow.
+pub(crate) fn enabled() -> bool {
+    requested().is_some()
+}
+
 /// [`BACKEND_ENV`] in a debug build; `None` in release builds.
 fn requested() -> Option<String> {
     if !cfg!(debug_assertions) {

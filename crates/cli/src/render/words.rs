@@ -497,6 +497,7 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 .unwrap_or_else(|| "this".into());
             (format!("{feature} is not supported yet"), None)
         }
+        code if is_gui_command_error(code) => gui_command_error(code, data),
         "config_error" => (
             config_invalid(data),
             Some(Hint::command(["config", "check"])),
@@ -2054,6 +2055,177 @@ pub(crate) fn is_gui_failure(code: &str) -> bool {
         code,
         "gui_host_missing" | "gui_unavailable" | "gui_host_failed"
     )
+}
+
+/// The codes of `devlanes gui` failures, which the binary raises itself.
+const GUI_COMMAND_ERRORS: &[&str] = &[
+    "gui_not_gui_service",
+    "gui_not_running",
+    "gui_no_host",
+    "gui_host_down",
+    "gui_not_mirrored",
+    "gui_unreachable",
+    "gui_window_not_found",
+    "gui_window_ambiguous",
+    "gui_no_window",
+    "gui_window_locked",
+    "gui_failed",
+    "gui_unknown_key",
+];
+
+/// Whether `code` is a `devlanes gui` failure.
+fn is_gui_command_error(code: &str) -> bool {
+    GUI_COMMAND_ERRORS.contains(&code)
+}
+
+/// `1 "Editor", 2 "Settings"`: the windows of a `devlanes gui` error.
+fn gui_windows(data: &Value) -> String {
+    let windows: Vec<String> = list(data, "windows")
+        .iter()
+        .map(|window| match text(window, "title") {
+            title if title.is_empty() => field(window, "id"),
+            title => format!("{} {title:?}", field(window, "id")),
+        })
+        .collect();
+    if windows.is_empty() {
+        "none".into()
+    } else {
+        windows.join(", ")
+    }
+}
+
+/// The message and hint of a `devlanes gui` failure. `data` has `lane` and
+/// `unit` (and `box` for a box's lane) wherever a service was found.
+fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
+    let unit = target(data);
+    let host = text(data, "box");
+    let on_box = if host.is_empty() {
+        String::new()
+    } else {
+        format!(" on box {host}")
+    };
+    let ls = || {
+        let lane = text(data, "lane");
+        if lane.is_empty() {
+            Hint::command(["gui", "ls"])
+        } else {
+            Hint::command(["gui", "ls", "--lane", lane.as_str()])
+        }
+    };
+    match code {
+        "gui_not_gui_service" => {
+            let services: Vec<String> = list(data, "services").iter().map(display_value).collect();
+            let message = if services.is_empty() {
+                format!("{unit} is not a GUI service, and its lane has none")
+            } else {
+                format!(
+                    "{unit} is not a GUI service; GUI services there: {}",
+                    services.join(", ")
+                )
+            };
+            (message, Some(ls()))
+        }
+        "gui_not_running" => (
+            format!(
+                "{unit}{on_box} is not running ({})",
+                field(data, "state")
+            ),
+            Some(if host.is_empty() {
+                Hint::command(["start", &unit])
+            } else {
+                Hint(format!(
+                    "start it on {host}: devlanes start {}",
+                    crate::shell_quote(&unit)
+                ))
+            }),
+        ),
+        "gui_no_host" => (
+            format!(
+                "{unit} has no GUI host on this machine, so its windows open on this machine's desktop"
+            ),
+            Some(Hint::command(["doctor"])),
+        ),
+        "gui_host_down" => (
+            format!("the GUI host of {unit} exited, so its windows cannot be reached until it restarts"),
+            Some(Hint::command(["restart", &unit])),
+        ),
+        "gui_not_mirrored" => (
+            format!(
+                "the GUI port of {unit}{on_box} is not mirrored to this machine: {}",
+                field(data, "message")
+            ),
+            Some(Hint::command(["remote", "ls"])),
+        ),
+        "gui_unreachable" => (
+            format!(
+                "the GUI host of {unit}{on_box} at {} did not answer: {}",
+                field(data, "address"),
+                field(data, "message")
+            ),
+            Some(if host.is_empty() {
+                Hint::command(["debug", "why", &unit])
+            } else {
+                Hint::command(["remote", "ls"])
+            }),
+        ),
+        "gui_window_not_found" => (
+            format!(
+                "{unit} has no window {}; its windows: {}",
+                field(data, "window"),
+                gui_windows(data)
+            ),
+            Some(ls()),
+        ),
+        "gui_window_ambiguous" => (
+            format!(
+                "several windows of {unit} are titled {}: {}; name one by its id",
+                field(data, "window"),
+                gui_windows(data)
+            ),
+            Some(ls()),
+        ),
+        "gui_no_window" => (
+            format!(
+                "{unit} has no main window open; its windows: {}",
+                gui_windows(data)
+            ),
+            Some(ls()),
+        ),
+        "gui_window_locked" => {
+            let window = &data["window"];
+            let name = match text(window, "title") {
+                title if title.is_empty() => format!("window {}", field(window, "id")),
+                title => format!("window {} {title:?}", field(window, "id")),
+            };
+            let lock = text(data, "lock");
+            let (why, hint) = match lock.as_str() {
+                "frozen" if host.is_empty() => (
+                    "its lane is frozen for inactivity",
+                    Some(Hint::command(["debug", "thaw", &text(data, "lane")])),
+                ),
+                "frozen" => ("its lane is frozen for inactivity", None),
+                "waiting" => ("its app is opening it again", None),
+                "resizing" => ("it is resizing", None),
+                _ => ("it takes no input now", Some(ls())),
+            };
+            (format!("{name} of {unit} is {lock}: {why}"), hint)
+        }
+        "gui_unknown_key" => {
+            let known: Vec<String> = list(data, "known").iter().map(display_value).collect();
+            (
+                format!(
+                    "{}; known keys: {}",
+                    field(data, "message"),
+                    known.join(", ")
+                ),
+                Some(Hint::command(["gui", "key", "--help"])),
+            )
+        }
+        _ => (
+            format!("the GUI host of {unit}{on_box} failed: {}", field(data, "message")),
+            None,
+        ),
+    }
 }
 
 /// Why a GUI service's host did not start (`gui_host_missing`,

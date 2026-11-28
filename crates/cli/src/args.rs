@@ -64,6 +64,11 @@ Examples:
   devlanes with --profile e2e -- pnpm test:e2e
   devlanes with api --logs-dir devlanes-logs -- cargo test --test api";
 
+/// Hidden top-level commands of a feature users cannot reach yet: `gui`, while
+/// GUI services are off in releases. The generated CLI reference leaves them
+/// out, where it lists the other hidden commands.
+pub const UNRELEASED_COMMANDS: &[&str] = &["gui"];
+
 /// Public parser for the binary and shell completion frontend.
 #[derive(Debug, Parser)]
 #[command(
@@ -254,6 +259,14 @@ REQUESTS_CA_BUNDLE point at the devlanes CA unless the shell sets them, and\n\
     Url {
         #[command(subcommand)]
         command: UrlCommand,
+    },
+    // Hidden until GUI services are on for users; the help is written as it
+    // will be published.
+    /// List, screenshot and drive the windows of GUI services: click, type, press keys, scroll and resize
+    #[command(hide = true, long_about = GUI_ABOUT, after_help = GUI_AFTER)]
+    Gui {
+        #[command(subcommand)]
+        command: GuiCommand,
     },
     /// Start, stop and inspect the project's containers
     Infra {
@@ -655,6 +668,220 @@ pub enum UrlCommand {
     },
     /// List the current project's routed hostnames with their lane, unit, port and state; outside a project, every project's
     Ls,
+}
+
+const GUI_ABOUT: &str = "\
+List, screenshot and drive the windows of GUI services: click, type, press keys, scroll and resize.
+
+Works on services with gui: true without opening their windows. Each command
+connects to the service's GUI host, does one thing, and returns once the host
+has passed it to the app, so a screenshot taken next shows the result.
+Coordinates are window pixels from the window's top-left corner.
+
+--window picks a window by the id or title gui ls prints; without it, the
+service's first main window. A box's GUI service works the same from a
+connected machine: name its lane, such as acme@2:desktop.";
+
+const GUI_AFTER: &str = "\
+Examples:
+  devlanes gui ls                               GUI services of this lane and their windows
+  devlanes gui screenshot desktop               save a PNG and print its path
+  devlanes gui click desktop 120 48
+  devlanes gui type desktop 'hello world'
+  devlanes gui key desktop ctrl+s enter
+  devlanes gui resize desktop 1280x800";
+
+const GUI_SCREENSHOT_ABOUT: &str = "\
+Save a PNG of a GUI service's window and print where it went.
+
+Without --to the file goes to devlanes-screenshots in the temporary directory,
+named after the lane, the service and the window id, such as
+acme@2-desktop-1.png, and the next screenshot of that window replaces it. JSON output names the
+file and the image's size.";
+
+const GUI_KEY_ABOUT: &str = "\
+Press keys and chords in a GUI service's window, such as enter or ctrl+s.
+
+Each KEY is a key name, or names joined by + where every name before the last
+is a modifier (ctrl, shift, alt, meta). Names follow the key's place on a US
+keyboard: a to z, 0 to 9, f1 to f24, enter, esc, tab, space, backspace,
+delete, insert, home, end, pageup, pagedown, up, down, left, right and the
+punctuation keys by name (minus, equal, comma, period, slash, ...). The keys of
+a chord go down in order and up in reverse; chords are pressed one after
+another. For text, use devlanes gui type.";
+
+/// A mouse button of `gui click`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum GuiButton {
+    /// The primary button
+    #[default]
+    Left,
+    /// The secondary button, which usually opens a menu
+    Right,
+    /// The wheel button
+    Middle,
+}
+
+impl GuiButton {
+    /// The name, as `--button` takes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Middle => "middle",
+        }
+    }
+}
+
+/// A window size, `WIDTHxHEIGHT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GuiSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum GuiCommand {
+    /// List the lane's GUI services with their windows and the state of their GUI hosts
+    Ls {
+        /// GUI services to list ([lane:]unit, such as desktop or acme@2:desktop) [default: every GUI service of the lane]
+        #[arg(value_name = "UNIT")]
+        units: Vec<String>,
+    },
+    /// Save a PNG of a GUI service's window and print where it went
+    #[command(long_about = GUI_SCREENSHOT_ABOUT)]
+    Screenshot {
+        /// GUI service ([lane:]unit, such as desktop, 2:desktop or desktop.2 for a replica)
+        #[arg(value_name = "UNIT")]
+        unit: String,
+        /// Window id or title, as gui ls prints them [default: the first main window]
+        #[arg(long, value_name = "WINDOW")]
+        window: Option<String>,
+        /// Write the PNG here [default: devlanes-screenshots/LANE-UNIT-WINDOW.png in the temporary directory]
+        #[arg(short = 'o', long, value_name = "FILE")]
+        to: Option<PathBuf>,
+    },
+    /// Click in a GUI service's window at X Y, in window pixels
+    Click {
+        /// GUI service ([lane:]unit, such as desktop or 2:desktop)
+        #[arg(value_name = "UNIT")]
+        unit: String,
+        /// Pixels from the window's left edge
+        #[arg(value_name = "X")]
+        x: u32,
+        /// Pixels from the window's top edge
+        #[arg(value_name = "Y")]
+        y: u32,
+        /// Mouse button to click
+        #[arg(long, value_enum, default_value_t = GuiButton::Left)]
+        button: GuiButton,
+        /// Click twice
+        #[arg(long)]
+        double: bool,
+        /// Window id or title, as gui ls prints them [default: the first main window]
+        #[arg(long, value_name = "WINDOW")]
+        window: Option<String>,
+    },
+    /// Type text into a GUI service's window, as committed text
+    Type {
+        /// GUI service ([lane:]unit, such as desktop or 2:desktop)
+        #[arg(value_name = "UNIT")]
+        unit: String,
+        /// Text to type; it goes to the field that has focus, so click it first
+        #[arg(value_name = "TEXT", allow_hyphen_values = true)]
+        text: String,
+        /// Window id or title, as gui ls prints them [default: the first main window]
+        #[arg(long, value_name = "WINDOW")]
+        window: Option<String>,
+    },
+    /// Press keys and chords in a GUI service's window, such as enter or ctrl+s
+    #[command(long_about = GUI_KEY_ABOUT)]
+    Key {
+        /// GUI service ([lane:]unit, such as desktop or 2:desktop)
+        #[arg(value_name = "UNIT")]
+        unit: String,
+        /// Keys or chords to press in order, such as enter, ctrl+s or ctrl+shift+t
+        #[arg(value_name = "KEY", required = true)]
+        keys: Vec<String>,
+        /// Window id or title, as gui ls prints them [default: the first main window]
+        #[arg(long, value_name = "WINDOW")]
+        window: Option<String>,
+    },
+    /// Scroll a GUI service's window by DX DY lines; positive DY scrolls down
+    Scroll {
+        /// GUI service ([lane:]unit, such as desktop or 2:desktop)
+        #[arg(value_name = "UNIT")]
+        unit: String,
+        /// Lines to scroll right; negative scrolls left
+        #[arg(value_name = "DX", allow_negative_numbers = true)]
+        dx: i32,
+        /// Lines to scroll down; negative scrolls up
+        #[arg(value_name = "DY", allow_negative_numbers = true)]
+        dy: i32,
+        /// Where the pointer is while it scrolls, in window pixels [default: the window's middle]
+        #[arg(long, num_args = 2, value_names = ["X", "Y"])]
+        at: Option<Vec<u32>>,
+        /// Window id or title, as gui ls prints them [default: the first main window]
+        #[arg(long, value_name = "WINDOW")]
+        window: Option<String>,
+    },
+    /// Ask a GUI service's window for a new size, such as 1280x800; prints the size it took
+    Resize {
+        /// GUI service ([lane:]unit, such as desktop or 2:desktop)
+        #[arg(value_name = "UNIT")]
+        unit: String,
+        /// New size as WIDTHxHEIGHT in pixels, such as 1280x800
+        #[arg(value_name = "SIZE", value_parser = parse_size)]
+        size: GuiSize,
+        /// Window id or title, as gui ls prints them [default: the first main window]
+        #[arg(long, value_name = "WINDOW")]
+        window: Option<String>,
+    },
+}
+
+impl GuiCommand {
+    /// The units the command names: one, or for `ls` any number.
+    pub fn units(&self) -> Vec<String> {
+        match self {
+            Self::Ls { units } => units.clone(),
+            Self::Screenshot { unit, .. }
+            | Self::Click { unit, .. }
+            | Self::Type { unit, .. }
+            | Self::Key { unit, .. }
+            | Self::Scroll { unit, .. }
+            | Self::Resize { unit, .. } => vec![unit.clone()],
+        }
+    }
+
+    /// `--window`, for the commands that take it.
+    pub fn window(&self) -> Option<&str> {
+        match self {
+            Self::Ls { .. } => None,
+            Self::Screenshot { window, .. }
+            | Self::Click { window, .. }
+            | Self::Type { window, .. }
+            | Self::Key { window, .. }
+            | Self::Scroll { window, .. }
+            | Self::Resize { window, .. } => window.as_deref(),
+        }
+    }
+}
+
+/// `WIDTHxHEIGHT`, each side from 1 to 8192 (the GUI protocol's largest).
+fn parse_size(value: &str) -> Result<GuiSize, String> {
+    let error = || "expected WIDTHxHEIGHT in pixels, such as 1280x800".to_owned();
+    let (width, height) = value
+        .split_once(['x', 'X'])
+        .ok_or_else(error)?;
+    let side = |side: &str| {
+        side.parse::<u32>()
+            .ok()
+            .filter(|side| (1..=8192).contains(side))
+    };
+    match (side(width), side(height)) {
+        (Some(width), Some(height)) => Ok(GuiSize { width, height }),
+        _ => Err(format!("{}; each side from 1 to 8192", error())),
+    }
 }
 
 const SETUP_ABOUT: &str = "\
@@ -1093,6 +1320,12 @@ pub enum Action {
     },
     ConfigUnset(String),
     Completions(clap_complete::Shell),
+    /// `devlanes gui`: the binary finds the service through the daemon and
+    /// talks to its GUI host itself. `context` says where the units are.
+    Gui {
+        command: GuiCommand,
+        context: Context,
+    },
     /// `devlanes mcp`: serves MCP on stdin and stdout until the client leaves.
     Mcp {
         read_only: bool,
@@ -1448,6 +1681,12 @@ impl Cli {
                 }
                 UrlCommand::Ls => (Method::Hosts, json!({})),
             },
+            Some(Command::Gui { command }) => {
+                return Ok(Action::Gui {
+                    command: command.clone(),
+                    context,
+                });
+            }
             Some(Command::Env { command }) => match command {
                 EnvCommand::Show { unit, explain } => {
                     (Method::Env, json!({"unit": unit, "explain": explain}))
@@ -1882,6 +2121,7 @@ impl Cli {
             | Command::Remote { .. }
             | Command::Lane { .. }
             | Command::Url { .. }
+            | Command::Gui { .. }
             | Command::Config { .. } => None,
             Command::Debug { command } => match command {
                 DebugCommand::Events { follow: true } if unbounded => Some(follow),
@@ -2005,6 +2245,15 @@ impl Command {
             // `url open` only prints the URL in agent mode, which `devlanes mcp` uses.
             Self::Url { command } => match command {
                 UrlCommand::Print { .. } | UrlCommand::Open { .. } | UrlCommand::Ls => true,
+            },
+            // A screenshot writes a file only the caller reads; the app sees nothing.
+            Self::Gui { command } => match command {
+                GuiCommand::Ls { .. } | GuiCommand::Screenshot { .. } => true,
+                GuiCommand::Click { .. }
+                | GuiCommand::Type { .. }
+                | GuiCommand::Key { .. }
+                | GuiCommand::Scroll { .. }
+                | GuiCommand::Resize { .. } => false,
             },
             Self::Infra { command } => match command {
                 InfraCommand::Status | InfraCommand::Logs { .. } => true,
