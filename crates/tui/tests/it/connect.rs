@@ -357,6 +357,14 @@ async fn a_paste_as_key_presses_runs_no_bindings() -> TestResult {
         "Pasted text goes only into a text field. Press n, then paste the ticket."
     );
     assert_eq!(app.view, View::Boxes);
+    // A key typed afterwards works as before.
+    app.update(key(KeyCode::Char('d')));
+    assert!(
+        matches!(&app.dialog, Some(Dialog::Confirm { prompt, .. }) if prompt == "Disconnect hetzner?"),
+        "{:?}",
+        app.dialog
+    );
+    app.update(key(KeyCode::Char('n')));
 
     let mut app = boxes_app(100, 30, hosts).await;
     app.update(key(KeyCode::Char('j')));

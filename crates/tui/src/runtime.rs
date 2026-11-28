@@ -27,7 +27,7 @@ use crossterm::{
 };
 use devlanes_proto::{AttachParams, Method, Selection};
 use devlanes_term::{Notifications, Notifier, Progress, ProgressBar, TitleGuard, Wrap};
-use futures_util::{FutureExt, Stream, StreamExt};
+use futures_util::{Stream, StreamExt};
 use ratatui::{Terminal, backend::Backend};
 use tokio::{
     sync::{Notify, mpsc},
@@ -325,15 +325,28 @@ where
                     // together as the terminal sent them.
                     let mut read = vec![(Instant::now(), event)];
                     while read.len() < MAX_EVENT_BATCH {
-                        match events.next().now_or_never() {
-                            Some(Some(Ok(event))) => read.push((Instant::now(), event)),
-                            Some(Some(Err(error))) => return Err(error.into()),
+                        // Polled with this task's own waker: crossterm's
+                        // stream starts one wake-up thread per pending poll
+                        // and keeps the waker of that poll, so a poll with
+                        // any other waker would leave this loop asleep while
+                        // keys wait.
+                        let next = std::future::poll_fn(|cx| {
+                            std::task::Poll::Ready(events.poll_next_unpin(cx))
+                        })
+                        .await;
+                        match next {
+                            std::task::Poll::Ready(Some(Ok(event))) => {
+                                read.push((Instant::now(), event));
+                            }
+                            std::task::Poll::Ready(Some(Err(error))) => {
+                                return Err(error.into());
+                            }
                             // An ended stream is not polled again.
-                            Some(None) => {
+                            std::task::Poll::Ready(None) => {
                                 events_ended = true;
                                 break;
                             }
-                            None => break,
+                            std::task::Poll::Pending => break,
                         }
                     }
                     read.into_iter()
