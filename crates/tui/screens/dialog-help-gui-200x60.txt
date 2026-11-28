@@ -15,7 +15,7 @@
 │   ● web-app                                  │   s  S              on the lane: its default services; every service                                   │                                              │
 │   ● web-admin                                │   r                 on the lane: reload changes, else restart it                                       │                                              │
 │   ● web-docs                                 │   p  C              start the lane with profiles, clean it (asks first)                                │                                              │
-│   · web-storybook                            │   o  w              open the address in a browser, a GUI service's windows                             │                                              │
+│   · web-storybook                            │   o  w              open the address, or a GUI service's windows                                       │                                              │
 │   ● web-landing                              │   m                 use a grey lane instead of the one in use                                          │                                              │
 │   ◉ wrk-email                                │   /                 filter by name or +tag; enter keeps, esc clears                                    │                                              │
 │   ◉ wrk-billing                              │                                                                                                        │                                              │

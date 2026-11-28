@@ -35,7 +35,7 @@ pub(crate) async fn open(
     services: Vec<Service>,
     named: bool,
 ) -> Result<Value, RpcError> {
-    if !has_display() {
+    if !devlanes_gui_client::display::here() {
         return Err(RpcError::new("gui_no_display", json!({}), exit::FAILED));
     }
     let program = tokio::task::spawn_blocking(crate::gui::program)
@@ -128,13 +128,19 @@ async fn start(launch: Launch) -> Result<&'static str, String> {
         .map_err(|error| error.to_string())?;
     let deadline = tokio::time::Instant::now() + STARTUP;
     while tokio::time::Instant::now() < deadline {
-        match child.try_wait() {
+        match child.exited() {
             // Another viewer took the lock first and was asked for its windows.
-            Ok(Some(status)) if status.success() => return Ok("already_open"),
-            Ok(Some(status)) if status.code() == Some(NO_DISPLAY_EXIT) => {
+            Ok(Some(0)) => return Ok("already_open"),
+            Ok(Some(NO_DISPLAY_EXIT)) => {
                 return Err("there is no display to open windows on".into());
             }
-            Ok(Some(status)) => return Err(log_tail(&log).unwrap_or_else(|| status.to_string())),
+            Ok(Some(code)) => {
+                let tail = tokio::task::spawn_blocking(move || log_tail(&log))
+                    .await
+                    .ok()
+                    .flatten();
+                return Err(tail.unwrap_or_else(|| format!("it exited with code {code}")));
+            }
             Ok(None) => tokio::time::sleep(Duration::from_millis(100)).await,
             Err(error) => return Err(error.to_string()),
         }
@@ -142,24 +148,13 @@ async fn start(launch: Launch) -> Result<&'static str, String> {
     Ok("opened")
 }
 
-/// The last line of the viewer's log, which says why it ended.
+/// The last line of the viewer's log, which says why it ended. Blocking.
 fn log_tail(log: &Path) -> Option<String> {
     let text = std::fs::read_to_string(log).ok()?;
     text.lines()
         .rev()
         .find(|line| !line.trim().is_empty())
         .map(|line| line.trim().trim_start_matches("devlanes-gui: ").to_owned())
-}
-
-/// Whether this machine has a display to open windows on, from the caller's
-/// environment, which the viewer inherits. Only Linux can lack one.
-fn has_display() -> bool {
-    if !cfg!(target_os = "linux") {
-        return true;
-    }
-    ["WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY"]
-        .iter()
-        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
 }
 
 /// `{lane, unit, box}` of `service`, which errors carry.

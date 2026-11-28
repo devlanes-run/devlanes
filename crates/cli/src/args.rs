@@ -692,11 +692,16 @@ const GUI_OPEN_ABOUT: &str = "\
 Open a GUI service's windows on this machine's desktop, or bring them to the front.
 
 Each window of the service gets a window here that shows it and takes your
-mouse and keyboard. A service has one viewer on this machine: running the
-command again brings its windows to the front and reopens the ones you closed.
-The windows stay until the service stops. Without a unit, every running GUI
-service of the lane opens. A box's GUI service opens the same way through its
-mirrored port, such as acme@2:desktop.";
+mouse and keyboard. Its windows open once on this machine: running the command
+again brings them to the front and reopens the ones you closed. The windows
+stay until the service stops. Without a unit, every running GUI service of the
+lane opens. A box's GUI service opens the same way through its mirrored port,
+such as acme@2:desktop. Agents get an error instead: the windows are for the
+person at this machine.";
+
+/// Why `gui open` does not run for an agent, as the MCP server and the agent
+/// output mode say it.
+pub(crate) const GUI_OPEN_FOR_PEOPLE: &str = "it opens windows on this machine's desktop for the person at it; ask the user to run it, or let the windows open by themselves";
 
 const GUI_SCREENSHOT_ABOUT: &str = "\
 Save a PNG of a GUI service's window and print where it went.
@@ -2119,6 +2124,9 @@ impl Cli {
             ),
             Command::Logs(args) if args.follow && unbounded => Some(follow),
             Command::Status(args) if args.watch && unbounded => Some(follow),
+            Command::Gui {
+                command: GuiCommand::Open { .. },
+            } => Some(GUI_OPEN_FOR_PEOPLE),
             Command::Start(_)
             | Command::Stop(_)
             | Command::Restart(_)
@@ -2260,10 +2268,11 @@ impl Command {
             },
             // A screenshot to the screenshots folder changes nothing the app
             // or a later command sees; `--to` may replace any file.
-            // `gui open` shows windows on this machine and changes nothing
-            // the app or a later command sees, like `url open`.
+            // `gui open` starts a process that takes focus and sends the
+            // local clipboard to the app.
             Self::Gui { command } => match command {
-                GuiCommand::Ls { .. } | GuiCommand::Open { .. } => true,
+                GuiCommand::Ls { .. } => true,
+                GuiCommand::Open { .. } => false,
                 GuiCommand::Screenshot { to, .. } => to.is_none(),
                 GuiCommand::Click { .. }
                 | GuiCommand::Type { .. }

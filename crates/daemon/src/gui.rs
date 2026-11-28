@@ -10,7 +10,7 @@
 //! opens a `control` connection, spawns the unit and, once the run is
 //! recorded with the host as one of its members (so orphan handling reaches
 //! it after a crash), tells the host the unit's process identity. The unit's
-//! handle is a [`GuiUnit`]: stopping or reaping the unit stops the host after
+//! handle is a `GuiUnit`: stopping or reaping the unit stops the host after
 //! it, freezing reaches the unit only and tells the host, and viewer input
 //! the host reports is lane activity.
 //!

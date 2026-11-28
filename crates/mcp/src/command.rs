@@ -454,6 +454,27 @@ mod tests {
         assert!(Call::parse(&args(&["with", "--", "devlanes", "status"]), Tool::Any).is_ok());
     }
 
+    /// The generic tool never opens windows on the user's desktop, in either
+    /// mode: `gui open` is refused with the reason, as is `with` running it.
+    #[test]
+    fn gui_open_is_refused_in_both_modes() {
+        for tool in [Tool::Any, Tool::ReadOnly] {
+            for line in [
+                &["gui", "open", "desktop"][..],
+                &["gui", "open"],
+                &["with", "--", "devlanes", "gui", "open", "desktop"],
+            ] {
+                match Call::parse(&args(line), tool) {
+                    Err(Rejected::Error(text)) => assert!(
+                        text.contains("ask the user") || text.contains("changes something"),
+                        "{line:?}: {text}"
+                    ),
+                    _ => panic!("{line:?} was not refused"),
+                }
+            }
+        }
+    }
+
     /// Terminal-only commands and write commands on the read tool are refused
     /// with what to do instead; `--help` is text, not an error.
     #[test]

@@ -199,6 +199,9 @@ pub struct Setup {
     pub ca_env: BTreeMap<String, String>,
     /// `EngineOptions::gui`; off by default.
     pub gui: Option<devlanes_daemon::gui::GuiOptions>,
+    /// `gui.auto_open`; off unless a test of auto-open sets it, so no test
+    /// starts a viewer.
+    pub auto_open: bool,
 }
 
 /// A user config whose port pool is `range`, for [`Setup::user`]. A restart
@@ -218,8 +221,6 @@ pub struct Setup {
 pub fn pool(range: &str) -> Option<devlanes_config::UserConfig> {
     let mut user = devlanes_config::UserConfig::default();
     user.ports.range = range.into();
-    // No test opens a viewer window.
-    user.gui.auto_open = false;
     Some(user)
 }
 
@@ -273,6 +274,9 @@ pub async fn harness(home: &Path, setup: Setup) -> Harness {
         options.user = user;
         options.dns_listen = "127.0.0.1:0".parse().expect("address");
     }
+    // No test opens a viewer window, whatever its user config says; the
+    // tests of auto-open ask for it.
+    options.user.gui.auto_open = setup.auto_open;
     let idle = options.idle.clone();
     let engine = Engine::new(options, store, integ, CancellationToken::new());
     engine.reconcile().await.expect("reconcile");

@@ -288,10 +288,13 @@ impl Handler for Engine {
         // Usually the server's token already fired; an embedder may call this
         // directly. Either way, new mutations and spawns are refused from here on.
         self.inner.shutdown.cancel();
-        // The viewers auto-open started go first: a box's would otherwise
-        // reconnect to a mirror that is gone with this daemon.
-        let inner = self.inner.clone();
-        let _ = tokio::task::spawn_blocking(move || inner.end_viewers()).await;
+        // A stop for good ends the viewers auto-open started first: a box's
+        // would otherwise reconnect to a mirror that is gone with this
+        // daemon. A restart leaves them to the next daemon.
+        if !request.restart && self.inner.opts.gui.enabled {
+            let inner = self.inner.clone();
+            let _ = tokio::task::spawn_blocking(move || inner.end_viewers()).await;
+        }
         let steps = StopSteps::new(&self.inner.bus, request.reason, request.restart);
         self.inner.remote_shutdown(&steps).await;
         let hooks = (request.reason == ShutdownReason::Explicit).then_some(&request.interrupt);

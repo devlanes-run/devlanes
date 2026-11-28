@@ -35,7 +35,13 @@ pub fn applies(key: &str) -> Applies {
 /// Every section and setting of the user config as a dotted key (`proxy`,
 /// `proxy.https_port`), in schema order.
 pub fn user_keys() -> Vec<String> {
-    let schema = crate::user_schema();
+    user_keys_for(false)
+}
+
+/// [`user_keys`], with the settings of GUI services (`gui`) when
+/// `gui_services`, for a build that has them on.
+pub fn user_keys_for(gui_services: bool) -> Vec<String> {
+    let schema = crate::user_schema_for(gui_services);
     let mut keys = Vec::new();
     collect(&schema, &schema, "", &mut keys);
     keys
@@ -46,7 +52,13 @@ pub fn user_keys() -> Vec<String> {
 /// name (`remote.boxes`) any name counts, so `remote.boxes.acme.command` is a
 /// setting.
 pub fn check_user_key(key: &str) -> Result<(), ConfigError> {
-    let keys = user_keys();
+    check_user_key_for(key, false)
+}
+
+/// [`check_user_key`], knowing the settings of GUI services when
+/// `gui_services`.
+pub fn check_user_key_for(key: &str, gui_services: bool) -> Result<(), ConfigError> {
+    let keys = user_keys_for(gui_services);
     if keys.iter().any(|known| known == key) || in_named_section(key) {
         return Ok(());
     }
@@ -67,6 +79,12 @@ pub fn check_user_key(key: &str) -> Result<(), ConfigError> {
 /// settings, since that is what devlanes uses. Durations and sizes use their
 /// largest exact unit (`7d`, `5GiB`).
 pub fn effective_user_value(config: &UserConfig) -> Value {
+    effective_user_value_for(config, false)
+}
+
+/// [`effective_user_value`], with the settings of GUI services when
+/// `gui_services`; without, they are left out, as from the schema.
+pub fn effective_user_value_for(config: &UserConfig, gui_services: bool) -> Value {
     let mut value = serde_json::to_value(config).unwrap_or_default();
     let terminal = config
         .terminal
@@ -78,8 +96,9 @@ pub fn effective_user_value(config: &UserConfig) -> Value {
             "terminal".into(),
             serde_json::to_value(terminal).unwrap_or_default(),
         );
-        // Unpublished while GUI services are off for users, as in the schema.
-        map.remove("gui");
+        if !gui_services {
+            map.remove("gui");
+        }
     }
     shorten(&mut value);
     value
@@ -158,8 +177,18 @@ fn digits(text: &str) -> Option<u64> {
 /// Null for a setting that is unset and has no default (`startup.max`).
 /// Fails like [`check_user_key`] for an unknown key.
 pub fn user_setting(config: &UserConfig, key: &str) -> Result<Value, ConfigError> {
-    check_user_key(key)?;
-    let effective = effective_user_value(config);
+    user_setting_for(config, key, false)
+}
+
+/// [`user_setting`], knowing the settings of GUI services when
+/// `gui_services`.
+pub fn user_setting_for(
+    config: &UserConfig,
+    key: &str,
+    gui_services: bool,
+) -> Result<Value, ConfigError> {
+    check_user_key_for(key, gui_services)?;
+    let effective = effective_user_value_for(config, gui_services);
     Ok(key
         .split('.')
         .try_fold(&effective, |node, segment| node.get(segment))

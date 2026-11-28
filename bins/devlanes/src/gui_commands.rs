@@ -43,6 +43,12 @@ pub(crate) async fn run(
             exit::FAILED,
         ));
     }
+    // Windows on the desktop are for a person: an agent cannot use them, and
+    // they would take focus and send the local clipboard to the app.
+    if matches!(command, GuiCommand::Open { .. }) && runtime.mode == devlanes_cli::OutputMode::Agent
+    {
+        return Err(RpcError::new("gui_open_for_people", json!({}), exit::USAGE));
+    }
     let chords = chords(&command)?;
     // Refused before anything connects, as the host would refuse it.
     if let GuiCommand::Resize { size, .. } = &command
@@ -292,7 +298,26 @@ async fn find(mut context: Context, lane: Option<String>) -> Result<Found, RpcEr
             })
             .await
             .unwrap_or_default();
-            lookup::box_lane(&boxes, &reference).ok_or(error)
+            if let Some(found) = lookup::box_lane(&boxes, &reference) {
+                return Ok(found);
+            }
+            // A box this machine knows but is not connected to may have the
+            // lane: that is not a lane that does not exist.
+            let disconnected: Vec<&str> = boxes["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|host| host["state"] != "connected")
+                .filter_map(|host| host["host"].as_str())
+                .collect();
+            if disconnected.is_empty() {
+                return Err(error);
+            }
+            Err(RpcError::new(
+                "gui_box_not_connected",
+                json!({"reference": reference, "boxes": disconnected}),
+                exit::FAILED,
+            ))
         }
     }
 }

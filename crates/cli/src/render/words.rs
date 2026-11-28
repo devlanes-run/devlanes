@@ -2080,6 +2080,8 @@ const GUI_COMMAND_ERRORS: &[&str] = &[
     "gui_no_display",
     "gui_viewer_missing",
     "gui_viewer_failed",
+    "gui_open_for_people",
+    "gui_box_not_connected",
 ];
 
 /// Why a box's GUI port cannot be reached here, from `{port, state,
@@ -2320,10 +2322,28 @@ fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
         ),
         "gui_viewer_failed" => (
             format!(
-                "the viewer of {unit}{on_box} did not start: {}",
+                "the windows of {unit}{on_box} did not open: {}",
                 field(data, "message")
             ),
             None,
+        ),
+        "gui_box_not_connected" => {
+            let boxes: Vec<String> = list(data, "boxes").iter().map(display_value).collect();
+            (
+                format!(
+                    "{} is no lane of this machine or of a connected box; not connected: {}",
+                    field(data, "reference"),
+                    boxes.join(", ")
+                ),
+                Some(Hint::command(["remote", "ls"])),
+            )
+        }
+        "gui_open_for_people" => (
+            format!(
+                "devlanes gui open does not run for an agent: {}",
+                crate::args::GUI_OPEN_FOR_PEOPLE
+            ),
+            Some(Hint::command(["gui", "screenshot", "UNIT"])),
         ),
         _ => (
             format!(

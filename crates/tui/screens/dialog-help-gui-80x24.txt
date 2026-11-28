@@ -18,7 +18,7 @@
 ││   s  S              on the lane: its default services; every service       ││
 ││   r                 on the lane: reload changes, else restart it           ││
 ││   p  C              start the lane with profiles, clean it (asks first)    ││
-││   o  w              open the address in a browser, a GUI service's windows ││
+││   o  w              open the address, or a GUI service's windows           ││
 ││ …                                                                          ││
 └│ any key closes                                                             │┘
  └────────────────────────────────────────────────────────────────────────────┘

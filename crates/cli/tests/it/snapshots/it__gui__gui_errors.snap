@@ -44,6 +44,10 @@ error: acme@2 has no running GUI service to open
 hint: devlanes gui ls --lane acme@2
 error: there is no display to open windows on here: neither WAYLAND_DISPLAY nor DISPLAY is set
 hint: run it from a terminal of the desktop session; over SSH, use devlanes gui screenshot
+error: devlanes gui open does not run for an agent: it opens windows on this machine's desktop for the person at it; ask the user to run it, or let the windows open by themselves
+hint: devlanes gui screenshot UNIT
+error: acme@2 is no lane of this machine or of a connected box; not connected: hetzner
+hint: devlanes remote ls
 error: devlanes-gui, which shows the windows, is not installed at /opt/devlanes/devlanes-gui
 hint: devlanes update
-error: the viewer of acme@2:desktop did not start: cannot connect to the GUI host: GUI connection failed
+error: the windows of acme@2:desktop did not open: cannot connect to the GUI host: GUI connection failed

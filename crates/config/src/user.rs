@@ -88,13 +88,12 @@ pub struct UserConfig {
 #[serde(default, deny_unknown_fields)]
 #[schemars(extend("examples" = [{"auto_open":false}]))]
 pub struct GuiUserConfig {
-    /// Open a viewer window by itself for each window of a running GUI service whose
-    /// display is not this machine's desktop: every GUI service of a connected box, and
-    /// this machine's own on a display of their own. Defaults to true. A window you
-    /// close stays closed until `devlanes gui open`, which also opens windows when
-    /// this is false. On Linux the daemon needs `DISPLAY` or `WAYLAND_DISPLAY` from the
-    /// shell that started it; without either, nothing opens by itself and `devlanes gui
-    /// open` still works from a desktop terminal.
+    /// Open the windows of a running GUI service here by themselves when they are not
+    /// already on this machine's desktop: the GUI services of the box lanes this machine
+    /// mirrors, and this machine's own that run headless. A window you close stays
+    /// closed until `devlanes gui open`, which also works when this is false. On Linux
+    /// the daemon needs `DISPLAY` or `WAYLAND_DISPLAY` from the desktop terminal that
+    /// started it, not from an SSH session. Defaults to true.
     #[schemars(extend("examples" = [true,false]))]
     pub auto_open: bool,
 }

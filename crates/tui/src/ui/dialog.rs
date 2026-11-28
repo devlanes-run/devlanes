@@ -632,10 +632,7 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
                     // With GUI services on, `w` shares the line of `o`, so the
                     // list keeps fitting 60 rows.
                     let (key, what) = match (*key, app.gui) {
-                        ("o", true) => (
-                            &"o  w",
-                            &"open the address in a browser, a GUI service's windows",
-                        ),
+                        ("o", true) => (&"o  w", &"open the address, or a GUI service's windows"),
                         _ => (key, what),
                     };
                     body.push(fit(

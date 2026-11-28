@@ -479,9 +479,41 @@ impl Lab {
         self.command_with(&program, cwd, args)
     }
 
+    /// Puts `gui.auto_open: false` back into the lab's `config.yaml` when a
+    /// test rewrote the file without it, so no GUI service ever opens a
+    /// viewer window on the test machine. A `gui` section of the test's own
+    /// that leaves the key out fails the test instead of being edited.
+    fn keep_auto_open_off(&self) -> Result<()> {
+        let path = self.home.path().join("config.yaml");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
+        };
+        if text.contains("\n  auto_open: false") {
+            return Ok(());
+        }
+        if text.lines().any(|line| line.trim_end() == "gui:") {
+            return Err(Error::Unexpected(
+                "the test's config.yaml has a gui section without auto_open: false".into(),
+            ));
+        }
+        let separator = if text.is_empty() || text.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        fs::write(
+            &path,
+            format!("{text}{separator}gui:\n  auto_open: false\n"),
+        )?;
+        Ok(())
+    }
+
     /// Like [`Lab::command`] for another `devlanes` executable, such as a copy
     /// installed elsewhere.
     pub fn command_with(&self, program: &Path, cwd: &Path, args: &[&str]) -> Result<Command> {
+        self.keep_auto_open_off()?;
         let bins = bin_dir()?;
         let mut command = Command::new(program);
         command.env_clear();

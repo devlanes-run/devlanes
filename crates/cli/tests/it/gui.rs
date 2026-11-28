@@ -318,6 +318,12 @@ fn gui_errors_are_worded() {
         ),
         RpcError::new("gui_no_services", json!({"lane": "acme@2", "box": null}), 1),
         RpcError::new("gui_no_display", json!({}), 1),
+        RpcError::new("gui_open_for_people", json!({}), 2),
+        RpcError::new(
+            "gui_box_not_connected",
+            json!({"reference": "acme@2", "boxes": ["hetzner"]}),
+            1,
+        ),
         RpcError::new(
             "gui_viewer_missing",
             json!({"path": "/opt/devlanes/devlanes-gui"}),

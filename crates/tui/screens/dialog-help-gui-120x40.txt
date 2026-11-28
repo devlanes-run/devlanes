@@ -15,7 +15,7 @@
 │   ● w│   s  S              on the lane: its default services; every service                                   │      │
 │   ● w│   r                 on the lane: reload changes, else restart it                                       │ok=92m│
 │   ● w│   p  C              start the lane with profiles, clean it (asks first)                                │      │
-│   · w│   o  w              open the address in a browser, a GUI service's windows                             │ok=105│
+│   · w│   o  w              open the address, or a GUI service's windows                                       │ok=105│
 │   ● w│   m                 use a grey lane instead of the one in use                                          │      │
 │   ◉ w│   /                 filter by name or +tag; enter keeps, esc clears                                    │ok=118│
 │   ◉ w│                                                                                                        │      │
