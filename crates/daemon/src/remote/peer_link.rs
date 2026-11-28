@@ -415,6 +415,15 @@ impl Transport for PeerAttempts {
             }
             Err(error) => error,
         };
+        // The endpoint closes only for good, on daemon shutdown, which
+        // closes it before it stops the links. The box is not unreachable
+        // then and the link has nothing to retry or fail for, so the
+        // attempt waits until the link is stopped, which ends it; the link's
+        // connect timeout bounds the wait if that never comes.
+        if matches!(error.downcast_ref(), Some(PeerError::Closed)) {
+            tracing::debug!(host = %self.name, "not dialing a box: peer-to-peer networking was stopped");
+            std::future::pending::<()>().await;
+        }
         let name = self.name.clone();
         if matches!(error.downcast_ref(), Some(PeerError::Refused)) {
             return Err(TransportError::permanent(PeerLinkError::Refused { name }));
@@ -1422,6 +1431,28 @@ mod tests {
             "{error}"
         );
         assert!(attempts.gave_up().load(Ordering::SeqCst));
+    }
+
+    /// A dial on an endpoint closed for shutdown neither fails nor counts
+    /// against the box: it waits for the link to stop, even past the
+    /// deadline, and gives nothing up.
+    #[tokio::test(start_paused = true)]
+    async fn a_closed_endpoint_neither_fails_nor_gives_up() {
+        let closed = || -> TransportError { PeerError::Closed.into() };
+        let (memory, _listener) = memory_transport();
+        let inner = Arc::new(Scripted {
+            outcomes: Mutex::new(VecDeque::from([Some(closed as fn() -> TransportError)])),
+            memory,
+        });
+        let attempts = PeerAttempts::new(inner, "acme", true, None);
+        tokio::time::advance(2 * EPHEMERAL_RETRY_FOR).await;
+        let waited = tokio::time::timeout(Duration::from_secs(60), attempts.connect()).await;
+        assert!(
+            waited.is_err(),
+            "the attempt ended: {:?}",
+            waited.map(|result| result.err())
+        );
+        assert!(!attempts.gave_up().load(Ordering::SeqCst));
     }
 
     /// `span` rounds down at its boundaries.
