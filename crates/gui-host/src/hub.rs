@@ -675,9 +675,14 @@ impl Hub {
             let Some(backend) = self.encoders.iter().find(|e| e.offer() == codec).cloned() else {
                 return;
             };
+            // Lossy codecs blur thin text; `raw` is exact already.
+            let pacer = match codec.codec {
+                CodecId::RAW => Pacer::new(),
+                _ => Pacer::new().with_refinement(),
+            };
             let mut stream = Stream {
                 generation: self.next_generation,
-                pacer: Pacer::new(),
+                pacer,
                 backend,
                 encoder: None,
                 busy: false,
@@ -1726,14 +1731,15 @@ impl Hub {
         }
     }
 
-    /// An encoder of `offer` could not start (or panicked and was lost):
-    /// nobody gets that encoder again, and its viewers move to the next
-    /// codec both ends share. Frames name their codec, so clients follow.
+    /// An encoder of `offer` could not start, failed mid-stream or panicked
+    /// and was lost: nobody gets that encoder again, and its viewers move to
+    /// the next codec both ends share, starting with a keyframe. Frames name
+    /// their codec, so clients follow.
     fn encoder_failed(&mut self, offer: CodecOffer, error: &EncodeFailure) {
         if !self.failed_encoders.insert(offer) {
             return;
         }
-        tracing::warn!(%error, codec = ?offer.codec.name(), hardware = offer.hardware, "a GUI encoder failed to start; its viewers fall back to another codec");
+        tracing::warn!(%error, codec = ?offer.codec.name(), hardware = offer.hardware, "a GUI encoder failed; its viewers fall back to another codec");
         self.streams.retain(|(_, codec), _| *codec != offer);
         let moved: Vec<_> = self
             .sessions
@@ -1891,6 +1897,7 @@ fn encode_frame(
         frame_interval: job.target.frame_interval,
         quality: job.target.quality,
         keyframe: job.keyframe,
+        refine: job.refine,
     };
     let result = match encoder.encode(&job.frame, &params) {
         Ok(Some(encoded)) => {
@@ -1910,7 +1917,11 @@ fn encode_frame(
                 .map_err(Into::into)
         }
         Ok(None) => Ok(None),
-        Err(error) => Err(error.into()),
+        // A frame the encoder cannot take is that frame's problem; any other
+        // error means the encoder broke mid-stream (a hardware encoder's
+        // device went away), and losing it moves its viewers to another codec.
+        Err(error @ CodecError::InvalidFrame(_)) => Err(error.into()),
+        Err(error) => return (None, Err(error.into())),
     };
     (Some(encoder), result)
 }
@@ -1922,6 +1933,7 @@ fn screenshot_result(window: WindowId, frame: &Frame) -> ScreenshotResult {
         frame_interval: std::time::Duration::ZERO,
         quality: 100,
         keyframe: true,
+        refine: false,
     };
     match RawEncoder::new().encode(frame, &params) {
         Ok(Some(encoded)) => ScreenshotResult::Image(Screenshot {

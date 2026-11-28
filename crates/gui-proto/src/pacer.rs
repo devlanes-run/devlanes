@@ -26,6 +26,10 @@ pub const MAX_IN_FLIGHT: usize = 3;
 /// only stops one viewer from holding back the others, it does not end anything.
 pub const STALL_AFTER: Duration = Duration::from_secs(2);
 
+/// How long the picture must stay unchanged, with every frame acknowledged,
+/// before a lossy stream sends its sharp-text refinement.
+pub const REFINE_AFTER: Duration = Duration::from_millis(400);
+
 /// What the encoder aims for. Derived from acknowledgement timing; there are
 /// no user settings.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,6 +52,9 @@ pub struct Encode<F> {
     pub seq: u64,
     /// Whether the encoder must make a keyframe.
     pub keyframe: bool,
+    /// Whether this is the sharp-text refinement: the last frame again, once
+    /// the picture stopped changing, to be coded at the highest quality.
+    pub refine: bool,
     /// The viewers to send it to.
     pub recipients: Vec<SessionId>,
     /// The rate to encode at.
@@ -93,6 +100,10 @@ pub struct Pacer<F> {
     next_seq: u64,
     last_encode: Option<Instant>,
     dropped: u64,
+    /// Whether the stream's codec is lossy, so a still picture gets a refinement.
+    refinement: bool,
+    /// Whether the last frame encoded was a refinement, or there is none due.
+    refined: bool,
 }
 
 impl<F: Clone> Default for Pacer<F> {
@@ -113,7 +124,31 @@ impl<F: Clone> Pacer<F> {
             next_seq: 1,
             last_encode: None,
             dropped: 0,
+            refinement: false,
+            refined: true,
         }
+    }
+
+    /// The same pacer for a lossy codec: once the picture has not changed
+    /// for [`REFINE_AFTER`] and every viewer acknowledged the last frame, it
+    /// asks once for that frame again as a refinement at the highest quality.
+    pub fn with_refinement(mut self) -> Self {
+        self.refinement = true;
+        self
+    }
+
+    /// Whether the refinement of the last frame is due at `now`.
+    fn refine_due(&self, now: Instant) -> bool {
+        self.refinement
+            && !self.refined
+            && self.pending.is_none()
+            && self.last_stale_since.is_none()
+            && self.last_encode.is_some_and(|at| now >= at + REFINE_AFTER)
+            && self
+                .viewers
+                .iter()
+                .filter(|v| !v.stalled)
+                .all(|v| v.in_flight.is_empty())
     }
 
     /// Adds a viewer, which gets a keyframe next.
@@ -219,7 +254,7 @@ impl<F: Clone> Pacer<F> {
         if active.any(|v| v.in_flight.len() >= MAX_IN_FLIGHT) {
             return None;
         }
-        let target = self.target();
+        let mut target = self.target();
         if self
             .last_encode
             .is_some_and(|last| now < last + target.frame_interval)
@@ -227,11 +262,17 @@ impl<F: Clone> Pacer<F> {
             return None;
         }
         let keyframe = self.viewers.iter().any(|v| !v.stalled && v.needs_keyframe);
+        let refine = !keyframe && self.refine_due(now);
         let frame = match self.pending.take() {
             Some(frame) => frame,
             None if keyframe => self.cached(now)?.clone(),
+            None if refine => self.last.clone()?,
             None => return None,
         };
+        self.refined = refine;
+        if refine {
+            target.quality = 100;
+        }
         let seq = self.next_seq;
         self.next_seq += 1;
         let mut recipients = Vec::new();
@@ -252,6 +293,7 @@ impl<F: Clone> Pacer<F> {
             frame,
             seq,
             keyframe,
+            refine,
             recipients,
             target,
         })
@@ -312,8 +354,22 @@ impl<F: Clone> Pacer<F> {
         if self.pending.is_some() {
             return Some(interval);
         }
-        if self.last.is_none() || !active().any(|v| v.needs_keyframe) {
-            return None;
+        self.last.as_ref()?;
+        if !active().any(|v| v.needs_keyframe) {
+            // The refinement, once the picture has been still long enough;
+            // an acknowledgement still out makes it wait for that instead.
+            let settled = active().all(|v| v.in_flight.is_empty());
+            return match self.last_encode {
+                Some(last)
+                    if self.refinement
+                        && !self.refined
+                        && settled
+                        && self.last_stale_since.is_none() =>
+                {
+                    Some(interval.max(last + REFINE_AFTER))
+                }
+                _ => None,
+            };
         }
         // A keyframe from the cache, once a resize no longer holds it back.
         let usable = self
@@ -757,6 +813,43 @@ mod tests {
         let next = step(&mut pacer, 99, now + ms(100), &[]).expect("frame for A");
         assert!(!next.keyframe);
         assert_eq!(next.recipients, vec![A]);
+    }
+
+    /// A lossy stream whose picture stops changing sends the last frame once
+    /// more as a refinement, only after every viewer acknowledged it and
+    /// [`REFINE_AFTER`] passed; a lossless stream never does.
+    #[test]
+    fn a_still_picture_is_refined_once_after_it_settles() {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new().with_refinement();
+        pacer.add_viewer(A);
+        let first = step(&mut pacer, 1, t0, &[]).expect("first frame");
+        assert!(!first.refine);
+        // Unacknowledged, the frame may still be on its way: no refinement.
+        assert_eq!(pacer.wake_at(t0 + REFINE_AFTER), None);
+        assert_eq!(pacer.poll(t0 + REFINE_AFTER * 2), None);
+        pacer.ack(A, first.seq, t0 + ms(10));
+        assert_eq!(pacer.wake_at(t0 + ms(20)), Some(t0 + REFINE_AFTER));
+        assert_eq!(pacer.poll(t0 + REFINE_AFTER - ms(1)), None);
+        let refined = pacer.poll(t0 + REFINE_AFTER).expect("the refinement");
+        assert!(refined.refine && !refined.keyframe);
+        assert_eq!((refined.frame, refined.target.quality), (1, 100));
+        pacer.ack(A, refined.seq, t0 + REFINE_AFTER + ms(5));
+        assert_eq!(pacer.wake_at(t0 + REFINE_AFTER * 3), None, "only once");
+        assert_eq!(pacer.poll(t0 + REFINE_AFTER * 3), None);
+
+        // A new picture is refined again once it settles.
+        let t1 = t0 + REFINE_AFTER * 4;
+        let next = step(&mut pacer, 2, t1, &[(A, ms(5))]).expect("new picture");
+        assert!(!next.refine);
+        let again = pacer.poll(t1 + REFINE_AFTER).expect("refined again");
+        assert_eq!((again.frame, again.refine), (2, true));
+
+        let mut lossless = Pacer::new();
+        lossless.add_viewer(A);
+        step(&mut lossless, 1, t0, &[(A, ms(5))]).expect("frame");
+        assert_eq!(lossless.wake_at(t0 + ms(10)), None);
+        assert_eq!(lossless.poll(t0 + REFINE_AFTER * 2), None);
     }
 
     #[test]

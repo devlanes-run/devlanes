@@ -273,6 +273,76 @@ async fn viewers_of_an_encoder_that_cannot_start_fall_back_to_another_codec() {
     host.stop().await;
 }
 
+/// A backend of [`PLAIN`] whose encoders fail after their first frame, like a
+/// hardware encoder that loses its device mid-stream.
+struct Failing;
+
+impl EncoderBackend for Failing {
+    /// [`PLAIN`].
+    fn offer(&self) -> CodecOffer {
+        PLAIN
+    }
+
+    /// An encoder with one good frame in it.
+    fn encoder(&self) -> Result<Box<dyn VideoEncoder>, CodecError> {
+        Ok(Box::new(Failing))
+    }
+}
+
+impl VideoEncoder for Failing {
+    /// [`PLAIN`].
+    fn offer(&self) -> CodecOffer {
+        PLAIN
+    }
+
+    /// The first frame as [`Plain`] does, then an error for every frame.
+    fn encode(
+        &mut self,
+        frame: &Frame,
+        params: &EncodeParams,
+    ) -> Result<Option<Encoded>, CodecError> {
+        match params.keyframe {
+            true => Plain.encode(frame, params),
+            false => Err(CodecError::Backend {
+                codec: "h264",
+                source: "the device was removed".into(),
+            }),
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn viewers_of_an_encoder_that_fails_mid_stream_go_on_in_another_codec() {
+    let encoders: Vec<Arc<dyn EncoderBackend>> = vec![Arc::new(Failing), Arc::new(RawBackend)];
+    let host = Host::start(TestPatternOptions::default(), |o| o.encoders = encoders).await;
+    let window = host.pattern.first_window();
+    let decoded = Arc::new(AtomicUsize::new(0));
+    let both = ClientOptions::new(Role::Viewer, "ada", "ada").with_decoders(vec![
+        Arc::new(PlainDecoder(decoded.clone())),
+        Arc::new(RawBackend),
+    ]);
+    let (_ada, mut events) = host.connect(both).await;
+    assert!(shows_grid(&next_frame(&mut events).await.frame));
+    assert_eq!(
+        decoded.load(Ordering::SeqCst),
+        1,
+        "the first frame was plain"
+    );
+
+    animate(&host, window, Duration::from_secs(1));
+    let after = next_frame(&mut events).await;
+    assert!(after.keyframe, "the new codec starts with a keyframe");
+    assert!(shows_grid(&after.frame));
+    let (more, _) = count_frames(&mut events, Duration::from_secs(1), Duration::ZERO).await;
+    assert!(more > 0, "frames go on after the switch");
+    assert_eq!(
+        decoded.load(Ordering::SeqCst),
+        1,
+        "every later frame came as raw"
+    );
+    host.stop().await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn the_backend_is_told_which_windows_are_watched() {
     let host = Host::default().await;
