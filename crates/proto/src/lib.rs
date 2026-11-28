@@ -1529,6 +1529,64 @@ pub mod remote {
         !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric()) && holds(text)
     }
 
+    /// Characters of the longest ticket text: the prefix and the base32 of
+    /// the largest ticket (the longest relay URL and 8 IPv6 addresses).
+    /// `devlanes-transport` checks it against the ticket layout.
+    pub const TICKET_TEXT_MAX: usize = 656;
+    /// Bytes of the SHA-256 checksum that ends every ticket.
+    pub const TICKET_CHECKSUM_LEN: usize = 4;
+
+    /// Why text is not a whole ticket, before its fields are read.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum TicketTextError {
+        /// It does not start with [`TICKET_PREFIX`].
+        Prefix,
+        /// It is longer than [`TICKET_TEXT_MAX`], so it is not decoded.
+        TooLong,
+        /// It is not base32.
+        Base32,
+        /// It is too short to hold a checksum.
+        Layout,
+        /// Its checksum does not match, as for a ticket cut short or mistyped.
+        Checksum,
+    }
+
+    /// The bytes of a ticket's fields, once its prefix, base32 and checksum
+    /// are right: the one check of whether a ticket is whole, shared by
+    /// `devlanes-transport`, which reads the fields, and clients, which
+    /// send a pasted ticket only once it is whole. Surrounding whitespace
+    /// is ignored.
+    pub fn ticket_fields(text: &str) -> Result<Vec<u8>, TicketTextError> {
+        use sha2::{Digest, Sha256};
+        let text = text.trim();
+        if text.len() > TICKET_TEXT_MAX {
+            return Err(TicketTextError::TooLong);
+        }
+        let body = text
+            .get(..TICKET_PREFIX.len())
+            .filter(|prefix| prefix.eq_ignore_ascii_case(TICKET_PREFIX))
+            .and_then(|_| text.get(TICKET_PREFIX.len()..))
+            .ok_or(TicketTextError::Prefix)?;
+        let mut bytes = data_encoding::BASE32_NOPAD_NOCASE
+            .decode(body.as_bytes())
+            .map_err(|_| TicketTextError::Base32)?;
+        let split = bytes
+            .len()
+            .checked_sub(TICKET_CHECKSUM_LEN)
+            .ok_or(TicketTextError::Layout)?;
+        let checksum = bytes.split_off(split);
+        // Not secret: a checksum against typing mistakes needs no constant time.
+        if Sha256::digest(&bytes)[..TICKET_CHECKSUM_LEN] != *checksum {
+            return Err(TicketTextError::Checksum);
+        }
+        Ok(bytes)
+    }
+
+    /// Whether `text` is a whole ticket: [`ticket_fields`] accepts it.
+    pub fn is_whole_ticket(text: &str) -> bool {
+        ticket_fields(text).is_ok()
+    }
+
     /// [`holds_ticket`].
     fn holds(text: &str) -> bool {
         let base32 = |c: char| matches!(c.to_ascii_lowercase(), 'a'..='z' | '2'..='7');

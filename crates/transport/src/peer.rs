@@ -323,8 +323,8 @@ const EPHEMERAL: u8 = 1;
 const MAX_TICKET_RELAY: usize = 200;
 /// Most addresses a ticket holds.
 const MAX_TICKET_ADDRS: usize = 8;
-/// Bytes of the SHA-256 checksum at the end.
-const CHECKSUM_LEN: usize = 4;
+/// Bytes of the SHA-256 checksum at the end, as `devlanes-proto` checks it.
+const CHECKSUM_LEN: usize = devlanes_proto::remote::TICKET_CHECKSUM_LEN;
 /// Bytes of the largest ticket: flags, id, secret, the longest relay URL
 /// with its length, and the most IPv6 addresses with their count and the
 /// checksum.
@@ -333,6 +333,9 @@ const MAX_TICKET_BYTES: usize =
 /// Characters of the largest ticket's text with its prefix: unpadded base32
 /// takes 8 characters per 5 bytes, rounded up.
 const MAX_TICKET_TEXT: usize = TICKET_PREFIX.len() + (MAX_TICKET_BYTES * 8).div_ceil(5);
+// `devlanes-proto` refuses longer text before decoding it, from its own
+// copy of this length.
+const _: () = assert!(MAX_TICKET_TEXT == devlanes_proto::remote::TICKET_TEXT_MAX);
 
 impl Ticket {
     /// Longest relay URL a ticket holds, in bytes.
@@ -383,28 +386,16 @@ impl Ticket {
     /// here instead of reaching the box as a wrong secret. Text longer than
     /// the largest ticket is refused before it is decoded.
     pub fn parse(text: &str) -> Result<Self, TicketError> {
-        let text = text.trim();
-        if text.len() > MAX_TICKET_TEXT {
-            return Err(TicketError::TooLong);
-        }
-        let body = text
-            .get(..TICKET_PREFIX.len())
-            .filter(|prefix| prefix.eq_ignore_ascii_case(TICKET_PREFIX))
-            .and_then(|_| text.get(TICKET_PREFIX.len()..))
-            .ok_or(TicketError::Prefix)?;
-        let bytes = data_encoding::BASE32_NOPAD_NOCASE
-            .decode(body.as_bytes())
-            .map_err(|_| TicketError::Base32)?;
-        let split = bytes
-            .len()
-            .checked_sub(CHECKSUM_LEN)
-            .ok_or(TicketError::Layout)?;
-        let (fields, checksum) = bytes.split_at(split);
-        // Not secret: a checksum against typing mistakes needs no constant time.
-        if Sha256::digest(fields)[..CHECKSUM_LEN] != *checksum {
-            return Err(TicketError::Checksum);
-        }
-        let mut reader = Fields(fields);
+        use devlanes_proto::remote::TicketTextError;
+        // Clients check a pasted ticket with the same function.
+        let fields = devlanes_proto::remote::ticket_fields(text).map_err(|error| match error {
+            TicketTextError::Prefix => TicketError::Prefix,
+            TicketTextError::TooLong => TicketError::TooLong,
+            TicketTextError::Base32 => TicketError::Base32,
+            TicketTextError::Layout => TicketError::Layout,
+            TicketTextError::Checksum => TicketError::Checksum,
+        })?;
+        let mut reader = Fields(&fields);
         let flags = reader.byte()?;
         if flags & !EPHEMERAL != 0 {
             return Err(TicketError::Flags);

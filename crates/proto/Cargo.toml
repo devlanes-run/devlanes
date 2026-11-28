@@ -11,5 +11,8 @@ workspace = true
 
 [dependencies]
 devlanes-version = { path = "../version" }
+# Whether a pairing ticket is whole: its base32 and checksum.
+data-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
