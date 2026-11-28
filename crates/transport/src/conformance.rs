@@ -1,19 +1,25 @@
-//! What the session and the box need from a connection, checked against the
-//! traits only. Each check is an `async fn` taking a [`Pair`] and failing
-//! with an error or a panic; a connection type's tests build a fresh pair
-//! for each check and bound it with a timeout, since a broken transport
-//! often waits forever instead of failing.
+//! What the session and the box need from a connection, and what the daemon
+//! needs from a peer endpoint, checked against the traits only. Each check
+//! is an `async fn` taking a [`Pair`] or [`Peers`] and failing with an error
+//! or a panic; a transport's tests build a fresh fixture for each check and
+//! bound it with a timeout, since a broken transport often waits forever
+//! instead of failing.
 //!
 //! Built with the `test-support` feature, so transports in other crates run
-//! the same checks as this crate's yamux connections.
+//! the same checks as this crate's yamux connections and memory peers.
 
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::Instant;
 
+use crate::peer::{Admission, Alpn, PeerEndpoint, PeerError, PeerId, PeerIncoming};
 use crate::session::MAX_STREAMS;
-use crate::transport::{BoxConnection, BoxDuplex, BoxError, BoxServerConnection, ConnectionError};
+use crate::transport::{
+    BoxConnection, BoxDuplex, BoxError, BoxServerConnection, ConnectionError, TransportError,
+};
 
 /// Outcome of one check.
 pub type CheckResult = Result<(), BoxError>;
@@ -280,5 +286,150 @@ pub async fn a_broken_link_reports_why(mut pair: Pair) -> CheckResult {
         pair.server.accept().await.is_none(),
         "the box accepted a stream"
     );
+    Ok(())
+}
+
+/// Two dialing endpoints and the endpoint they dial, none of them listening
+/// yet, of a peer transport under test.
+pub struct Peers {
+    /// Endpoints that dial `listener`, with different ids.
+    pub dialers: [Arc<dyn PeerEndpoint>; 2],
+    /// The endpoint the checks make listen.
+    pub listener: Arc<dyn PeerEndpoint>,
+}
+
+/// An admission that lets in the peers in its set for any protocol, as the
+/// daemon's lets in pinned keys.
+struct Allowed(Mutex<HashSet<PeerId>>);
+
+impl Allowed {
+    /// An admission for `peers`, shared with the check that changes it.
+    fn new(peers: impl IntoIterator<Item = PeerId>) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(peers.into_iter().collect())))
+    }
+
+    /// Stops admitting `peer`, as revoking a client does.
+    fn remove(&self, peer: &PeerId) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(peer);
+    }
+}
+
+impl Admission for Allowed {
+    /// Whether `peer` is in the set.
+    fn admit(&self, peer: &PeerId, _alpn: Alpn) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(peer)
+    }
+}
+
+/// Dials `listener` from `dialer` for a session.
+async fn dial(
+    dialer: &dyn PeerEndpoint,
+    listener: &dyn PeerEndpoint,
+) -> Result<BoxConnection, TransportError> {
+    let addr = listener.addr().await.map_err(TransportError::from)?;
+    dialer.connect(&addr, Alpn::Tunnel).await
+}
+
+/// The next connection `listener` accepts, which must come from `from`.
+async fn accepted(
+    listener: &dyn PeerEndpoint,
+    from: &dyn PeerEndpoint,
+) -> Result<PeerIncoming, BoxError> {
+    let incoming = listener.accept().await.ok_or("the listener closed")?;
+    assert_eq!(
+        incoming.peer,
+        from.id().await?,
+        "accepted a connection from another peer"
+    );
+    assert_eq!(incoming.alpn, Alpn::Tunnel);
+    Ok(incoming)
+}
+
+/// Asserts that a dial failed in the given class, for a cause `reason` accepts.
+fn assert_failed_with(
+    result: Result<BoxConnection, TransportError>,
+    permanent: bool,
+    reason: impl Fn(&PeerError) -> bool,
+) {
+    let Err(error) = result else {
+        panic!("the dial succeeded");
+    };
+    assert_eq!(error.is_permanent(), permanent, "{error}");
+    let cause = error.downcast_ref::<PeerError>();
+    assert!(cause.is_some_and(reason), "{error}");
+}
+
+/// A key the admission does not know is refused during the handshake as a
+/// permanent error, and the box never sees its connection: the next one it
+/// accepts is an admitted peer's, dialed afterwards.
+pub async fn an_unadmitted_peer_is_refused_before_any_stream(peers: Peers) -> CheckResult {
+    let [known, stranger] = &peers.dialers;
+    let listener = &*peers.listener;
+    listener
+        .listen(Some(Allowed::new([known.id().await?])))
+        .await?;
+    assert_failed_with(dial(&**stranger, listener).await, true, |cause| {
+        matches!(cause, PeerError::Refused)
+    });
+    let _client = dial(&**known, listener).await?;
+    let _server = accepted(listener, &**known).await?;
+    Ok(())
+}
+
+/// Closing one peer ends its connection and, once the admission drops it,
+/// refuses its next dial, while another peer's connection keeps working.
+pub async fn close_peer_ends_only_that_peers_connections(peers: Peers) -> CheckResult {
+    let [closed, kept] = &peers.dialers;
+    let listener = &*peers.listener;
+    let closed_id = closed.id().await?;
+    let admission = Allowed::new([closed_id, kept.id().await?]);
+    listener.listen(Some(admission.clone())).await?;
+    let closed_client = dial(&**closed, listener).await?;
+    let mut closed_server = accepted(listener, &**closed).await?.connection;
+    let kept_client = dial(&**kept, listener).await?;
+    let mut kept_server = accepted(listener, &**kept).await?.connection;
+    let mut kept_stream = kept_client.open().await?;
+    kept_stream.write_all(b"open").await?;
+    let mut kept_boxed = kept_server.accept().await.ok_or("no stream")?;
+    expect(&mut kept_boxed, b"open").await?;
+
+    admission.remove(&closed_id);
+    listener.close_peer(&closed_id);
+    closed_client.closed().await;
+    assert!(
+        closed_server.accept().await.is_none(),
+        "the box accepted a stream from the closed peer"
+    );
+    assert_failed_with(dial(&**closed, listener).await, true, |cause| {
+        matches!(cause, PeerError::Refused)
+    });
+
+    kept_stream.write_all(b"still here").await?;
+    expect(&mut kept_boxed, b"still here").await?;
+    kept_boxed.write_all(b"and back").await?;
+    expect(&mut kept_stream, b"and back").await?;
+    Ok(())
+}
+
+/// A listener that stopped refuses new dials as a transient failure, since
+/// it may listen again, and admits again once it does.
+pub async fn a_listener_that_stopped_accepts_nothing(peers: Peers) -> CheckResult {
+    let [dialer, _] = &peers.dialers;
+    let listener = &*peers.listener;
+    let admission = Allowed::new([dialer.id().await?]);
+    listener.listen(Some(admission.clone())).await?;
+    listener.listen(None).await?;
+    assert_failed_with(dial(&**dialer, listener).await, false, |cause| {
+        matches!(cause, PeerError::Unreachable(_))
+    });
+    listener.listen(Some(admission)).await?;
+    let _client = dial(&**dialer, listener).await?;
+    let _server = accepted(listener, &**dialer).await?;
     Ok(())
 }

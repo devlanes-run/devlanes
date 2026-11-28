@@ -1,6 +1,7 @@
 //! End-to-end protocol tests over the in-memory transport.
 
 mod connection;
+mod peer;
 
 use std::future::Future;
 use std::sync::Arc;
