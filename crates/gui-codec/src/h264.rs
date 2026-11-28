@@ -20,29 +20,13 @@ pub(crate) fn frame_rate(params: &EncodeParams) -> f32 {
     }
 }
 
-/// The quantizer (0 best to 51 worst) for the pacer's quality from 0 to
-/// 100: 44, blocky but small, at 0, down to 18 at 100.
+// The quantizer of the pacer's quality and of a refinement come from the
+// pacer, which estimates a refinement's size from the same steps. Only Media
+// Foundation sets a quantizer per frame; OpenH264 only refines at one.
+#[cfg(windows)]
+pub(crate) use devlanes_gui_proto::quantizer;
 #[cfg(any(target_os = "linux", windows))]
-pub(crate) fn quantizer(quality: u8) -> u8 {
-    44 - (u32::from(quality.min(100)) * 26 / 100) as u8
-}
-
-/// How many quantizer steps finer than its stream a refinement is at most.
-/// A refinement of text at 640x360 cost Microsoft's and NVIDIA's encoders
-/// twice the stream's keyframe at 21 steps finer and under 1.5 times it at
-/// 15, which still took three quarters of the blur away.
-#[cfg(any(target_os = "linux", windows))]
-const MAX_REFINE_STEPS: u8 = 15;
-
-/// The quantizer of a refinement at the pacer's `quality` of a stream coded
-/// at `stream_qp`: at most [`MAX_REFINE_STEPS`] finer than the stream, and
-/// never coarser.
-#[cfg(any(target_os = "linux", windows))]
-pub(crate) fn refine_qp(quality: u8, stream_qp: u8) -> u8 {
-    quantizer(quality)
-        .max(stream_qp.saturating_sub(MAX_REFINE_STEPS))
-        .min(stream_qp)
-}
+pub(crate) use devlanes_gui_proto::refine_qp;
 
 /// Whether a picture of `width` by `height` fits H.264 level 5.2, the
 /// highest the software encoders here support: at most 36,864 macroblocks
