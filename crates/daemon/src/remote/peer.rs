@@ -390,7 +390,9 @@ impl Inner {
                         tracing::warn!(
                             %error,
                             "cannot read the clients paired by ticket; until the daemon \
-                             restarts, the endpoint does not stop listening or forget its ports"
+                             restarts, the endpoint does not stop listening or forget its ports, \
+                             and the daemon does not exit when idle. Run `devlanes daemon \
+                             restart` once the state database is readable"
                         );
                     }
                 }
@@ -403,7 +405,7 @@ impl Inner {
         *lock(&self.remote.peer.load) = Some(task);
     }
 
-    /// At daemon start, once the rule decided not to listen: tells the
+    /// At daemon start, when the rule says not to listen: tells the
     /// endpoint so, which on an endpoint that never bound only removes the
     /// ports a listener kept (`p2p-port`). A daemon that stopped while a
     /// ticket was out never said so, and its later binds for dials would
@@ -417,7 +419,12 @@ impl Inner {
         };
         let state = &self.remote.peer;
         let _rule = state.rule.lock().await;
-        if state.is_listening() || state.load_failed.load(Ordering::SeqCst) {
+        // Decided on the rule, not on whether `listen(Some)` succeeded: a
+        // box whose listen failed with clients paired keeps its ports for
+        // the next attempt, and a ticket minted just now counts too.
+        let pinned = !lock(&state.pinned).is_empty();
+        let until = lock(&self.remote.codes).tickets_until(Instant::now());
+        if should_listen(pinned, until) || state.load_failed.load(Ordering::SeqCst) {
             return;
         }
         if let Err(error) = endpoint.listen(None).await {

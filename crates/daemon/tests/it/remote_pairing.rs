@@ -1063,3 +1063,122 @@ async fn a_ticket_that_cannot_be_made_leaves_codes_working() {
     .await
     .expect("timeout");
 }
+
+/// A memory endpoint that records which `listen` calls the daemon made
+/// (true for `Some`, false for `None`, failed ones included) and can make
+/// `listen(Some)` fail, as a key file error or a failed bind would.
+struct Recording {
+    inner: Arc<MemoryPeer>,
+    listens: std::sync::Mutex<Vec<bool>>,
+    failing: bool,
+}
+
+impl Recording {
+    /// Wraps a new endpoint of `peers`; `failing` makes every `listen(Some)`
+    /// fail.
+    fn new(peers: &MemoryPeers, failing: bool) -> Arc<Self> {
+        Arc::new(Self {
+            inner: peers.endpoint(),
+            listens: std::sync::Mutex::default(),
+            failing,
+        })
+    }
+
+    /// The `listen` calls so far.
+    fn listens(&self) -> Vec<bool> {
+        self.listens.lock().expect("listens").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl PeerEndpoint for Recording {
+    /// The inner endpoint's id.
+    async fn id(&self) -> Result<devlanes_transport::PeerId, PeerError> {
+        self.inner.id().await
+    }
+
+    /// The inner endpoint's address.
+    async fn addr(&self) -> Result<PeerAddr, PeerError> {
+        self.inner.addr().await
+    }
+
+    /// Dials through the inner endpoint.
+    async fn connect(
+        &self,
+        addr: &PeerAddr,
+        alpn: Alpn,
+    ) -> Result<devlanes_transport::BoxConnection, devlanes_transport::TransportError> {
+        self.inner.connect(addr, alpn).await
+    }
+
+    /// Records the call, then fails it or listens on the inner endpoint.
+    async fn listen(
+        &self,
+        admission: Option<Arc<dyn devlanes_transport::Admission>>,
+    ) -> Result<(), PeerError> {
+        self.listens
+            .lock()
+            .expect("listens")
+            .push(admission.is_some());
+        if self.failing && admission.is_some() {
+            return Err(PeerError::Bind("the test refuses to listen".into()));
+        }
+        self.inner.listen(admission).await
+    }
+
+    /// The inner endpoint's next connection.
+    async fn accept(&self) -> Option<devlanes_transport::PeerIncoming> {
+        self.inner.accept().await
+    }
+
+    /// Closes the peer's sessions on the inner endpoint.
+    fn close_peer(&self, peer: &devlanes_transport::PeerId) {
+        self.inner.close_peer(peer);
+    }
+
+    /// Closes the inner endpoint.
+    async fn close(&self) {
+        self.inner.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// At daemon start a box tells its endpoint once to stop listening when no
+/// client is paired by ticket, which forgets the ports an earlier listener
+/// kept. With a client paired it never does, also when its listen fails,
+/// so the box keeps its ports for the next attempt. Stopping the box waits
+/// for the startup decision, so the calls are read once it was made.
+async fn startup_forgets_kept_ports_only_when_no_client_is_paired() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let peers = MemoryPeers::new();
+        let fresh = Recording::new(&peers, false);
+        let side = BoxSide::start_peer(&tmp, "box", "11700-11799", fresh.clone()).await;
+        side.stop().await;
+        assert_eq!(
+            fresh.listens(),
+            [false],
+            "one listen(None) and nothing else"
+        );
+
+        let pairing = Recording::new(&peers, false);
+        let side = BoxSide::start_peer(&tmp, "box", "11700-11799", pairing.clone()).await;
+        let laptop = peers.endpoint();
+        let ticket = new_ticket(&side).await;
+        let id = format!("dl_cid_{}", "e".repeat(64));
+        let answer = pair_by_ticket(&laptop, &ticket, &id).await;
+        assert!(matches!(answer, PairAnswer::Paired { .. }), "{answer:?}");
+        side.stop().await;
+
+        let failing = Recording::new(&peers, true);
+        let side = BoxSide::start_peer(&tmp, "box", "11700-11799", failing.clone()).await;
+        side.stop().await;
+        assert_eq!(
+            failing.listens(),
+            [true],
+            "a failed listen with a client paired keeps the ports"
+        );
+    })
+    .await
+    .expect("timeout");
+}
