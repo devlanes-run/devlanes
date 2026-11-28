@@ -160,6 +160,7 @@ mod tests {
         frame_interval: Duration::from_millis(33),
         quality: 50,
         keyframe: false,
+        refine: false,
     };
 
     /// A padded frame whose pixels depend on `seed`.

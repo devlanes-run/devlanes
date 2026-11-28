@@ -5,15 +5,40 @@
 //! Encoders and decoders are `Send` and own everything they return, so a host
 //! can run its encoder on a thread of its own and a viewer its decoder off the
 //! UI thread.
+//!
+//! The `h264` feature adds the H.264 backends of each OS ([`h264()`]): the
+//! system's OpenH264 on Linux, Media Foundation on Windows, the VideoToolbox
+//! decoder on macOS. Their FFI lives in `devlanes-sys` and
+//! `devlanes-sys-windows`; only `devlanes-gui` enables the feature, so the
+//! main `devlanes` binary never carries them.
 
 mod frame;
 mod raw;
 mod select;
+#[cfg(feature = "h264")]
+mod yuv;
+
+#[cfg(feature = "h264")]
+mod h264;
+#[cfg(all(feature = "h264", windows))]
+mod media_foundation;
+#[cfg(all(feature = "h264", target_os = "linux"))]
+mod openh264;
+#[cfg(all(feature = "h264", target_os = "macos"))]
+mod videotoolbox;
 
 pub use devlanes_gui_proto::{CodecId, CodecOffer};
 pub use frame::Frame;
+#[cfg(feature = "h264")]
+pub use h264::{H264, Unavailable, h264};
+#[cfg(all(feature = "h264", windows))]
+pub use media_foundation::{MediaFoundationDecoder, MediaFoundationEncoder};
+#[cfg(all(feature = "h264", target_os = "linux"))]
+pub use openh264::OpenH264;
 pub use raw::{RawBackend, RawDecoder, RawEncoder};
 pub use select::{Selection, select};
+#[cfg(all(feature = "h264", target_os = "macos"))]
+pub use videotoolbox::VideoToolbox;
 
 use std::time::Duration;
 
@@ -66,6 +91,11 @@ pub struct EncodeParams {
     pub quality: u8,
     /// Whether the output must decode on its own, without earlier frames.
     pub keyframe: bool,
+    /// A sharp-text refinement: the picture stopped changing and this is
+    /// the last one again, to be coded at a high quality so thin text loses
+    /// the blur of the lossy frames before it. Lossless codecs see the
+    /// previous picture and send nothing.
+    pub refine: bool,
 }
 
 /// One encoded frame.

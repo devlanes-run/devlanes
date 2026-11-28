@@ -10,8 +10,29 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `h264`: the H.264 backends of each OS (OpenH264 on Linux, Media Foundation on
+# Windows, the VideoToolbox decoder on macOS). Only devlanes-gui enables it, so
+# devlanes itself never carries them.
+h264 = [
+    "dep:devlanes-sys",
+    "devlanes-sys?/openh264",
+    "devlanes-sys?/videotoolbox",
+    "dep:devlanes-sys-windows",
+    "devlanes-sys-windows?/media-foundation",
+]
+
 [dependencies]
 devlanes-gui-proto = { path = "../gui-proto" }
 bytes.workspace = true
 thiserror.workspace = true
 zstd.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+devlanes-sys = { path = "../sys", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+devlanes-sys-windows = { path = "../sys-windows", optional = true }
+
+[dev-dependencies]
+devlanes-gui-host = { path = "../gui-host" }

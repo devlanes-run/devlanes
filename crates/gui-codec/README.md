@@ -28,6 +28,7 @@ fn stream_one_frame(pixels: Vec<u8>, captured: Duration) -> Result<(), CodecErro
         frame_interval: Duration::from_millis(33),
         quality: 60,
         keyframe: true,
+        refine: false,
     };
     let encoded = encoder.encode(&frame, &params)?.expect("a keyframe is never skipped");
 
