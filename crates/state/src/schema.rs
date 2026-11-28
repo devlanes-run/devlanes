@@ -210,6 +210,15 @@ diesel::table! {
         since -> BigInt,
     }
 }
+diesel::table! {
+    p2p_clients (peer_key) {
+        peer_key -> Text,
+        client_id -> Text,
+        name -> Text,
+        paired_at -> BigInt,
+        last_seen -> Nullable<BigInt>,
+    }
+}
 diesel::allow_tables_to_appear_in_same_query!(
     projects,
     worktrees,
@@ -230,4 +239,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     remote_lane_choices,
     startup_peaks,
     data_deletes,
+    p2p_clients,
 );

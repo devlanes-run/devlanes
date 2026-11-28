@@ -69,6 +69,89 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
 }
 
 #[tokio::test]
+/// Migration 016 adds `p2p_clients` to a version 15 database, which keeps
+/// one key per client and one client per key until a state reset; its down
+/// script drops it.
+async fn migration_adds_p2p_clients_and_down_drops_them() {
+    use devlanes_state::P2pClient;
+    use diesel::{migration::MigrationSource, prelude::*};
+    use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+    const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+    let dir = tempfile::tempdir().expect("directory");
+    let path = dir.path().join("peers.db");
+    let mut c = SqliteConnection::establish(path.to_str().expect("path")).expect("connection");
+    c.applied_migrations().expect("ledger");
+    let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
+        .expect("migrations");
+    c.run_migrations(&migrations[..15]).expect("v15");
+    let store = Store::open(&path).await.expect("upgrade");
+    assert_eq!(
+        store.schema_version().await.expect("version"),
+        SCHEMA_VERSION
+    );
+    let client = |key: &str, id: &str, name: &str| P2pClient {
+        peer_key: key.repeat(64),
+        client_id: format!("dl_cid_{id}"),
+        name: name.into(),
+        paired_at: 1,
+        last_seen: None,
+    };
+    let none = store
+        .add_p2p_client(client("a", "laptop", "laptop"))
+        .await
+        .expect("pin");
+    assert!(none.is_empty(), "{none:?}");
+    store
+        .add_p2p_client(client("b", "desk", "desk"))
+        .await
+        .expect("pin");
+    // The laptop pairs again with a new key, and the desk's key turns up
+    // under another client id: each replaces the rows it collides with.
+    let replaced = store
+        .add_p2p_client(client("c", "laptop", "laptop"))
+        .await
+        .expect("re-pair");
+    assert_eq!(replaced, ["a".repeat(64)]);
+    let replaced = store
+        .add_p2p_client(client("b", "other", "other"))
+        .await
+        .expect("same key");
+    assert_eq!(replaced, ["b".repeat(64)]);
+    assert!(
+        store
+            .touch_p2p_client("c".repeat(64), "laptop-2".into(), 9)
+            .await
+            .expect("touch")
+    );
+    let pinned: Vec<(String, String, Option<i64>)> = store
+        .p2p_clients()
+        .await
+        .expect("clients")
+        .into_iter()
+        .map(|client| (client.peer_key, client.client_id, client.last_seen))
+        .collect();
+    assert_eq!(
+        pinned,
+        [
+            ("c".repeat(64), "dl_cid_laptop".into(), Some(9)),
+            ("b".repeat(64), "dl_cid_other".into(), None),
+        ]
+    );
+    // `daemon reset-state` forgets every pinned key with the other pairings.
+    store.reset().await.expect("reset");
+    assert!(store.p2p_clients().await.expect("clients").is_empty());
+    store.close().await.expect("close");
+    while c.applied_migrations().expect("ledger").len() > 16 {
+        c.revert_last_migration(MIGRATIONS)
+            .expect("down a later migration");
+    }
+    c.revert_last_migration(MIGRATIONS).expect("down 016");
+    let gone = diesel::sql_query("SELECT peer_key FROM p2p_clients").execute(&mut c);
+    assert!(gone.is_err(), "down drops p2p_clients");
+    c.run_pending_migrations(MIGRATIONS).expect("redo 016");
+}
+
+#[tokio::test]
 /// Migration `task_run_state` names how earlier task runs ended from their exit
 /// code: 0 `exited`, another code `failed`, none `stopped`; a run still going
 /// has none.

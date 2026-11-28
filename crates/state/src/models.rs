@@ -241,6 +241,15 @@ pub(crate) struct PairingRow {
     pub last_seen: Option<i64>,
 }
 #[derive(Queryable, Selectable, Insertable, AsChangeset)]
+#[diesel(table_name = p2p_clients, primary_key(peer_key), treat_none_as_null = true, check_for_backend(diesel::sqlite::Sqlite))]
+pub(crate) struct P2pClientRow {
+    pub peer_key: String,
+    pub client_id: String,
+    pub name: String,
+    pub paired_at: i64,
+    pub last_seen: Option<i64>,
+}
+#[derive(Queryable, Selectable, Insertable, AsChangeset)]
 #[diesel(table_name = remote_tokens, primary_key(host), check_for_backend(diesel::sqlite::Sqlite))]
 pub(crate) struct TokenRow {
     pub host: String,
