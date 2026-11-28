@@ -655,16 +655,22 @@ pub(super) struct Paired {
 
 /// The error of a pairing dial that failed, for the box called `label`
 /// here. An unreachable box is most often one whose ticket expired, after
-/// which it stops listening, so that text says a ticket expires too.
+/// which it stops listening, so that text names the ticket's age too. It is
+/// written here in full around the cause rather than appended to
+/// [`PeerError::Unreachable`]'s own text, so the advice is one sentence; it
+/// keeps that text's opening words, "the box is not reachable", which the
+/// CLI's docs and tests match on.
 fn pairing_dial_failed(label: &str, error: &TransportError) -> RpcError {
     let reason = clean_reason(&error.to_string());
     match error.downcast_ref::<PeerError>() {
         Some(PeerError::InvalidId(_)) => bad_ticket(reason),
         Some(PeerError::Refused) => pairing_refused(NO_TICKET_OPEN, None),
-        Some(PeerError::Unreachable(_)) => super::remote_failed(
+        Some(PeerError::Unreachable(cause)) => super::remote_failed(
             label,
             format!(
-                "{reason}. Also check that the ticket was printed less than {} minutes ago.",
+                "the box is not reachable ({}). Check that its devlanes daemon is running and \
+                 that the ticket is less than {} minutes old.",
+                clean_reason(cause),
                 PAIRING_CODE_TTL_MS / 60_000
             ),
         ),
