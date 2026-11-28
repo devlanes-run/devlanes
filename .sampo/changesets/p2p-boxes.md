@@ -9,6 +9,7 @@ cargo/devlanes-transport: minor
 cargo/devlanes-transport-iroh: minor
 cargo/devlanes-state: minor
 cargo/devlanes-mcp: minor
+cargo/devlanes-tui: minor
 ---
 
 Added `devlanes remote connect <ticket>`, which pairs with a box and connects to it peer to peer, without SSH.
@@ -17,5 +18,5 @@ Run `devlanes daemon pair` on the box, then `devlanes remote connect <ticket>` h
 
 <!-- highlight
 title: Connect to a box without SSH
-body: Run `devlanes daemon pair` on the box, then `devlanes remote connect <ticket>` here with the ticket it prints. The two machines connect peer to peer, with no SSH account on the box.
+body: On the box, press p in the Boxes view (or run `devlanes daemon pair`); here, press n and paste the ticket. The two machines connect peer to peer, without SSH.
 -->
