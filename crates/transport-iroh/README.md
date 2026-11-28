@@ -48,7 +48,14 @@ Nothing is bound or contacted until `addr`, `connect` or `listen(Some(..))` need
 
 A dial contacts only the relays in `relays`. A ticket's relay, or one a box names in its address record, that is not in the list is dropped, and the dial tries the box's direct addresses alone, so a pasted ticket cannot make this machine send a request to an address the ticket chose. To reach a box on another relay, add that relay to the list. Text the other side controls (close reasons, a dropped relay's host) has control and format characters removed and is cut to 200 bytes before it reaches an error or a log line.
 
-The key file holds the 32-byte secret key. It is created private to the user (mode 0600 on Unix), and a key other accounts can read is refused.
+The endpoint binds the same UDP ports at every start, so a client that stored the box's addresses from a ticket still reaches it after the box's daemon restarts, also without a relay. When a saved port is taken, it binds another one and logs that clients on a network without a relay must pair again.
+
+## Files
+
+The crate writes two files, both in the directory of `IrohOptions::key_file`:
+
+- the key file, which holds the 32-byte secret key. It is created private to the user (mode 0600 on Unix), and a key other accounts can read is refused.
+- `p2p-port`, the UDP ports the endpoint bound last, one line per address family. It is not secret; a missing or unreadable file means any port, and ports below 1024 are ignored.
 
 ## License
 

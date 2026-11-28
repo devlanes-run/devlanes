@@ -146,10 +146,13 @@ fn a_command_box_mirrors_its_lane() -> Result<()> {
     let revoked = boxed.json(boxed.repo(), &["daemon", "revoke", &id, "--json"])?;
     assert_eq!(revoked["ended"], 1, "{revoked}");
     // Pairing, listing and revoking by code never touched the peer-to-peer
-    // endpoint, which creates its key the first time anything needs it.
+    // endpoint, which creates its key the first time anything needs it and
+    // records its ports once it binds.
     for lab in [&boxed, &client] {
-        let key = lab.home().join("p2p-key");
-        assert!(!key.exists(), "{} exists", key.display());
+        for name in ["p2p-key", "p2p-port"] {
+            let file = lab.home().join(name);
+            assert!(!file.exists(), "{} exists", file.display());
+        }
     }
     let waiting = client.eventually("acme to need pairing", CONNECT, || {
         Ok(host(&client, "acme")?.filter(|host| host["state"] == "needs_pairing"))
