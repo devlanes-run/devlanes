@@ -23,6 +23,7 @@ use tokio::sync::{OnceCell, mpsc};
 
 use crate::connection::{IrohConnection, IrohServerConnection, NO_DIRECT_PATH, REFUSED};
 use crate::key;
+use crate::text::peer_text;
 
 /// How long a dial waits for a direct path: three of iroh's 5 s hole-punch
 /// rounds. Locally a direct path took 2 to 31 ms.
@@ -497,6 +498,7 @@ impl IrohEndpoint {
             match relay.parse::<RelayUrl>() {
                 Ok(url) => target = target.with_relay_url(url),
                 Err(error) => {
+                    let relay = peer_text(relay);
                     tracing::debug!(%relay, %error, "ignoring a relay URL that does not parse")
                 }
             }
@@ -514,19 +516,22 @@ fn is_refused(error: &endpoint::ConnectionError) -> bool {
         if close.error_code.into_inner() == u64::from(REFUSED))
 }
 
-/// The typed failure of a dial whose connection closed with `error`.
+/// The typed failure of a dial whose connection closed with `error`. The
+/// refusal is told by its close code; the text, which carries the box's
+/// reason bytes, is cleaned.
 fn closed_dial(error: &endpoint::ConnectionError) -> PeerError {
     if is_refused(error) {
         PeerError::Refused
     } else {
-        PeerError::Unreachable(error.to_string())
+        PeerError::Unreachable(peer_text(&error.to_string()))
     }
 }
 
 /// The typed failure of a dial that never produced a connection: the box's
 /// refusal when the close arrived during the handshake, else the whole chain
 /// of causes, since iroh's outer message alone ("Unable to connect to
-/// remote") says nothing.
+/// remote") says nothing. Each cause is cleaned on its own, since a close
+/// among them carries the box's text.
 fn dial_failed(error: endpoint::ConnectError) -> PeerError {
     let closed = match &error {
         endpoint::ConnectError::Connection { source, .. } => Some(source),
@@ -539,10 +544,10 @@ fn dial_failed(error: endpoint::ConnectError) -> PeerError {
     if closed.is_some_and(is_refused) {
         return PeerError::Refused;
     }
-    let mut text = error.to_string();
+    let mut text = peer_text(&error.to_string());
     let mut cause = std::error::Error::source(&error);
     while let Some(next) = cause {
-        let next_text = next.to_string();
+        let next_text = peer_text(&next.to_string());
         if !text.ends_with(&next_text) {
             text = format!("{text}: {next_text}");
         }
@@ -562,6 +567,7 @@ async fn accept_loop(endpoint: Endpoint, shared: Arc<Shared>, queues: Queues) {
             let connection = match incoming.await {
                 Ok(connection) => connection,
                 Err(error) => {
+                    let error = peer_text(&error.to_string());
                     tracing::debug!(%error, "incoming peer connection failed");
                     return;
                 }

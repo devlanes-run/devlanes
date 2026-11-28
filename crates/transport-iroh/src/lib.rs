@@ -9,5 +9,6 @@
 mod connection;
 mod endpoint;
 mod key;
+mod text;
 
 pub use endpoint::{IrohEndpoint, IrohOptions};
