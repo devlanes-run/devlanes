@@ -16,7 +16,7 @@ Print a ticket on the box, then connect with it on your machine, giving the box 
 $ devlanes daemon pair
 ```
 
-If it prints a code and no ticket, run `devlanes daemon pair --ticket`, which waits longer for the ticket.
+If it prints a code and no ticket, run it again a few seconds later, or with `--ticket`.
 
 ```console title="on your machine"
 $ devlanes remote connect dlp1... --name my-vps
@@ -55,7 +55,7 @@ remote:
   relays: []
 ```
 
-Your machine then finds the box only at the addresses in its ticket, so pair again with a new ticket when the box's IP address changes, as on another network or with a new address from the router, and when the box's daemon could not keep its port because another program took it, which its log (`devlanes daemon logs` on the box) says. On a Windows box, allow devlanes through the firewall, or the box does not answer.
+Your machine then finds the box only at the addresses in its ticket, so pair again with a new ticket when the box's IP address changes, as on another network or with a new address from the router, and when the box's daemon could not keep its port because another program took it. The box's log (`devlanes daemon logs`) says when that happens. On a Windows box, allow devlanes through the firewall, or the box does not answer.
 
 ## Related
 
