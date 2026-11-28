@@ -47,7 +47,7 @@ async fn watch(port: u16) -> Result<(), ClientError> {
 
 ## Behaviour
 
-Each window decodes on the blocking pool in order, and events keep the order the host sent them in. A frame that fails to decode is acknowledged as discarded and followed by a keyframe request. While the client holds a button or key it sends a keep-alive every heartbeat interval, so the host does not release them. Lock states combine the host's state with the client's own resizes and its link, as `ViewerLock` does, for one connection only. At most `MAX_SCREENSHOTS_IN_FLIGHT` screenshots are asked for at once; further calls wait. Once the connection closes, every call returns `ClientError::Closed`.
+Each window decodes on the blocking pool in order, and events keep the order the host sent them in. A frame that fails to decode is acknowledged as discarded and followed by one keyframe request; frames until that keyframe are discarded without decoding, and when the keyframe fails too, `Event::CodecFailed` names the codec, since the protocol cannot change codecs on a connection: the viewer reconnects without that decoder. While the client holds a button or key it sends a keep-alive every heartbeat interval, so the host does not release them. Lock states combine the host's state with the client's own resizes and its link, as `ViewerLock` does, for one connection only. At most `MAX_SCREENSHOTS_IN_FLIGHT` screenshots are asked for at once; further calls wait. Once the connection closes, every call returns `ClientError::Closed`.
 
 ## License
 
