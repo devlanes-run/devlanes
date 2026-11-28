@@ -244,6 +244,11 @@ struct Param {
     per_flag: usize,
     /// Whether a positional value may be a negative number.
     negative: bool,
+    /// Whether a positional value may start with `-`, after a `--`.
+    hyphen: bool,
+    /// A value the argument takes, to try a line with it: its first possible
+    /// value, else `1`.
+    example: String,
 }
 
 /// How many values each use of `arg` takes when that is a fixed number above
@@ -290,13 +295,15 @@ impl Catalog {
         let tools = CURATED
             .iter()
             .filter(|spec| gui || !spec.gui)
-            .filter_map(|spec| match generate(&root, spec, is_read_only) {
-                Ok(generated) => Some(generated),
-                Err(error) => {
-                    tracing::warn!(%error, "no MCP tool");
-                    None
-                }
-            })
+            .filter_map(
+                |spec| match generate(&root, spec, is_read_only, read_only) {
+                    Ok(generated) => Some(generated),
+                    Err(error) => {
+                        tracing::warn!(%error, "no MCP tool");
+                        None
+                    }
+                },
+            )
             .filter(|generated| !read_only || generated.read_only)
             .collect();
         Self { tools }
@@ -315,19 +322,28 @@ impl Catalog {
 
 /// Whether `devlanes ARGS` parses to a command that only reads.
 fn is_read_only(args: &[String]) -> bool {
-    Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(args.iter().cloned()))
-        .ok()
-        .and_then(|cli| cli.command)
-        .is_some_and(|command| command.is_read_only())
+    classify(args) == Some(true)
 }
 
-/// The tool of `spec` from the built command tree `root`. `read_only` tells
-/// from the command's shortest valid line whether it only reads.
+/// Whether `devlanes ARGS` only reads, or `None` when it does not parse.
+fn classify(args: &[String]) -> Option<bool> {
+    Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(args.iter().cloned()))
+        .ok()?
+        .command
+        .map(|command| command.is_read_only())
+}
+
+/// The tool of `spec` from the built command tree `root`. `read_only_line`
+/// tells from a command line whether it only reads: the shortest valid one
+/// classifies the tool, and for a server with `only_reading` the options
+/// that would make it change something are left out.
 fn generate(
     root: &clap::Command,
     spec: &'static Spec,
-    read_only: impl Fn(&[String]) -> bool,
+    read_only_line: impl Fn(&[String]) -> bool,
+    only_reading: bool,
 ) -> Result<Generated, String> {
+    let read_only = &read_only_line;
     let name = spec.path.join("_");
     let mut command = root;
     for part in spec.path {
@@ -373,6 +389,35 @@ fn generate(
         );
         params.push(param);
     }
+    let shortest = shortest(spec, &params);
+    let read_only = read_only(&shortest);
+    // A read-only server leaves out the options that make a reading command
+    // change something, such as `gui screenshot --to`, which writes any file.
+    if only_reading && read_only {
+        // A line with the option that parses and does not only read; the
+        // value is one the option takes, or a number.
+        let writes = |param: &Param| {
+            let Form::Flag(flag) = &param.form else {
+                return false;
+            };
+            let mut line = shortest.clone();
+            match param.kind {
+                Kind::Boolean => line.push(flag.clone()),
+                _ if param.per_flag > 1 => {
+                    line.push(flag.clone());
+                    line.extend(std::iter::repeat_n("1".to_owned(), param.per_flag));
+                }
+                _ => line.push(format!("{flag}={}", param.example)),
+            }
+            classify(&line) == Some(false)
+        };
+        let (kept, dropped): (Vec<Param>, Vec<Param>) =
+            params.into_iter().partition(|param| !writes(param));
+        for param in dropped {
+            properties.remove(&param.property);
+        }
+        params = kept;
+    }
     properties.insert(
         "cwd".into(),
         json!({"type": "string", "description": text::CWD}),
@@ -394,8 +439,6 @@ fn generate(
         Value::Object(input) => input,
         _ => JsonObject::new(),
     };
-    let shortest = shortest(spec, &params);
-    let read_only = read_only(&shortest);
     let title = format!("devlanes {}", spec.path.join(" "));
     let annotations = if read_only {
         ToolAnnotations::with_title(title).read_only(true)
@@ -445,6 +488,11 @@ fn param(arg: &clap::Arg, last: &str) -> Param {
         required: arg.is_required_set(),
         per_flag: values_per_use(arg).unwrap_or(1),
         negative: arg.is_allow_negative_numbers_set(),
+        hyphen: arg.is_allow_hyphen_values_set(),
+        example: arg
+            .get_possible_values()
+            .first()
+            .map_or_else(|| "1".to_owned(), |value| value.get_name().to_owned()),
     }
 }
 
@@ -605,6 +653,7 @@ impl Generated {
             .map(|part| (*part).to_owned())
             .collect();
         let mut trailing = Vec::new();
+        let mut after_dashes = Vec::new();
         for param in &self.params {
             let values = match arguments.get(&param.property) {
                 None | Some(Value::Null) => Vec::new(),
@@ -640,21 +689,29 @@ impl Generated {
                     let flag_like = |value: &&String| {
                         value.starts_with('-') && !(param.negative && value.parse::<f64>().is_ok())
                     };
-                    if let Some(value) = values.iter().find(flag_like) {
-                        return Err(format!(
-                            "{} of {}: {value} starts with -, which the command line would read \
-                             as a flag",
-                            param.property, self.name
-                        ));
+                    match values.iter().find(flag_like) {
+                        // `gui type desktop -- -n`: after `--` a value is
+                        // never read as a flag, so it and the positionals
+                        // after it go last.
+                        Some(_) if param.hyphen => after_dashes.extend(values),
+                        Some(value) => {
+                            return Err(format!(
+                                "{} of {}: {value} starts with -, which the command line would \
+                                 read as a flag",
+                                param.property, self.name
+                            ));
+                        }
+                        None if !after_dashes.is_empty() => after_dashes.extend(values),
+                        None => args.extend(values),
                     }
-                    args.extend(values);
                 }
                 Form::Last => trailing = values,
             }
         }
-        if !trailing.is_empty() {
+        after_dashes.extend(trailing);
+        if !after_dashes.is_empty() {
             args.push("--".into());
-            args.extend(trailing);
+            args.extend(after_dashes);
         }
         Ok(Line { args, cwd })
     }
@@ -826,7 +883,7 @@ mod tests {
                     ),
             );
         root.build();
-        let generated = generate(&root, &SPEC, |_| true).expect("tool");
+        let generated = generate(&root, &SPEC, |_| true, false).expect("tool");
         let properties = &generated.tool.input_schema["properties"];
         assert_eq!(
             properties["mode"],
@@ -1017,7 +1074,30 @@ mod tests {
             )
             .contains("2 values")
         );
-        assert!(refused("gui_type", json!({"unit": "d", "text": "-x"})).contains("read as a flag"));
+        // Text that looks like a flag goes after `--`, and arrives as text.
+        let line = catalog
+            .get("gui_type")
+            .expect("gui_type")
+            .line(&object(
+                json!({"unit": "d", "text": "--window=2", "window": "1"}),
+            ))
+            .expect("line");
+        assert_eq!(
+            line.args,
+            ["gui", "type", "d", "--window=1", "--", "--window=2"]
+        );
+        let cli = Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(line.args))
+            .expect("parses");
+        let Some(devlanes_cli::Command::Gui {
+            command: devlanes_cli::GuiCommand::Type { text, window, .. },
+        }) = cli.command
+        else {
+            panic!("gui type");
+        };
+        assert_eq!(
+            (text.as_str(), window.as_deref()),
+            ("--window=2", Some("1"))
+        );
         let line = catalog
             .get("status")
             .expect("status")
@@ -1076,11 +1156,24 @@ mod tests {
                     tool.name
                 );
             }
-            let names: Vec<String> = Catalog::new(true, gui)
-                .iter()
-                .map(|tool| tool.name.clone())
-                .collect();
+            let reading = Catalog::new(true, gui);
+            let names: Vec<String> = reading.iter().map(|tool| tool.name.clone()).collect();
             assert_eq!(names, read_only);
+            // `--to` replaces a file, so a read-only server does not offer it.
+            if gui {
+                assert!(
+                    catalog
+                        .get("gui_screenshot")
+                        .is_some_and(|tool| tool.takes("to"))
+                );
+                let screenshot = reading.get("gui_screenshot").expect("gui_screenshot");
+                assert!(!screenshot.takes("to") && screenshot.takes("window"));
+                assert!(
+                    screenshot.tool.input_schema["properties"]
+                        .get("to")
+                        .is_none()
+                );
+            }
         }
     }
 

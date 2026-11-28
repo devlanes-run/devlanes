@@ -256,6 +256,9 @@ impl Server {
             }
         }
         let image = screenshot(&call, &output).await;
+        if let Some(Err(note)) = &image {
+            notes.push(note.clone());
+        }
         let mut result = result(
             &call,
             &cwd,
@@ -264,7 +267,7 @@ impl Server {
             self.config.read_only,
             &self.cards,
         );
-        if let Some(image) = image {
+        if let Some(Ok(image)) = image {
             result.content.push(image);
         }
         Ok(result.into())
@@ -740,26 +743,46 @@ fn result(
     result
 }
 
-/// The picture of a `gui screenshot` that succeeded, as PNG image content.
-/// The command writes the PNG to a file and names it in its JSON, so the
-/// image is read from there; a file that cannot be read leaves the result
-/// with its text, which names the path.
-async fn screenshot(call: &Call, output: &Output) -> Option<ContentBlock> {
+/// The largest screenshot returned as image content.
+const IMAGE_LIMIT: u64 = 16 * 1024 * 1024;
+
+/// The first bytes of every PNG file.
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// The picture of a `gui screenshot` that succeeded, as PNG image content,
+/// or the note that says why the result has none. The command writes the
+/// PNG to a file and names it in its JSON, so the image is read from there:
+/// only a regular file (not a link) of at most [`IMAGE_LIMIT`] bytes that is
+/// a PNG, so a path that leads elsewhere never ends up in the result.
+async fn screenshot(call: &Call, output: &Output) -> Option<Result<ContentBlock, String>> {
     use base64::Engine as _;
     if call.path != "gui screenshot" || output.exit_code != 0 || output.cancelled {
         return None;
     }
-    let path = output.data.get("path")?.as_str()?;
-    match tokio::fs::read(path).await {
-        Ok(png) => Some(ContentBlock::image(
+    let path = output.data.get("path")?.as_str()?.to_owned();
+    let note = |why: &str| format!("note: the picture is not attached: {path} {why}");
+    let read = async {
+        let meta = tokio::fs::symlink_metadata(&path)
+            .await
+            .map_err(|error| note(&format!("cannot be read ({error})")))?;
+        if !meta.file_type().is_file() {
+            return Err(note("is not a regular file"));
+        }
+        if meta.len() > IMAGE_LIMIT {
+            return Err(note(&format!("is over {} MiB", IMAGE_LIMIT >> 20)));
+        }
+        let png = tokio::fs::read(&path)
+            .await
+            .map_err(|error| note(&format!("cannot be read ({error})")))?;
+        if !png.starts_with(PNG_SIGNATURE) || png.len() as u64 > IMAGE_LIMIT {
+            return Err(note("is not a PNG"));
+        }
+        Ok(ContentBlock::image(
             base64::engine::general_purpose::STANDARD.encode(png),
             "image/png",
-        )),
-        Err(error) => {
-            tracing::warn!(path, %error, "cannot read the screenshot");
-            None
-        }
-    }
+        ))
+    };
+    Some(read.await)
 }
 
 /// `data`, or `Null` and `true` when its JSON is over [`DATA_LIMIT`].
