@@ -130,17 +130,18 @@ impl Backoff {
         self.connected_at = Some(now);
     }
 
-    /// The connection ended at `now`: the wait before dialing again. One
-    /// that lasted [`STABLE_AFTER`] starts the backoff over. A host that
-    /// broke the protocol is waited for like a failed dial, so one that
-    /// keeps doing it is not dialed in a loop; any other close is followed
-    /// by a dial at once.
+    /// The connection ended at `now`: the wait before dialing again. A host
+    /// that broke the protocol is waited for like a failed dial, and the
+    /// wait does not start over until a connection ends for another reason,
+    /// so one that keeps doing it is dialed at most every [`MAX_BACKOFF`].
+    /// Another close is followed by a dial at once, and one of a connection
+    /// that lasted [`STABLE_AFTER`] starts the backoff over.
     fn closed(&mut self, now: Instant, broke_protocol: bool) -> Duration {
         let lasted = self
             .connected_at
             .take()
             .is_some_and(|at| now.saturating_duration_since(at) >= STABLE_AFTER);
-        if lasted {
+        if lasted && !broke_protocol {
             self.next = FIRST_BACKOFF;
         }
         match broke_protocol {
@@ -467,12 +468,19 @@ mod tests {
             );
         }
         assert_eq!(waits, [200, 400, 800, 1600, 2000, 2000]);
+        // A host that lasts a while before breaking the protocol again
+        // stays at the longest wait.
         let later = t0 + Duration::from_secs(60);
         backoff.connected(later);
-        let wait = backoff.closed(later + STABLE_AFTER, true);
-        assert_eq!(wait, FIRST_BACKOFF, "a connection that lasted starts over");
-        backoff.connected(later + STABLE_AFTER);
-        assert_eq!(backoff.closed(later + STABLE_AFTER, false), Duration::ZERO);
+        let wait = backoff.closed(later + STABLE_AFTER * 2, true);
+        assert_eq!(wait, MAX_BACKOFF, "a protocol error never starts over");
+        // A connection that lasted and ended otherwise starts it over.
+        let after = later + STABLE_AFTER * 3;
+        backoff.connected(after);
+        assert_eq!(backoff.closed(after + STABLE_AFTER, false), Duration::ZERO);
+        backoff.connected(after + STABLE_AFTER);
+        let wait = backoff.closed(after + STABLE_AFTER, true);
+        assert_eq!(wait, FIRST_BACKOFF);
     }
 
     /// A unit that exists is gone only when it does not run.
