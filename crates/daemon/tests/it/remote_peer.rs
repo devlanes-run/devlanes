@@ -171,21 +171,27 @@ async fn a_ticket_pairs_and_connects_until_the_box_refuses_the_key() {
             matches!(boxes.as_slice(), [kept] if kept.name == name && !kept.ephemeral),
             "{boxes:?}"
         );
-        // The live link was connected and quiet, so a state event for the
-        // box comes from the watcher of a new link, which always announces
-        // the state it first sees.
-        let mut reopened = false;
-        loop {
-            match bus.try_recv() {
-                Ok(event) => {
-                    reopened |= event.event == devlanes_proto::remote::STATE_EVENT
-                        && event.data["host"] == name.as_str();
+        // The old link was connected before the bus was subscribed and is
+        // closed, which can only announce it stopped; `connected` for the
+        // box comes from the watcher of a new link, which announces every
+        // state it sees.
+        let reopened = tokio::time::timeout(SOON, async {
+            loop {
+                match bus.recv().await {
+                    Ok(event)
+                        if event.event == devlanes_proto::remote::STATE_EVENT
+                            && event.data["host"] == name.as_str()
+                            && event.data["state"] == "connected" =>
+                    {
+                        return true;
+                    }
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
                 }
-                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
-                Err(_) => break,
             }
-        }
-        assert!(reopened, "the pairing replaced the live link");
+        })
+        .await;
+        assert_eq!(reopened, Ok(true), "the pairing replaced the live link");
 
         client
             .h
@@ -419,7 +425,19 @@ async fn names_paired_by_ticket_are_never_resolved_another_way() {
             ),
             "{solo}"
         );
-        let coded = connect_unattended(&client, json!({"host": "solo", "code": "ABCD-EFGH"}))
+        // In another case the name is still that box's, and never an SSH
+        // destination sharing its sync directory.
+        let spelled = connect_unattended(&client, json!({"host": "SOLO"}))
+            .await
+            .expect_err("a paired box's name in another case");
+        assert_eq!(spelled.code, "bad_request", "{spelled:?}");
+        assert!(
+            spelled.data["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("as `solo`")),
+            "{spelled:?}"
+        );
+        let coded = connect_unattended(&client, json!({"host": "Solo", "code": "ABCD-EFGH"}))
             .await
             .expect_err("a code for a box paired by ticket");
         assert_eq!(coded.code, "bad_request", "{coded:?}");

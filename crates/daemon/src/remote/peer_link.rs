@@ -95,7 +95,10 @@ const MAX_REASON: usize = 1024;
 /// `text`, part of which a box may have chosen (a close reason, a decode
 /// error quoting what it sent), without the characters [`clean`] drops,
 /// cut to [`MAX_REASON`] bytes. Each character goes through [`clean`], so
-/// the two never differ in what they keep.
+/// the two never differ in what they keep. `devlanes-transport-iroh`
+/// cleans the close reasons it reports with its own list of format
+/// characters, in its `text.rs`; that list and `clean`'s should stay the
+/// same.
 pub(super) fn clean_reason(text: &str) -> String {
     let mut cleaned = String::new();
     let mut buffer = [0u8; 4];
@@ -305,10 +308,21 @@ fn span(duration: Duration) -> String {
 ///
 /// A failed dial past the deadline, and a refused key at once, become
 /// permanent [`PeerLinkError`]s, which end the link `failed`. The deadline
-/// is on tokio's clock: it only measures time this daemon ran. The time a
-/// box was away before the daemon started comes in through
-/// [`PeerAttempts::new`] from stored wall-clock times, and never cuts the
-/// link's own attempts below [`RESTORE_GRACE`].
+/// is on tokio's clock. The time a box was away before the daemon started
+/// comes in through [`PeerAttempts::new`] from stored wall-clock times, and
+/// never cuts the link's own attempts below [`RESTORE_GRACE`].
+///
+/// tokio's clock is std's `Instant`, which on Windows reads
+/// `QueryPerformanceCounter` and, by every account of it, keeps counting
+/// while the machine sleeps; std leaves it unspecified. So a gap between
+/// two attempts much longer than the backoff allows ([`ASLEEP_AFTER`])
+/// means the daemon was not running them, and the deadline moves to at
+/// least [`RESTORE_GRACE`] after the attempt that follows: the first dial
+/// after waking often fails before the network is back. Where the clock
+/// stops during sleep no such gap shows, and nothing changes. A daemon that
+/// restarts in a loop likewise grants a fresh grace at each start, so such
+/// a box is retried for good and never forgotten, which errs on keeping a
+/// pairing rather than deleting it.
 pub(super) struct PeerAttempts {
     inner: Arc<dyn Transport>,
     name: String,
@@ -316,12 +330,21 @@ pub(super) struct PeerAttempts {
     /// When the next failed dial ends the link; `None` while the last dial
     /// connected, so the box was reachable then.
     deadline: Mutex<Option<Instant>>,
-    /// For a restored link that has not connected yet: when it started and
-    /// how long its box had been away then, for the give-up text.
-    restored: Mutex<Option<(Instant, Unreached)>>,
+    /// When the last attempt ended, on tokio's clock.
+    last_attempt: Mutex<Option<Instant>>,
+    /// For a restored link that has not connected yet: when it started, on
+    /// tokio's clock and in Unix milliseconds, and how long its box had
+    /// been away then, for the give-up text.
+    restored: Mutex<Option<(Instant, i64, Unreached)>>,
     /// Set once the link stopped trying because the box stayed away.
     gave_up: Arc<AtomicBool>,
 }
+
+/// A gap between two attempts longer than this means the daemon was not
+/// running them, as across a sleep: twice the longest wait
+/// `Backoff::default()` (`devlanes_transport`'s `reconnect.rs`) puts
+/// between attempts, 2 minutes, which the type does not expose.
+const ASLEEP_AFTER: Duration = Duration::from_secs(2 * 2 * 60);
 
 impl PeerAttempts {
     /// Tries box `name` through `inner` for [`RETRY_FOR`], or
@@ -346,7 +369,11 @@ impl PeerAttempts {
             name: name.to_owned(),
             ephemeral,
             deadline: Mutex::new(Some(now + left)),
-            restored: Mutex::new(restored.map(|unreached| (now, unreached))),
+            last_attempt: Mutex::new(None),
+            restored: Mutex::new(restored.map(|unreached| {
+                let wall = i64::try_from(super::now_ms()).unwrap_or(i64::MAX);
+                (now, wall, unreached)
+            })),
             gave_up: Arc::default(),
         }
     }
@@ -370,7 +397,14 @@ impl PeerAttempts {
 impl Transport for PeerAttempts {
     /// Dials through the inner transport and applies the bounds.
     async fn connect(&self) -> Result<BoxConnection, TransportError> {
-        let error = match self.inner.connect().await {
+        // From the end of the last attempt to the start of this one is only
+        // the backoff, however long a dial takes.
+        let started = Instant::now();
+        let gap = lock(&self.last_attempt).map(|ended| started.saturating_duration_since(ended));
+        let result = self.inner.connect().await;
+        let now = Instant::now();
+        *lock(&self.last_attempt) = Some(now);
+        let error = match result {
             Ok(connection) => {
                 *lock(&self.deadline) = None;
                 *lock(&self.restored) = None;
@@ -385,10 +419,16 @@ impl Transport for PeerAttempts {
         if error.is_permanent() {
             return Err(error);
         }
-        let now = Instant::now();
-        // The first failure after a connection starts the window: the box
-        // was reached until about then.
-        let deadline = *lock(&self.deadline).get_or_insert(now + Self::window(self.ephemeral));
+        let deadline = {
+            let mut deadline = lock(&self.deadline);
+            // The first failure after a connection starts the window: the
+            // box was reached until about then.
+            let at = deadline.get_or_insert(now + Self::window(self.ephemeral));
+            if gap.is_some_and(|gap| gap > ASLEEP_AFTER) {
+                *at = (*at).max(now + RESTORE_GRACE);
+            }
+            *at
+        };
         if now < deadline {
             return Err(error);
         }
@@ -396,7 +436,15 @@ impl Transport for PeerAttempts {
         let last = clean_reason(&error.to_string());
         tracing::info!(host = %self.name, error = %last, "stopped trying a box that stayed unreachable");
         let since = match *lock(&self.restored) {
-            Some((started, unreached)) => unreached.text(now - started),
+            // The larger of the two clocks, so the text stays true where
+            // tokio's stops while the machine sleeps.
+            Some((started, wall, unreached)) => {
+                let now_wall = i64::try_from(super::now_ms()).unwrap_or(i64::MAX);
+                let walled = u64::try_from(now_wall.saturating_sub(wall)).unwrap_or(0);
+                unreached.text((now - started).max(Duration::from_millis(walled)))
+            }
+            // At least the window passed since the first failure, also
+            // after a gap that granted more.
             None => format!("for {}", span(Self::window(self.ephemeral))),
         };
         Err(TransportError::permanent(if self.ephemeral {
@@ -613,8 +661,7 @@ fn pairing_dial_failed(label: &str, error: &TransportError) -> RpcError {
         Some(PeerError::Unreachable(_)) => super::remote_failed(
             label,
             format!(
-                "{reason}; a ticket also stops working {} minutes after `devlanes daemon pair` \
-                 printed it",
+                "{reason}. Also check that the ticket was printed less than {} minutes ago.",
                 PAIRING_CODE_TTL_MS / 60_000
             ),
         ),
@@ -709,6 +756,31 @@ impl Inner {
                 retry_after_ms,
             } => return Err(pairing_refused(&message, retry_after_ms)),
         };
+        // The box pinned this machine's key and used the ticket up, so the
+        // rest runs in a task of its own: a request dropped from here on, as
+        // by Ctrl-C while it waits for the lock, still keeps the pairing.
+        let engine = self.clone();
+        let (addr, ephemeral) = (ticket.addr.clone(), ticket.ephemeral);
+        tokio::spawn(async move {
+            engine
+                .keep_pairing(key, addr, ephemeral, given, answered)
+                .await
+        })
+        .await
+        .map_err(|error| RpcError::new("internal", json!({"message": error.to_string()}), 1))?
+    }
+
+    /// [`Inner::pair_by_ticket`]'s work after the box paired with this
+    /// machine: picks the name and stores the pairing with the box `key` at
+    /// `addr`, `answered` being the name the box gave itself.
+    async fn keep_pairing(
+        self: Arc<Self>,
+        key: String,
+        addr: PeerAddr,
+        ephemeral: bool,
+        given: Option<String>,
+        answered: String,
+    ) -> Result<Paired, RpcError> {
         // Held until the caller opened the link: no other connect takes the
         // name between the check and the row, and no forget of an earlier
         // link deletes the row before the new link reads it.
@@ -738,9 +810,9 @@ impl Inner {
         let paired = P2pBox {
             name,
             peer_key: key,
-            relay_url: ticket.addr.relay.clone(),
-            direct_addrs: ticket.addr.direct.iter().map(ToString::to_string).collect(),
-            ephemeral: ticket.ephemeral,
+            relay_url: addr.relay.clone(),
+            direct_addrs: addr.direct.iter().map(ToString::to_string).collect(),
+            ephemeral,
             paired_at: i64::try_from(super::now_ms()).unwrap_or(i64::MAX),
         };
         let row = self
@@ -748,7 +820,7 @@ impl Inner {
             .add_p2p_box(paired)
             .await
             .map_err(crate::registry::store_error)?;
-        tracing::info!(host = %row.name, peer = %ticket.addr.id.short(), ephemeral = row.ephemeral, "paired with a box by ticket");
+        tracing::info!(host = %row.name, peer = %addr.id.short(), ephemeral = row.ephemeral, "paired with a box by ticket");
         Ok(Paired {
             name: row.name,
             kept: stored.is_some(),
@@ -756,14 +828,29 @@ impl Inner {
         })
     }
 
-    /// Whether `host` names a box paired by ticket.
+    /// Whether `host` names a box paired by ticket, in any case.
     pub(super) async fn is_peer_box(&self, host: &str) -> Result<bool, RpcError> {
         Ok(self
             .store
-            .p2p_box(host.to_owned())
+            .p2p_boxes()
             .await
             .map_err(crate::registry::store_error)?
-            .is_some())
+            .iter()
+            .any(|paired| paired.name.eq_ignore_ascii_case(host)))
+    }
+
+    /// The stored spelling of the box paired by ticket that `host` names in
+    /// another case, which must not become an SSH destination: on a file
+    /// system that ignores case the two would share a sync directory.
+    pub(super) async fn peer_box_spelled(&self, host: &str) -> Result<Option<String>, RpcError> {
+        Ok(self
+            .store
+            .p2p_boxes()
+            .await
+            .map_err(crate::registry::store_error)?
+            .into_iter()
+            .find(|paired| paired.name != host && paired.name.eq_ignore_ascii_case(host))
+            .map(|paired| paired.name))
     }
 
     /// The stored pairing with the box whose key is `key`.
@@ -868,10 +955,10 @@ impl Inner {
             base,
             holder,
             format!(
-                "the box calls itself {base}, and {base} and {base}-2 to {base}-9 are all taken \
-                 here, so this machine did not keep the pairing and the ticket is used up. Get a \
-                 new ticket with `devlanes daemon pair` on the box, then run `devlanes remote \
-                 connect <ticket> --name NAME` with a free name"
+                "this machine would keep the box as {base}, but {base} and {base}-2 to {base}-9 \
+                 are all taken here, so it did not keep the pairing, and the ticket is used up. \
+                 Get a new ticket with `devlanes daemon pair` on the box, then run `devlanes \
+                 remote connect <ticket> --name NAME` with a free name."
             ),
         ))
     }
@@ -1056,7 +1143,8 @@ mod tests {
     /// error the function makes.
     type Outcome = Option<fn() -> TransportError>;
 
-    /// A transport that answers each dial with the next queued outcome.
+    /// A transport that answers each dial with the next queued outcome,
+    /// and once they ran out as an unreachable box.
     struct Scripted {
         outcomes: Mutex<VecDeque<Outcome>>,
         memory: MemoryTransport,
@@ -1066,12 +1154,34 @@ mod tests {
     impl Transport for Scripted {
         /// The next outcome.
         async fn connect(&self) -> Result<BoxConnection, TransportError> {
-            let outcome = lock(&self.outcomes).pop_front().flatten();
+            let outcome = lock(&self.outcomes)
+                .pop_front()
+                .unwrap_or(Some(unreachable));
             match outcome {
                 Some(error) => Err(error()),
                 None => self.memory.connect().await,
             }
         }
+    }
+
+    /// Dials `attempts` every 2 minutes, as the longest backoff does, until
+    /// a dial ends the link or `limit` passed; how long that took, and the
+    /// error that ended it.
+    async fn dial_until_stopped(
+        attempts: &PeerAttempts,
+        limit: Duration,
+    ) -> (Duration, Option<TransportError>) {
+        let step = Duration::from_secs(2 * 60);
+        let mut waited = Duration::ZERO;
+        while waited <= limit {
+            match attempts.connect().await {
+                Err(error) if error.is_permanent() => return (waited, Some(error)),
+                _ => {}
+            }
+            tokio::time::advance(step).await;
+            waited += step;
+        }
+        (waited, None)
     }
 
     /// A dial that finds no listener.
@@ -1261,12 +1371,7 @@ mod tests {
         let hour = Duration::from_secs(60 * 60);
         let (memory, _listener) = memory_transport();
         let inner = Arc::new(Scripted {
-            outcomes: Mutex::new(VecDeque::from([
-                None,
-                Some(unreachable as fn() -> TransportError),
-                Some(unreachable),
-                Some(unreachable),
-            ])),
+            outcomes: Mutex::new(VecDeque::from([None])),
             memory,
         });
         let restored = Unreached {
@@ -1276,16 +1381,49 @@ mod tests {
         let attempts = PeerAttempts::new(inner, "acme", false, Some(restored));
         assert!(attempts.connect().await.is_ok(), "the box answered");
         tokio::time::advance(2 * hour).await;
+        let (after, error) = dial_until_stopped(&attempts, 25 * hour).await;
+        let error = error.expect("the link stops");
+        assert_eq!(after, 24 * hour, "{error}");
+        assert!(error.to_string().contains("for 24 hours"), "{error}");
+    }
+
+    /// Hours without a dial, as across a sleep, give the link the grace
+    /// from the next failed dial instead of ending it there, and the
+    /// give-up after the grace still says how long the box was away.
+    #[tokio::test(start_paused = true)]
+    async fn a_gap_without_attempts_grants_the_grace() {
+        let (memory, _listener) = memory_transport();
+        let inner = Arc::new(Scripted {
+            outcomes: Mutex::new(VecDeque::new()),
+            memory,
+        });
+        let attempts = PeerAttempts::new(inner, "acme", true, None);
         let first = attempts.connect().await.err().expect("unreachable");
         assert!(!first.is_permanent(), "{first}");
-        tokio::time::advance(23 * hour).await;
-        let later = attempts.connect().await.err().expect("unreachable");
+        tokio::time::advance(Duration::from_secs(3 * 60 * 60)).await;
+        let (after, error) = dial_until_stopped(&attempts, 2 * RESTORE_GRACE).await;
+        let error = error.expect("the link stops after the grace");
+        assert_eq!(after, RESTORE_GRACE, "{error}");
         assert!(
-            !later.is_permanent(),
-            "23 hours after the first failure: {later}"
+            error
+                .to_string()
+                .contains("for an hour, so devlanes stopped trying and forgot it"),
+            "{error}"
         );
-        tokio::time::advance(hour).await;
-        let last = attempts.connect().await.err().expect("unreachable");
-        assert!(last.is_permanent(), "a day after the first failure: {last}");
+        assert!(attempts.gave_up().load(Ordering::SeqCst));
+    }
+
+    /// `span` rounds down at its boundaries.
+    #[test]
+    fn spans_round_down_to_minutes_hours_and_days() {
+        let minute = Duration::from_secs(60);
+        let rows = [
+            (59 * minute, "59 minutes"),
+            (119 * minute, "an hour"),
+            (47 * 60 * minute, "47 hours"),
+        ];
+        for (duration, text) in rows {
+            assert_eq!(span(duration), text, "{duration:?}");
+        }
     }
 }

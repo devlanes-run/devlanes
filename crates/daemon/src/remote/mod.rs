@@ -909,16 +909,23 @@ impl HostConn {
     /// connected box's handshake waits for [`watch_link`] to copy it. The only
     /// reader of `info` and `label`.
     fn handshake(&self) -> (BoxInfo, String) {
-        if let LinkState::Connected(session) = &*self.state.borrow() {
-            return (session.box_info().clone(), self.label_of(session.server()));
-        }
-        (lock(&self.info).clone(), self.label_of(&lock(&self.label)))
+        let (mut info, label) = match &*self.state.borrow() {
+            LinkState::Connected(session) => {
+                (session.box_info().clone(), self.label_of(session.server()))
+            }
+            _ => (lock(&self.info).clone(), self.label_of(&lock(&self.label))),
+        };
+        // The port range is text the box sent too, shown in `remote ls` and
+        // in the `ports_range_overlap` message.
+        info.ports_range = info.ports_range.map(|range| self.label_of(&range));
+        (info, label)
     }
 
-    /// The version label `server` a box sent, as shown and stored: for a
-    /// box paired by ticket without control and format characters and at
-    /// most as long as a name, since any machine that holds a ticket's key
-    /// sends it; for SSH and command boxes as it is.
+    /// Text a box sent about itself, such as its version label `server`,
+    /// as shown and stored: for a box paired by ticket without control and
+    /// format characters and at most `MAX_CLIENT_TEXT` bytes, since any
+    /// machine that holds a ticket's key sends it; for SSH and command
+    /// boxes as it is.
     fn label_of(&self, server: &str) -> String {
         if self.kind == P2P {
             feed::clean(server)
@@ -1232,7 +1239,7 @@ fn name_ambiguous(host: &str) -> RpcError {
             "message": format!(
                 "{host} is both a box paired by ticket and an entry of remote.boxes in the user \
                  config. Rename the remote.boxes entry, or forget the paired box and pair with it \
-                 again under another name"
+                 again from a new ticket with `--name`"
             ),
         }),
         1,
@@ -1465,14 +1472,14 @@ impl Inner {
             Some(_) => {
                 return Err(RpcError::new(
                     "bad_request",
-                    json!({"message": "a ticket goes without a host or a code"}),
+                    json!({"message": "`ticket` cannot be sent with `host` or `code`"}),
                     2,
                 ));
             }
             None if args.name.is_some() => {
                 return Err(RpcError::new(
                     "bad_request",
-                    json!({"message": "a name goes with a ticket"}),
+                    json!({"message": "`name` is only taken with a `ticket`"}),
                     2,
                 ));
             }
@@ -1718,6 +1725,19 @@ impl Inner {
                 // name must never become an SSH destination.
                 if recorded == Some(P2P) || opening == Opening::Paired {
                     return Err(pairing_missing(host));
+                }
+                if let Some(stored) = self.peer_box_spelled(host).await? {
+                    return Err(RpcError::new(
+                        "bad_request",
+                        json!({
+                            "host": host,
+                            "name": stored,
+                            "message": format!(
+                                "this machine has that box as `{stored}`; use that name"
+                            ),
+                        }),
+                        2,
+                    ));
                 }
                 let remote = self
                     .integ
@@ -2889,9 +2909,19 @@ mod tests {
         serial: u64,
         state: watch::Receiver<LinkState>,
     ) -> Arc<HostConn> {
+        conn_of_kind(name, "memory", serial, state)
+    }
+
+    /// [`conn_named`] for a box reached over transport `kind`.
+    fn conn_of_kind(
+        name: &str,
+        kind: &'static str,
+        serial: u64,
+        state: watch::Receiver<LinkState>,
+    ) -> Arc<HostConn> {
         Arc::new(HostConn {
             name: name.into(),
-            kind: "memory",
+            kind,
             address: name.into(),
             forget: None,
             state,
@@ -3024,6 +3054,54 @@ mod tests {
             code: "K7QM-3XWD".into(),
         });
         assert!(lock(&slot).is_some(), "a later connect's code stays");
+    }
+
+    /// A box paired by ticket that needs pairing again says so in its own
+    /// words, with the ticket command as `fix` and `transport` in the
+    /// error; an SSH box keeps the transport's text and its code command.
+    #[test]
+    fn a_p2p_box_that_needs_pairing_says_what_it_needs() {
+        let transport_text = "the box no longer accepts this machine's pairing and needs a new \
+                              code from `devlanes daemon pair` on the box";
+        let waiting = || LinkState::NeedsPairing {
+            error: transport_text.into(),
+            refused: false,
+            retry_at: None,
+        };
+        let rows = [
+            (
+                P2P,
+                "box acme no longer accepts this machine's pairing. Run `devlanes daemon pair` \
+                 on the box, then `devlanes remote connect <ticket>` here.",
+                "devlanes daemon pair on acme, then devlanes remote connect <ticket>",
+                Some(P2P),
+            ),
+            (
+                "ssh",
+                transport_text,
+                "devlanes daemon pair on acme, then devlanes remote connect acme --code <code>",
+                None,
+            ),
+        ];
+        for (kind, error, fix, transport) in rows {
+            let (_state, receiver) = watch::channel(waiting());
+            let conn = conn_of_kind("acme", kind, 0, receiver);
+            let shown = conn.state_json();
+            assert_eq!(
+                (&shown["state"], &shown["error"], &shown["fix"]),
+                (&json!("needs_pairing"), &json!(error), &json!(fix)),
+                "{kind}"
+            );
+            let stuck = conn.stuck().expect("needs pairing");
+            assert_eq!(stuck.code, "remote_needs_pairing", "{kind}");
+            assert_eq!(stuck.data["message"], error, "{kind}");
+            assert_eq!(stuck.data["fix"], fix, "{kind}");
+            assert_eq!(
+                stuck.data.get("transport").and_then(Value::as_str),
+                transport,
+                "{kind}"
+            );
+        }
     }
 
     /// Ranges overlap when they share one port; invalid ranges never parse.
