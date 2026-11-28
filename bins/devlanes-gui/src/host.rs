@@ -94,6 +94,9 @@ pub enum HostError {
     /// The async runtime did not start.
     #[error("cannot start the async runtime")]
     Runtime(#[source] std::io::Error),
+    /// Looking for the codecs failed with a bug.
+    #[error("cannot look for the video codecs: {0}")]
+    Codecs(String),
     /// The termination signals could not be watched.
     #[error("cannot watch for termination signals")]
     Signals(#[source] std::io::Error),
@@ -159,6 +162,17 @@ async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Res
         }
         Err(error) => return Err(error.into()),
     };
+    // Blocking: it loads OpenH264 or enumerates Media Foundation's transforms.
+    let codecs = tokio::task::spawn_blocking(crate::codecs::find)
+        .await
+        .map_err(|error| HostError::Codecs(error.to_string()))?;
+    for problem in &codecs.problems {
+        tracing::warn!(codec = %problem.codec, reason = problem.reason.word(), detail = %problem.detail, "a video codec is missing; viewers get the next one both ends have");
+    }
+    if let Some(version) = &codecs.version {
+        tracing::info!(%version, "H.264 available");
+    }
+    options.encoders = codecs.encoders;
     let listener = TcpListener::bind(args.listen)
         .await
         .map_err(|source| HostError::Bind {
@@ -172,13 +186,14 @@ async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Res
     if options.shutdown.is_cancelled() {
         return Ok(());
     }
-    let line = Ready::new(
+    let mut ready = Ready::new(
         address,
         devlanes_version::VERSION,
         running.env(),
         running.real_desktop(),
-    )
-    .to_line();
+    );
+    ready.codecs = codecs.problems;
+    let line = ready.to_line();
     print_line(&line)?;
     tracing::info!(%address, backend = ?backend, "GUI host ready");
     serve(listener, running, options).await?;

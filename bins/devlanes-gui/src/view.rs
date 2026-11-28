@@ -62,9 +62,21 @@ impl ViewError {
     }
 }
 
-/// The decoders this build has, best first. Only `raw` exists so far.
+/// The decoders this machine has, best first: H.264 where the OS or OpenH264
+/// has it, then `raw`. Looked for on a thread of its own, since Media
+/// Foundation's probe uses the multithreaded COM apartment, which the winit
+/// thread this runs on must never join.
 fn decoders() -> Vec<Arc<dyn DecoderBackend>> {
-    vec![Arc::new(RawBackend)]
+    let found = std::thread::spawn(crate::codecs::find)
+        .join()
+        .map(|codecs| {
+            for problem in &codecs.problems {
+                tracing::warn!(codec = %problem.codec, reason = problem.reason.word(), detail = %problem.detail, "a video decoder is missing");
+            }
+            codecs.decoders
+        });
+    // A probe that panicked leaves `raw`, which every host has.
+    found.unwrap_or_else(|_| vec![Arc::new(RawBackend)])
 }
 
 /// Runs the viewer on the main thread until the service is gone.

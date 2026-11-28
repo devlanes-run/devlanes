@@ -2,6 +2,7 @@
 //! ships next to `devlanes`, so `devlanes` itself never links the GUI
 //! libraries.
 
+mod codecs;
 mod host;
 mod view;
 
@@ -29,6 +30,9 @@ struct Cli {
 enum Command {
     /// Print `devlanes-gui <version> build=<release|debug>`.
     Version,
+    /// Print this machine's video codecs as one JSON line: the H.264 library
+    /// in use and why H.264 is missing, for `devlanes doctor`.
+    Codecs,
     /// Run a GUI host: start the backend, listen on loopback, print the ready
     /// line and serve until stopped.
     Host(host::HostArgs),
@@ -47,6 +51,10 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Version => {
             println!("{}", version_line());
+            ExitCode::SUCCESS
+        }
+        Command::Codecs => {
+            println!("{}", codecs::report(&codecs::find()));
             ExitCode::SUCCESS
         }
         Command::Host(args) => match host::run(args) {
