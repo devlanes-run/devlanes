@@ -28,8 +28,8 @@ use devlanes_proto::{
         TOKEN_PREFIX, VerifyParams, is_random_id,
     },
 };
-use devlanes_state::{RemotePairing, Store};
-use devlanes_transport::{BoxError, PairingClient, PairingReason};
+use devlanes_state::{P2pClient, RemotePairing, Store};
+use devlanes_transport::{BoxError, PairingClient, PairingReason, Ticket, TicketSecret};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -37,7 +37,7 @@ use subtle::ConstantTimeEq;
 
 use super::{ClientKey, feed::clean, now_ms};
 use crate::{
-    engine::{Inner, required},
+    engine::{Inner, params, required},
     integrations::{RemotePrompt, RemotePrompter},
     model::lock,
     registry::store_error,
@@ -184,7 +184,6 @@ impl Codes {
     /// A new ticket secret, valid for [`CODE_TTL`] from `now`, with the
     /// ticket's `ephemeral` flag. While failures refuse every secret, none is
     /// handed out.
-    #[allow(dead_code)]
     pub(crate) fn mint_ticket(
         &mut self,
         ephemeral: bool,
@@ -209,7 +208,6 @@ impl Codes {
 
     /// Takes back a ticket that was minted but never handed out, because
     /// the request failed after minting it.
-    #[allow(dead_code)]
     pub(crate) fn drop_ticket(&mut self, secret: &[u8; 16]) {
         self.tickets.retain(|ticket| !same(&ticket.secret, secret));
     }
@@ -373,6 +371,18 @@ fn client_address(ssh: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// `remote.pair` parameters. Without `ticket` only a code is minted, as
+/// before tickets existed, so a client that asks for none opens no listener.
+#[derive(Debug, Default, Deserialize)]
+struct PairParams {
+    /// Mint a pairing ticket too.
+    #[serde(default)]
+    ticket: bool,
+    /// The client forgets the box once it stays unreachable for an hour.
+    #[serde(default)]
+    ephemeral: bool,
+}
+
 /// `revoke` parameters.
 #[derive(Debug, Deserialize)]
 struct RevokeParams {
@@ -392,28 +402,55 @@ struct Paired {
     paired_at: i64,
     last_seen: Option<i64>,
     pairings: usize,
+    /// The short form of the key it paired with by ticket, if it did.
+    p2p_key: Option<String>,
 }
 
-/// `pairings` grouped by client, in the order of each client's first pairing.
-fn by_client(pairings: &[RemotePairing]) -> Vec<Paired> {
+/// Token `pairings` and the clients `p2p` paired by ticket, grouped by
+/// client id, in the order of each client's first appearance there.
+fn by_client(pairings: &[RemotePairing], p2p: &[P2pClient]) -> Vec<Paired> {
     let mut clients: Vec<Paired> = Vec::new();
-    for pairing in pairings {
-        let recent = pairing.last_seen.unwrap_or(pairing.paired_at);
-        match clients.iter_mut().find(|c| c.id == pairing.client_id) {
+    let tokens = pairings.iter().map(|pairing| {
+        let key = None;
+        (
+            &pairing.client_id,
+            &pairing.name,
+            pairing.paired_at,
+            pairing.last_seen,
+            key,
+        )
+    });
+    let tickets = p2p.iter().map(|client| {
+        let key = client.peer_key.get(..8).map(str::to_owned);
+        (
+            &client.client_id,
+            &client.name,
+            client.paired_at,
+            client.last_seen,
+            key,
+        )
+    });
+    for (id, name, paired_at, last_seen, key) in tokens.chain(tickets) {
+        let recent = last_seen.unwrap_or(paired_at);
+        match clients.iter_mut().find(|c| c.id == *id) {
             Some(client) => {
                 if recent > client.last_seen.unwrap_or(client.paired_at) {
-                    client.name.clone_from(&pairing.name);
+                    client.name.clone_from(name);
                 }
-                client.paired_at = client.paired_at.min(pairing.paired_at);
-                client.last_seen = client.last_seen.max(pairing.last_seen);
+                client.paired_at = client.paired_at.min(paired_at);
+                client.last_seen = client.last_seen.max(last_seen);
                 client.pairings += 1;
+                if key.is_some() {
+                    client.p2p_key = key;
+                }
             }
             None => clients.push(Paired {
-                id: pairing.client_id.clone(),
-                name: pairing.name.clone(),
-                paired_at: pairing.paired_at,
-                last_seen: pairing.last_seen,
+                id: id.clone(),
+                name: name.clone(),
+                paired_at,
+                last_seen,
                 pairings: 1,
+                p2p_key: key,
             }),
         }
     }
@@ -452,10 +489,14 @@ pub(super) fn allow_connections(home: &std::path::Path) -> (bool, bool) {
 }
 
 impl Inner {
-    /// `remote.pair`: a new one-time code, `connections_off` when this
-    /// machine's user config turns clients away, or `pairing_paused` while
-    /// wrong codes refuse every code. The code is never logged.
-    pub(crate) async fn pair_method(&self) -> Result<Value, RpcError> {
+    /// `remote.pair`: a new one-time code, and with `ticket` a pairing ticket
+    /// too, which starts the peer-to-peer listener until it is used or
+    /// expires. `connections_off` when this machine's user config turns
+    /// clients away, `pairing_paused` while wrong codes or secrets refuse
+    /// every one, `p2p_unavailable` when the endpoint cannot listen or tell
+    /// its address. Neither the code nor the ticket is logged.
+    pub(crate) async fn pair_method(self: &Arc<Self>, value: Value) -> Result<Value, RpcError> {
+        let args: PairParams = params(value)?;
         let home = self.opts.home.clone();
         let (allowed, invalid) = tokio::task::spawn_blocking(move || allow_connections(&home))
             .await
@@ -463,19 +504,94 @@ impl Inner {
         if !allowed {
             return Err(connections_off(invalid));
         }
+        // The ticket first: a code minted before a failed ticket would stay
+        // valid with nobody to type it.
+        let ticket = if args.ticket {
+            Some(self.mint_ticket(args.ephemeral).await?)
+        } else {
+            None
+        };
         let minted = lock(&self.remote.codes).mint(Instant::now());
         let code = match minted {
             Ok(code) => code,
-            Err(MintError::Paused(wait)) => return Err(paused(wait)),
-            Err(MintError::Random(error)) => return Err(random_error(error)),
+            Err(error) => {
+                if let Some((_, secret)) = &ticket {
+                    lock(&self.remote.codes).drop_ticket(secret);
+                    if let Err(error) = self.refresh_listening().await {
+                        tracing::debug!(%error, "cannot stop listening after a failed ticket");
+                    }
+                }
+                return Err(match error {
+                    MintError::Paused(wait) => paused(wait),
+                    MintError::Random(error) => random_error(error),
+                });
+            }
         };
         let expires_at_ms = now_ms().saturating_add(PAIRING_CODE_TTL_MS);
-        tracing::info!(expires_at_ms, "issued a pairing code");
-        Ok(json!({
+        tracing::info!(expires_at_ms, ticket = args.ticket, "issued a pairing code");
+        let mut answer = json!({
             "code": code,
             "expires_at_ms": expires_at_ms,
             "valid_ms": PAIRING_CODE_TTL_MS,
-        }))
+        });
+        if let Some((ticket, _)) = ticket {
+            answer["ticket"] = Value::from(ticket);
+        }
+        Ok(answer)
+    }
+
+    /// A ticket for `remote.pair`, as text with its secret: mints the
+    /// secret, listens and reads the address to put in it. A failure takes
+    /// the secret back and applies the listening rule again, so a ticket
+    /// nobody got leaves no listener behind.
+    async fn mint_ticket(
+        self: &Arc<Self>,
+        ephemeral: bool,
+    ) -> Result<(String, [u8; 16]), RpcError> {
+        let Some(endpoint) = self
+            .integ
+            .peer
+            .clone()
+            .filter(|_| self.integ.box_serving.is_some())
+        else {
+            return Err(RpcError::new(
+                "not_supported_yet",
+                json!({"feature": "pairing by ticket"}),
+                1,
+            ));
+        };
+        let minted = lock(&self.remote.codes).mint_ticket(ephemeral, Instant::now());
+        let secret = match minted {
+            Ok(secret) => secret,
+            Err(MintError::Paused(wait)) => return Err(paused(wait)),
+            Err(MintError::Random(error)) => return Err(random_error(error)),
+        };
+        let addr = match self.refresh_listening().await {
+            Ok(()) => endpoint.addr().await,
+            Err(error) => Err(error),
+        };
+        match addr {
+            Ok(addr) => {
+                let ticket = Ticket {
+                    addr,
+                    secret: TicketSecret(secret),
+                    ephemeral,
+                };
+                Ok((ticket.encode(), secret))
+            }
+            Err(error) => {
+                lock(&self.remote.codes).drop_ticket(&secret);
+                if let Err(error) = self.refresh_listening().await {
+                    tracing::debug!(%error, "cannot stop listening after a failed ticket");
+                }
+                tracing::warn!(%error, "cannot hand out a pairing ticket");
+                Err(RpcError::new(
+                    "p2p_unavailable",
+                    json!({"message": error.to_string()}),
+                    1,
+                ))
+            }
+        }
     }
 
     /// `remote.pairing.verify`: whether a client's token is one of its
@@ -587,14 +703,15 @@ impl Inner {
     /// (`now_ms`) for the times.
     pub(crate) async fn clients_method(&self) -> Result<Value, RpcError> {
         let pairings = self.store.remote_pairings().await.map_err(store_error)?;
+        let p2p = self.store.p2p_clients().await.map_err(store_error)?;
         let live: Vec<(ClientKey, RemoteClient)> = lock(&self.remote.clients)
             .iter()
             .map(|(key, (_, client))| (key.clone(), client.clone()))
             .collect();
-        let mut items: Vec<Value> = by_client(&pairings)
+        let mut items: Vec<Value> = by_client(&pairings, &p2p)
             .into_iter()
             .map(|client| {
-                json!({
+                let mut item = json!({
                     "id": client.id,
                     "name": client.name,
                     "paired": true,
@@ -602,7 +719,13 @@ impl Inner {
                     "paired_at_ms": client.paired_at,
                     "last_seen_ms": client.last_seen,
                     "connections": [],
-                })
+                });
+                // Only on clients paired by ticket, so other answers stay as they were.
+                if let Some(key) = client.p2p_key {
+                    item["transport"] = Value::from("p2p");
+                    item["key"] = Value::from(key);
+                }
+                item
             })
             .collect();
         for (key, client) in live {
@@ -646,12 +769,14 @@ impl Inner {
     /// order: a feed that starts meanwhile finds the pairing gone
     /// ([`RegistryParams::paired`](devlanes_proto::remote::RegistryParams::paired)).
     /// A client connected without pairing cannot be revoked; the answer says
-    /// so (`unpaired`).
-    pub(crate) async fn revoke_method(&self, value: Value) -> Result<Value, RpcError> {
+    /// so (`unpaired`). A client paired by ticket loses its pinned key too,
+    /// and its sessions are closed with the refused-key reason.
+    pub(crate) async fn revoke_method(self: &Arc<Self>, value: Value) -> Result<Value, RpcError> {
         let args: RevokeParams = required(value)?;
         let target = args.client.trim().to_owned();
         let pairings = self.store.remote_pairings().await.map_err(store_error)?;
-        let clients = by_client(&pairings);
+        let p2p = self.store.p2p_clients().await.map_err(store_error)?;
+        let clients = by_client(&pairings, &p2p);
         let found = matching(&clients, &target);
         if found.is_empty() {
             let unpaired = lock(&self.remote.clients).values().any(|(_, client)| {
@@ -676,9 +801,25 @@ impl Inner {
             .delete_remote_pairings(ids.clone())
             .await
             .map_err(store_error)?;
+        self.store
+            .delete_p2p_clients(ids.clone())
+            .await
+            .map_err(store_error)?;
+        // Unpinned before anything is closed, so the endpoint refuses the
+        // client's next dial while its sessions end.
+        let keys = self
+            .unpin_peers(|_, id| ids.iter().any(|revoked| revoked == id))
+            .await;
+        // Counted before the connections close, which ends the feeds too.
         let ended = self
             .remote
             .end_feeds(|id| ids.iter().any(|revoked| revoked == id));
+        self.close_peers(&keys);
+        // Last: with no client and no ticket left the endpoint stops
+        // listening, after `close_peer` sent the refusal while it listened.
+        if let Err(error) = self.refresh_listening().await {
+            tracing::warn!(%error, "cannot apply the listening rule after a revoke");
+        }
         for client in &found {
             tracing::info!(client_id = %client.id, name = %client.name, ended, "revoked a client's pairings");
         }
@@ -691,13 +832,19 @@ impl Inner {
     }
 
     /// After `daemon reset-state` deleted every pairing: voids the
-    /// outstanding codes and ends every client's session, so no client keeps
-    /// a box that no longer knows it. Recent failed attempts still count.
-    pub(crate) fn forget_pairings(&self) {
+    /// outstanding codes and tickets, unpins every key and ends every
+    /// client's session, so no client keeps a box that no longer knows it,
+    /// then stops listening. Recent failed attempts still count.
+    pub(crate) async fn forget_pairings(self: &Arc<Self>) {
         lock(&self.remote.codes).void();
+        let keys = self.unpin_peers(|_, _| true).await;
         let ended = self.remote.end_feeds(|_| true);
+        self.close_peers(&keys);
         if ended > 0 {
             tracing::info!(ended, "ended every client's session after a state reset");
+        }
+        if let Err(error) = self.refresh_listening().await {
+            tracing::warn!(%error, "cannot stop listening after a state reset");
         }
         self.clients_changed();
     }
@@ -894,6 +1041,88 @@ mod tests {
         Ok(())
     }
 
+    /// A ticket's secret works once, with the ticket's flag, and not after
+    /// it expired; until then it opens pairing to unknown keys.
+    #[test]
+    fn a_ticket_is_used_once_and_expires() -> Result<(), MintError> {
+        let start = Instant::now();
+        let mut codes = Codes::default();
+        let secret = codes.mint_ticket(true, start)?;
+        assert!(codes.takes_tickets(start));
+        assert!(codes.outstanding(start), "keeps an idle daemon up");
+        assert_eq!(codes.claim_ticket(Some(&secret), start + MINUTE), Ok(true));
+        assert!(!codes.takes_tickets(start + MINUTE));
+        assert_eq!(
+            codes.claim_ticket(Some(&secret), start + MINUTE),
+            Err(Refusal::Wrong),
+            "used up"
+        );
+
+        let late = codes.mint_ticket(false, start)?;
+        assert_eq!(codes.tickets_until(start), Some(start + CODE_TTL));
+        assert!(codes.takes_tickets(start + CODE_TTL - Duration::from_millis(1)));
+        assert_eq!(codes.tickets_until(start + CODE_TTL), None);
+        assert_eq!(
+            codes.claim_ticket(Some(&late), start + CODE_TTL),
+            Err(Refusal::Wrong),
+            "expired"
+        );
+        Ok(())
+    }
+
+    /// A wrong or malformed secret counts as a failure and voids no ticket
+    /// and no code; a wrong code leaves tickets alone too.
+    #[test]
+    fn a_wrong_secret_counts_and_voids_nothing() -> Result<(), MintError> {
+        let start = Instant::now();
+        let mut codes = Codes::default();
+        let code = codes.mint(start)?;
+        let secret = codes.mint_ticket(false, start)?;
+        let mut wrong = secret;
+        wrong[0] ^= 1;
+        assert_eq!(codes.claim_ticket(Some(&wrong), start), Err(Refusal::Wrong));
+        assert_eq!(codes.claim_ticket(None, start), Err(Refusal::Wrong));
+        assert_eq!(codes.failures.len(), 2);
+        assert_eq!(codes.claim(&code, start), Ok(()), "the code still works");
+        assert_eq!(codes.claim_ticket(Some(&secret), start), Ok(false));
+
+        let secret = codes.mint_ticket(false, start)?;
+        assert_eq!(codes.claim("0000-0000", start), Err(Refusal::Wrong));
+        assert_eq!(codes.claim_ticket(Some(&secret), start), Ok(false));
+        Ok(())
+    }
+
+    /// Wrong secrets and wrong codes count towards one limit, which pauses
+    /// tickets and codes alike: none is handed out or accepted, and pairing
+    /// connections from unknown keys are not let in.
+    #[test]
+    fn failures_pause_tickets_and_codes_alike() -> Result<(), MintError> {
+        let start = Instant::now();
+        let mut codes = Codes::default();
+        let secret = codes.mint_ticket(false, start)?;
+        for attempt in 0..MAX_FAILURES {
+            let refused = if attempt % 2 == 0 {
+                codes.claim_ticket(Some(&[0; 16]), start)
+            } else {
+                codes.claim("0000-0000", start).map(|()| false)
+            };
+            assert_eq!(refused, Err(Refusal::Wrong));
+        }
+        assert!(!codes.takes_tickets(start));
+        assert!(matches!(
+            codes.mint_ticket(false, start),
+            Err(MintError::Paused(_))
+        ));
+        assert!(matches!(codes.mint(start), Err(MintError::Paused(_))));
+        assert_eq!(
+            codes.claim_ticket(Some(&secret), start + MINUTE),
+            Err(Refusal::Locked {
+                retry_after: MINUTE * 9
+            })
+        );
+        Ok(())
+    }
+
     /// Codes use the unambiguous alphabet, and the letters read as digits
     /// are accepted for them.
     #[test]
@@ -923,8 +1152,9 @@ mod tests {
         Ok(())
     }
 
-    /// A client's pairings make one entry: the name of the one used last,
-    /// the first pairing time, the last connection and their count.
+    /// A client's pairings, by token and by ticket, make one entry: the name
+    /// of the one used last, the first pairing time, the last connection,
+    /// their count and the key of its ticket pairing.
     #[test]
     fn pairings_are_grouped_by_client() {
         let pairing =
@@ -935,11 +1165,26 @@ mod tests {
                 paired_at,
                 last_seen,
             };
-        let clients = by_client(&[
-            pairing("dl_cid_a", "laptop", 5, Some(9)),
-            pairing("dl_cid_a", "old-laptop", 2, Some(3)),
-            pairing("dl_cid_b", "desk", 4, None),
-        ]);
+        let ticket = |id: &str, name: &str, key: char, paired_at: i64| P2pClient {
+            peer_key: key.to_string().repeat(64),
+            client_id: id.into(),
+            name: name.into(),
+            paired_at,
+            last_seen: Some(paired_at),
+        };
+        let clients = by_client(
+            &[
+                pairing("dl_cid_a", "laptop", 5, Some(9)),
+                pairing("dl_cid_a", "old-laptop", 2, Some(3)),
+                pairing("dl_cid_b", "desk", 4, None),
+            ],
+            // The desk paired by ticket since, under a new name; another
+            // client only by ticket.
+            &[
+                ticket("dl_cid_b", "desk-2", 'b', 6),
+                ticket("dl_cid_c", "tower", 'c', 7),
+            ],
+        );
         assert_eq!(
             clients,
             [
@@ -949,13 +1194,23 @@ mod tests {
                     paired_at: 2,
                     last_seen: Some(9),
                     pairings: 2,
+                    p2p_key: None,
                 },
                 Paired {
                     id: "dl_cid_b".into(),
-                    name: "desk".into(),
+                    name: "desk-2".into(),
                     paired_at: 4,
-                    last_seen: None,
+                    last_seen: Some(6),
+                    pairings: 2,
+                    p2p_key: Some("bbbbbbbb".into()),
+                },
+                Paired {
+                    id: "dl_cid_c".into(),
+                    name: "tower".into(),
+                    paired_at: 7,
+                    last_seen: Some(7),
                     pairings: 1,
+                    p2p_key: Some("cccccccc".into()),
                 },
             ]
         );
@@ -999,6 +1254,7 @@ mod tests {
             paired_at: 0,
             last_seen: None,
             pairings: 1,
+            p2p_key: None,
         };
         let clients = [
             client("dl_cid_aaaa1111", "laptop"),

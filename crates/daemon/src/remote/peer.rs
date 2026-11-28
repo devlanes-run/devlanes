@@ -422,9 +422,44 @@ impl Inner {
         listed.insert(serial, (peer, alpn, task.abort_handle()));
     }
 
+    /// Removes the pinned keys that `picked` chooses by key and client id
+    /// from the admission and returns them. Under the rule lock, so the
+    /// startup load cannot pin one of them again afterwards.
+    pub(super) async fn unpin_peers(&self, picked: impl Fn(&PeerId, &str) -> bool) -> Vec<PeerId> {
+        let _rule = self.remote.peer.rule.lock().await;
+        let mut pinned = lock(&self.remote.peer.pinned);
+        let keys: Vec<PeerId> = pinned
+            .iter()
+            .filter(|(key, id)| picked(key, id))
+            .map(|(key, _)| *key)
+            .collect();
+        for key in &keys {
+            pinned.remove(key);
+        }
+        keys
+    }
+
+    /// Closes the sessions of `keys`, which [`Inner::unpin_peers`] removed
+    /// first: the endpoint closes them with the refused-key code, so their
+    /// clients show that reason, and their serving tasks end.
+    pub(super) fn close_peers(&self, keys: &[PeerId]) {
+        if keys.is_empty() {
+            return;
+        }
+        if let Some(endpoint) = &self.integ.peer {
+            for key in keys {
+                endpoint.close_peer(key);
+            }
+        }
+        self.end_peer_sessions(|key| keys.contains(key));
+        for key in keys {
+            tracing::info!(peer = %key.short(), "closed the sessions of a key that is no longer paired");
+        }
+    }
+
     /// Ends the sessions of the keys `ended` picks: their serving tasks stop
     /// and drop their connections.
-    pub(super) fn end_peer_sessions(&self, ended: impl Fn(&PeerId) -> bool) {
+    fn end_peer_sessions(&self, ended: impl Fn(&PeerId) -> bool) {
         let handles: Vec<AbortHandle> = lock(&self.remote.peer.tasks)
             .values()
             .filter(|(peer, alpn, _)| *alpn == Alpn::Tunnel && ended(peer))
@@ -490,7 +525,7 @@ impl Inner {
     /// `p2p_clients` and answers with this box's name. The secret is never
     /// logged.
     async fn decide_pairing(self: &Arc<Self>, peer: PeerId, request: &PairRequest) -> PairAnswer {
-        let Some((endpoint, serving)) = self.peer_wiring() else {
+        let Some((_, serving)) = self.peer_wiring() else {
             return refused("this box does not pair by ticket", None);
         };
         let id = clean(&request.client_id);
@@ -562,11 +597,7 @@ impl Inner {
             }
             closing
         };
-        // Unpinned first, as `close_peer` asks, so their next dial is refused.
-        for key in &closing {
-            endpoint.close_peer(key);
-        }
-        self.end_peer_sessions(|key| closing.contains(key));
+        self.close_peers(&closing);
         tracing::info!(peer = %peer.short(), client_id = %id, %name, ephemeral, "paired a client by ticket");
         self.clients_changed();
         if let Err(error) = self.refresh_listening().await {

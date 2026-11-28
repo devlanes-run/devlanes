@@ -2,8 +2,9 @@
 //! client only after the client traded a one-time code for a remote token,
 //! the client presents the token from then on, also after its daemon
 //! restarts, and `daemon revoke` ends the client's session and refuses it
-//! until it pairs again. A child of `remote`, whose box and client harness it
-//! reuses.
+//! until it pairs again. A box that pairs by ticket admits only the keys it
+//! pinned, over memory peer endpoints. A child of `remote`, whose box and
+//! client harness it reuses.
 
 use std::{net::Ipv6Addr, path::Path};
 
@@ -15,15 +16,24 @@ use devlanes_proto::{
     remote::{CLIENTS_EVENT, PAIRING_CODE_TTL_MS, PROMPT_EVENT, TOKEN_PREFIX, is_random_id},
 };
 use devlanes_state::Store;
+use devlanes_transport::{
+    Alpn, DialTarget, PairAnswer, PairRequest, PeerAddr, PeerEndpoint, PeerError,
+    Session as BoxSession, SessionError, SessionOptions, Ticket,
+    memory::{MemoryPeer, MemoryPeers},
+    request_pairing,
+};
 use serde_json::{Value, json};
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 
 use super::{BOX, BoxSide, ClientSide, SOON, box_port, echo, http_get, ipv6_loopback};
 use crate::{LIMIT, cx, eventually, repo, temp};
 
 // Port ranges: 15400-15799 and 16000-16999, between the DNS server's 15353
-// and `remote_sync.rs`'s 17000, which no other test in this binary uses.
-// Each test has its own slice, given where it starts its box.
+// and `remote_sync.rs`'s 17000, and 11300-11499, which no other test in this
+// binary uses. Each test has its own slice, given where it starts its box.
 
 /// The `fix` of a client waiting for pairing with box `host`.
 fn pair_fix(host: &str) -> String {
@@ -554,13 +564,24 @@ async fn revoking_one_client_leaves_another_connected() {
 #[tokio::test(flavor = "multi_thread")]
 /// `daemon reset-state` on the box deletes every pairing: a connected client
 /// loses its session and waits in `needs_pairing`, and a code handed out
-/// before the reset no longer works.
+/// before the reset no longer works. A client paired by ticket loses its
+/// session and its key, and the box stops listening.
 async fn a_state_reset_on_the_box_ends_every_pairing() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let side = BoxSide::start(&tmp, "box", "15400-15499").await;
+        let peers = MemoryPeers::new();
+        let endpoint = peers.endpoint();
+        let side = BoxSide::start_peer(&tmp, "box", "15400-15499", endpoint.clone()).await;
         let client = ClientSide::start(&tmp, "client", "15500-15599", &side).await;
         client.connect("box").await;
+        let laptop = peers.endpoint();
+        let laptop_id = format!("dl_cid_{}", "c".repeat(64));
+        let ticket = new_ticket(&side).await;
+        let answer = pair_by_ticket(&laptop, &ticket, &laptop_id).await;
+        assert!(matches!(answer, PairAnswer::Paired { .. }), "{answer:?}");
+        let served = peer_session(&laptop, &ticket.addr, &laptop_id)
+            .await
+            .expect("a session for the paired key");
         let before = side.code().await;
         let yes = Context {
             yes: true,
@@ -570,6 +591,19 @@ async fn a_state_reset_on_the_box_ends_every_pairing() {
             .call(Method::DaemonResetState, json!({}), yes)
             .await
             .expect("reset");
+        assert!(
+            !endpoint.is_listening(),
+            "the reset left no client and no ticket"
+        );
+        tokio::time::timeout(SOON, served.closed())
+            .await
+            .expect("the session paired by ticket ended");
+        // Listening again for a new ticket, the box no longer knows the key.
+        let fresh = new_ticket(&side).await;
+        let Err(forgotten) = laptop.connect(&fresh.addr, Alpn::Tunnel).await else {
+            panic!("a key from before the reset opened a session");
+        };
+        assert!(refused_key(&forgotten), "{forgotten:?}");
         let waiting = eventually(SOON, || async {
             (client.host().await["state"] == "needs_pairing").then_some(())
         })
@@ -664,34 +698,44 @@ async fn a_box_that_takes_no_connections_fails_the_link_with_its_reason() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// `daemon pair` gives no code while `remote.allow_connections` is false, or
-/// while the remote settings it is read with are invalid, and gives one
-/// again once connections are allowed.
+/// `daemon pair` gives no code or ticket while `remote.allow_connections`
+/// is false, or while the remote settings it is read with are invalid, and
+/// gives one again once connections are allowed.
 async fn pairing_needs_connections_to_be_allowed() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let side = BoxSide::start(&tmp, "box", "18200-18224").await;
+        let endpoint = MemoryPeers::new().endpoint();
+        let side = BoxSide::start_peer(&tmp, "box", "18200-18224", endpoint.clone()).await;
         let config = side.h.home.join("config.yaml");
-        let pair = || async {
-            side.h
-                .call(Method::RemotePair, json!({}), Context::default())
-                .await
+        let pair = |params: Value| {
+            let side = &side;
+            async move {
+                side.h
+                    .call(Method::RemotePair, params, Context::default())
+                    .await
+            }
         };
         for (source, invalid) in [
             ("remote:\n  allow_connections: false\n", false),
             ("remote:\n  allow_connections: nope\n", true),
         ] {
             tokio::fs::write(&config, source).await.expect("config");
-            let refused = pair().await.expect_err("a code with connections off");
-            assert_eq!(refused.code, "connections_off", "{refused:?}");
-            assert_eq!(refused.data["invalid"], invalid, "{refused:?}");
+            for params in [json!({}), json!({"ticket": true})] {
+                let refused = pair(params).await.expect_err("a code with connections off");
+                assert_eq!(refused.code, "connections_off", "{refused:?}");
+                assert_eq!(refused.data["invalid"], invalid, "{refused:?}");
+            }
+            assert!(!endpoint.is_listening(), "a refused ticket opens nothing");
         }
         tokio::fs::write(&config, "remote:\n  allow_connections: true\n")
             .await
             .expect("config");
         let before = now_ms();
-        let paired = pair().await.expect("a code");
+        let paired = pair(json!({})).await.expect("a code");
         assert!(paired["code"].as_str().is_some(), "{paired}");
+        // Today's clients ask for no ticket and get the answer they always did.
+        assert_eq!(paired.get("ticket"), None, "{paired}");
+        assert!(!endpoint.is_listening(), "a code alone opens nothing");
         // The TUI counts down from `valid_ms`, the CLI from `expires_at_ms`.
         assert_eq!(paired["valid_ms"], PAIRING_CODE_TTL_MS, "{paired}");
         let expires = paired["expires_at_ms"].as_u64().unwrap_or_default();
@@ -699,6 +743,198 @@ async fn pairing_needs_connections_to_be_allowed() {
             (before + PAIRING_CODE_TTL_MS..=now_ms() + PAIRING_CODE_TTL_MS).contains(&expires),
             "{paired}"
         );
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// A pairing ticket from `daemon pair` on `side`.
+async fn new_ticket(side: &BoxSide) -> Ticket {
+    let answer = side
+        .h
+        .call(
+            Method::RemotePair,
+            json!({"ticket": true}),
+            Context::default(),
+        )
+        .await
+        .expect("daemon pair with a ticket");
+    assert!(
+        answer["code"].as_str().is_some(),
+        "a code comes with it: {answer}"
+    );
+    Ticket::parse(answer["ticket"].as_str().unwrap_or_default()).expect("a ticket")
+}
+
+/// The box's answer to `peer` pairing with `ticket` as client `client_id`.
+async fn pair_by_ticket(peer: &MemoryPeer, ticket: &Ticket, client_id: &str) -> PairAnswer {
+    let connection = peer
+        .connect(&ticket.addr, Alpn::Pair)
+        .await
+        .expect("the box admits a pairing dial");
+    let request = PairRequest::new(
+        &ticket.secret,
+        client_id.to_owned(),
+        "laptop".into(),
+        "devlanes test-client".into(),
+    );
+    request_pairing(connection, request)
+        .await
+        .expect("an answer")
+}
+
+/// A session of `peer` with the box at `addr`, introducing itself as
+/// `client_id`.
+async fn peer_session(
+    peer: &MemoryPeer,
+    addr: &PeerAddr,
+    client_id: &str,
+) -> Result<BoxSession, SessionError> {
+    let connection = peer.connect(addr, Alpn::Tunnel).await?;
+    let mut options = SessionOptions::new("devlanes test-client");
+    options.client_id = client_id.to_owned();
+    options.client_name = "laptop".into();
+    BoxSession::establish(connection, options).await
+}
+
+/// Whether `error` is the box refusing this machine's key for good.
+fn refused_key(error: &devlanes_transport::TransportError) -> bool {
+    error.is_permanent() && matches!(error.downcast_ref(), Some(PeerError::Refused))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Pairing by ticket. A box listens only once a ticket is out. A key it
+/// never pinned is refused in the handshake and nothing about it reaches
+/// the box's services; a key that paired reaches the box's services under
+/// its own client id only, and is turned away with the reason while
+/// connections are off. A restarted box listens for its pinned clients at
+/// once. `daemon revoke` ends a client's session and refuses its next dial,
+/// and once no client and no ticket is left the box stops listening.
+async fn a_ticket_pins_the_only_key_that_reaches_the_box_until_revoked() {
+    tokio::time::timeout(LIMIT * 2, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "boxrepo", BOX);
+        let peers = MemoryPeers::new();
+        let endpoint = peers.endpoint();
+        let side = BoxSide::start_peer(&tmp, "box", "11300-11499", endpoint.clone()).await;
+        side.h
+            .call(Method::Start, json!({"units": ["echo"]}), cx(&main))
+            .await
+            .expect("box start");
+        let echo_port = box_port(&side.h, 0, "echo").await;
+        let (laptop, desk, stranger) = (peers.endpoint(), peers.endpoint(), peers.endpoint());
+        let laptop_id = format!("dl_cid_{}", "a".repeat(64));
+        let desk_id = format!("dl_cid_{}", "b".repeat(64));
+
+        assert!(!endpoint.is_listening(), "no ticket and no client");
+        let ticket = new_ticket(&side).await;
+        assert!(endpoint.is_listening());
+        assert_eq!(ticket.addr.id, endpoint.id().await.expect("id"));
+
+        let Err(unpaired) = stranger.connect(&ticket.addr, Alpn::Tunnel).await else {
+            panic!("a key the box never paired opened a session");
+        };
+        assert!(refused_key(&unpaired), "{unpaired:?}");
+        let clients = side
+            .h
+            .call(Method::RemoteClients, json!({}), Context::default())
+            .await
+            .expect("daemon clients");
+        assert_eq!(clients["items"], json!([]), "nothing reached the services");
+
+        let answer = pair_by_ticket(&laptop, &ticket, &laptop_id).await;
+        assert!(
+            matches!(&answer, PairAnswer::Paired { server, .. } if server == "devlanes test-box"),
+            "{answer:?}"
+        );
+        let entry = listed(&side, &laptop_id).await.expect("listed as paired");
+        assert_eq!(entry["transport"], "p2p", "{entry}");
+        assert_eq!(entry["key"], laptop.id().await.expect("id").short(), "{entry}");
+
+        let posing = peer_session(&laptop, &ticket.addr, &desk_id).await;
+        assert!(
+            posing.as_ref().is_err_and(SessionError::is_needs_pairing),
+            "the laptop's key served as another client: {:?}",
+            posing.map(|session| session.server().to_owned())
+        );
+        let served = peer_session(&laptop, &ticket.addr, &laptop_id)
+            .await
+            .expect("a session for the paired key");
+        assert_eq!(served.server(), "devlanes test-box");
+        let mut stream = served
+            .open(DialTarget::Port { port: echo_port })
+            .await
+            .expect("a stream to the box's echo");
+        stream.write_all(b"ping\n").await.expect("write");
+        let mut echoed = [0u8; 5];
+        stream.read_exact(&mut echoed).await.expect("read");
+        assert_eq!(&echoed, b"ping\n");
+
+        let desk_ticket = new_ticket(&side).await;
+        let answer = pair_by_ticket(&desk, &desk_ticket, &desk_id).await;
+        assert!(matches!(answer, PairAnswer::Paired { .. }), "{answer:?}");
+        let config = side.h.home.join("config.yaml");
+        tokio::fs::write(&config, "remote:\n  allow_connections: false\n")
+            .await
+            .expect("config");
+        let off = peer_session(&desk, &ticket.addr, &desk_id).await;
+        assert!(
+            matches!(&off, Err(SessionError::Refused(reason)) if reason.contains("remote.allow_connections")),
+            "{:?}",
+            off.map(|session| session.server().to_owned())
+        );
+        tokio::fs::remove_file(&config).await.expect("config");
+
+        let revoked = side
+            .h
+            .call(
+                Method::RemoteRevoke,
+                json!({"client": laptop_id}),
+                Context::default(),
+            )
+            .await
+            .expect("revoke");
+        assert_eq!(revoked["ended"], 1, "{revoked}");
+        tokio::time::timeout(SOON, served.closed())
+            .await
+            .expect("the revoked session ended");
+        let Err(again) = laptop.connect(&ticket.addr, Alpn::Tunnel).await else {
+            panic!("the revoked key opened a session");
+        };
+        assert!(refused_key(&again), "{again:?}");
+        assert!(endpoint.is_listening(), "the desk is still paired");
+
+        side.stop().await;
+        let endpoint = peers.endpoint();
+        let side = BoxSide::start_peer(&tmp, "box", "11300-11499", endpoint.clone()).await;
+        let listening = eventually(SOON, || async { endpoint.is_listening().then_some(()) }).await;
+        assert!(listening.is_some(), "the restarted box listens for the desk");
+        let addr = PeerAddr {
+            id: endpoint.id().await.expect("id"),
+            relay: None,
+            direct: Vec::new(),
+        };
+        let desk_session = peer_session(&desk, &addr, &desk_id)
+            .await
+            .expect("the desk's session after the restart");
+
+        side.h
+            .call(
+                Method::RemoteRevoke,
+                json!({"client": desk_id}),
+                Context::default(),
+            )
+            .await
+            .expect("revoke");
+        assert!(!endpoint.is_listening(), "no client and no ticket is left");
+        tokio::time::timeout(SOON, desk_session.closed())
+            .await
+            .expect("the revoked session ended");
+        let Err(gone) = desk.connect(&addr, Alpn::Tunnel).await else {
+            panic!("a box that stopped listening took a session");
+        };
+        assert!(!gone.is_permanent(), "{gone:?}");
         side.stop().await;
     })
     .await

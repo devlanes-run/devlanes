@@ -376,11 +376,18 @@ pub enum Method {
     #[serde(rename = "remote.report")]
     RemoteReport,
     /// Box side, for `devlanes daemon pair`: a one-time pairing code, valid
-    /// once for [`remote::PAIRING_CODE_TTL_MS`] and kept in memory. Reply
-    /// `{code, expires_at_ms, valid_ms}`: `valid_ms` is how long the code is
-    /// valid from the reply, for a countdown that needs no clock. Error
-    /// `pairing_paused` with `retry_after_ms` while failed attempts keep every
-    /// code refused, `connections_off` while `remote.allow_connections` is off.
+    /// once for [`remote::PAIRING_CODE_TTL_MS`] and kept in memory. Params
+    /// `{ticket?, ephemeral?}`, both false by default: with `ticket` the
+    /// reply also has `ticket`, a peer-to-peer pairing ticket
+    /// ([`remote::TICKET_PREFIX`]) valid once for as long as the code, and
+    /// the box listens for peers until it is used or expires; `ephemeral`
+    /// marks the ticket for a client that forgets the box once it stays
+    /// away. Reply `{code, expires_at_ms, valid_ms, ticket?}`: `valid_ms` is
+    /// how long the code is valid from the reply, for a countdown that needs
+    /// no clock. Error `pairing_paused` with `retry_after_ms` while failed
+    /// attempts keep every code and ticket refused, `connections_off` while
+    /// `remote.allow_connections` is off, `p2p_unavailable` (`{message}`)
+    /// when the box cannot listen for peers or tell its address.
     #[serde(rename = "remote.pair")]
     RemotePair,
     /// Box side, for `devlanes tunnel`: whether a client's remote token is
@@ -399,14 +406,17 @@ pub enum Method {
     /// connected clients, connected ones first, then by name, `{items: [{id, name, paired, pairings,
     /// paired_at_ms, last_seen_ms, connections: [{address, since_ms, version,
     /// mirror}]}], now_ms}`; a client connected without pairing
-    /// (`remote.require_pairing: false`) has `paired: false` and no times.
+    /// (`remote.require_pairing: false`) has `paired: false` and no times. A
+    /// client paired by ticket also has `transport: "p2p"` and `key`, the
+    /// first 8 hex digits of its peer key.
     /// `now_ms` is the daemon's clock, which the times are measured against.
     /// [`remote::CLIENTS_EVENT`] announces changes.
     #[serde(rename = "remote.clients")]
     RemoteClients,
     /// Box side, for `devlanes daemon revoke`: deletes the pairing of the
     /// client named by `{client}` (its name, its id or a unique start of the
-    /// id) and ends its sessions. Reply `{revoked: [{id, name}], ended}`.
+    /// id) and ends its sessions; a client paired by ticket loses its pinned
+    /// key, so the box no longer lets it connect. Reply `{revoked: [{id, name}], ended}`.
     /// Errors `client_not_found` (`{client, candidates}`) and
     /// `client_ambiguous` (`{client, candidates}`).
     #[serde(rename = "remote.revoke")]
