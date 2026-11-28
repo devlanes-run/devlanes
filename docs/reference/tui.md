@@ -79,5 +79,5 @@ The boxes this machine connects to, and the machines connected to this one.
 | `n` | Connect to a new box |
 | `Enter` | Connect, sign in or pair the selected box |
 | `d` | Disconnect the selected box |
-| `p` | Show a pairing code for another machine |
+| `p` | Show a pairing ticket and code for another machine |
 | `x` | Revoke the selected machine |

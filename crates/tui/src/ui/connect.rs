@@ -12,7 +12,8 @@ use super::dialog::keys;
 use super::fit;
 use crate::app::App;
 use crate::connect::{
-    ConnectDialog, Field, PairDialog, PairState, Prompt, Reach, Step, countdown, ticket_shown,
+    ConnectDialog, Field, NoTicket, Offer, PairDialog, PairState, Prompt, Reach, Step, countdown,
+    ticket_shown,
 };
 use crate::text::{self, clean};
 use crate::theme::{Glyph, Glyphs, Theme, Tone};
@@ -444,55 +445,215 @@ fn question(theme: &Theme, host: &str, prompt: &Prompt, width: usize) -> Parts {
     (format!("connect {host}"), body, tail)
 }
 
-/// The pairing code modal: the code with its countdown and what to run on
-/// the other machine, the wait while pairing is paused, or why this
-/// machine gives no code.
+/// The code alone, as a daemon without a ticket gives it: the code with its
+/// countdown and what to run on the other machine.
+fn code_alone(theme: &Theme, code: &str, left: Option<u64>, width: usize) -> Vec<Line<'static>> {
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    // The code is what the person reads out or types, so it stands alone
+    // in the middle, in the attention color.
+    let mut body = vec![
+        Line::from(""),
+        Line::styled(code.to_owned(), bold.patch(theme.tone(Tone::Attention))).centered(),
+    ];
+    let expires = match left {
+        Some(ms) => format!("It works once and expires in {}.", countdown(ms)),
+        None => "It works once.".to_owned(),
+    };
+    body.extend(
+        wrapped(&expires, width, theme.quiet())
+            .into_iter()
+            .map(Line::centered),
+    );
+    body.push(Line::from(""));
+    body.extend(wrapped("On the other machine, run", width, Style::new()));
+    body.extend(wrapped(
+        &format!("  devlanes remote connect <box> --code {code}"),
+        width,
+        theme.key(),
+    ));
+    for line in [
+        "<box> is this machine's SSH name there.",
+        "Or press n in its Boxes view and type the code.",
+    ] {
+        body.extend(wrapped(line, width, theme.quiet()));
+    }
+    body
+}
+
+/// Why there is no ticket, in the modal's words, and what `t` does about it.
+fn no_ticket_lines(
+    app: &App,
+    no_ticket: &NoTicket,
+    can_fetch: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let theme = &app.theme;
+    let attention = theme.tone(Tone::Attention);
+    let mut lines = match no_ticket {
+        NoTicket::OldDaemon => wrapped(
+            "No ticket: the devlanes daemon running here is older than this devlanes and makes \
+             no tickets. Run devlanes daemon restart to start this release's daemon.",
+            width,
+            attention,
+        ),
+        // The daemon's own text names CLI commands; here `t` waits instead.
+        NoTicket::NotReady => wrapped(
+            "No ticket yet: this machine is still reaching the network for peer-to-peer \
+             connections.",
+            width,
+            attention,
+        ),
+        NoTicket::Fetching => vec![Line::from(vec![
+            Span::styled(
+                format!("{} ", theme.spinner(app.spin)),
+                theme.tone(Tone::Busy),
+            ),
+            Span::styled(
+                "getting the ticket, which can take a few seconds…",
+                theme.quiet(),
+            ),
+        ])],
+        NoTicket::Failed { message, .. } => {
+            wrapped(&format!("No ticket: {message}"), width, attention)
+        }
+    };
+    if can_fetch {
+        lines.extend(wrapped(
+            "Press t to get the ticket alone.",
+            width,
+            theme.quiet(),
+        ));
+    }
+    lines
+}
+
+/// The ticket and the code side by side: the ticket first, with what to do
+/// with it on the other machine, then the code for a machine that reaches
+/// this one over SSH or a command.
+fn offer(app: &App, dialog: &PairDialog, offer: &Offer, width: usize) -> Parts {
+    let theme = &app.theme;
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let ticket = offer.ticket.as_ref().filter(|_| dialog.ticket().is_some());
+    let code = dialog.code();
+    let mut body = Vec::new();
+    if let Some(ticket) = ticket {
+        body.extend(wrapped(
+            "On the other machine, press n in its Boxes view and paste this ticket:",
+            width,
+            Style::new(),
+        ));
+        body.push(Line::from(""));
+        body.extend(wrapped(
+            ticket.text.expose(),
+            width,
+            bold.patch(theme.tone(Tone::Attention)),
+        ));
+        body.push(Line::from(""));
+        body.extend(wrapped(
+            &format!(
+                "It works once and expires in {}. It lets that machine pair with this one \
+                 without SSH.",
+                countdown(dialog.ticket_left(ticket))
+            ),
+            width,
+            theme.quiet(),
+        ));
+        body.extend(wrapped(
+            "Or run devlanes remote connect <ticket> there.",
+            width,
+            theme.quiet(),
+        ));
+        if let Some(code) = code {
+            body.push(Line::from(""));
+            body.extend(wrapped(
+                &format!(
+                    "A machine that reaches this one over SSH or a command uses the code {code} \
+                     instead:"
+                ),
+                width,
+                Style::new(),
+            ));
+            body.extend(wrapped(
+                &format!("  devlanes remote connect <box> --code {code}"),
+                width,
+                theme.key(),
+            ));
+        }
+    } else {
+        if let Some(no_ticket) = &offer.no_ticket {
+            body.extend(no_ticket_lines(
+                app,
+                no_ticket,
+                dialog.may_fetch_ticket(),
+                width,
+            ));
+        } else if offer.ticket.is_some() {
+            body.extend(wrapped("This ticket expired.", width, bold));
+        }
+        if let Some(code) = code {
+            let left = offer.valid_ms.map(|valid| dialog.left(valid));
+            body.extend(code_alone(theme, code, left, width));
+        } else if offer.code.is_some() {
+            body.extend(wrapped("This code expired.", width, bold));
+        }
+    }
+    if let Some(paused) = offer.code_paused_ms {
+        let left = dialog.left(paused);
+        body.push(Line::from(""));
+        body.extend(wrapped(
+            &if left > 0 {
+                format!(
+                    "Pairing codes are paused after 5 wrong codes, for {} more.",
+                    countdown(left)
+                )
+            } else {
+                "Pairing codes were paused after 5 wrong codes. Press p for a code.".to_owned()
+            },
+            width,
+            theme.tone(Tone::Attention),
+        ));
+    }
+    let mut pairs = Vec::new();
+    match (ticket.is_some(), code.is_some()) {
+        (true, true) => pairs.extend([("y", "copy ticket"), ("c", "copy code")]),
+        (true, false) => pairs.push(("y", "copy ticket")),
+        (false, true) => pairs.push(("y", "copy code")),
+        (false, false) => {}
+    }
+    if dialog.may_fetch_ticket() {
+        pairs.push(("t", "get ticket"));
+    }
+    let new = if ticket.is_some() || offer.no_ticket != Some(NoTicket::OldDaemon) {
+        "new ticket"
+    } else {
+        "new code"
+    };
+    pairs.extend([("p", new), ("esc", "close")]);
+    (pair_title(offer), body, vec![keys(theme, &pairs)])
+}
+
+/// The modal's title: what it offers.
+fn pair_title(offer: &Offer) -> String {
+    if offer.no_ticket == Some(NoTicket::OldDaemon) {
+        "pairing code".to_owned()
+    } else {
+        "pair another machine".to_owned()
+    }
+}
+
+/// The pairing modal: the ticket and the code with their countdown and what
+/// to run on the other machine, the wait while pairing is paused, or why
+/// this machine gives neither.
 pub(super) fn pair(app: &App, dialog: &PairDialog, width: usize) -> Parts {
     let theme = &app.theme;
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let close = ("esc", "close");
     let (body, pairs) = match &dialog.state {
         PairState::Loading => (
-            vec![Line::styled("getting a code…", theme.quiet())],
+            vec![Line::styled("getting a ticket and a code…", theme.quiet())],
             vec![close],
         ),
-        PairState::Code { code, valid_ms } => {
-            let left = valid_ms.map(|valid| dialog.left(valid));
-            if left == Some(0) {
-                let body = wrapped("This code expired.", width, bold);
-                (body, vec![("p", "new code"), close])
-            } else {
-                // The code is what the person reads out or types, so it
-                // stands alone in the middle, in the attention color.
-                let mut body = vec![
-                    Line::from(""),
-                    Line::styled(code.clone(), bold.patch(theme.tone(Tone::Attention))).centered(),
-                ];
-                let expires = match left {
-                    Some(ms) => format!("It works once and expires in {}.", countdown(ms)),
-                    None => "It works once.".to_owned(),
-                };
-                body.extend(
-                    wrapped(&expires, width, theme.quiet())
-                        .into_iter()
-                        .map(Line::centered),
-                );
-                body.push(Line::from(""));
-                body.extend(wrapped("On the other machine, run", width, Style::new()));
-                body.extend(wrapped(
-                    &format!("  devlanes remote connect <box> --code {code}"),
-                    width,
-                    theme.key(),
-                ));
-                for line in [
-                    "<box> is this machine's SSH name there.",
-                    "Or press n in its Boxes view and type the code.",
-                ] {
-                    body.extend(wrapped(line, width, theme.quiet()));
-                }
-                (body, vec![("y", "copy code"), ("p", "new code"), close])
-            }
-        }
+        PairState::Offer(state) => return offer(app, dialog, state, width),
         PairState::Paused { wait_ms } => {
             let left = dialog.left(*wait_ms);
             let mut body = wrapped("Pairing is paused after 5 wrong codes.", width, bold);
@@ -522,5 +683,9 @@ pub(super) fn pair(app: &App, dialog: &PairDialog, width: usize) -> Parts {
             (body, vec![("p", "try again"), close])
         }
     };
-    ("pairing code".to_owned(), body, vec![keys(theme, &pairs)])
+    (
+        "pair another machine".to_owned(),
+        body,
+        vec![keys(theme, &pairs)],
+    )
 }

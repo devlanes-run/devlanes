@@ -890,6 +890,8 @@ pub enum Msg {
     },
     /// [`Effect::Pair`] is done.
     Paired(Result<Value, ApiError>),
+    /// [`Effect::MintTicket`] is done.
+    TicketMinted(Result<Value, ApiError>),
     /// [`Effect::UseLane`] is done.
     LaneUsed {
         lane: String,
@@ -1027,8 +1029,11 @@ pub enum Effect {
     Forget {
         host: String,
     },
-    /// `remote.pair`, answered with [`Msg::Paired`].
+    /// `remote.pair` for a ticket and a code, answered with [`Msg::Paired`].
     Pair,
+    /// `remote.pair` for the ticket alone, answered with
+    /// [`Msg::TicketMinted`].
+    MintTicket,
     /// `remote.use` for lane `lane` (`acme@0`) of box `host`, or of this
     /// machine when `host` is `None`, answered with [`Msg::LaneUsed`].
     UseLane {
@@ -2436,6 +2441,11 @@ impl App {
             Msg::Paired(result) => {
                 if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut() {
                     dialog.answered(result);
+                }
+            }
+            Msg::TicketMinted(result) => {
+                if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut() {
+                    dialog.ticket_answered(result);
                 }
             }
             Msg::LaneUsed { lane, host, result } => {
@@ -6311,20 +6321,34 @@ impl App {
         }
     }
 
-    /// Keys in the pairing code modal: `p` gets a new code, `y` copies it,
-    /// `o` opens the options while connections are off, the rest closes it.
+    /// Keys in the pairing modal: `p` gets a new ticket and code, `t` the
+    /// ticket alone when it was not ready, `y` copies the ticket, or the
+    /// code when there is no ticket, `c` the code next to a ticket, `o`
+    /// opens the options while connections are off, the rest closes it.
+    /// Each key sends at most one request; drawing and ticks send none.
     fn pair_key(
         &mut self,
         key: KeyEvent,
-        dialog: crate::connect::PairDialog,
+        mut dialog: crate::connect::PairDialog,
         effects: &mut Vec<Effect>,
     ) {
+        let copied = match key.code {
+            KeyCode::Char('y') => dialog.ticket().or_else(|| dialog.code()),
+            KeyCode::Char('c') if dialog.ticket().is_some() => dialog.code(),
+            _ => None,
+        };
         match key.code {
             KeyCode::Char('p') => self.pair(effects),
-            KeyCode::Char('y') => {
-                if let Some(code) = dialog.code() {
-                    effects.push(Effect::Copy(code.to_owned()));
+            KeyCode::Char('y' | 'c') => {
+                if let Some(text) = copied {
+                    effects.push(Effect::Copy(text.to_owned()));
                     self.set_notice("copied with OSC 52. Some terminals block it.".into());
+                }
+                self.dialog = Some(Dialog::Pair(dialog));
+            }
+            KeyCode::Char('t') => {
+                if dialog.fetch_ticket() {
+                    effects.push(Effect::MintTicket);
                 }
                 self.dialog = Some(Dialog::Pair(dialog));
             }

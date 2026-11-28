@@ -1,8 +1,8 @@
 //! The boxes view's modals: connecting to a box by a pairing ticket, its SSH
-//! name or a command, with each question its link
-//! asks on the way (an ssh passphrase, a host key, a pairing code), and the
-//! pairing code another machine needs to connect to this one. They hold what
-//! the modal shows and turn keys into [`Action`]s; the app runs the effects.
+//! name or a command, with each question its link asks on the way (an ssh
+//! passphrase, a host key, a pairing code), and the ticket and code another
+//! machine needs to connect to this one. They hold what the modal shows and
+//! turn keys into [`Action`]s; the app runs the effects.
 
 use std::collections::BTreeMap;
 
@@ -773,17 +773,15 @@ fn unclosed() -> String {
     "A quote in the command is not closed.".into()
 }
 
-/// The pairing code modal's content.
+/// The pairing modal's content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairState {
     /// `remote.pair` is out.
     Loading,
-    /// A code, and how long it was valid for when it arrived.
-    Code {
-        code: String,
-        valid_ms: Option<u64>,
-    },
-    /// Wrong codes paused pairing for `wait_ms` from when it arrived.
+    /// What another machine pairs with: a ticket, a code or both.
+    Offer(Offer),
+    /// Wrong codes paused pairing for `wait_ms` from when it arrived; only
+    /// a daemon older than tickets answers so.
     Paused {
         wait_ms: u64,
     },
@@ -795,12 +793,75 @@ pub enum PairState {
     Failed(Worded),
 }
 
-/// The pairing code modal (`p` in the boxes view).
+/// What `remote.pair` gave, as the modal shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Offer {
+    pub code: Option<String>,
+    /// How long the code was valid for when it arrived.
+    pub valid_ms: Option<u64>,
+    pub ticket: Option<OfferedTicket>,
+    /// Why there is no ticket, while there is none.
+    pub no_ticket: Option<NoTicket>,
+    /// Wrong codes paused codes for this long from when the answer came.
+    pub code_paused_ms: Option<u64>,
+}
+
+/// A ticket for another machine and how long it is valid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfferedTicket {
+    pub text: TicketText,
+    pub valid_ms: u64,
+    /// [`PairDialog::age`] when it arrived: a ticket asked for alone comes
+    /// after the code.
+    pub since: u64,
+}
+
+/// Why the modal shows no ticket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoTicket {
+    /// The daemon answered without a ticket and without saying why, as
+    /// daemons from before tickets do.
+    OldDaemon,
+    /// The ticket was not ready within the daemon's short wait, as after a
+    /// start or after the peer-to-peer networking stopped while idle.
+    NotReady,
+    /// The ticket alone is being asked for, which waits for it.
+    Fetching,
+    /// The daemon could not make one: its code and words.
+    Failed { code: String, message: String },
+}
+
+/// The pairing modal (`p` in the boxes view).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairDialog {
     pub state: PairState,
     /// Seconds since the state arrived, for the countdowns.
     pub age: u64,
+}
+
+/// `remote.pair`'s `ticket` in `value`, valid for its `valid_ms` from now.
+fn ticket_of(value: &Value, since: u64) -> Option<OfferedTicket> {
+    let text = value.get("ticket").and_then(Value::as_str)?;
+    Some(OfferedTicket {
+        text: TicketText(text::clean(text)),
+        valid_ms: value
+            .get("valid_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(devlanes_proto::remote::PAIRING_CODE_TTL_MS),
+        since,
+    })
+}
+
+/// Why a ticket failed, from `{code, message}` (`ticket_error`, or the
+/// error of a request).
+fn no_ticket(code: &str, message: &str) -> NoTicket {
+    if code == "ticket_not_ready" {
+        return NoTicket::NotReady;
+    }
+    NoTicket::Failed {
+        code: text::clean(code),
+        message: text::clean(message).replace('`', ""),
+    }
 }
 
 impl PairDialog {
@@ -812,21 +873,62 @@ impl PairDialog {
         }
     }
 
-    /// Takes `remote.pair`'s answer: `pairing_paused` and `connections_off`
-    /// are states of their own, other errors are shown in words.
+    /// Takes `remote.pair`'s answer to a request for a ticket and a code. A
+    /// code always shows, with a note for a ticket that is missing; an
+    /// answer with neither is an error. `connections_off` and an old
+    /// daemon's `pairing_paused` are states of their own, other errors are
+    /// shown in words.
     pub fn answered(&mut self, result: Result<Value, crate::ApiError>) {
         self.age = 0;
         self.state = match result {
-            Ok(value) => match value.get("code").and_then(Value::as_str) {
-                Some(code) => PairState::Code {
-                    code: text::clean(code),
-                    valid_ms: value
-                        .get("valid_ms")
-                        .and_then(Value::as_u64)
-                        .or(Some(devlanes_proto::remote::PAIRING_CODE_TTL_MS)),
-                },
-                None => PairState::Failed(Worded::local("the daemon sent no code")),
-            },
+            Ok(value) => {
+                let code = value.get("code").and_then(Value::as_str).map(text::clean);
+                let ticket = ticket_of(&value, 0);
+                let reason = value.get("ticket_error").map(|error| {
+                    let field = |key| error.get(key).and_then(Value::as_str).unwrap_or_default();
+                    no_ticket(field("code"), field("message"))
+                });
+                if code.is_none() && ticket.is_none() {
+                    PairState::Failed(Worded::local("the daemon sent no code"))
+                } else {
+                    PairState::Offer(Offer {
+                        no_ticket: if ticket.is_some() {
+                            None
+                        } else {
+                            Some(reason.unwrap_or(NoTicket::OldDaemon))
+                        },
+                        valid_ms: code.as_ref().map(|_| {
+                            value
+                                .get("valid_ms")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(devlanes_proto::remote::PAIRING_CODE_TTL_MS)
+                        }),
+                        code,
+                        ticket,
+                        code_paused_ms: value.get("code_paused_ms").and_then(Value::as_u64),
+                    })
+                }
+            }
+            // Codes are paused and the ticket failed too, so nothing went
+            // out; the ticket alone may still come.
+            Err(crate::ApiError::Rpc(error))
+                if error.data.get("code_paused_ms").is_some()
+                    && matches!(
+                        error.code.as_str(),
+                        "ticket_not_ready" | "p2p_unavailable" | "random_failed"
+                    ) =>
+            {
+                let message = error
+                    .data
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                PairState::Offer(Offer {
+                    no_ticket: Some(no_ticket(&error.code, message)),
+                    code_paused_ms: error.data.get("code_paused_ms").and_then(Value::as_u64),
+                    ..Offer::default()
+                })
+            }
             Err(crate::ApiError::Rpc(error)) if error.code == "pairing_paused" => {
                 PairState::Paused {
                     wait_ms: error
@@ -848,15 +950,91 @@ impl PairDialog {
         total.saturating_sub(self.age * 1000)
     }
 
+    /// Milliseconds left of the ticket's validity.
+    pub fn ticket_left(&self, ticket: &OfferedTicket) -> u64 {
+        ticket
+            .valid_ms
+            .saturating_sub(self.age.saturating_sub(ticket.since) * 1000)
+    }
+
     /// The code shown, while it has not expired.
     pub fn code(&self) -> Option<&str> {
         match &self.state {
-            PairState::Code { code, valid_ms }
-                if valid_ms.is_none_or(|valid| self.left(valid) > 0) =>
-            {
-                Some(code)
-            }
+            PairState::Offer(Offer {
+                code: Some(code),
+                valid_ms,
+                ..
+            }) if valid_ms.is_none_or(|valid| self.left(valid) > 0) => Some(code),
             _ => None,
+        }
+    }
+
+    /// The ticket shown, while it has not expired.
+    pub fn ticket(&self) -> Option<&str> {
+        match &self.state {
+            PairState::Offer(Offer {
+                ticket: Some(ticket),
+                ..
+            }) if self.ticket_left(ticket) > 0 => Some(ticket.text.expose()),
+            _ => None,
+        }
+    }
+
+    /// Whether `t` asks for the ticket alone: while there is none and the
+    /// daemon may still make one. A daemon older than tickets or built
+    /// without them never does.
+    pub fn may_fetch_ticket(&self) -> bool {
+        let PairState::Offer(offer) = &self.state else {
+            return false;
+        };
+        match &offer.no_ticket {
+            Some(NoTicket::NotReady) => true,
+            Some(NoTicket::Failed { code, .. }) => code != "not_supported_yet",
+            _ => false,
+        }
+    }
+
+    /// `t`: marks the ticket as asked for; true when the request should go.
+    pub fn fetch_ticket(&mut self) -> bool {
+        if !self.may_fetch_ticket() {
+            return false;
+        }
+        if let PairState::Offer(offer) = &mut self.state {
+            offer.no_ticket = Some(NoTicket::Fetching);
+        }
+        true
+    }
+
+    /// Takes the answer to a request for the ticket alone, which only the
+    /// modal that asked waits for. The code shown stays as it is, so an
+    /// error never takes its place.
+    pub fn ticket_answered(&mut self, result: Result<Value, crate::ApiError>) {
+        let age = self.age;
+        let PairState::Offer(offer) = &mut self.state else {
+            return;
+        };
+        if offer.no_ticket != Some(NoTicket::Fetching) {
+            return;
+        }
+        match result {
+            Ok(value) => match ticket_of(&value, age) {
+                Some(ticket) => {
+                    offer.ticket = Some(ticket);
+                    offer.no_ticket = None;
+                }
+                None => offer.no_ticket = Some(NoTicket::OldDaemon),
+            },
+            Err(crate::ApiError::Rpc(error)) if error.data.get("message").is_some() => {
+                let message = error.data["message"].as_str().unwrap_or_default();
+                offer.no_ticket = Some(no_ticket(&error.code, message));
+            }
+            Err(error) => {
+                let worded = crate::words::api(&error);
+                offer.no_ticket = Some(NoTicket::Failed {
+                    code: worded.code.unwrap_or_default(),
+                    message: worded.summary,
+                });
+            }
         }
     }
 }
@@ -1083,11 +1261,75 @@ mod tests {
             "valid_ms": devlanes_proto::remote::PAIRING_CODE_TTL_MS,
         })));
         dialog.age = 2;
-        assert!(matches!(&dialog.state, PairState::Code { code, .. } if code == "K7QM-3XWD"));
         assert_eq!(countdown(dialog.left(600_000)), "9m 58s");
         assert_eq!(dialog.code(), Some("K7QM-3XWD"));
         dialog.age = 600;
         assert_eq!(dialog.code(), None, "an expired code is not offered");
+
+        // A ticket that was not ready leaves the code in place, and `t`
+        // asks for the ticket alone, whose countdown starts when it comes;
+        // a failure of that request keeps the code too.
+        let code_and = |extra: Value| {
+            let mut answer = json!({"code": "K7QM-3XWD", "valid_ms": 600_000});
+            if let (Some(answer), Some(extra)) = (answer.as_object_mut(), extra.as_object()) {
+                answer.extend(extra.clone());
+            }
+            let mut dialog = PairDialog::loading();
+            dialog.answered(Ok(answer));
+            dialog
+        };
+        let mut dialog = code_and(json!({"ticket_error": {"code": "ticket_not_ready",
+            "message": "this machine was still reaching its relay"}}));
+        assert_eq!(dialog.code(), Some("K7QM-3XWD"));
+        assert!(dialog.fetch_ticket());
+        assert!(!dialog.fetch_ticket(), "one request per t");
+        dialog.age = 30;
+        dialog.ticket_answered(Ok(json!({"ticket": "dlp1abc", "valid_ms": 600_000})));
+        assert_eq!(dialog.ticket(), Some("dlp1abc"));
+        dialog.age = 600;
+        assert_eq!(dialog.code(), None);
+        assert_eq!(dialog.ticket(), Some("dlp1abc"), "the ticket came later");
+        let mut dialog = code_and(json!({"ticket_error": {"code": "ticket_not_ready",
+            "message": "not yet"}}));
+        dialog.fetch_ticket();
+        dialog.ticket_answered(Err(crate::ApiError::Rpc(devlanes_proto::RpcError::new(
+            "p2p_unavailable",
+            json!({"message": "this machine has no network address"}),
+            1,
+        ))));
+        assert_eq!(dialog.code(), Some("K7QM-3XWD"));
+        assert!(matches!(
+            &dialog.state,
+            PairState::Offer(Offer { no_ticket: Some(NoTicket::Failed { message, .. }), .. })
+                if message == "this machine has no network address"
+        ));
+        // Without a ticket or a reason, the daemon is older than tickets;
+        // built without them, it never makes one.
+        let dialog = code_and(json!({}));
+        assert!(matches!(
+            &dialog.state,
+            PairState::Offer(Offer {
+                no_ticket: Some(NoTicket::OldDaemon),
+                ..
+            })
+        ));
+        assert!(!dialog.may_fetch_ticket());
+        let dialog = code_and(json!({"ticket_error": {"code": "not_supported_yet",
+            "message": "pairing by ticket is not supported yet"}}));
+        assert!(!dialog.may_fetch_ticket());
+        // Paused codes: the ticket alone, or nothing but the wait and `t`.
+        let mut dialog = PairDialog::loading();
+        dialog.answered(Ok(
+            json!({"ticket": "dlp1abc", "valid_ms": 600_000, "code_paused_ms": 252_000}),
+        ));
+        assert_eq!((dialog.ticket(), dialog.code()), (Some("dlp1abc"), None));
+        let mut dialog = PairDialog::loading();
+        dialog.answered(Err(crate::ApiError::Rpc(devlanes_proto::RpcError::new(
+            "ticket_not_ready",
+            json!({"message": "not yet", "code_paused_ms": 252_000}),
+            1,
+        ))));
+        assert!(dialog.may_fetch_ticket());
         let refused = |code: &str, data| {
             let mut dialog = PairDialog::loading();
             dialog.answered(Err(crate::ApiError::Rpc(devlanes_proto::RpcError::new(

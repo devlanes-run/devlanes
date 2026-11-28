@@ -918,6 +918,8 @@ fn parse_typed(kind: &Kind, text: &str) -> Result<Option<Value>, String> {
             .parse::<i64>()
             .map(Value::from)
             .map_err(|_| "Enter a whole number.".to_owned())?,
+        // `none` is how an empty list shows, so it types as one.
+        Kind::List(_) if text == "none" => Value::Array(Vec::new()),
         Kind::List(_) => Value::Array(
             text.split([',', ' '])
                 .filter(|part| !part.is_empty())
@@ -1196,8 +1198,14 @@ fn walk(node: &Value, root: &Value, prefix: &str, out: &mut Vec<Item>) {
             }
         } else if has_type(first, "array") {
             let items = first.get("items").map(|items| resolve(items, root));
-            match items.and_then(choices) {
-                Some(choices) => Kind::List(choices),
+            match items {
+                Some(items) => match choices(items) {
+                    Some(choices) => Kind::List(choices),
+                    // Free text, such as `remote.relays`; the config checks
+                    // each entry when the edit is staged.
+                    None if has_type(items, "string") => Kind::List(Vec::new()),
+                    None => continue,
+                },
                 None => continue,
             }
         } else if has_type(first, "string") {
@@ -1656,9 +1664,15 @@ fn render_about(
         Style::new().add_modifier(Modifier::BOLD),
     ));
     lines.extend(wrapped(&item.about, Style::new()));
+    if item.kind == Kind::List(Vec::new()) {
+        lines.extend(wrapped(
+            "Separate the entries with commas, or type none for an empty list.",
+            theme.quiet(),
+        ));
+    }
     let current = settings.current(item);
     let options = match &item.kind {
-        Kind::Choice(choices) | Kind::List(choices) => Some(choices),
+        Kind::Choice(choices) | Kind::List(choices) if !choices.is_empty() => Some(choices),
         _ => None,
     };
     if let Some(choices) = options {

@@ -849,6 +849,11 @@ impl Executor {
                     deliver(&sender, Msg::Paired(api.pair().await)).await;
                 });
             }
+            Effect::MintTicket => {
+                tokio::spawn(async move {
+                    deliver(&sender, Msg::TicketMinted(api.mint_ticket().await)).await;
+                });
+            }
             Effect::UseLane { lane, host } => {
                 tokio::spawn(async move {
                     let result = api.use_lane(lane.clone(), host.clone()).await;

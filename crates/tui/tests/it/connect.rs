@@ -691,6 +691,66 @@ async fn the_pairing_code_modal() -> TestResult {
     Ok(())
 }
 
+/// The pairing modal shows the ticket before the code. A ticket that was
+/// not ready leaves the code on screen, and only `t` asks for the ticket
+/// alone, once; neither drawing nor ticks nor polls ask the daemon for a
+/// ticket, which would start this machine's peer-to-peer networking.
+#[tokio::test]
+async fn the_pairing_modal_asks_for_a_ticket_only_when_told() -> TestResult {
+    let mut app = boxes_app(100, 40, json!([])).await;
+    let asks = |effects: &[Effect]| {
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Pair | Effect::MintTicket))
+            .count()
+    };
+    assert_eq!(asks(&app.update(key(KeyCode::Char('p')))), 1);
+    let mut reply = pair_reply("K7QM-3XWD");
+    reply["ticket"] = json!(test_ticket());
+    app.update(Msg::Paired(Ok(reply)));
+    let text = screen(&render(&app)?);
+    let ticket_at = text.find(&test_ticket()[..40]).ok_or("no ticket")?;
+    let code_at = text.find("--code K7QM-3XWD").ok_or("no code")?;
+    assert!(ticket_at < code_at, "{text}");
+    assert!(text.contains("without SSH"), "{text}");
+    let effects = app.update(key(KeyCode::Char('y')));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Copy(text) if *text == test_ticket())),
+        "{effects:?}"
+    );
+
+    app.update(key(KeyCode::Char('p')));
+    let mut reply = pair_reply("K7QM-3XWD");
+    reply["ticket_error"] = json!({"code": "ticket_not_ready",
+        "message": "this machine was still reaching its relay; run devlanes daemon pair again"});
+    app.update(Msg::Paired(Ok(reply)));
+    for _ in 0..3 {
+        assert_eq!(asks(&app.update(Msg::Tick)), 0);
+        render(&app)?;
+        assert_eq!(asks(&app.update(Msg::Boxes(Ok(json!({"items": []}))))), 0);
+    }
+    let text = screen(&render(&app)?);
+    assert!(text.contains("No ticket yet"), "{text}");
+    assert!(text.contains("K7QM-3XWD"), "{text}");
+    assert!(!text.contains("daemon pair again"), "{text}");
+    assert_eq!(asks(&app.update(key(KeyCode::Char('t')))), 1);
+    assert_eq!(
+        asks(&app.update(key(KeyCode::Char('t')))),
+        0,
+        "one at a time"
+    );
+    assert!(screen(&render(&app)?).contains("K7QM-3XWD"));
+    app.update(Msg::TicketMinted(Ok(
+        json!({"ticket": test_ticket(), "valid_ms": 600_000}),
+    )));
+    let text = screen(&render(&app)?);
+    assert!(text.contains(&test_ticket()[..40]), "{text}");
+    assert!(text.contains("--code K7QM-3XWD"), "{text}");
+    Ok(())
+}
+
 /// `o` in the pair-off modal and in the view opens the options on
 /// `remote.allow_connections`, and closing them asks for the clients again,
 /// whose note then says whether connections are on.

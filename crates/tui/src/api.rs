@@ -648,9 +648,22 @@ pub trait DaemonApi: Send + Sync {
             2,
         )))
     }
-    /// `remote.pair`: a one-time code for another machine, with `valid_ms`,
-    /// how long it is valid from the reply.
+    /// `remote.pair` with `ticket`: a one-time pairing ticket and code for
+    /// another machine, with `valid_ms`, how long they are valid from the
+    /// reply. A ticket that is not ready within about a second is left out
+    /// with `ticket_error`. Asking for a ticket starts this machine's
+    /// peer-to-peer networking, so only a person's request calls it.
     async fn pair(&self) -> Result<Value, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "remote.pair"}),
+            2,
+        )))
+    }
+    /// `remote.pair` for the ticket alone, which waits for it, for a
+    /// [`DaemonApi::pair`] answer whose ticket was not ready. Like that one,
+    /// only a person's request calls it.
+    async fn mint_ticket(&self) -> Result<Value, ApiError> {
         Err(ApiError::Rpc(RpcError::new(
             "unknown_method",
             json!({"method": "remote.pair"}),
@@ -1529,10 +1542,27 @@ impl DaemonApi for ClientApi {
         .await
     }
 
-    /// Calls `remote.pair` on the shared connection.
+    /// Calls `remote.pair` with `ticket` on its own connection: the daemon
+    /// waits up to a second for the ticket, which the polls on the shared
+    /// connection should not wait behind.
     async fn pair(&self) -> Result<Value, ApiError> {
-        self.shared_request(Method::RemotePair, json!({}), self.context(None, false))
-            .await
+        self.oneshot(
+            Method::RemotePair,
+            json!({"ticket": true}),
+            self.context(None, false),
+        )
+        .await
+    }
+
+    /// Calls `remote.pair` for the ticket alone on its own connection; the
+    /// daemon waits seconds for it.
+    async fn mint_ticket(&self) -> Result<Value, ApiError> {
+        self.oneshot(
+            Method::RemotePair,
+            json!({"ticket": true, "code": false}),
+            self.context(None, false),
+        )
+        .await
     }
 
     /// Calls `remote.clients` on the shared connection and adds
