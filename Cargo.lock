@@ -1472,6 +1472,7 @@ dependencies = [
  "devlanes-testing",
  "devlanes-transport",
  "devlanes-transport-command",
+ "devlanes-transport-iroh",
  "devlanes-transport-ssh",
  "devlanes-trust",
  "devlanes-trust-linux",

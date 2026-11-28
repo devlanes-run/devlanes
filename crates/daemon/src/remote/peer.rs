@@ -215,6 +215,14 @@ fn connections_refusal(invalid: bool) -> &'static str {
     }
 }
 
+/// `serving`'s handshake label, read on a blocking thread since reading it
+/// may run a program.
+async fn label_of(serving: Arc<dyn BoxServing>) -> String {
+    tokio::task::spawn_blocking(move || serving.label())
+        .await
+        .unwrap_or_else(|_| format!("devlanes {}", devlanes_version::VERSION))
+}
+
 /// Forgets a finished task in [`PeerState::tasks`], however it ends.
 struct TaskGuard {
     tasks: PeerTasks,
@@ -498,6 +506,7 @@ impl Inner {
             }
             return;
         }
+        let label = label_of(serving.clone()).await;
         let mut services = serving.services(RemoteClient {
             pid: std::process::id(),
             ssh: None,
@@ -509,7 +518,7 @@ impl Inner {
             peer,
             store: self.store.clone(),
         });
-        let mut options = ServeOptions::new(serving.label());
+        let mut options = ServeOptions::new(label);
         // What `daemon.status` answers the tunnel with, from this daemon itself.
         options.box_info = BoxInfo {
             https_port: self.https_port,
@@ -605,7 +614,7 @@ impl Inner {
         }
         PairAnswer::Paired {
             name: identity::host_name(),
-            server: serving.label(),
+            server: label_of(serving).await,
         }
     }
 

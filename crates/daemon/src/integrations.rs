@@ -1128,7 +1128,8 @@ pub trait BoxServing: Send + Sync {
         client: devlanes_proto::remote::RemoteClient,
     ) -> devlanes_transport::BoxServices;
 
-    /// The handshake label, such as `devlanes 0.16.0 (linger off)`.
+    /// The handshake label, such as `devlanes 0.16.0 (linger off)`. May
+    /// block, so the daemon asks for it on a blocking thread.
     fn label(&self) -> String;
 }
 
