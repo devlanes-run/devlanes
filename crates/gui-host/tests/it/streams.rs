@@ -425,7 +425,8 @@ async fn frame_at(
 
 /// A window that grows past an encoder's limits is watched in the next
 /// codec while it is that large and comes back, with a keyframe, once it
-/// fits again; another window stays with the encoder throughout.
+/// fits again with a macroblock to spare; another window stays with the
+/// encoder throughout.
 #[tokio::test(start_paused = true)]
 async fn a_window_too_large_for_its_encoder_returns_once_it_fits() {
     let made = Arc::new(AtomicUsize::new(0));
@@ -471,6 +472,14 @@ async fn a_window_too_large_for_its_encoder_returns_once_it_fits() {
         3,
         "the other window kept its encoder"
     );
+
+    // Back under the limit by less than a macroblock, it stays in the next
+    // codec; with a macroblock to spare, it returns.
+    for (width, plain) in [(410, false), (396, false), (384, true)] {
+        ada.resize(window, Size::new(width, 200)).expect("sends");
+        frame_at(&mut events, window, Size::new(width, 200)).await;
+        assert_eq!(widths.seen().contains(&width), plain, "at {width} wide");
+    }
     host.stop().await;
 }
 

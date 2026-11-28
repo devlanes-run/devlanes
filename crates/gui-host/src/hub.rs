@@ -50,6 +50,10 @@ const STRIKE_WINDOW: Duration = Duration::from_secs(600);
 /// encoders on every step.
 const RERANK_CHANGE: f64 = 0.15;
 
+/// The pixels, one macroblock, a window must have to spare under an
+/// encoder's size limit to go back to that encoder.
+const FITS_MARGIN: u32 = 16;
+
 /// What the connections send the host task.
 pub(crate) enum Inbox {
     /// A hello passed its checks.
@@ -650,12 +654,18 @@ impl Hub {
         let win = self.windows.get(&window)?;
         let size = win.picture_size();
         let ranked = win.ranked.unwrap_or(size);
-        let mut encoders: Vec<_> = self
-            .encoders
-            .iter()
-            .filter(|e| e.fits(size.width, size.height))
-            .cloned()
-            .collect();
+        // An encoder the viewer left for this window takes it back only with
+        // a macroblock to spare, so a window at its limit that the app
+        // changes by a few pixels does not move on every change.
+        let current = s.window_codecs.get(&window);
+        let fits = |e: &Arc<dyn EncoderBackend>| {
+            let margin = match current {
+                Some(codec) if *codec != e.offer() => FITS_MARGIN,
+                _ => 0,
+            };
+            e.fits(size.width + margin, size.height + margin)
+        };
+        let mut encoders: Vec<_> = self.encoders.iter().filter(|e| fits(e)).cloned().collect();
         // Stable, so equal ranks keep the order the host listed them in.
         encoders.sort_by_key(|e| std::cmp::Reverse(e.rank(ranked.width, ranked.height)));
         let excluded = s.excluded.get(&window);
@@ -702,7 +712,7 @@ impl Hub {
             };
             let key = (window, codec);
             let new_stream = !self.streams.contains_key(&key);
-            self.watch(window, session);
+            self.watch_in(window, session, codec);
             self.resize_again(window, session, key, new_stream);
         }
         if moved {
@@ -817,9 +827,13 @@ impl Hub {
     /// should watch it in, starting the stream with the cached frame when
     /// there is one.
     fn watch(&mut self, window: WindowId, session: SessionId) {
-        let Some(codec) = self.preferred(session, window) else {
-            return;
-        };
+        if let Some(codec) = self.preferred(session, window) {
+            self.watch_in(window, session, codec);
+        }
+    }
+
+    /// Adds viewer `session` to the stream of `window` in `codec`.
+    fn watch_in(&mut self, window: WindowId, session: SessionId, codec: CodecOffer) {
         if let Some(s) = self.sessions.get_mut(&session) {
             s.window_codecs.insert(window, codec);
         }
