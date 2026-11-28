@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, Weak};
 use std::time::Duration;
 
@@ -132,6 +132,11 @@ struct Inner {
     /// change goes through this lock, which is what keeps a call that
     /// arrives as the idle task releases from getting a closed endpoint.
     phase: Mutex<Phase>,
+    /// Calls between getting the endpoint and returning, each held by an
+    /// [`InUse`]: a call still waiting for an address or a handshake keeps
+    /// the endpoint as an open connection does. Changed only under `phase`,
+    /// which the release decision holds too.
+    calls: AtomicUsize,
     shared: Arc<Shared>,
     /// Where the accept task queues admitted connections; `None` once
     /// closed, which ends `accept` after the queues drain.
@@ -186,10 +191,9 @@ struct Bound {
     /// addresses: once per bind, so a relay that does not answer costs the
     /// first ticket the wait and no later one.
     settled_by: tokio::time::Instant,
-    /// The ports in `p2p-port` as this bind found or last wrote them.
-    saved: Mutex<ports::Ports>,
-    /// When a call last needed the endpoint, for the idle release. Set when
-    /// the bind made it, and after that written only under `Inner::phase`.
+    /// When a call last needed the endpoint or ended, for the idle release.
+    /// Set when the bind made it, and after that written only under
+    /// `Inner::phase`.
     last_use: Mutex<tokio::time::Instant>,
 }
 
@@ -202,6 +206,35 @@ impl Bound {
     /// Records that a call needs the endpoint now.
     fn touch(&self) {
         *self.last_use.lock().unwrap_or_else(PoisonError::into_inner) = tokio::time::Instant::now();
+    }
+}
+
+/// A call to the endpoint in progress, counted in `Inner::calls` from the
+/// moment it asks for the endpoint until it is dropped, also when its caller
+/// stops waiting.
+struct InUse {
+    inner: Arc<Inner>,
+}
+
+impl InUse {
+    /// Counts a call; the caller holds `inner`'s phase lock.
+    fn start(inner: &Arc<Inner>) -> Self {
+        inner.calls.fetch_add(1, Ordering::Relaxed);
+        Self {
+            inner: inner.clone(),
+        }
+    }
+}
+
+impl Drop for InUse {
+    /// Ends the call and marks the endpoint used now, so the idle time
+    /// starts when the call ended.
+    fn drop(&mut self) {
+        let phase = self.inner.phase();
+        self.inner.calls.fetch_sub(1, Ordering::Relaxed);
+        if let Phase::Bound(bound) = &*phase {
+            bound.touch();
+        }
     }
 }
 
@@ -261,16 +294,18 @@ enum IdleStep {
 }
 
 /// The idle rule: release only an endpoint that does not listen, has no
-/// open connection and has not been needed for `idle` ([`IDLE_RELEASE`]).
+/// open connection and no call in progress, and has not been needed for
+/// `idle` ([`IDLE_RELEASE`]).
 fn idle_step(
     idle: Duration,
     listening: bool,
     open_connections: usize,
+    calls: usize,
     last_use: tokio::time::Instant,
     now: tokio::time::Instant,
 ) -> IdleStep {
     let due = last_use + idle;
-    if listening || open_connections > 0 {
+    if listening || open_connections > 0 || calls > 0 {
         IdleStep::CheckAt(due.max(now + idle.min(BUSY_RECHECK)))
     } else if now >= due {
         IdleStep::Release
@@ -565,6 +600,7 @@ impl Inner {
             options,
             key: OnceCell::new(),
             phase: Mutex::new(Phase::Unbound),
+            calls: AtomicUsize::new(0),
             shared: Arc::default(),
             queues: Mutex::new(Some(Queues { tunnel, pair })),
             incoming: tokio::sync::Mutex::new(Incoming {
@@ -619,14 +655,18 @@ impl Inner {
     ///
     /// `close` sets the phase to closed under the same lock, so no bind
     /// starts after it, and a bind already running sees it when it is done.
-    async fn bound(self: &Arc<Self>) -> Result<Arc<Bound>, PeerError> {
-        let task = {
+    ///
+    /// The returned [`InUse`] counts the call as in progress, also while it
+    /// waits for the bind; the caller holds it until it returns, so the
+    /// endpoint is not released under a call that is still waiting.
+    async fn bound(self: &Arc<Self>) -> Result<(Arc<Bound>, InUse), PeerError> {
+        let (task, in_use) = {
             let mut phase = self.phase();
-            match &*phase {
+            let task = match &*phase {
                 Phase::Closed => return Err(PeerError::Closed),
                 Phase::Bound(bound) => {
                     bound.touch();
-                    return Ok(bound.clone());
+                    return Ok((bound.clone(), InUse::start(self)));
                 }
                 Phase::Binding(task) => task.clone(),
                 Phase::Unbound => self.start_bind(&mut phase, None),
@@ -634,10 +674,12 @@ impl Inner {
                     let release = release.clone();
                     self.start_bind(&mut phase, Some(release))
                 }
-            }
+            };
+            (task, InUse::start(self))
         };
         // The bind set the endpoint's last use when it made it.
-        task.await.map_err(|error| error.to_peer_error())
+        let bound = task.await.map_err(|error| error.to_peer_error())?;
+        Ok((bound, in_use))
     }
 
     /// The phase, locked.
@@ -718,6 +760,7 @@ impl Inner {
             self.idle,
             self.shared.listening(),
             self.shared.open_connections(),
+            self.calls.load(Ordering::Relaxed),
             bound.last_use(),
             tokio::time::Instant::now(),
         );
@@ -846,30 +889,30 @@ impl Inner {
             endpoint,
             accepting,
             settled_by: tokio::time::Instant::now() + ONLINE_WAIT,
-            saved: Mutex::new(saved),
             last_use: Mutex::new(tokio::time::Instant::now()),
         })
     }
 
-    /// Saves the bound ports in `p2p-port` when they differ from what it
-    /// holds, for a bind that listens: the next start of a box then binds the
-    /// same ports. Runs in a task of its own, so `listen` has nothing left
-    /// to await once it changed state, and a caller's timeout cannot leave
-    /// it half done. A write that runs after the endpoint stopped listening
-    /// does nothing, so it cannot bring back a file `forget_ports` removed.
-    /// Never fails anyone: without the file the next start binds any port.
+    /// Saves the bound ports in `p2p-port`, for a bind that listens: the next
+    /// start of a box then binds the same ports. Written on every
+    /// `listen(Some)`, which is rare, instead of trusting a copy of the file
+    /// that a removal may have made stale. Runs in a task of its own, so
+    /// `listen` has nothing left to await once it changed state, and a
+    /// caller's timeout cannot leave it half done. A write that runs after
+    /// the endpoint stopped listening does nothing, so it cannot bring back a
+    /// file `forget_ports` removed. Never fails anyone: without the file the
+    /// next start binds any port.
     fn keep_ports(self: &Arc<Self>, bound: Arc<Bound>) {
         let inner = self.clone();
         self.port_task(async move {
             let _file = inner.port_file.lock().await;
-            let ports = ports::Ports::of(&bound.endpoint.bound_sockets());
-            let saved = *bound.saved.lock().unwrap_or_else(PoisonError::into_inner);
-            if !inner.shared.listening() || saved == ports {
+            if !inner.shared.listening() {
                 return;
             }
+            let ports = ports::Ports::of(&bound.endpoint.bound_sockets());
             let path = ports::path(&inner.options.key_file);
             match tokio::task::spawn_blocking(move || ports::save(&path, ports)).await {
-                Ok(Ok(())) => *bound.saved.lock().unwrap_or_else(PoisonError::into_inner) = ports,
+                Ok(Ok(())) => {}
                 Ok(Err(error)) => tracing::warn!(%error, "saving the peer-to-peer ports failed"),
                 Err(error) => tracing::warn!(%error, "saving the peer-to-peer ports failed"),
             }
@@ -877,7 +920,14 @@ impl Inner {
     }
 
     /// Runs a change to `p2p-port` in a task of its own, kept for `close`.
+    /// Nothing starts once the endpoint is closed: the check and the push
+    /// happen under the phase lock, which `close` takes to close the
+    /// endpoint before it collects the tasks, so none is left unawaited.
     fn port_task(&self, change: impl Future<Output = ()> + Send + 'static) {
+        let phase = self.phase();
+        if matches!(*phase, Phase::Closed) {
+            return;
+        }
         let mut tasks = self
             .port_tasks
             .lock()
@@ -891,7 +941,7 @@ impl Inner {
     /// nothing depends on the ports any more, and keeping them would give a
     /// machine that listened once a fixed source port for every later dial.
     /// A detached task, like [`Inner::keep_ports`], in the same order.
-    fn forget_ports(self: &Arc<Self>, bound: Option<Arc<Bound>>) {
+    fn forget_ports(self: &Arc<Self>) {
         let inner = self.clone();
         self.port_task(async move {
             let _file = inner.port_file.lock().await;
@@ -900,12 +950,7 @@ impl Inner {
             }
             let path = ports::path(&inner.options.key_file);
             match tokio::task::spawn_blocking(move || ports::remove(&path)).await {
-                Ok(Ok(())) => {
-                    if let Some(bound) = bound {
-                        *bound.saved.lock().unwrap_or_else(PoisonError::into_inner) =
-                            ports::Ports::default();
-                    }
-                }
+                Ok(Ok(())) => {}
                 Ok(Err(error)) => tracing::warn!(%error, "removing the peer-to-peer ports failed"),
                 Err(error) => tracing::warn!(%error, "removing the peer-to-peer ports failed"),
             }
@@ -1304,7 +1349,8 @@ impl Inner {
     /// answers does not cost every ticket 5 seconds. The endpoint keeps
     /// trying the relay, so a later call names the home relay once reached.
     async fn addr(self: &Arc<Self>) -> Result<PeerAddr, PeerError> {
-        let bound = self.bound().await?;
+        // Held to the end: the waits below are part of the call.
+        let (bound, _in_use) = self.bound().await?;
         let endpoint = &bound.endpoint;
         let relays = !self.options.relays.is_empty();
         let _ = tokio::time::timeout_at(bound.settled_by, async {
@@ -1348,7 +1394,9 @@ impl Inner {
         addr: &PeerAddr,
         alpn: Alpn,
     ) -> Result<BoxConnection, TransportError> {
-        let bound = self.bound().await?;
+        // Held to the end: until the connection is tracked, only this keeps
+        // the endpoint from a release during the handshake and the waits.
+        let (bound, _in_use) = self.bound().await?;
         let endpoint = &bound.endpoint;
         let (target, dropped) = self.target(addr)?;
         let connection = endpoint
@@ -1421,18 +1469,23 @@ impl Inner {
             Phase::Bound(bound) => Some(bound.clone()),
             _ => None,
         };
-        let bound = match (admission.is_some(), bound_now) {
+        // Stopping needs no guard: it has no await, and a released endpoint
+        // has nothing to stop.
+        let (bound, _in_use) = match (admission.is_some(), bound_now) {
             (false, None) => {
                 self.shared.set_admission(None);
-                self.forget_ports(None);
+                self.forget_ports();
                 return Ok(());
             }
-            (false, Some(bound)) => bound,
+            (false, Some(bound)) => (bound, None),
             // The only await once the lock is held: a caller dropped here
             // has changed nothing. Everything below runs to its end without
             // one, and the port file is written or removed in a task of its
             // own.
-            (true, _) => self.bound().await?,
+            (true, _) => {
+                let (bound, in_use) = self.bound().await?;
+                (bound, Some(in_use))
+            }
         };
         let endpoint = &bound.endpoint;
         let listening = admission.is_some();
@@ -1451,7 +1504,7 @@ impl Inner {
         if listening {
             self.keep_ports(bound.clone());
         } else {
-            self.forget_ports(Some(bound.clone()));
+            self.forget_ports();
         }
         published
     }
@@ -1531,12 +1584,22 @@ mod tests {
         let start = tokio::time::Instant::now();
         let at = |secs| start + Duration::from_secs(secs);
         let release = IDLE_RELEASE.as_secs();
-        // (listening, open connections, last call, now) and the step.
+        // (listening, open connections, calls in progress, last call, now)
+        // and the step.
         let cases = [
-            ("idle long enough", false, 0, 0, release, IdleStep::Release),
+            (
+                "idle long enough",
+                false,
+                0,
+                0,
+                0,
+                release,
+                IdleStep::Release,
+            ),
             (
                 "idle, not long enough",
                 false,
+                0,
                 0,
                 10,
                 release,
@@ -1547,12 +1610,23 @@ mod tests {
                 true,
                 0,
                 0,
+                0,
                 10 * release,
                 IdleStep::CheckAt(at(10 * release) + BUSY_RECHECK),
             ),
             (
                 "a connection open",
                 false,
+                1,
+                0,
+                0,
+                10 * release,
+                IdleStep::CheckAt(at(10 * release) + BUSY_RECHECK),
+            ),
+            (
+                "a call in progress",
+                false,
+                0,
                 1,
                 0,
                 10 * release,
@@ -1562,14 +1636,15 @@ mod tests {
                 "busy, called lately",
                 false,
                 2,
+                0,
                 100,
                 110,
                 IdleStep::CheckAt(at(100 + release)),
             ),
         ];
-        for (name, listening, open, last_use, now, step) in cases {
+        for (name, listening, open, calls, last_use, now, step) in cases {
             assert_eq!(
-                idle_step(IDLE_RELEASE, listening, open, at(last_use), at(now)),
+                idle_step(IDLE_RELEASE, listening, open, calls, at(last_use), at(now)),
                 step,
                 "{name}"
             );
@@ -1650,6 +1725,11 @@ mod tests {
     /// An endpoint named `name` in `home` that is released after [`IDLE`],
     /// with no relay, lookup or port mapping, so nothing leaves the machine.
     fn short_lived(home: &TempDir, name: &str) -> Arc<Inner> {
+        lasting(home, name, IDLE)
+    }
+
+    /// An endpoint like [`short_lived`] that is released after `idle`.
+    fn lasting(home: &TempDir, name: &str, idle: Duration) -> Arc<Inner> {
         Arc::new(Inner::with_idle(
             IrohOptions {
                 key_file: home.path().join(name).join("p2p-key"),
@@ -1657,8 +1737,24 @@ mod tests {
                 address_lookup: false,
                 port_mapping: false,
             },
-            IDLE,
+            idle,
         ))
+    }
+
+    /// The ports the endpoint has bound, or none while it is not bound.
+    fn bound_ports(inner: &Inner) -> ports::Ports {
+        match &*inner.phase() {
+            Phase::Bound(bound) => ports::Ports::of(&bound.endpoint.bound_sockets()),
+            _ => ports::Ports::default(),
+        }
+    }
+
+    /// Whether other sockets can bind both of `ports` again.
+    fn ports_free(ports: ports::Ports) -> bool {
+        ports.v4.is_none_or(port_free)
+            && ports
+                .v6
+                .is_none_or(|port| std::net::UdpSocket::bind((Ipv6Addr::UNSPECIFIED, port)).is_ok())
     }
 
     /// The IPv4 port the endpoint reports for a ticket, binding it if needed.
@@ -1813,6 +1909,108 @@ mod tests {
                     .await
                     .map_err(|error| format!("offset {offset} ms: {error}"))?;
             }
+            inner.close().await;
+            Ok(())
+        })
+        .await
+    }
+
+    /// A call still in progress keeps the endpoint bound over several idle
+    /// times, and the endpoint is released once it ended. The call is a dial
+    /// to a socket that never answers, cut off by the test after 5 idle times.
+    #[tokio::test]
+    async fn a_call_in_progress_keeps_the_endpoint() -> TestResult {
+        bounded(async {
+            let home = tempfile::tempdir()?;
+            let inner = short_lived(&home, "client");
+            let silent = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+            let addr = PeerAddr {
+                id: short_lived(&home, "box").id().await?,
+                relay: None,
+                direct: vec![silent.local_addr()?],
+            };
+            let dialing = {
+                let inner = inner.clone();
+                tokio::spawn(async move {
+                    tokio::time::timeout(5 * IDLE, inner.connect(&addr, Alpn::Tunnel))
+                        .await
+                        .is_err()
+                })
+            };
+            let mut was_bound = false;
+            while !dialing.is_finished() {
+                let bound = matches!(*inner.phase(), Phase::Bound(_));
+                assert!(!was_bound || bound, "released during the dial");
+                was_bound |= bound;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            assert!(dialing.await?, "the dial ended before the test cut it off");
+            assert!(was_bound, "the dial never bound the endpoint");
+            // iroh's close then waits about 3 s for the abandoned handshake,
+            // so the release starting is what this waits for.
+            until("the release after the dial", || {
+                !matches!(*inner.phase(), Phase::Bound(_))
+            })
+            .await?;
+            inner.close().await;
+            Ok(())
+        })
+        .await
+    }
+
+    /// `listen(Some)` writes `p2p-port` even when the bind found the same
+    /// ports in it: a removal since then (a `listen(None)` while the endpoint
+    /// was not yet bound) must not leave a listening box without the file.
+    #[tokio::test]
+    async fn listening_writes_the_ports_after_a_removal() -> TestResult {
+        bounded(async {
+            let home = tempfile::tempdir()?;
+            let first = lasting(&home, "box", IDLE_RELEASE);
+            let port_file = ports::path(&first.options.key_file);
+            first.listen(Some(Arc::new(Everyone))).await?;
+            until("the saved ports", || port_file.exists()).await?;
+            let saved = bound_ports(&first);
+            first.close().await;
+            until("the old sockets to be freed", || ports_free(saved)).await?;
+            let second = lasting(&home, "box", IDLE_RELEASE);
+            second.addr().await?;
+            assert_eq!(
+                bound_ports(&second),
+                saved,
+                "the bind did not reuse the ports"
+            );
+            second.forget_ports();
+            until("the removal", || !port_file.exists()).await?;
+            second.listen(Some(Arc::new(Everyone))).await?;
+            until("the ports saved again", || port_file.exists()).await?;
+            assert_eq!(ports::load(&port_file), saved);
+            second.close().await;
+            Ok(())
+        })
+        .await
+    }
+
+    /// `listen(None)` on an endpoint that never bound, as the daemon calls it
+    /// at startup when nothing needs a listener, removes a `p2p-port` left
+    /// behind and does nothing else: no key file and no bind.
+    #[tokio::test]
+    async fn stopping_an_unbound_endpoint_only_removes_the_ports() -> TestResult {
+        bounded(async {
+            let home = tempfile::tempdir()?;
+            let inner = short_lived(&home, "box");
+            let port_file = ports::path(&inner.options.key_file);
+            std::fs::create_dir_all(home.path().join("box"))?;
+            ports::save(
+                &port_file,
+                ports::Ports {
+                    v4: Some(40_000),
+                    v6: None,
+                },
+            )?;
+            inner.listen(None).await?;
+            until("the removal", || !port_file.exists()).await?;
+            assert!(!inner.options.key_file.exists(), "a key file was created");
+            assert!(released(&inner), "the endpoint was bound");
             inner.close().await;
             Ok(())
         })
