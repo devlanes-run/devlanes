@@ -2,7 +2,7 @@
 //! daemon asks it to, and dialing boxes over direct paths only.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,6 +30,7 @@ use tokio::sync::{OnceCell, mpsc};
 
 use crate::connection::{IrohConnection, IrohServerConnection, NO_DIRECT_PATH, REFUSED};
 use crate::key;
+use crate::ports;
 use crate::text::peer_text;
 
 /// How long a dial waits for a direct path: three of iroh's 5 s hole-punch
@@ -88,6 +89,9 @@ const KEEP_ALIVE: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone)]
 pub struct IrohOptions {
     /// The secret key, created on first use and kept private to the user.
+    /// The UDP ports the endpoint bound are kept next to it in `p2p-port`,
+    /// so the next start binds the same ones and stored addresses still
+    /// reach it.
     pub key_file: PathBuf,
     /// Relay URLs such as `https://relay1.devlanes.run`. Empty for none: then
     /// peers connect only through the addresses they know of each other.
@@ -418,32 +422,64 @@ impl IrohEndpoint {
                     .map_err(|error| PeerError::Bind(format!("relay {url}: {error}")))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let relay_mode = if relays.is_empty() {
-            RelayMode::Disabled
-        } else {
-            RelayMode::Custom(relays.into_iter().collect())
+        let port_file = ports::path(&self.options.key_file);
+        let saved = {
+            let port_file = port_file.clone();
+            tokio::task::spawn_blocking(move || ports::load(&port_file))
+                .await
+                .unwrap_or_default()
         };
-        let port_mapping = if self.options.port_mapping {
-            PortmapperConfig::default()
-        } else {
-            PortmapperConfig::Disabled
+        // iroh binds a port it is given or fails the whole bind (`is_required`
+        // sockets; a socket that may fail is left out instead, which would
+        // drop that family), and each family's socket binds on its own. So a
+        // taken port is retried without it, family by family, ending with
+        // any ports.
+        let mut attempts = vec![
+            (saved.v4, saved.v6),
+            (saved.v4, None),
+            (None, saved.v6),
+            (None, None),
+        ];
+        attempts.dedup();
+        let mut endpoint = None;
+        let mut last_error = PeerError::Bind("no bind was tried".into());
+        for (v4, v6) in attempts {
+            let bound = match self.builder(key.clone(), &relays, v4, v6) {
+                Ok(builder) => builder
+                    .bind()
+                    .await
+                    .map_err(|error| PeerError::Bind(error.to_string())),
+                Err(error) => Err(error),
+            };
+            match bound {
+                Ok(bound) => {
+                    endpoint = Some(bound);
+                    break;
+                }
+                Err(error) => {
+                    tracing::debug!(?v4, ?v6, %error, "binding the saved peer-to-peer ports failed");
+                    last_error = error;
+                }
+            }
+        }
+        let Some(endpoint) = endpoint else {
+            return Err(last_error);
         };
-        // `Empty` sets nothing, so every choice is made here: ring like
-        // crates/pki and crates/proxy, never a process-wide default.
-        let builder = Endpoint::builder(presets::Empty)
-            .crypto_provider(Arc::new(rustls::crypto::ring::default_provider()))
-            .secret_key(key)
-            .relay_mode(relay_mode)
-            .portmapper_config(port_mapping)
-            .transport_config(transport_config())
-            .hooks(Gatekeeper {
-                shared: self.shared.clone(),
-            });
-        let endpoint = builder
-            .bind()
-            .await
-            .map_err(|error| PeerError::Bind(error.to_string()))?;
         tracing::debug!(sockets = ?endpoint.bound_sockets(), "peer-to-peer endpoint bound");
+        let bound = ports::Ports::of(&endpoint.bound_sockets());
+        if bound != saved {
+            if !saved.is_empty() {
+                tracing::info!(
+                    ?saved,
+                    ?bound,
+                    "the peer-to-peer port changed; clients on a network without a relay must pair again"
+                );
+            }
+            let saved = tokio::task::spawn_blocking(move || ports::save(&port_file, bound)).await;
+            if let Ok(Err(error)) = saved {
+                tracing::warn!(%error, "saving the peer-to-peer ports failed");
+            }
+        }
         if self.looks_up() {
             // Added after the bind rather than on the builder, so they can be
             // wrapped in `OwnRelays`; nothing dials in between.
@@ -460,6 +496,52 @@ impl IrohEndpoint {
             endpoint,
             accepting,
         })
+    }
+
+    /// A builder for this endpoint, binding IPv4 and IPv6 on `v4` and `v6`
+    /// when given and on ports the system picks otherwise.
+    fn builder(
+        &self,
+        key: SecretKey,
+        relays: &[RelayUrl],
+        v4: Option<u16>,
+        v6: Option<u16>,
+    ) -> Result<iroh::endpoint::Builder, PeerError> {
+        let relay_mode = if relays.is_empty() {
+            RelayMode::Disabled
+        } else {
+            RelayMode::Custom(relays.iter().cloned().collect())
+        };
+        let port_mapping = if self.options.port_mapping {
+            PortmapperConfig::default()
+        } else {
+            PortmapperConfig::Disabled
+        };
+        // `Empty` sets nothing, so every choice is made here: ring like
+        // crates/pki and crates/proxy, never a process-wide default.
+        let mut builder = Endpoint::builder(presets::Empty)
+            .crypto_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .secret_key(key)
+            .relay_mode(relay_mode)
+            .portmapper_config(port_mapping)
+            .transport_config(transport_config())
+            .hooks(Gatekeeper {
+                shared: self.shared.clone(),
+            });
+        // A given address replaces iroh's own socket of that family on all
+        // interfaces, so these bind what iroh would, on a chosen port.
+        let wanted = [
+            v4.map(|port| SocketAddr::from((Ipv4Addr::UNSPECIFIED, port))),
+            v6.map(|port| SocketAddr::from((Ipv6Addr::UNSPECIFIED, port))),
+        ];
+        for addr in wanted.into_iter().flatten() {
+            // Only a second address of one family fails here, which this
+            // never adds; the caller then tries the next ports.
+            builder = builder
+                .bind_addr(addr)
+                .map_err(|error| PeerError::Bind(error.to_string()))?;
+        }
+        Ok(builder)
     }
 
     /// Starts or stops publishing this endpoint's relay to n0's DNS;

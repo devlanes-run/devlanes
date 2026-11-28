@@ -5,6 +5,7 @@
 mod connection;
 mod gate;
 mod peer;
+mod restart;
 
 use std::future::Future;
 use std::path::PathBuf;
