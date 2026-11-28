@@ -998,6 +998,11 @@ pub const GUI_CODEC_MISSING_LIBRARY: &str = "missing_library";
 /// [`GuiCodecProblem::reason`]: the codec's library is a version devlanes
 /// cannot use.
 pub const GUI_CODEC_UNSUPPORTED_VERSION: &str = "unsupported_version";
+/// [`GuiCodecProblem::reason`] in `devlanes-gui codecs`: the library encodes,
+/// but its decoder is a version with a known security flaw, so this machine
+/// does not decode with it. A host's status never carries it, since a host
+/// only encodes.
+pub const GUI_CODEC_DECODER_TOO_OLD: &str = "decoder_too_old";
 /// [`GuiCodecProblem::reason`]: the OS has no such codec, or it did not start.
 pub const GUI_CODEC_UNAVAILABLE: &str = "unavailable";
 

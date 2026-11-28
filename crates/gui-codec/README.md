@@ -55,7 +55,9 @@ fn stream_one_frame(pixels: Vec<u8>, captured: Duration) -> Result<(), CodecErro
 
 ## H.264
 
-Every H.264 backend converts BGRA to 4:2:0 and back here, with one BT.709 limited-range matrix, about 1.4 ms per 1440x900 frame each way in a release build. H.264 needs even sides: the encoder pads an odd side by repeating the last column or row, the frame message carries the real size, and the decoder crops to it. A new size starts a new encoder, whose first frame is a keyframe. A refinement (`EncodeParams::refine`, asked for by the pacer once a lossy picture stops changing) is coded at a fine quantizer. Decoders decode every frame; the viewer shows the newest.
+Every H.264 backend converts BGRA to 4:2:0 and back here, with one BT.709 limited-range matrix. H.264 needs even sides: the encoder pads an odd side by repeating the last column or row, the frame message carries the real size, and the decoder crops to it. A new size starts a new encoder, whose first frame is a keyframe. Each encoder backend says through `EncoderBackend::fits` which sizes it takes (level 5.2 for OpenH264 and GPU encoders, 4096x2304 for Microsoft's software encoder); the GUI host streams a larger window in the next codec. A refinement (`EncodeParams::refine`, asked for by the pacer once a lossy picture stops changing) is a predicted frame at the higher quality the pacer gives it, never coarser than the stream. Decoders decode every frame, refuse an empty payload and pictures with a side above 8192; the viewer shows the newest.
+
+The OpenH264 decoder is used only from version 2.6 on, since older versions have a known flaw in it (CVE-2025-27091); their encoder is used, from 2.2 to 2.7. `h264()` reports each side's problem in `H264::encode` and `H264::decode`.
 
 ## License
 

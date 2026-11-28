@@ -966,10 +966,11 @@ fn doctor_without_a_daemon() {
     );
 }
 
-/// A GUI host without H.264 is noted on its unit in status; doctor names the
-/// H.264 library a machine has, and without OpenH264 warns (exit 0) with the
-/// install lines of the common package managers; a version devlanes does
-/// not use is named with the ones it does.
+/// A GUI host that cannot encode H.264 is noted on its unit in status;
+/// doctor names the H.264 library a machine has and the sides it works for,
+/// warns (exit 0) without OpenH264 with the install lines of the common
+/// package managers, and names a refused version, or an old decoder, with
+/// what devlanes needs, without install lines for a package already there.
 #[test]
 fn missing_h264_is_worded_in_status_and_doctor() {
     let page = |items: Vec<Value>| json!({"items": items, "truncated": false, "next_cursor": null});
@@ -991,34 +992,51 @@ fn missing_h264_is_worded_in_status_and_doctor() {
                     "fix": "devlanes update", "codecs": codecs},
         })
     };
+    let none =
+        json!({"version": null, "encode": false, "decode": false, "encoders": [], "decoders": []});
+    let loader = "OpenH264 is not installed: none of libopenh264.so.8, libopenh264.so.7, libopenh264.so.6, libopenh264.so loads";
     let missing = render_text(
         Method::Doctor,
-        &gui(
-            json!({"h264": {"version": null, "encoders": [], "decoders": []}, "problems": [
-            {"codec": "h264", "reason": "missing_library", "library": "OpenH264",
-             "detail": "OpenH264 is not installed: none of libopenh264.so.8, libopenh264.so.7, libopenh264.so.6, libopenh264.so loads"}]}),
-        ),
+        &gui(json!({"h264": none, "problems": [
+            {"codec": "h264", "side": "encode", "reason": "missing_library", "library": "OpenH264", "detail": loader},
+            {"codec": "h264", "side": "decode", "reason": "missing_library", "library": "OpenH264", "detail": loader}]})),
     );
     assert!(missing.contains("--- plain (exit 0)"), "{missing}");
-    let refused = render_text(
+    // Ubuntu 24.04's OpenH264 encodes, and its decoder is refused.
+    let old = render_text(
         Method::Doctor,
         &gui(
-            json!({"h264": {"version": null, "encoders": [], "decoders": []}, "problems": [
-            {"codec": "h264", "reason": "unsupported_version", "library": "OpenH264",
-             "found": "3.0.0", "supported": "2.2.0 to 2.7", "detail": ""}]}),
+            json!({"h264": {"version": "OpenH264 2.4.1", "encode": true, "decode": false,
+                             "encoders": ["software"], "decoders": []}, "problems": [
+            {"codec": "h264", "side": "decode", "reason": "decoder_too_old", "library": "OpenH264",
+             "found": "2.4.1", "supported": "2.6 or later", "detail": ""}]}),
         ),
     );
+    assert!(
+        !old.contains("apt install"),
+        "no install line for an installed package: {old}"
+    );
+    let refused = render_text(
+        Method::Doctor,
+        &gui(json!({"h264": none, "problems": [
+            {"codec": "h264", "side": "encode", "reason": "unsupported_version", "library": "OpenH264",
+             "found": "3.0.0", "supported": "2.2 to 2.7", "detail": ""},
+            {"codec": "h264", "side": "decode", "reason": "unsupported_version", "library": "OpenH264",
+             "found": "3.0.0", "supported": "2.2 to 2.7", "detail": ""}]})),
+    );
+    assert!(!refused.contains("apt install"), "{refused}");
     let windows = render_text(
         Method::Doctor,
         &gui(
-            json!({"h264": {"version": "Media Foundation", "encoders": ["hardware", "software"],
-                             "decoders": ["software"]}, "problems": []}),
+            json!({"h264": {"version": "Media Foundation", "encode": true, "decode": true,
+                             "encoders": ["software", "hardware"], "decoders": ["software"]},
+                    "problems": []}),
         ),
     );
     insta::assert_snapshot!(
         "render_missing_h264",
         format!(
-            "{status}=== doctor without OpenH264\n{missing}=== doctor with OpenH264 3.0\n{refused}=== doctor on Windows\n{windows}"
+            "{status}=== doctor without OpenH264\n{missing}=== doctor with OpenH264 2.4.1\n{old}=== doctor with OpenH264 3.0\n{refused}=== doctor on Windows\n{windows}"
         )
     );
 }

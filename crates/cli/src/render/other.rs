@@ -1295,59 +1295,60 @@ fn codec_checks(codecs: &Value) -> Vec<Check> {
     }
     let mut checks = Vec::new();
     let h264 = &codecs["h264"];
+    let can = |key: &str| h264.get(key).and_then(Value::as_bool) == Some(true);
     if let Some(version) = h264.get("version").and_then(Value::as_str) {
-        let hardware = |key: &str| list(h264, key).iter().any(|kind| kind == "hardware");
-        let ends = match (list(h264, "encoders").is_empty(), hardware("encoders")) {
-            (true, _) => "decoding only".to_owned(),
-            (false, true) => "hardware encoder".to_owned(),
-            (false, false) => "software encoder".to_owned(),
+        // "the software encoder", "the software and hardware encoders".
+        let kinds = |key: &str, noun: &str| {
+            let kinds: Vec<String> = list(h264, key).iter().map(display_value).collect();
+            let plural = if kinds.len() > 1 { "s" } else { "" };
+            format!("the {} {noun}{plural}", kinds.join(" and "))
         };
-        let decoder = if hardware("decoders") {
-            ", hardware decoder"
-        } else {
-            ""
-        };
+        let mut ends = Vec::new();
+        if can("encode") {
+            ends.push(format!("encodes with {}", kinds("encoders", "encoder")));
+        }
+        if can("decode") {
+            ends.push(format!("decodes with {}", kinds("decoders", "decoder")));
+        }
         checks.push(Check::new(
             "gui",
             Outcome::Ok,
-            format!("H.264 through {} ({ends}{decoder})", clean(version)),
+            format!("H.264 through {}: {}", clean(version), ends.join(", ")),
         ));
     }
-    for problem in list(codecs, "problems") {
-        let library = text(problem, "library");
-        let (why, fix) = match (text(problem, "reason").as_str(), library.as_str()) {
-            ("missing_library", "OpenH264") => (
-                "OpenH264 is not installed".to_owned(),
-                Some(words::OPENH264_INSTALL.to_owned()),
+    let problems = list(codecs, "problems");
+    let facts =
+        |problem: &Value| ["reason", "library", "found", "supported"].map(|key| text(problem, key));
+    for (index, problem) in problems.iter().enumerate() {
+        // The same reason on both sides is one row.
+        let same = |other: &&Value| facts(other) == facts(problem);
+        if problems[..index].iter().any(|earlier| same(&earlier)) {
+            continue;
+        }
+        let both = problems.iter().filter(|other| same(other)).count() > 1;
+        let [reason, library, found, supported] = facts(problem);
+        let why = words::codec_problem(&reason, &library, &found, &supported);
+        let codec = words::codec_name(&text(problem, "codec"));
+        let what = match (both, text(problem, "side").as_str()) {
+            (true, _) => format!(
+                "no {codec}: {why}, so GUI windows stream as whole pictures, which is slow over a network"
             ),
-            ("missing_library", library) => (format!("{} is not installed", clean(library)), None),
-            ("unsupported_version", library) => (
-                format!(
-                    "{} {} is installed and devlanes uses {}",
-                    clean(library),
-                    clean(&text(problem, "found")),
-                    clean(&text(problem, "supported"))
-                ),
-                (library == "OpenH264").then(|| words::OPENH264_INSTALL.to_owned()),
+            (false, "decode") => format!(
+                "no {codec} decoding: {why}; GUI windows shown on this machine come as whole pictures, which is slow over a network"
             ),
-            _ => (
-                "the OS has no H.264 encoder or decoder that starts".to_owned(),
-                None,
+            _ => format!(
+                "no {codec} encoding: {why}, so GUI services on this machine stream whole pictures, which is slow over a network"
             ),
         };
-        let mut check = Check::new(
-            "gui",
-            Outcome::Skip,
-            format!(
-                "no H.264: {why}, so GUI windows stream as whole pictures, which is slow over a network"
-            ),
-        );
+        let mut check = Check::new("gui", Outcome::Skip, what);
         let detail = text(problem, "detail");
         if !detail.is_empty() {
             check = check.detail(clean(&detail));
         }
-        if let Some(fix) = fix {
-            check = check.fix(fix);
+        // Install lines only where nothing is installed: a version devlanes
+        // does not use is already the package the lines would install.
+        if reason == devlanes_proto::GUI_CODEC_MISSING_LIBRARY && library == "OpenH264" {
+            check = check.fix(words::OPENH264_INSTALL);
         }
         checks.push(check);
     }

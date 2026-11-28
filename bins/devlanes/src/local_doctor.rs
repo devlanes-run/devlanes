@@ -91,6 +91,11 @@ pub async fn add_wsl(data: &mut Value) {
 /// How long `devlanes-gui version` may take.
 const GUI_VERSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How long `devlanes-gui codecs` may take. It loads OpenH264 and starts an
+/// encoder and a decoder, or enumerates Media Foundation's transforms, which
+/// took well under a second where it was measured; a slow driver gets more.
+const GUI_CODECS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Adds `gui` (`{path, installed, version, expected, error, backend, fix,
 /// codecs}`) to doctor `data` while GUI services are on, by running
 /// `devlanes-gui version` and `devlanes-gui codecs`; otherwise `data` is
@@ -158,7 +163,7 @@ async fn gui_codecs(path: &Path) -> Value {
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
-    match tokio::time::timeout(GUI_VERSION_TIMEOUT, command.output()).await {
+    match tokio::time::timeout(GUI_CODECS_TIMEOUT, command.output()).await {
         Ok(Ok(output)) if output.status.success() => {
             serde_json::from_slice(&output.stdout).unwrap_or(Value::Null)
         }

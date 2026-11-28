@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use devlanes_gui_client::instance::{self, Claim, Info, StartedBy};
 use devlanes_gui_codec::{DecoderBackend, RawBackend};
+use devlanes_gui_proto::ready::CodecSide;
 use devlanes_gui_viewer::{Options, UnitCheck, ViewerError};
 
 /// The arguments of `devlanes-gui view`.
@@ -70,7 +71,7 @@ fn decoders() -> Vec<Arc<dyn DecoderBackend>> {
     let found = std::thread::spawn(crate::codecs::find)
         .join()
         .map(|codecs| {
-            for problem in &codecs.problems {
+            for problem in codecs.problems_of(CodecSide::Decode) {
                 tracing::warn!(codec = %problem.codec, reason = problem.reason.word(), detail = %problem.detail, "a video decoder is missing");
             }
             codecs.decoders

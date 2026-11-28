@@ -169,6 +169,14 @@ pub trait EncoderBackend: Send + Sync {
     /// What encoders of this backend offer.
     fn offer(&self) -> CodecOffer;
 
+    /// Whether its encoders take frames of `width` by `height`. The host
+    /// checks it before encoding, so a window past the limit streams in
+    /// another codec without counting against this one. Any size by default.
+    fn fits(&self, width: u32, height: u32) -> bool {
+        let _ = (width, height);
+        true
+    }
+
     /// A new encoder, for one window.
     fn encoder(&self) -> Result<Box<dyn VideoEncoder>, CodecError>;
 }

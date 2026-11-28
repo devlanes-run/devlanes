@@ -77,15 +77,19 @@ pub const MAX_CODEC_PROBLEMS: usize = 8;
 pub struct CodecProblem {
     /// The codec's name, such as `h264`.
     pub codec: String,
+    /// Which side is missing: a host needs to encode, a viewer to decode.
+    #[serde(default)]
+    pub side: CodecSide,
     /// Why it is missing.
     pub reason: CodecReason,
     /// The library that is missing or refused, such as `OpenH264`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library: Option<String>,
-    /// The version found, for [`CodecReason::UnsupportedVersion`].
+    /// The version found, for [`CodecReason::UnsupportedVersion`] and
+    /// [`CodecReason::DecoderTooOld`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub found: Option<String>,
-    /// The versions devlanes uses, such as `2.2.0 to 2.7`.
+    /// The versions devlanes uses on that side, such as `2.2 to 2.7`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supported: Option<String>,
     /// The loader's or the OS's own message, for logs.
@@ -101,6 +105,9 @@ pub enum CodecReason {
     MissingLibrary,
     /// Its library is a version devlanes cannot use.
     UnsupportedVersion,
+    /// Its library encodes, but its decoder has a known security flaw
+    /// (OpenH264 before 2.6), so this machine does not decode with it.
+    DecoderTooOld,
     /// The OS has no such codec, or it did not start.
     Unavailable,
     /// Anything else; `detail` says what.
@@ -114,7 +121,34 @@ impl CodecReason {
         match self {
             Self::MissingLibrary => "missing_library",
             Self::UnsupportedVersion => "unsupported_version",
+            Self::DecoderTooOld => "decoder_too_old",
             Self::Unavailable => "unavailable",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Which side of a codec a [`CodecProblem`] is about. Unknown words read as
+/// [`CodecSide::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodecSide {
+    /// Encoding, which a GUI host does.
+    Encode,
+    /// Decoding, which a viewer does.
+    Decode,
+    /// A side this build does not know, or none given.
+    #[default]
+    #[serde(other)]
+    Other,
+}
+
+impl CodecSide {
+    /// The word on the line, such as `encode`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Encode => "encode",
+            Self::Decode => "decode",
             Self::Other => "other",
         }
     }
@@ -495,10 +529,11 @@ mod tests {
         let mut lacking = ready.clone();
         lacking.codecs = vec![CodecProblem {
             codec: "h264".into(),
+            side: CodecSide::Encode,
             reason: CodecReason::UnsupportedVersion,
             library: Some("OpenH264".into()),
             found: Some("3.0.0".into()),
-            supported: Some("2.2.0 to 2.7".into()),
+            supported: Some("2.2 to 2.7".into()),
             detail: String::new(),
         }];
         let line = lacking.to_line();

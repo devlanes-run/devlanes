@@ -5,11 +5,9 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use devlanes_gui_proto::{CodecId, CodecOffer};
-use devlanes_sys::openh264::{
-    Decoder, Encoder, EncoderConfig, FrameKind, I420, Library, LoadError,
-};
+use devlanes_sys::openh264::{Decoder, Encoder, EncoderConfig, FrameKind, I420, Library};
 
-use crate::h264::frame_rate;
+use crate::h264::{frame_rate, quantizer};
 use crate::yuv::{self, I420Buffer, Planes};
 use crate::{
     CodecError, DecoderBackend, EncodeParams, Encoded, EncoderBackend, Frame, Packet, VideoDecoder,
@@ -22,9 +20,12 @@ const OFFER: CodecOffer = CodecOffer {
     hardware: false,
 };
 
-/// The quantizer of a sharp-text refinement: fine enough that thin text keeps
-/// its edges, coarser than lossless so one frame stays a modest size.
-const REFINE_QP: u8 = 16;
+/// How many quantizer steps a sharp-text refinement is finer than the
+/// stream at least.
+const REFINE_STEPS: u8 = 6;
+
+/// The finest quantizer a refinement uses, so one frame stays a modest size.
+const FINEST_QP: u8 = 12;
 
 /// Wraps an OpenH264 error.
 fn backend(source: devlanes_sys::openh264::Error) -> CodecError {
@@ -41,15 +42,10 @@ pub struct OpenH264 {
 }
 
 impl OpenH264 {
-    /// Loads the system's OpenH264.
-    pub fn load() -> Result<Self, LoadError> {
-        Library::load().map(|library| Self { library })
-    }
-
-    /// Loads OpenH264 from the first of `candidates` that loads, names the
-    /// loader searches or paths.
-    pub fn load_from<S: AsRef<std::ffi::OsStr>>(candidates: &[S]) -> Result<Self, LoadError> {
-        Library::load_from(candidates).map(|library| Self { library })
+    /// The backends of a loaded OpenH264; [`crate::h264()`] loads it and
+    /// checks that it encodes and decodes.
+    pub(crate) fn new(library: Arc<Library>) -> Self {
+        Self { library }
     }
 
     /// The loaded version, such as `2.6.0`.
@@ -62,6 +58,12 @@ impl EncoderBackend for OpenH264 {
     /// H.264 in software.
     fn offer(&self) -> CodecOffer {
         OFFER
+    }
+
+    /// H.264's level 5.2: at most 36,864 macroblocks, 4096x2304, with sides
+    /// of at most 4096.
+    fn fits(&self, width: u32, height: u32) -> bool {
+        crate::h264::level_5_2(width, height)
     }
 
     /// An encoder that starts its OpenH264 encoder on the first frame, at
@@ -147,7 +149,14 @@ impl VideoEncoder for OpenH264Encoder {
             }
         }
         if params.refine {
-            encoder.set_fixed_qp(Some(REFINE_QP)).map_err(backend)?;
+            // A few steps finer than what bitrate control used last, and
+            // never coarser than the stream nor finer than `FINEST_QP`.
+            let stream = encoder.last_qp().map_err(backend)?;
+            let qp = quantizer(params.quality)
+                .min(stream.saturating_sub(REFINE_STEPS))
+                .max(FINEST_QP)
+                .min(stream);
+            encoder.set_fixed_qp(Some(qp)).map_err(backend)?;
         }
         let picture = I420 {
             width,
@@ -195,6 +204,9 @@ impl VideoDecoder for OpenH264Decoder {
     /// which the encoder padded to even sides.
     fn decode(&mut self, packet: &Packet<'_>) -> Result<Option<Frame>, CodecError> {
         let (width, height) = (packet.width, packet.height);
+        if packet.payload.is_empty() {
+            return Err(CodecError::BadPayload { width, height });
+        }
         let Some(picture) = self.decoder.decode(packet.payload).map_err(backend)? else {
             return Ok(None);
         };

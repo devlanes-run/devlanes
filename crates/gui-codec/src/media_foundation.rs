@@ -1,6 +1,13 @@
 //! H.264 on Windows through Media Foundation (`devlanes_sys_windows::
-//! media_foundation`): a hardware encoder where the GPU has one, Microsoft's
-//! software encoder as the fallback, and Microsoft's decoder.
+//! media_foundation`): Microsoft's software encoder first, a hardware
+//! encoder where the GPU has one as the next to try, and Microsoft's
+//! decoder.
+//!
+//! Software comes first by the supervisor's decision for this run: it was
+//! faster on the machine it was measured on, has no session cap and no
+//! driver to hang, and behaves the same on every machine. The quantizer of
+//! every frame, a refinement's included, comes from the quality the pacer
+//! asks for.
 
 use std::sync::Arc;
 
@@ -8,21 +15,12 @@ use bytes::Bytes;
 use devlanes_gui_proto::{CodecId, CodecOffer};
 use devlanes_sys_windows::media_foundation::{self as mf, Decoder, Encoder, EncoderConfig};
 
-use crate::h264::{H264, Unavailable, frame_rate};
+use crate::h264::{H264, Unavailable, frame_rate, level_5_2, quantizer};
 use crate::yuv::{self, Planes};
 use crate::{
     CodecError, DecoderBackend, EncodeParams, Encoded, EncoderBackend, Frame, Packet, VideoDecoder,
     VideoEncoder,
 };
-
-/// The quantizer of a sharp-text refinement.
-const REFINE_QP: u8 = 16;
-
-/// The quantizer for the pacer's quality: 44 (blocky but small) at 0 to 18
-/// at 100.
-fn quantizer(quality: u8) -> u8 {
-    44 - (u32::from(quality.min(100)) * 26 / 100) as u8
-}
 
 /// Maps a Media Foundation error.
 fn codec_error(error: mf::Error) -> CodecError {
@@ -38,36 +36,40 @@ fn codec_error(error: mf::Error) -> CodecError {
     }
 }
 
-/// Finds the Media Foundation encoders and the decoder. Blocking.
+/// Finds the Media Foundation encoders, software first, and the decoder.
+/// Blocking.
 pub(crate) fn backends() -> H264 {
     let mut encoders: Vec<Arc<dyn EncoderBackend>> = Vec::new();
     let mut problems = Vec::new();
+    match mf::has_software_encoder() {
+        Ok(true) => encoders.push(Arc::new(MediaFoundationEncoder { hardware: false })),
+        Ok(false) => problems.push("no software H.264 encoder transform".to_owned()),
+        Err(error) => problems.push(error.to_string()),
+    }
     match mf::has_hardware_encoder() {
         Ok(true) => encoders.push(Arc::new(MediaFoundationEncoder { hardware: true })),
         Ok(false) => {}
         Err(error) => problems.push(error.to_string()),
     }
-    match mf::has_software_encoder() {
-        Ok(true) => encoders.push(Arc::new(MediaFoundationEncoder { hardware: false })),
-        Ok(false) => problems.push("no H.264 encoder transform".to_owned()),
-        Err(error) => problems.push(error.to_string()),
-    }
-    let decoders: Vec<Arc<dyn DecoderBackend>> = match Decoder::new() {
-        Ok(_) => vec![Arc::new(MediaFoundationDecoder)],
-        Err(error) => {
-            problems.push(error.to_string());
-            Vec::new()
-        }
-    };
-    let unavailable = (encoders.is_empty() || decoders.is_empty()).then(|| Unavailable::Os {
+    let encode = encoders.is_empty().then(|| Unavailable::Os {
         detail: problems.join("; "),
     });
+    let (decoders, decode): (Vec<Arc<dyn DecoderBackend>>, _) = match Decoder::new() {
+        Ok(_) => (vec![Arc::new(MediaFoundationDecoder)], None),
+        Err(error) => (
+            Vec::new(),
+            Some(Unavailable::Os {
+                detail: error.to_string(),
+            }),
+        ),
+    };
     H264 {
         version: (!encoders.is_empty() || !decoders.is_empty())
             .then(|| "Media Foundation".to_owned()),
         encoders,
         decoders,
-        unavailable,
+        encode,
+        decode,
     }
 }
 
@@ -84,6 +86,16 @@ impl EncoderBackend for MediaFoundationEncoder {
         CodecOffer {
             codec: CodecId::H264,
             hardware: self.hardware,
+        }
+    }
+
+    /// Microsoft's software encoder documents 4096x2304 at most; GPU
+    /// encoders (NVENC among them) take sides of up to 4096 for H.264.
+    /// Both within level 5.2.
+    fn fits(&self, width: u32, height: u32) -> bool {
+        match self.hardware {
+            true => level_5_2(width, height),
+            false => width <= 4096 && height <= 2304,
         }
     }
 
@@ -149,10 +161,8 @@ impl VideoEncoder for Stream {
         if !encoder.constant_qp() && encoder.config().bitrate_bps != bitrate {
             encoder.set_bitrate(bitrate).map_err(codec_error)?;
         }
-        let qp = match params.refine {
-            true => REFINE_QP,
-            false => quantizer(params.quality),
-        };
+        // A refinement's quality is above the stream's, so its quantizer is finer.
+        let qp = quantizer(params.quality);
         let keyframe = encoder
             .encode(
                 &self.nv12,
@@ -209,6 +219,10 @@ impl VideoDecoder for Decode {
     /// Decodes a packet and crops the picture to the size it announces.
     fn decode(&mut self, packet: &Packet<'_>) -> Result<Option<Frame>, CodecError> {
         let (width, height) = (packet.width, packet.height);
+        let bad = || CodecError::BadPayload { width, height };
+        if packet.payload.is_empty() {
+            return Err(bad());
+        }
         let Some(picture) = self
             .0
             .decode(packet.payload, packet.timestamp)
@@ -218,18 +232,14 @@ impl VideoDecoder for Decode {
         };
         let stride = picture.stride as usize;
         let luma = stride * picture.height as usize;
+        let chroma = picture.data.len().checked_sub(luma).ok_or_else(bad)?;
         let (w, h) = (width as usize, height as usize);
         if picture.width < width
             || picture.height < height
             || !yuv::holds(luma, stride, w, h)
-            || !yuv::holds(
-                picture.data.len() - luma,
-                stride,
-                2 * w.div_ceil(2),
-                h.div_ceil(2),
-            )
+            || !yuv::holds(chroma, stride, 2 * w.div_ceil(2), h.div_ceil(2))
         {
-            return Err(CodecError::BadPayload { width, height });
+            return Err(bad());
         }
         let (y, uv) = picture.data.split_at(luma);
         let pixels = yuv::to_bgra(

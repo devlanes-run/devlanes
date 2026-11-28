@@ -15,7 +15,7 @@ use devlanes_gui_host::{
 };
 use devlanes_gui_proto::{
     Token,
-    ready::{Ready, UnavailableReason, Unready},
+    ready::{CodecSide, Ready, UnavailableReason, Unready},
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken as Shutdown;
@@ -166,8 +166,10 @@ async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Res
     let codecs = tokio::task::spawn_blocking(crate::codecs::find)
         .await
         .map_err(|error| HostError::Codecs(error.to_string()))?;
-    for problem in &codecs.problems {
-        tracing::warn!(codec = %problem.codec, reason = problem.reason.word(), detail = %problem.detail, "a video codec is missing; viewers get the next one both ends have");
+    // A host only encodes; what this machine cannot decode is the viewer's.
+    let problems = codecs.problems_of(CodecSide::Encode);
+    for problem in &problems {
+        tracing::warn!(codec = %problem.codec, reason = problem.reason.word(), detail = %problem.detail, "a video encoder is missing; viewers get the next codec both ends have");
     }
     if let Some(version) = &codecs.version {
         tracing::info!(%version, "H.264 available");
@@ -192,7 +194,7 @@ async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Res
         running.env(),
         running.real_desktop(),
     );
-    ready.codecs = codecs.problems;
+    ready.codecs = problems;
     let line = ready.to_line();
     print_line(&line)?;
     tracing::info!(%address, backend = ?backend, "GUI host ready");
