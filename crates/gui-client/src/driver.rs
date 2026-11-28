@@ -109,7 +109,9 @@ pub(crate) async fn read_loop<S: AsyncRead>(
             _ = shared.close.cancelled() => break None,
             read = reader.read_buf(&mut buf) => match read {
                 Ok(0) => break None,
-                Ok(_) => {}
+                // Any bytes are a sign of life: a large frame over a slow
+                // link may take longer than the silence limit to arrive.
+                Ok(_) => shared.data_arrived(now()),
                 Err(error) => break Some(error.into()),
             },
             _ = sleep_until(next) => {}
@@ -164,11 +166,8 @@ impl Reader {
     fn handle(&mut self, message: HostMessage) {
         let at = now();
         let shared = self.shared.clone();
+        shared.data_arrived(at);
         let mut state = shared.state();
-        state.last_data = at;
-        for win in state.windows.values_mut() {
-            win.lock.data(at);
-        }
         let event = match message {
             HostMessage::WindowAdded(info) => {
                 state

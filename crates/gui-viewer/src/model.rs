@@ -11,7 +11,8 @@
 //!
 //! Keys go out as typed text where they type a character and as physical
 //! keys otherwise ([`Viewer::key`]), so a layout other than the host's types
-//! what its user sees on the keys, and shortcuts keep their positions.
+//! what its user sees on the keys, and shortcuts keep their positions. The
+//! host inserts text exactly as given, whatever modifiers the viewer holds.
 
 use std::time::{Duration, Instant};
 
@@ -19,7 +20,7 @@ use devlanes_gui_client::Event;
 use devlanes_gui_codec::Frame;
 use devlanes_gui_proto::{
     Buttons, CursorShape, KeyCode, LockState, Point, Pointer, Size, Wheel, WheelUnit, WindowId,
-    WindowInfo, WindowKind,
+    WindowInfo, WindowKind, keys,
 };
 
 use crate::frame::{self, CloseAction, Decoration, Drag, Os};
@@ -144,6 +145,9 @@ pub struct KeyInput {
     pub text: Option<String>,
     /// A dead key, whose character comes with the next press.
     pub dead: bool,
+    /// For a keypad key, the navigation key its local meaning names (keypad
+    /// 4 is Left with Num Lock off), sent in its place when it types nothing.
+    pub navigation: Option<KeyCode>,
 }
 
 /// The modifiers held with a key.
@@ -207,8 +211,9 @@ struct Win {
     frame: Option<Frame>,
     resize: Resize,
     buttons: Buttons,
-    /// Keys held down as physical keys.
-    keys: Vec<KeyCode>,
+    /// Keys held down as physical keys: the local key and the code sent for
+    /// it, which its release sends too.
+    keys: Vec<(KeyCode, KeyCode)>,
     /// Keys whose press went out as text, whose release is not sent.
     texted: Vec<KeyCode>,
     pointer: Option<Point>,
@@ -239,6 +244,8 @@ pub struct Viewer {
     clipboard: Option<String>,
     /// Local clipboard text read while the link was down, sent once it is up.
     clipboard_pending: Option<String>,
+    /// How many clipboard texts the host has sent.
+    host_clipboards: u64,
     /// The local window that reported a focus loss this turn of the event
     /// loop; the loss counts only when no other window of the service gained
     /// focus by [`Viewer::settle_focus`].
@@ -264,6 +271,7 @@ impl Viewer {
             end_at: None,
             clipboard: None,
             clipboard_pending: None,
+            host_clipboards: 0,
             blurred: None,
             out: Vec::new(),
         }
@@ -329,7 +337,7 @@ impl Viewer {
             keep
         });
         for info in added {
-            self.add(info, ui);
+            self.add(info, now, ui);
         }
         if let Some(text) = self.clipboard_pending.take() {
             self.send_clipboard(text);
@@ -357,7 +365,7 @@ impl Viewer {
 
     /// Adds `info` with a new local window, opened unless its parent's is
     /// closed.
-    fn add(&mut self, info: WindowInfo, ui: &mut impl Windows) {
+    fn add(&mut self, info: WindowInfo, now: Instant, ui: &mut impl Windows) {
         let local = LocalId(self.next_local);
         self.next_local += 1;
         let hidden = info
@@ -371,7 +379,7 @@ impl Viewer {
             open: false,
             hidden,
             frame: None,
-            resize: Resize::new(info.size),
+            resize: Resize::new(info.size, now),
             buttons: Buttons::NONE,
             keys: Vec::new(),
             texted: Vec::new(),
@@ -417,10 +425,10 @@ impl Viewer {
             Event::WindowAdded(info) => {
                 if self.index_of(info.id).is_none() {
                     self.closed_by_host = false;
-                    self.add(info, ui);
+                    self.add(info, now, ui);
                 }
             }
-            Event::WindowChanged(info) => self.changed(info, ui),
+            Event::WindowChanged(info) => self.changed(info, now, ui),
             Event::WindowRemoved(window) => {
                 if let Some(index) = self.index_of(window) {
                     let win = self.windows.remove(index);
@@ -474,9 +482,12 @@ impl Viewer {
                     ui.drag(self.windows[index].local, drag);
                 }
             }
-            Event::Clipboard(text) if self.clipboard.as_deref() != Some(text.as_str()) => {
-                ui.set_clipboard(&text);
-                self.clipboard = Some(text);
+            Event::Clipboard(text) => {
+                self.host_clipboards += 1;
+                if self.clipboard.as_deref() != Some(text.as_str()) {
+                    ui.set_clipboard(&text);
+                    self.clipboard = Some(text);
+                }
             }
             // Applied sizes, the input holder and activity change nothing
             // here, and `disconnected` follows the end of the connection.
@@ -486,7 +497,7 @@ impl Viewer {
     }
 
     /// The host described a window anew.
-    fn changed(&mut self, info: WindowInfo, ui: &mut impl Windows) {
+    fn changed(&mut self, info: WindowInfo, now: Instant, ui: &mut impl Windows) {
         let Some(index) = self.index_of(info.id) else {
             return;
         };
@@ -498,7 +509,7 @@ impl Viewer {
             (_, host) => host,
         };
         let size = (win.info.size != info.size && info.size.is_nonzero())
-            .then(|| win.resize.remote(info.size))
+            .then(|| win.resize.remote(info.size, now))
             .flatten();
         let looks_changed = win.info.title != info.title
             || win.info.min_size != info.min_size
@@ -649,7 +660,7 @@ impl Viewer {
             let held = std::mem::take(&mut self.windows[other].keys);
             let window = self.windows[other].info.id;
             self.windows[other].texted.clear();
-            for code in held {
+            for (_, code) in held {
                 self.out.push(Out::Key(window, code, false));
             }
         }
@@ -676,10 +687,19 @@ impl Viewer {
         }
     }
 
+    /// How many clipboard texts the host has sent, for a read of the local
+    /// clipboard to say when it started.
+    pub fn host_clipboards(&self) -> u64 {
+        self.host_clipboards
+    }
+
     /// The local clipboard's text, read when a window of the service gained
-    /// focus. Sent when it changed, once the link can carry it.
-    pub fn local_clipboard(&mut self, text: String) {
-        if self.clipboard.as_deref() == Some(text.as_str()) {
+    /// focus, from a read that started when [`Viewer::host_clipboards`] was
+    /// `started`. Sent when it changed, once the link can carry it. A read
+    /// the host's clipboard overtook is dropped: the host's text is newer,
+    /// and the read may predate it on the local clipboard.
+    pub fn local_clipboard(&mut self, text: String, started: u64) {
+        if started != self.host_clipboards || self.clipboard.as_deref() == Some(text.as_str()) {
             return;
         }
         if self.link == Link::Up {
@@ -788,56 +808,80 @@ impl Viewer {
     ///
     /// A press that types a character with the local layout goes out as that
     /// text, and its release not at all; a repeat of it repeats the text.
-    /// Presses with Control (without Alt, which with Control is AltGr on
-    /// Windows) or with Super or Command held stay physical keys, so
-    /// shortcuts keep their positions. A dead key sends nothing; its
-    /// character comes as the text of the next press. Every other key goes
-    /// out as a physical key, modifiers included, and the app repeats a held
-    /// one itself. Presses go out only while the window is unlocked;
-    /// releases of held keys always do.
+    /// Shortcuts stay physical keys, so they keep their positions: presses
+    /// with Control without Alt (Control with Alt is AltGr on Windows), with
+    /// Super or Command, and on Windows and Linux with Alt without Control
+    /// (menu mnemonics; Option types characters on macOS). A key keeps the
+    /// way its press went out until its release, whatever the modifiers do
+    /// meanwhile. Space and keys that type nothing go out as physical keys,
+    /// a keypad key that types nothing as the navigation key it means; the
+    /// app repeats a held one itself. Caps Lock and Num Lock stay local: text
+    /// already has their effect, and the host types text as given. A dead
+    /// key sends nothing; its character comes as the text of the next press.
+    /// Presses go out only while the window is unlocked; releases of held
+    /// keys always do.
     pub fn key(&mut self, local: LocalId, input: KeyInput, modifiers: Modifiers, now: Instant) {
         let Some(index) = self.index_of_local(local) else {
             return;
         };
         let window = self.windows[index].info.id;
-        if !input.pressed {
-            let Some(code) = input.code else {
-                return;
-            };
-            let win = &mut self.windows[index];
-            if let Some(at) = win.texted.iter().position(|held| *held == code) {
-                win.texted.remove(at);
-            } else if let Some(at) = win.keys.iter().position(|held| *held == code) {
-                win.keys.remove(at);
-                self.out.push(Out::Key(window, code, false));
+        let Some(code) = input.code else {
+            // Only text can go without a code; a release has none.
+            if input.pressed
+                && !input.dead
+                && self.shown(&self.windows[index], now) == LockState::Unlocked
+                && let Some(text) = self.text_of(&input, modifiers)
+            {
+                self.out.push(Out::Text(window, text));
             }
+            return;
+        };
+        let win = &mut self.windows[index];
+        if !input.pressed {
+            if let Some(at) = win.keys.iter().position(|(held, _)| *held == code) {
+                let (_, sent) = win.keys.remove(at);
+                self.out.push(Out::Key(window, sent, false));
+            } else if let Some(at) = win.texted.iter().position(|held| *held == code) {
+                win.texted.remove(at);
+            }
+            return;
+        }
+        // A key that went down as a physical key stays one; the app repeats
+        // it. One whose press went as text never sends a key press, so its
+        // release needs none either.
+        if win.keys.iter().any(|(held, _)| *held == code)
+            || code == keys::CAPS_LOCK
+            || code == keys::NUM_LOCK
+        {
             return;
         }
         if self.shown(&self.windows[index], now) != LockState::Unlocked || input.dead {
             return;
         }
-        let shortcut = (modifiers.ctrl && !modifiers.alt) || modifiers.meta;
-        let text = input
-            .text
-            .filter(|text| !shortcut && !text.is_empty() && !text.chars().any(char::is_control));
+        let text = self.text_of(&input, modifiers);
         let win = &mut self.windows[index];
         if let Some(text) = text {
-            if let Some(code) = input.code
-                && !win.texted.contains(&code)
-            {
+            if !win.texted.contains(&code) {
                 win.texted.push(code);
             }
             self.out.push(Out::Text(window, text));
             return;
         }
-        let Some(code) = input.code else {
-            return;
-        };
-        if input.repeat || win.keys.contains(&code) {
+        if input.repeat || win.texted.contains(&code) {
             return;
         }
-        win.keys.push(code);
-        self.out.push(Out::Key(window, code, true));
+        let sent = input.navigation.unwrap_or(code);
+        win.keys.push((code, sent));
+        self.out.push(Out::Key(window, sent, true));
+    }
+
+    /// The text a press sends, or `None` when it goes as a physical key.
+    fn text_of(&self, input: &KeyInput, modifiers: Modifiers) -> Option<String> {
+        let mnemonic = modifiers.alt && !modifiers.ctrl && self.os != Os::Mac;
+        let shortcut = (modifiers.ctrl && !modifiers.alt) || modifiers.meta || mnemonic;
+        input.text.clone().filter(|text| {
+            !shortcut && !text.is_empty() && text != " " && !text.chars().any(char::is_control)
+        })
     }
 
     /// Does what is due at `now`: sends settled sizes, closes windows that
@@ -948,7 +992,7 @@ impl Viewer {
         let win = &mut self.windows[index];
         let window = win.info.id;
         win.texted.clear();
-        for code in std::mem::take(&mut win.keys) {
+        for (_, code) in std::mem::take(&mut win.keys) {
             self.out.push(Out::Key(window, code, false));
         }
         self.release_buttons(index);

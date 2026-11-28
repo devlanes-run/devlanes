@@ -352,7 +352,10 @@ pub enum ClientMessage {
     Wheel(Wheel),
     /// A key down or up.
     Key(Key),
-    /// Text the viewer's input method committed, at most [`MAX_TEXT`] bytes.
+    /// Text a client typed, at most [`MAX_TEXT`] bytes. The host inserts it
+    /// exactly as given, as if no modifier or lock were held, whatever keys
+    /// the client holds down (Shift for "A", Control and Alt for AltGr on
+    /// Windows); a viewer does not forward Caps Lock or Num Lock.
     Text {
         /// The focused window.
         window: WindowId,

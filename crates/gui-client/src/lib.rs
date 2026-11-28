@@ -298,6 +298,15 @@ impl Shared {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
+    /// Bytes from the host arrived at `at`, part of a message or a whole one.
+    fn data_arrived(&self, at: std::time::Instant) {
+        let mut state = self.state();
+        state.last_data = at;
+        for win in state.windows.values_mut() {
+            win.lock.data(at);
+        }
+    }
+
     /// Encodes `message` and queues it for the writer.
     fn send(&self, message: &ClientMessage) -> Result<(), ClientError> {
         if self.close.is_cancelled() {

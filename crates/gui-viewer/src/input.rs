@@ -3,7 +3,7 @@
 
 use devlanes_gui_proto::{Buttons, KeyCode, WheelUnit, keys};
 use winit::event::{MouseButton, MouseScrollDelta};
-use winit::keyboard::KeyCode as Physical;
+use winit::keyboard::{Key, KeyCode as Physical, NamedKey};
 
 /// The HID code of a physical key, or `None` for a key the protocol has no
 /// code for (such as Fn, which no OS reports to apps either).
@@ -140,6 +140,46 @@ pub fn key_code(key: Physical) -> Option<KeyCode> {
         P::AltRight => keys::ALT_RIGHT,
         P::SuperRight => keys::META_RIGHT,
         // Media and volume keys stay with this machine, which they control.
+        _ => return None,
+    })
+}
+
+/// For a keypad key, the navigation key its local meaning `logical` names,
+/// such as Left for keypad 4 with Num Lock off; `None` for other keys and
+/// for keypad keys that mean a character.
+pub fn navigation(key: Physical, logical: &Key) -> Option<KeyCode> {
+    use Physical as P;
+    let keypad = matches!(
+        key,
+        P::Numpad0
+            | P::Numpad1
+            | P::Numpad2
+            | P::Numpad3
+            | P::Numpad4
+            | P::Numpad5
+            | P::Numpad6
+            | P::Numpad7
+            | P::Numpad8
+            | P::Numpad9
+            | P::NumpadDecimal
+    );
+    let Key::Named(named) = logical else {
+        return None;
+    };
+    if !keypad {
+        return None;
+    }
+    Some(match named {
+        NamedKey::ArrowLeft => keys::LEFT,
+        NamedKey::ArrowRight => keys::RIGHT,
+        NamedKey::ArrowUp => keys::UP,
+        NamedKey::ArrowDown => keys::DOWN,
+        NamedKey::Home => keys::HOME,
+        NamedKey::End => keys::END,
+        NamedKey::PageUp => keys::PAGE_UP,
+        NamedKey::PageDown => keys::PAGE_DOWN,
+        NamedKey::Insert => keys::INSERT,
+        NamedKey::Delete => keys::DELETE,
         _ => return None,
     })
 }

@@ -90,10 +90,11 @@ impl App {
     /// text back to this thread.
     fn read_clipboard(&self) {
         let tell = self.tell.clone();
+        let started = self.viewer.host_clipboards();
         self.runtime.spawn_blocking(move || {
             let text = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text());
             if let Ok(text) = text {
-                tell(FromLink::LocalClipboard(text));
+                tell(FromLink::LocalClipboard(text, started));
             }
         });
     }
@@ -193,8 +194,8 @@ impl ApplicationHandler<FromLink> for App {
                 self.with_ui(event_loop, |viewer, ui| viewer.unit_checked(check, now, ui));
             }
             FromLink::Show => self.with_ui(event_loop, |viewer, ui| viewer.show(ui)),
-            FromLink::LocalClipboard(text) => {
-                self.viewer.local_clipboard(text);
+            FromLink::LocalClipboard(text, started) => {
+                self.viewer.local_clipboard(text, started);
                 self.with_ui(event_loop, |_, _| ());
             }
             FromLink::Failed(error) => {
@@ -276,6 +277,7 @@ impl ApplicationHandler<FromLink> for App {
                     repeat: event.repeat,
                     text: event.text.as_ref().map(|text| text.to_string()),
                     dead: matches!(event.logical_key, Key::Dead(_)),
+                    navigation: key.and_then(|key| input::navigation(key, &event.logical_key)),
                 };
                 let modifiers = Modifiers {
                     ctrl: self.modifiers.control_key(),

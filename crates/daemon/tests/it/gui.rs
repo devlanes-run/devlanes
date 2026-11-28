@@ -637,6 +637,7 @@ async fn a_daemon_restart_keeps_auto_opened_viewers_and_a_stop_ends_them() {
             start_time: identity.start_time,
             started_by: devlanes_gui_client::instance::StartedBy::Daemon,
             service: "acme@1:desktop".into(),
+            host_box: None,
         };
         // This test holds the lock in the viewer's place.
         let _lock = devlanes_gui_client::instance::claim(&dir, &key, &info).expect("claim");

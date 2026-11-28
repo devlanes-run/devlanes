@@ -38,8 +38,9 @@ pub enum FromLink {
     /// Someone asked for the windows again (`devlanes gui open`).
     Show,
     /// The local clipboard's text, read off the window thread when a window
-    /// gained focus.
-    LocalClipboard(String),
+    /// gained focus, by a read that started when the host had sent that many
+    /// clipboard texts ([`crate::model::Viewer::host_clipboards`]).
+    LocalClipboard(String, u64),
 }
 
 /// The newest decoded frame of each window, waiting for the window thread.
@@ -52,6 +53,15 @@ impl Frames {
     fn put(&self, frame: DecodedFrame) -> bool {
         let mut slots = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         slots.insert(frame.window, frame).is_none()
+    }
+
+    /// Empties every slot: the frames of a connection that ended are not
+    /// shown after the next one's windows took over.
+    fn clear(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
 
     /// The newest frame of `window`, emptying its slot.
@@ -72,6 +82,8 @@ pub struct UnitCheck {
     pub devlanes: std::path::PathBuf,
     /// The unit, as `lane:unit`.
     pub unit: String,
+    /// The box the unit's lane was found on, for a box's lane.
+    pub host_box: Option<String>,
 }
 
 /// The first wait before a reconnect, doubled after each failed attempt.
@@ -158,6 +170,7 @@ pub async fn run(
         }
         client.close();
         drop(events);
+        frames.clear();
         if !tell(FromLink::Disconnected) {
             return;
         }
@@ -254,35 +267,123 @@ const DAEMON_EXIT: i32 = 4;
 /// How long the check may take.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// What `devlanes gui ls UNIT --json` says about the unit: its `runs` field;
-/// gone when the unit or its lane does not exist (for a box's lane, only
-/// when every box this machine knows is connected and none has it, which
-/// `gui ls` says by that exit code); the daemon away when there is none to
-/// ask, since `DEVLANES_NO_SPAWN` keeps the check from starting one.
+/// Asks `devlanes gui ls UNIT --json` about the unit, without starting a
+/// daemon (`DEVLANES_NO_SPAWN`); see [`answer`]. For a box's lane that was
+/// not found, `devlanes remote ls --json` then says whether its box is away
+/// ([`box_away`]).
 async fn unit_check(check: &UnitCheck) -> Check {
-    let mut command = tokio::process::Command::new(&check.devlanes);
+    let found = run_json(&check.devlanes, &["gui", "ls", &check.unit, "--json"]).await;
+    let Some((code, stdout)) = found else {
+        return Check::Unknown;
+    };
+    let answer = answer(code, &stdout);
+    let Some(host_box) = check.host_box.as_deref().filter(|_| answer == Check::Gone) else {
+        return answer;
+    };
+    if code != Some(NOT_FOUND_EXIT) {
+        return answer;
+    }
+    match run_json(&check.devlanes, &["remote", "ls", "--json"]).await {
+        Some((Some(0), boxes)) if !box_away(&boxes, host_box) => Check::Gone,
+        _ => Check::Unknown,
+    }
+}
+
+/// Runs `devlanes` with `args` and no daemon start, for its exit code and
+/// standard output; `None` when it did not run or took too long.
+async fn run_json(devlanes: &std::path::Path, args: &[&str]) -> Option<(Option<i32>, Vec<u8>)> {
+    let mut command = tokio::process::Command::new(devlanes);
     command
-        .args(["gui", "ls", &check.unit, "--json"])
+        .args(args)
         .env(devlanes_proto::NO_SPAWN_ENV, "1")
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
-    let output = match tokio::time::timeout(CHECK_TIMEOUT, command.output()).await {
-        Ok(Ok(output)) => output,
-        _ => return Check::Unknown,
-    };
-    match output.status.code() {
-        Some(NOT_FOUND_EXIT) => return Check::Gone,
-        Some(DAEMON_EXIT) => return Check::DaemonAway,
-        Some(0) => {}
-        _ => return Check::Unknown,
+    match tokio::time::timeout(CHECK_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => Some((output.status.code(), output.stdout)),
+        _ => None,
     }
-    let runs = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+}
+
+/// What a `gui ls UNIT --json` that exited with `code` and printed `stdout`
+/// says about the unit: its `runs` field; gone when the unit or its lane
+/// does not exist; the daemon away when there is none to ask.
+fn answer(code: Option<i32>, stdout: &[u8]) -> Check {
+    match code {
+        Some(NOT_FOUND_EXIT) => Check::Gone,
+        Some(DAEMON_EXIT) => Check::DaemonAway,
+        Some(0) => {
+            let runs = serde_json::from_slice::<serde_json::Value>(stdout)
+                .ok()
+                .and_then(|answer| answer["items"][0]["runs"].as_bool());
+            match runs {
+                Some(true) => Check::Runs,
+                Some(false) => Check::Gone,
+                None => Check::Unknown,
+            }
+        }
+        _ => Check::Unknown,
+    }
+}
+
+/// Whether `remote ls --json` (`stdout`) lists `host_box` as known but not
+/// connected. A box no longer known is not away: its lanes are gone.
+fn box_away(stdout: &[u8], host_box: &str) -> bool {
+    serde_json::from_slice::<serde_json::Value>(stdout)
         .ok()
-        .and_then(|answer| answer["items"][0]["runs"].as_bool());
-    match runs {
-        Some(true) => Check::Runs,
-        Some(false) => Check::Gone,
-        None => Check::Unknown,
+        .and_then(|list| {
+            list["items"]
+                .as_array()?
+                .iter()
+                .find(|item| item["host"] == host_box)
+                .map(|item| item["state"] != "connected")
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `remote ls --json` with `boxes` and their states.
+    fn boxes(boxes: &[(&str, &str)]) -> Vec<u8> {
+        let items: Vec<_> = boxes
+            .iter()
+            .map(|(host, state)| serde_json::json!({"host": host, "state": state}))
+            .collect();
+        serde_json::json!({ "items": items })
+            .to_string()
+            .into_bytes()
+    }
+
+    /// A box lane found nowhere is gone when its own box is connected or no
+    /// longer known, also while another box is offline; only its own box
+    /// being away leaves it unknown.
+    #[test]
+    fn a_missing_box_lane_is_gone_unless_its_own_box_is_away() {
+        // The lane was cleaned while another box is offline.
+        let other_offline = boxes(&[("hetzner", "connected"), ("other", "disconnected")]);
+        assert!(!box_away(&other_offline, "hetzner"));
+        // The viewer's own box is offline.
+        let own_offline = boxes(&[("hetzner", "connecting"), ("other", "connected")]);
+        assert!(box_away(&own_offline, "hetzner"));
+        // The box was removed.
+        assert!(!box_away(&boxes(&[("other", "disconnected")]), "hetzner"));
+        assert_eq!(answer(Some(NOT_FOUND_EXIT), b""), Check::Gone);
+    }
+
+    /// A unit that exists is gone only when it does not run.
+    #[test]
+    fn the_runs_field_decides_for_a_unit_that_exists() {
+        let items = |runs: bool| {
+            serde_json::json!({"items": [{"runs": runs}]})
+                .to_string()
+                .into_bytes()
+        };
+        assert_eq!(answer(Some(0), &items(true)), Check::Runs);
+        assert_eq!(answer(Some(0), &items(false)), Check::Gone);
+        assert_eq!(answer(Some(0), b"{}"), Check::Unknown);
+        assert_eq!(answer(Some(DAEMON_EXIT), b""), Check::DaemonAway);
+        assert_eq!(answer(Some(1), b""), Check::Unknown);
     }
 }

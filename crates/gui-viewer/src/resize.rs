@@ -4,10 +4,11 @@
 //! client takes over with its own Resizing, which ends on the first frame
 //! after the change.
 //!
-//! Sizes cannot fight: the first size the window reports after the viewer
-//! gave it one is the OS's answer, whatever it is (an OS may round it to its
-//! size steps, a tiling desktop may refuse it), and a size the host answered
-//! with another size is not sent again.
+//! Sizes cannot fight: the first size the window reports within [`OS_ANSWER`]
+//! after the viewer gave it one is the OS's answer, whatever it is (an OS may
+//! round it to its size steps, a tiling desktop may refuse it), and a size
+//! the host answered with another size is not sent again until the user
+//! settles on a different one.
 
 use std::time::{Duration, Instant};
 
@@ -18,11 +19,16 @@ use devlanes_gui_proto::{RESIZE_TIMEOUT, Size};
 /// feel like a wait after letting go.
 pub const SETTLE: Duration = Duration::from_millis(250);
 
+/// How long after the viewer gave the window a size a size event counts as
+/// the OS's answer. An OS that refuses a size (a tiling desktop, a maximized
+/// window) may report nothing, and the next size event is then the user's.
+pub const OS_ANSWER: Duration = Duration::from_millis(500);
+
 /// The resize state of one local window.
 #[derive(Debug, Clone, Default)]
 pub struct Resize {
-    /// The viewer gave the window a size and its answer has not come yet.
-    awaiting_os: bool,
+    /// When the viewer gave the window a size whose answer has not come yet.
+    awaiting_os: Option<Instant>,
     /// The size the window has, as last reported or given.
     current: Option<Size>,
     /// The size the host has for the window.
@@ -38,20 +44,20 @@ pub struct Resize {
 }
 
 impl Resize {
-    /// A window opened at `size`, the host's size for it.
-    pub fn new(size: Size) -> Self {
+    /// A window opened at `now` at `size`, the host's size for it.
+    pub fn new(size: Size, now: Instant) -> Self {
         Self {
-            awaiting_os: true,
+            awaiting_os: Some(now),
             current: Some(size),
             remote: Some(size),
             ..Self::default()
         }
     }
 
-    /// The host's size for the window changed to `size`. Returns the size to
-    /// give the local window, or `None` while the user resizes it, which
-    /// wins: its size goes to the host when it settles.
-    pub fn remote(&mut self, size: Size) -> Option<Size> {
+    /// The host's size for the window changed to `size` at `now`. Returns
+    /// the size to give the local window, or `None` while the user resizes
+    /// it, which wins: its size goes to the host when it settles.
+    pub fn remote(&mut self, size: Size, now: Instant) -> Option<Size> {
         if let Some(sent) = self.last_sent.take()
             && sent != size
         {
@@ -61,7 +67,7 @@ impl Resize {
         if self.pending.is_some() || self.current == Some(size) {
             return None;
         }
-        self.awaiting_os = true;
+        self.awaiting_os = Some(now);
         Some(size)
     }
 
@@ -82,7 +88,7 @@ impl Resize {
             self.pending = Some((current, now.checked_sub(SETTLE).unwrap_or(now)));
             return None;
         }
-        self.awaiting_os = true;
+        self.awaiting_os = Some(now);
         Some(size)
     }
 
@@ -94,8 +100,10 @@ impl Resize {
         if !self.remote.is_some_and(Size::is_nonzero) {
             return;
         }
-        if self.awaiting_os && self.pending.is_none() {
-            self.awaiting_os = false;
+        if let Some(given) = self.awaiting_os.take()
+            && self.pending.is_none()
+            && now < given + OS_ANSWER
+        {
             return;
         }
         if self.pending.is_none() && self.remote == Some(size) {
@@ -105,8 +113,8 @@ impl Resize {
     }
 
     /// The size to send to the host at `now`, once, when it settled. A size
-    /// the host already has, or one it answered with another size, is not
-    /// sent again.
+    /// the host already has, or the one it last answered with another size,
+    /// is not sent again; settling on any other size forgets that one.
     pub fn due(&mut self, now: Instant) -> Option<Size> {
         let (size, since) = self.pending?;
         if now < since + SETTLE {
@@ -116,6 +124,7 @@ impl Resize {
         if self.remote == Some(size) || self.refused == Some(size) {
             return None;
         }
+        self.refused = None;
         self.sent_at = Some(now);
         self.last_sent = Some(size);
         Some(size)
@@ -160,7 +169,7 @@ mod tests {
     #[test]
     fn a_drag_sends_its_final_size_once_and_locks_meanwhile() {
         let t0 = Instant::now();
-        let mut resize = Resize::new(Size::new(800, 600));
+        let mut resize = Resize::new(Size::new(800, 600), t0);
         resize.local(Size::new(800, 600), t0);
         assert!(!resize.locks(t0), "the window's own first size event");
 
@@ -178,7 +187,7 @@ mod tests {
         // Another viewer resized the window: the viewer applies it, and the
         // size event that follows is not sent back.
         assert_eq!(
-            resize.remote(Size::new(1024, 768)),
+            resize.remote(Size::new(1024, 768), at(t0, 1990)),
             Some(Size::new(1024, 768))
         );
         resize.local(Size::new(1024, 768), at(t0, 2000));
@@ -191,13 +200,17 @@ mod tests {
     #[test]
     fn the_user_wins_over_the_host_and_a_round_trip_sends_nothing() {
         let t0 = Instant::now();
-        let mut resize = Resize::new(Size::new(800, 600));
+        let mut resize = Resize::new(Size::new(800, 600), t0);
         resize.local(Size::new(800, 600), t0);
         resize.local(Size::new(820, 600), t0);
-        assert_eq!(resize.remote(Size::new(700, 500)), None, "the user drags");
+        assert_eq!(
+            resize.remote(Size::new(700, 500), t0),
+            None,
+            "the user drags"
+        );
         assert_eq!(resize.due(t0 + SETTLE), Some(Size::new(820, 600)));
 
-        let mut resize = Resize::new(Size::new(800, 600));
+        let mut resize = Resize::new(Size::new(800, 600), t0);
         resize.local(Size::new(800, 600), t0);
         resize.local(Size::new(900, 600), t0);
         resize.local(Size::new(800, 600), at(t0, 100));
@@ -212,13 +225,13 @@ mod tests {
     #[test]
     fn sizes_the_os_or_the_app_change_are_not_sent_back() {
         let t0 = Instant::now();
-        let mut resize = Resize::new(Size::new(800, 600));
+        let mut resize = Resize::new(Size::new(800, 600), t0);
         resize.local(Size::new(800, 600), t0);
         resize.local(Size::new(900, 600), t0);
         assert_eq!(resize.due(t0 + SETTLE), Some(Size::new(900, 600)));
         // The app keeps a minimum: the host answers with another size.
         assert_eq!(
-            resize.remote(Size::new(1000, 600)),
+            resize.remote(Size::new(1000, 600), at(t0, 280)),
             Some(Size::new(1000, 600))
         );
         // The OS gives the window 998 wide, its size step.
@@ -231,6 +244,36 @@ mod tests {
         // The user drags to the refused size again: not sent again.
         resize.local(Size::new(900, 600), at(t0, 3000));
         assert_eq!(resize.due(at(t0, 3000) + SETTLE), None);
+        // Settling on another size forgets the refusal, so the one the app
+        // once clamped goes out when the user asks for it later.
+        resize.local(Size::new(950, 600), at(t0, 4000));
+        assert_eq!(resize.due(at(t0, 4000) + SETTLE), Some(Size::new(950, 600)));
+        resize.client_reported();
+        resize.local(Size::new(900, 600), at(t0, 5000));
+        assert_eq!(resize.due(at(t0, 5000) + SETTLE), Some(Size::new(900, 600)));
+    }
+
+    /// An OS that answers a given size with no size event (it refused the
+    /// size) does not swallow the user's next change once [`OS_ANSWER`]
+    /// passed; within it, the event is the OS's answer.
+    #[test]
+    fn the_wait_for_the_os_answer_expires() {
+        let t0 = Instant::now();
+        let mut resize = Resize::new(Size::new(800, 600), t0);
+        resize.local(Size::new(800, 600), t0);
+        assert_eq!(
+            resize.remote(Size::new(1024, 768), at(t0, 1000)),
+            Some(Size::new(1024, 768))
+        );
+        // Nothing comes; much later the user drags.
+        resize.local(Size::new(820, 600), at(t0, 3000));
+        assert_eq!(resize.due(at(t0, 3000) + SETTLE), Some(Size::new(820, 600)));
+
+        let mut resize = Resize::new(Size::new(800, 600), t0);
+        resize.local(Size::new(800, 600), t0);
+        resize.remote(Size::new(1024, 768), at(t0, 1000));
+        resize.local(Size::new(1000, 768), at(t0, 1000) + OS_ANSWER / 2);
+        assert_eq!(resize.due(at(t0, 5000)), None, "the OS's answer");
     }
 
     /// A drag finished while the link was down is sent after the reconnect;
@@ -238,7 +281,7 @@ mod tests {
     #[test]
     fn a_reconnect_keeps_the_sizes_together() {
         let t0 = Instant::now();
-        let mut resize = Resize::new(Size::new(800, 600));
+        let mut resize = Resize::new(Size::new(800, 600), t0);
         resize.local(Size::new(800, 600), t0);
         resize.local(Size::new(900, 600), t0);
         assert_eq!(resize.reconnected(Size::new(800, 600), at(t0, 10)), None);
@@ -248,7 +291,7 @@ mod tests {
         assert_eq!(resize.reconnected(Size::new(800, 600), at(t0, 500)), None);
         assert_eq!(resize.due(at(t0, 500)), Some(Size::new(900, 600)));
 
-        let mut resize = Resize::new(Size::new(800, 600));
+        let mut resize = Resize::new(Size::new(800, 600), t0);
         resize.local(Size::new(800, 600), t0);
         assert_eq!(
             resize.reconnected(Size::new(1024, 768), t0),
@@ -263,7 +306,7 @@ mod tests {
     #[test]
     fn the_viewer_lock_ends_on_the_resize_timeout() {
         let t0 = Instant::now();
-        let mut resize = Resize::new(Size::new(800, 600));
+        let mut resize = Resize::new(Size::new(800, 600), t0);
         resize.local(Size::new(800, 600), t0);
         resize.local(Size::new(900, 700), t0);
         let sent = t0 + SETTLE;

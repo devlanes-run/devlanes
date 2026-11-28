@@ -176,7 +176,10 @@ pub enum Command {
     Wheel(Wheel),
     /// A physical key went down or up.
     Key(Key),
-    /// Committed text for the focused window.
+    /// Text for the focused window, inserted exactly as given, as if no
+    /// modifier or lock were held: a viewer may hold Shift or Control and
+    /// Alt (AltGr on Windows) as physical keys while it sends the text they
+    /// typed, and does not forward Caps Lock or Num Lock.
     Text {
         /// The window.
         window: WindowId,

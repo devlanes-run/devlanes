@@ -113,6 +113,37 @@ fn one_window(os: Os, check: bool) -> (Viewer, Fake, LocalId) {
     (viewer, ui, main)
 }
 
+/// A first press of `code` that types `text`.
+fn key_press(code: KeyCode, text: Option<&str>) -> KeyInput {
+    KeyInput {
+        code: Some(code),
+        pressed: true,
+        repeat: false,
+        text: text.map(str::to_owned),
+        dead: false,
+        navigation: None,
+    }
+}
+
+/// `input` as a repeat, with `text`.
+fn repeat(input: &KeyInput, text: Option<&str>) -> KeyInput {
+    KeyInput {
+        repeat: true,
+        text: text.map(str::to_owned),
+        ..input.clone()
+    }
+}
+
+/// The release of `input`, which types nothing.
+fn release(input: &KeyInput) -> KeyInput {
+    KeyInput {
+        pressed: false,
+        repeat: false,
+        text: None,
+        ..input.clone()
+    }
+}
+
 /// The lock event for window 1.
 fn lock(state: LockState) -> Event {
     Event::Lock {
@@ -345,6 +376,7 @@ fn input_follows_the_lock_and_never_leaves_anything_held() {
         repeat: false,
         text: None,
         dead: false,
+        navigation: None,
     };
     let none = Modifiers::default();
 
@@ -500,13 +532,7 @@ fn a_drag_starts_only_with_the_left_button_down() {
 fn keys_type_their_text_and_shortcuts_stay_physical_keys() {
     let t0 = Instant::now();
     let id = WindowId(1);
-    let press = |code: KeyCode, text: Option<&str>| KeyInput {
-        code: Some(code),
-        pressed: true,
-        repeat: false,
-        text: text.map(str::to_owned),
-        dead: false,
-    };
+    let press = |code: KeyCode, text: Option<&str>| key_press(code, text);
     let ctrl = Modifiers {
         ctrl: true,
         ..Modifiers::default()
@@ -582,6 +608,16 @@ fn keys_type_their_text_and_shortcuts_stay_physical_keys() {
             vec![
                 Out::Key(id, keys::SHIFT_LEFT, true),
                 Out::Key(id, keys::SHIFT_LEFT, false),
+            ],
+        ),
+        // Space activates buttons and scrolls, so it is a key, not text.
+        (
+            "Space",
+            press(keys::SPACE, Some(" ")),
+            Modifiers::default(),
+            vec![
+                Out::Key(id, keys::SPACE, true),
+                Out::Key(id, keys::SPACE, false),
             ],
         ),
     ];
@@ -666,6 +702,161 @@ fn keys_type_their_text_and_shortcuts_stay_physical_keys() {
     );
 }
 
+/// Alt with a letter is a menu mnemonic on Windows and Linux and goes as a
+/// physical key; on macOS Option types a character, which goes as text.
+/// AltGr (Control and Alt on Windows; not Alt on X11 and Wayland) types.
+#[test]
+fn alt_is_a_shortcut_except_on_macos() {
+    let t0 = Instant::now();
+    let id = WindowId(1);
+    let f = keys::letter(b'f').expect("letter");
+    let q = keys::letter(b'q').expect("letter");
+    let alt = Modifiers {
+        alt: true,
+        ..Modifiers::default()
+    };
+    let ctrl_alt = Modifiers {
+        ctrl: true,
+        alt: true,
+        meta: false,
+    };
+    let physical = |code| vec![Out::Key(id, code, true), Out::Key(id, code, false)];
+    let cases = [
+        ("Alt+F on Windows", Os::Windows, f, "f", alt, physical(f)),
+        ("Alt+F on Linux", Os::Linux, f, "f", alt, physical(f)),
+        (
+            "Option+F on macOS",
+            Os::Mac,
+            f,
+            "ƒ",
+            alt,
+            vec![Out::Text(id, "ƒ".into())],
+        ),
+        (
+            "German AltGr+Q on Windows",
+            Os::Windows,
+            q,
+            "@",
+            ctrl_alt,
+            vec![Out::Text(id, "@".into())],
+        ),
+        (
+            "German AltGr+Q on Linux",
+            Os::Linux,
+            q,
+            "@",
+            Modifiers::default(),
+            vec![Out::Text(id, "@".into())],
+        ),
+    ];
+    for (name, os, code, text, modifiers, expected) in cases {
+        let (mut viewer, _, main) = one_window(os, false);
+        let press = key_press(code, Some(text));
+        viewer.key(main, press.clone(), modifiers, t0);
+        viewer.key(main, release(&press), modifiers, t0);
+        assert_eq!(viewer.take_out(), expected, "{name}");
+    }
+}
+
+/// A key keeps the way its press went out until its release, whatever the
+/// modifiers do meanwhile: pressed as a shortcut, its repeats without
+/// Control stay the app's and its release goes out; pressed as text, its
+/// repeats with Control held send nothing and its release no key.
+#[test]
+fn a_held_key_keeps_the_way_its_press_went() {
+    let t0 = Instant::now();
+    let id = WindowId(1);
+    let a = keys::letter(b'a').expect("letter");
+    let ctrl = Modifiers {
+        ctrl: true,
+        ..Modifiers::default()
+    };
+    let none = Modifiers::default();
+    let control = key_press(keys::CONTROL_LEFT, None);
+    let letter = key_press(a, Some("\u{1}"));
+
+    // Hold Ctrl, press A, release Ctrl, keep A down.
+    let (mut viewer, _, main) = one_window(Os::Windows, false);
+    viewer.key(main, control.clone(), none, t0);
+    viewer.key(main, letter.clone(), ctrl, t0);
+    viewer.key(main, release(&control), ctrl, t0);
+    viewer.key(main, repeat(&letter, Some("a")), none, t0);
+    viewer.key(main, repeat(&letter, Some("a")), none, t0);
+    viewer.key(main, release(&letter), none, t0);
+    assert_eq!(
+        viewer.take_out(),
+        [
+            Out::Key(id, keys::CONTROL_LEFT, true),
+            Out::Key(id, a, true),
+            Out::Key(id, keys::CONTROL_LEFT, false),
+            Out::Key(id, a, false),
+        ]
+    );
+
+    // A typed as text, then Ctrl goes down while it is held.
+    let (mut viewer, _, main) = one_window(Os::Windows, false);
+    let typed = key_press(a, Some("a"));
+    viewer.key(main, typed.clone(), none, t0);
+    viewer.key(main, control.clone(), none, t0);
+    viewer.key(main, repeat(&typed, Some("\u{1}")), ctrl, t0);
+    viewer.key(main, release(&typed), ctrl, t0);
+    viewer.key(main, release(&control), ctrl, t0);
+    assert_eq!(
+        viewer.take_out(),
+        [
+            Out::Text(id, "a".into()),
+            Out::Key(id, keys::CONTROL_LEFT, true),
+            Out::Key(id, keys::CONTROL_LEFT, false),
+        ]
+    );
+}
+
+/// Caps Lock and Num Lock stay local: the text already has their effect.
+/// A keypad key that types goes as text; one that types nothing goes as the
+/// navigation key it means, and its release names the same key even when
+/// Num Lock changed meanwhile.
+#[test]
+fn locks_stay_local_and_the_keypad_goes_as_what_it_means() {
+    let t0 = Instant::now();
+    let id = WindowId(1);
+    let none = Modifiers::default();
+    let (mut viewer, _, main) = one_window(Os::Linux, false);
+    let a = keys::letter(b'a').expect("letter");
+    let four = keys::keypad_digit(b'4').expect("keypad");
+
+    // Caps Lock on: its press and release send nothing, and a types "A".
+    let caps = key_press(keys::CAPS_LOCK, None);
+    viewer.key(main, caps.clone(), none, t0);
+    viewer.key(main, release(&caps), none, t0);
+    viewer.key(main, key_press(a, Some("A")), none, t0);
+    // Num Lock on: keypad 4 types 4.
+    let num = key_press(keys::NUM_LOCK, None);
+    viewer.key(main, num.clone(), none, t0);
+    viewer.key(main, release(&num), none, t0);
+    let digit = key_press(four, Some("4"));
+    viewer.key(main, digit.clone(), none, t0);
+    viewer.key(main, release(&digit), none, t0);
+    assert_eq!(
+        viewer.take_out(),
+        [Out::Text(id, "A".into()), Out::Text(id, "4".into())]
+    );
+
+    // Num Lock off: keypad 4 is Left, down and up.
+    let left = KeyInput {
+        navigation: Some(keys::LEFT),
+        ..key_press(four, None)
+    };
+    viewer.key(main, left.clone(), none, t0);
+    viewer.key(main, release(&digit), none, t0);
+    assert_eq!(
+        viewer.take_out(),
+        [
+            Out::Key(id, keys::LEFT, true),
+            Out::Key(id, keys::LEFT, false)
+        ]
+    );
+}
+
 /// The local clipboard read while the link is down is sent once it is up,
 /// and text the app set is not sent back.
 #[test]
@@ -673,11 +864,29 @@ fn clipboard_text_waits_for_the_link_and_never_echoes() {
     let t0 = Instant::now();
     let (mut viewer, mut ui, _) = one_window(Os::Linux, false);
     viewer.event(Event::Clipboard("from the app".into()), t0, &mut ui);
-    viewer.local_clipboard("from the app".into());
+    viewer.local_clipboard("from the app".into(), viewer.host_clipboards());
     assert_eq!(viewer.take_out(), [], "no echo");
     viewer.disconnected(t0, &mut ui);
-    viewer.local_clipboard("copied here".into());
+    viewer.local_clipboard("copied here".into(), viewer.host_clipboards());
     assert_eq!(viewer.take_out(), []);
     viewer.connected(vec![window(1, "main")], at(t0, 100), &mut ui);
     assert_eq!(viewer.take_out(), [Out::Clipboard("copied here".into())]);
+}
+
+/// A read of the local clipboard that the host's clipboard overtook is
+/// dropped: it may hold what the local clipboard had before the host's
+/// text reached it.
+#[test]
+fn a_clipboard_read_the_host_overtook_is_dropped() {
+    let t0 = Instant::now();
+    let (mut viewer, mut ui, _) = one_window(Os::Linux, false);
+    let started = viewer.host_clipboards();
+    viewer.event(Event::Clipboard("from the app".into()), t0, &mut ui);
+    viewer.local_clipboard("older local text".into(), started);
+    assert_eq!(viewer.take_out(), []);
+    viewer.local_clipboard("newer local text".into(), viewer.host_clipboards());
+    assert_eq!(
+        viewer.take_out(),
+        [Out::Clipboard("newer local text".into())]
+    );
 }

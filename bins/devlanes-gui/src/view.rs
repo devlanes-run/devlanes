@@ -37,6 +37,11 @@ pub struct ViewArgs {
     /// The unit to ask about, as lane:unit.
     #[arg(long, value_name = "UNIT", requires = "devlanes")]
     unit: Option<String>,
+    /// The box the service's lane was found on, for a box's lane: while that
+    /// box is not connected, neither the check nor the daemon counts the
+    /// service as gone.
+    #[arg(long = "box", value_name = "NAME")]
+    host_box: Option<String>,
 }
 
 /// Why `view` did not run.
@@ -84,6 +89,7 @@ pub fn run(args: ViewArgs) -> Result<(), ViewError> {
                     StartedBy::User
                 },
                 service: args.service.clone(),
+                host_box: args.host_box.clone(),
             };
             let failed = |error| ViewError::Instance(dir.clone(), error);
             match instance::claim(dir, &key, &info).map_err(failed)? {
@@ -98,10 +104,15 @@ pub fn run(args: ViewArgs) -> Result<(), ViewError> {
             }
         }
     };
+    let host_box = args.host_box;
     let check = args
         .devlanes
         .zip(args.unit)
-        .map(|(devlanes, unit)| UnitCheck { devlanes, unit });
+        .map(|(devlanes, unit)| UnitCheck {
+            devlanes,
+            unit,
+            host_box,
+        });
     devlanes_gui_viewer::run(Options {
         address: args.address,
         service: args.service,

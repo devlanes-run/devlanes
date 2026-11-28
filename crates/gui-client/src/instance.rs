@@ -54,6 +54,9 @@ pub struct Info {
     /// The service it shows, as `lane:unit`, so a daemon that finds it after
     /// a restart knows whose viewer it is.
     pub service: String,
+    /// The box the service runs on, for a box's lane, so that daemon counts
+    /// the service as running while the box is not connected.
+    pub host_box: Option<String>,
 }
 
 impl Info {
@@ -63,10 +66,16 @@ impl Info {
             StartedBy::Daemon => "daemon",
             StartedBy::User => "user",
         };
-        // A service label has no line break; one would only cut it short.
-        let service = self.service.lines().next().unwrap_or_default();
+        // A label or a box name has no line break; one would only cut it short.
+        let line = |text: &str| text.lines().next().unwrap_or_default().to_owned();
+        let service = line(&self.service);
+        let host_box = self
+            .host_box
+            .as_deref()
+            .map(|host_box| format!("box={}\n", line(host_box)))
+            .unwrap_or_default();
         format!(
-            "pid={}\nstart_time={}\nstarted_by={by}\nservice={service}\n",
+            "pid={}\nstart_time={}\nstarted_by={by}\nservice={service}\n{host_box}",
             self.pid, self.start_time
         )
     }
@@ -86,6 +95,9 @@ impl Info {
                 _ => return None,
             },
             service: field("service")?.to_owned(),
+            host_box: field("box")
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned),
         })
     }
 }
@@ -273,6 +285,7 @@ mod tests {
             start_time: 7,
             started_by: StartedBy::Daemon,
             service: "acme@2:desktop".into(),
+            host_box: Some("hetzner".into()),
         };
         assert!(!running(dir.path(), &key).expect("check"));
         let Claim::Claimed(mut first) = claim(dir.path(), &key, &info).expect("claim") else {
