@@ -51,7 +51,7 @@ What devlanes does not do, with the issue that tracks each limit. An empty Issue
 | Limit | Issue |
 |---|---|
 | Only TCP ports are mirrored, not UDP. | |
-| Connections run over SSH or a command; no HTTP or WebSocket transport exists. | [#46](https://github.com/devlanes-run/devlanes/issues/46) |
+| Connections run over SSH, a command or a direct peer-to-peer path; no HTTP or WebSocket transport exists, and no relay carries lane traffic. | [#46](https://github.com/devlanes-run/devlanes/issues/46) |
 | A mirrored port keeps the box's number; when the number is taken on your machine, the port is not mirrored. | [#46](https://github.com/devlanes-run/devlanes/issues/46) |
 | On Windows, each connection to a box signs in to SSH again. | [#46](https://github.com/devlanes-run/devlanes/issues/46) |
 | Boxes made from one image run the same lane, so your machine mirrors one of them at a time. | [#98](https://github.com/devlanes-run/devlanes/issues/98) |

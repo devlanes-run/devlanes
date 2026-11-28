@@ -105,8 +105,9 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | Page | Title | Goal |
 |---|---|---|
 | `prepare-a-box.md` (skill) | Prepare a box | Get a machine ready to be a box. |
-| `connect.md` (skill) | Connect to a box | Connect, pair, reconnect without a terminal, revoke a machine, turn every machine away. |
-| `connect-by-command.md` | Connect to a box without SSH | A container, pod, WSL distribution or codespace. |
+| `connect.md` (skill) | Connect to a box | Connect over SSH, pair with a code, reconnect without a terminal, revoke a machine, turn every machine away. |
+| `connect-by-ticket.md` (skill) | Connect to a box with a ticket | Pair and connect peer to peer with a ticket, keep the box's daemon running, forget a box, no direct path, relays. |
+| `connect-by-command.md` | Connect to a box through a command | A container, pod, WSL distribution or codespace. |
 | `tailscale.md` | Connect over Tailscale | A box on a tailnet. |
 | `cloudflare.md` | Connect through Cloudflare | A box behind Cloudflare. |
 | `several-boxes.md` | Work with several boxes | Boxes that run the same project. |
@@ -135,7 +136,7 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | `config-and-reload.md` | Config files and reload | How the project file and the local file merge, drift, what a reload does. |
 | `freezing.md` | Throttling and freezing | What happens to a lane nobody uses and what thaws it. |
 | `remote-mirroring.md` | Remote mirroring | Two daemons and one connection, and why a box keeps its hostnames and ports on your machine. |
-| `security.md` | Security | Who can reach the daemon, that a lane is not a sandbox, what the CA can sign, what pairing protects, what the browser extension's saved logins expose, the release check. |
+| `security.md` | Security | Who can reach the daemon, that a lane is not a sandbox, what the CA can sign, what pairing protects, what a ticket grants and what a relay and n0's DNS see, what the browser extension's saved logins expose, the release check. |
 
 ## Reference (`reference/`)
 
@@ -174,6 +175,8 @@ Read in order. One project, myapp, from one service to lanes on a box.
 | What a clean deletes | `how-to/lanes/clean-up.md` | Linked from the infra guides |
 | Pairing: the steps | `how-to/remote/connect.md` | `learn/remote.md` shows it once |
 | Pairing: what it protects | `concepts/security.md` | Nowhere else |
+| Pairing by ticket: the steps | `how-to/remote/connect-by-ticket.md` | The skill's `references/remote.md` |
+| What a ticket, the relay and n0's DNS reveal | `concepts/security.md` | Nowhere else |
 | What a lane page can do with the browser extension's saved logins | `concepts/security.md` | Linked from `how-to/fill-test-logins.md` |
 | Installing devlanes on a box | `how-to/remote/prepare-a-box.md` | Linked from the other remote guides |
 | States and exit codes | `reference/states-and-exit-codes.md` | The skill |

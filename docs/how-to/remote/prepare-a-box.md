@@ -80,6 +80,7 @@ $ devlanes daemon restart
 ## Related
 
 - [Connect to a box](connect.md)
-- [Connect to a box without SSH](connect-by-command.md)
+- [Connect to a box with a ticket](connect-by-ticket.md)
+- [Connect to a box through a command](connect-by-command.md)
 - [Lanes on another machine](../../learn/remote.md)
 - [Remote mirroring](../../concepts/remote-mirroring.md)

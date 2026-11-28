@@ -25,7 +25,7 @@ flowchart LR
   procs --> daemon
   procs --> key
   sandbox -. "only if the sandbox lets it out" .-> daemon
-  daemon -- "SSH or a command, then the pairing check" --> boxdaemon
+  daemon -- "SSH, a command or peer to peer, then the pairing check" --> boxdaemon
 ```
 
 Any process running as you can do what you can through the daemon: start and stop services, run commands in a lane, read logs and a lane's environment, your shell's secrets included. A dev server, or a dependency's install script, runs as you too and can do the same. A sandboxed process that is allowed to reach the daemon gets the daemon's rights, outside its sandbox; [Use devlanes from an agent sandbox](../how-to/agents/sandboxes.md) covers that case.
@@ -54,6 +54,22 @@ Under ordinary SSH access, pairing is not a boundary. A machine that can open a 
 
 The token is a bearer secret: any process running as you on the paired machine can copy it and connect as that machine. Revoking a machine leaves its SSH access as it was, so remove its key from the box as well. [Connect to a box](../how-to/remote/connect.md) has the steps.
 
+## A ticket pairs whoever holds it
+
+A box paired by ticket needs no SSH, so the pairing is the whole of the access check. Each machine has its own key, kept in `p2p-key` in the devlanes home and readable by your account only. A ticket from `devlanes daemon pair` holds the box's public key, a one-time secret, the box's relay and up to 8 of its IP addresses, local and public. The first machine that presents the secret within 10 minutes is paired, so pass a ticket on only over a channel you would trust with a password.
+
+Pairing pins both keys. The box serves only the keys it paired with, and your machine accepts only the box's key from the ticket, so nobody in between can pose as either. While a ticket is open, the box takes pairing requests from any machine that reaches it; otherwise it turns away every key it did not pair with before any data is exchanged. Revoking a machine on the box deletes its keys and ends its connections, and nothing else gives it access. Any process running as you on a paired machine can copy its key and connect as that machine, as with the token.
+
+## A relay and n0's DNS see who connects
+
+Two machines find each other through a relay, by default `relay1.devlanes.run` and `relay2.devlanes.run`. Until a direct path forms, the relay forwards the encrypted handshake between them; lane traffic never goes through it. The relay sees which keys connect, from which IP address and port, when, and the size of each packet it forwards, and it cannot read them. The [devlanes relay](https://github.com/devlanes-run/relay) repository describes what it logs and how to host your own.
+
+A box that waits for its paired machines publishes its key and its relay in n0's DNS service, `dns.iroh.link`, run by n0, the company that makes the iroh library devlanes connects with, and a machine that connects to the box may look that key up there. n0 sees the key, the relay and the IP address of each request. devlanes also asks your router to forward a port to your machine, over UPnP, NAT-PMP or PCP. [`remote.relays`](/docs/reference/config/user/remote/#remote-relays) set to an empty list turns off the relay and n0's DNS, and [`remote.port_mapping`](/docs/reference/config/user/remote/#remote-port_mapping) set to false turns off the router request.
+
+On Windows, the firewall may ask once whether devlanes may use the network. Peer-to-peer connections can form without that permission, because each machine sends first and the firewall lets the answers in.
+
+## A box trusts what it serves
+
 A box's services see your connections as coming from the box itself. A service there that trusts local connections without a password, such as an admin page or a database, trusts every machine the box serves.
 
 ## The browser extension holds test passwords
@@ -71,5 +87,6 @@ The daemon reads the latest version from the registry devlanes was installed fro
 - [Use devlanes from an agent sandbox](../how-to/agents/sandboxes.md)
 - [Trust the devlanes CA](../how-to/hostnames/trust-the-ca.md)
 - [Connect to a box](../how-to/remote/connect.md)
+- [Connect to a box with a ticket](../how-to/remote/connect-by-ticket.md)
 - [Remote mirroring](remote-mirroring.md)
 - [Fill test logins on lanes](../how-to/fill-test-logins.md)

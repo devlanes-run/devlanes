@@ -8,7 +8,7 @@ A box is a machine that runs devlanes for its own lanes, such as a server that h
 
 ## Two daemons share one session
 
-Each machine runs its own daemon. The daemon on your machine owns the connection: it opens one session to the box, over SSH or a command that reaches a container, listens on the box's ports, adds the box's hostnames to its proxy and writes the folders the box syncs. The daemon on the box runs the box's lanes as it would with nobody connected.
+Each machine runs its own daemon. The daemon on your machine owns the connection: it opens one session to the box, over SSH, over a command that reaches a container, or peer to peer over a direct path to a box paired by ticket, listens on the box's ports, adds the box's hostnames to its proxy and writes the folders the box syncs. The daemon on the box runs the box's lanes as it would with nobody connected.
 
 ```mermaid
 flowchart LR
@@ -25,8 +25,10 @@ flowchart LR
   end
   browser --> proxy --> port
   tool --> port
-  port -- "one connection, by SSH or a command" --> boxdaemon --> svc
+  port -- "one connection, by SSH, a command or peer to peer" --> boxdaemon --> svc
 ```
+
+A peer-to-peer session needs a direct path between the two machines. A relay helps them find each other and open that path through their routers, and the session never sends lane traffic through it; when no direct path forms, the connect fails, and SSH or Tailscale reaches the box instead. [Connect to a box with a ticket](../how-to/remote/connect-by-ticket.md) has the steps.
 
 The session belongs to your daemon and not to a terminal, so it outlives the terminal that opened it and reconnects on its own after the network drops. Run the same devlanes release on both machines; [Prepare a box](../how-to/remote/prepare-a-box.md) covers installing one.
 
@@ -49,6 +51,7 @@ Two boxes made from one image run the same lane with the same hostnames and port
 ## Related
 
 - [Lanes on another machine](../learn/remote.md)
+- [Connect to a box with a ticket](../how-to/remote/connect-by-ticket.md)
 - [Connect to a box](../how-to/remote/connect.md)
 - [Choose what a box shares](../how-to/remote/what-a-box-shares.md)
 - [Work with several boxes](../how-to/remote/several-boxes.md)

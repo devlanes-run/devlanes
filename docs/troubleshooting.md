@@ -48,4 +48,7 @@ kind: reference
 |---|---|---|
 | `needs_auth` in `devlanes remote ls` | Reconnecting needs your SSH password, passphrase or host key | `devlanes remote connect BOX` in a terminal |
 | `needs_pairing` in `devlanes remote ls` | The box no longer accepts this machine | [Connect to a box](how-to/remote/connect.md) |
+| `no direct connection to the box formed` | The networks between the two machines allow no direct path, and devlanes does not relay lane traffic | Connect over SSH ([Connect to a box](how-to/remote/connect.md)) or [Tailscale](how-to/remote/tailscale.md) |
+| `the box has no pairing ticket open` | The ticket expired, was used already, or the box's daemon restarted since it was printed | A new ticket from `devlanes daemon pair` on the box |
+| `the box's relay HOST is not one this machine uses` | The box uses a relay missing from this machine's `remote.relays` | Add that relay to `remote.relays` and run `devlanes daemon restart` ([Connect to a box with a ticket](how-to/remote/connect-by-ticket.md)) |
 | Other states and warnings of `devlanes remote ls` | | [Remote connection states](reference/remote-states.md) |
