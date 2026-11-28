@@ -6,7 +6,8 @@
 //! nothing else runs on it), and runs the connection to the GUI host and the
 //! decoding on a tokio runtime of its own. Frames are presented in software
 //! with softbuffer. Every decision sits in [`model::Viewer`], behind the
-//! [`model::Windows`] trait; [`app`] only translates between it and winit.
+//! [`model::Windows`] trait; the winit layer only translates between it and
+//! winit.
 //! The one thing the viewer draws itself is the overlay of a locked window:
 //! its last frame dimmed, with one line of text.
 
@@ -45,8 +46,8 @@ pub struct Options {
     /// no when the daemon opens them while the user works elsewhere.
     pub focus: bool,
     /// How to ask the daemon whether the service still runs while the viewer
-    /// cannot reconnect; `None` for a viewer the daemon started, which the
-    /// daemon ends itself.
+    /// cannot reconnect; `None` asks nothing, and the viewer then ends only
+    /// when the host closes its windows or the process is ended.
     pub check: Option<UnitCheck>,
     /// The lock that makes this the one viewer of the service, which also
     /// carries requests for its windows.
@@ -69,23 +70,15 @@ pub enum ViewerError {
     /// The first connection to the GUI host failed.
     #[error("cannot connect to the GUI host")]
     Connect(#[source] ClientError),
-}
-
-/// Whether this machine has a display winit can open windows on. Only Linux
-/// can lack one; it is read from the environment, as winit does.
-pub fn has_display() -> bool {
-    if !cfg!(all(unix, not(target_os = "macos"))) {
-        return true;
-    }
-    ["WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY"]
-        .iter()
-        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+    /// The connection's task failed with a bug.
+    #[error("the viewer's connection failed: {0}")]
+    Crashed(String),
 }
 
 /// Runs the viewer on this thread, which must be the main thread, until the
 /// service is gone or the process is ended.
 pub fn run(options: Options) -> Result<(), ViewerError> {
-    if !has_display() {
+    if !devlanes_gui_client::display::here() {
         return Err(ViewerError::NoDisplay);
     }
     let event_loop = EventLoop::<link::FromLink>::with_user_event()
@@ -98,8 +91,7 @@ pub fn run(options: Options) -> Result<(), ViewerError> {
         .build()
         .map_err(ViewerError::Runtime)?;
     let proxy = event_loop.create_proxy();
-    let tell: Arc<dyn Fn(link::FromLink) -> bool + Send + Sync> =
-        Arc::new(move |message| proxy.send_event(message).is_ok());
+    let tell: link::Tell = Arc::new(move |message| proxy.send_event(message).is_ok());
     let (to_link, from_viewer) = tokio::sync::mpsc::unbounded_channel();
     let client = ClientOptions::new(
         Role::Viewer,
@@ -108,14 +100,33 @@ pub fn run(options: Options) -> Result<(), ViewerError> {
     )
     .with_decoders(options.decoders);
     tracing::info!(service = %options.service, address = %options.address, "viewing");
-    runtime.spawn(link::run(
+    let frames = link::Frames::default();
+    let connection = runtime.spawn(link::run(
         options.address,
         client,
         options.check.clone(),
         from_viewer,
         tell.clone(),
+        frames.clone(),
     ));
+    // A panic there would leave windows that never change: the viewer ends
+    // with an error instead.
+    let crashed = tell.clone();
+    runtime.spawn(async move {
+        if let Err(error) = connection.await
+            && error.is_panic()
+        {
+            let panic = error.into_panic();
+            let message = panic
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a panic".to_owned());
+            crashed(link::FromLink::Crashed(message));
+        }
+    });
     if let Some(mut instance) = options.instance {
+        let tell = tell.clone();
         runtime.spawn(async move {
             loop {
                 tokio::time::sleep(SHOW_POLL).await;
@@ -135,7 +146,7 @@ pub fn run(options: Options) -> Result<(), ViewerError> {
         });
     }
     let viewer = model::Viewer::new(frame::Os::current(), options.focus, options.check.is_some());
-    let mut app = app::App::new(viewer, to_link);
+    let mut app = app::App::new(viewer, to_link, frames, tell, runtime.handle().clone());
     let ran = event_loop.run_app(&mut app).map_err(ViewerError::EventLoop);
     runtime.shutdown_timeout(Duration::from_secs(1));
     match app.error {

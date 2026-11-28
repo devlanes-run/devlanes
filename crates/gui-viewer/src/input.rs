@@ -139,15 +139,27 @@ pub fn key_code(key: Physical) -> Option<KeyCode> {
         P::ShiftRight => keys::SHIFT_RIGHT,
         P::AltRight => keys::ALT_RIGHT,
         P::SuperRight => keys::META_RIGHT,
-        P::MediaTrackNext => keys::MEDIA_NEXT,
-        P::MediaTrackPrevious => keys::MEDIA_PREVIOUS,
-        P::MediaStop => keys::MEDIA_STOP,
-        P::MediaPlayPause => keys::MEDIA_PLAY_PAUSE,
-        P::AudioVolumeMute => keys::VOLUME_MUTE,
-        P::AudioVolumeUp => keys::VOLUME_UP,
-        P::AudioVolumeDown => keys::VOLUME_DOWN,
+        // Media and volume keys stay with this machine, which they control.
         _ => return None,
     })
+}
+
+/// Whether `key` is a modifier, whose press the OS reports again when a
+/// window gains focus with it held, so a Control held while clicking into
+/// the viewer reaches the app.
+pub fn is_modifier(key: Physical) -> bool {
+    use Physical as P;
+    matches!(
+        key,
+        P::ControlLeft
+            | P::ControlRight
+            | P::ShiftLeft
+            | P::ShiftRight
+            | P::AltLeft
+            | P::AltRight
+            | P::SuperLeft
+            | P::SuperRight
+    )
 }
 
 /// The protocol's bit for a mouse button, or `None` for buttons beyond the
@@ -230,7 +242,7 @@ mod tests {
             P::ControlRight,
             P::IntlBackslash,
             P::Backslash,
-            P::MediaPlayPause,
+            P::NumLock,
             P::Pause,
         ];
         let mut codes: Vec<KeyCode> = all.iter().filter_map(|key| key_code(*key)).collect();

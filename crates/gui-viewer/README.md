@@ -29,15 +29,17 @@ fn main() -> Result<(), ViewerError> {
 - `model::Viewer`, `model::Windows`: every decision of the viewer (windows across reconnects, lock states, the close rule, input while locked, when to end), driven by any window system.
 - `frame`: the frame a window gets (`decoration`), what its close button does (`close_action`) and the local drag for a move the app starts (`drag`).
 - `resize::Resize`: the debounce that sends the final size of a local resize.
-- `input`: winit's physical keys as the protocol's HID codes, buttons and wheel deltas.
+- `input`: winit's physical keys as the protocol's HID codes, buttons and wheel deltas; `model::Viewer::key` decides between text and physical keys.
 
 ## Behaviour
 
 A window whose app draws its own frame and reports moves is borderless (on macOS a window with a hidden title bar, which macOS resizes from its edges), and a press on the app's title bar or edge becomes a local OS drag. Other windows keep the OS frame. Their outer close button closes only the local window when the app has a frame inside, until `devlanes gui open` asks again; otherwise it asks the app to close.
 
-A local resize is sent once the size held for 250 ms, and the window shows Resizing from the first change until the first frame after it. While the connection is down every window shows Reconnecting and stays open; a new connection's windows take over the local windows by id, and else in order. The viewer ends 3 seconds after the host closed every window, or after the daemon says the service stopped, which a viewer with a `UnitCheck` asks after 30 seconds without a connection.
+A local resize is sent once the size held for 250 ms, and the window shows Resizing from the first change until the first frame after it. The first size the OS gives a window after the viewer set one is taken as it is, and a size the app answered with another one is not sent again. While the connection is down every window shows Reconnecting and stays open; a connection silent for 16 seconds is dropped and dialed again. A new connection's windows take over the local windows by id, or in order when no id matches (a new host). The viewer ends 3 seconds after the host showed every window Closed, or once the daemon says the service stopped: with a `UnitCheck` it asks after 30 seconds without a connection, without starting a daemon, and a daemon that stays away for 30 seconds more counts as the service gone.
 
-Keys go out as physical keys, so the host's layout decides what they type; text an input method commits goes as text. Clipboard text goes to the host when a window gains focus and comes back whenever the app sets it. Held keys and buttons are released when a window loses focus.
+A key that types a character with the local layout goes out as that text, so any layout types what is on its keys; dead keys and AltGr work the same way. Shortcuts (with Control, or Super or Command) and keys that type nothing (arrows, Enter, modifiers) go out as physical keys. While a lane is frozen only clicks go out, to wake it. Clipboard text goes to the host when a window gains focus and comes back whenever the app sets it. Held keys and buttons are released when focus leaves every window of the service; moving between them is decided at the end of that turn of the event loop and is no focus loss for the app. Frames wait in one slot per window, so a slow window skips frames instead of queueing them.
+
+Limits: no input method is used, so there is no preedit text while composing, and an app sees a held printable key as repeated text, not as a key held down.
 
 On Linux winit and softbuffer load the X11, Wayland and xkbcommon libraries at run time, so the binary links none of them and starts without a display; `run` then fails with `NoDisplay`.
 

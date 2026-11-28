@@ -11,6 +11,7 @@
 //! arrives. Nothing here draws or reads a local input device; the agent
 //! commands and the viewer build that on top.
 
+pub mod display;
 mod driver;
 mod error;
 mod events;
@@ -176,6 +177,7 @@ where
             syncs: HashMap::new(),
             next_request: 1,
             held: Held::default(),
+            last_data: now,
         }),
         wake: Notify::new(),
         close: CancellationToken::new(),
@@ -269,6 +271,8 @@ struct State {
     syncs: HashMap<u32, oneshot::Sender<()>>,
     next_request: u32,
     held: Held,
+    /// When the host last sent anything, a heartbeat included.
+    last_data: std::time::Instant,
 }
 
 /// The connection, shared by [`Client`], [`Events`] and the tasks.
@@ -360,6 +364,13 @@ impl Client {
     /// The session id the host gave this connection.
     pub fn session(&self) -> SessionId {
         self.shared.welcome.session
+    }
+
+    /// How long the host has sent nothing, heartbeats included. A host sends
+    /// one every [`devlanes_gui_proto::HEARTBEAT_INTERVAL`], so a long
+    /// silence means a connection that broke without closing.
+    pub fn silent_for(&self) -> Duration {
+        driver::now().saturating_duration_since(self.shared.state().last_data)
     }
 
     /// Whether the host lists `feature`.

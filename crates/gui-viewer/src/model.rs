@@ -7,7 +7,11 @@
 //! for the connection ([`Out`]). It keeps its windows across reconnects: the
 //! client's lock state lasts one connection, so while the link is down every
 //! window shows Reconnecting here, and a new connection's windows take over
-//! the local windows of the old one, by id and else in order.
+//! the local windows of the old one, by id, or in order for a new host.
+//!
+//! Keys go out as typed text where they type a character and as physical
+//! keys otherwise ([`Viewer::key`]), so a layout other than the host's types
+//! what its user sees on the keys, and shortcuts keep their positions.
 
 use std::time::{Duration, Instant};
 
@@ -30,6 +34,11 @@ pub const CLOSED_LINGER: Duration = Duration::from_secs(3);
 /// connections for 10 seconds while a box link reconnects, and a restarting
 /// service can take a while to start, so this leaves room for both.
 pub const CHECK_AFTER: Duration = Duration::from_secs(30);
+
+/// How long the daemon must stay unreachable before its service counts as
+/// gone: longer than a `daemon restart` or an update takes, so neither ends
+/// a viewer.
+pub const DAEMON_AWAY: Duration = Duration::from_secs(30);
 
 /// A local window, as the viewer numbers them. A local window outlives the
 /// remote window it shows when a new connection's window takes its place.
@@ -92,7 +101,7 @@ pub enum Out {
     Wheel(Wheel),
     /// A key going down or up.
     Key(WindowId, KeyCode, bool),
-    /// Committed text.
+    /// Typed text.
     Text(WindowId, String),
     /// A resize to the size the user settled on.
     Resize(WindowId, Size),
@@ -107,6 +116,45 @@ pub enum Out {
     /// Ask the daemon whether the service still runs, answered with
     /// [`Viewer::unit_checked`].
     CheckUnit,
+}
+
+/// What the daemon said about the service, after [`Out::CheckUnit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Check {
+    /// It runs, or is on its way up.
+    Runs,
+    /// It stopped, failed, or no longer exists.
+    Gone,
+    /// The daemon does not run.
+    DaemonAway,
+    /// The answer said nothing either way.
+    Unknown,
+}
+
+/// A key the local window reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyInput {
+    /// Its physical key, when the protocol has a code for it.
+    pub code: Option<KeyCode>,
+    /// Down or up.
+    pub pressed: bool,
+    /// A press the OS repeats while the key is held.
+    pub repeat: bool,
+    /// The text the press types with the local layout and modifiers.
+    pub text: Option<String>,
+    /// A dead key, whose character comes with the next press.
+    pub dead: bool,
+}
+
+/// The modifiers held with a key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Modifiers {
+    /// Control.
+    pub ctrl: bool,
+    /// Alt (Option).
+    pub alt: bool,
+    /// Super, Windows or Command.
+    pub meta: bool,
 }
 
 /// What a local window draws.
@@ -159,7 +207,10 @@ struct Win {
     frame: Option<Frame>,
     resize: Resize,
     buttons: Buttons,
+    /// Keys held down as physical keys.
     keys: Vec<KeyCode>,
+    /// Keys whose press went out as text, whose release is not sent.
+    texted: Vec<KeyCode>,
     pointer: Option<Point>,
     /// Since when the window shows Closed.
     closed_since: Option<Instant>,
@@ -174,14 +225,24 @@ pub struct Viewer {
     windows: Vec<Win>,
     next_local: u64,
     link: Link,
+    /// The host showed every window Closed: the service stopped.
+    closed_by_host: bool,
     /// Whether the viewer may ask the daemon about the service.
     can_check: bool,
     /// When to ask next, while the link is down.
     check_at: Option<Instant>,
+    /// Since when the daemon has not answered the checks.
+    away_since: Option<Instant>,
     /// When the viewer ends.
     end_at: Option<Instant>,
     /// The clipboard text last seen on either side, so neither echoes it.
     clipboard: Option<String>,
+    /// Local clipboard text read while the link was down, sent once it is up.
+    clipboard_pending: Option<String>,
+    /// The local window that reported a focus loss this turn of the event
+    /// loop; the loss counts only when no other window of the service gained
+    /// focus by [`Viewer::settle_focus`].
+    blurred: Option<LocalId>,
     out: Vec<Out>,
 }
 
@@ -196,10 +257,14 @@ impl Viewer {
             windows: Vec::new(),
             next_local: 1,
             link: Link::Down,
+            closed_by_host: false,
             can_check,
             check_at: None,
+            away_since: None,
             end_at: None,
             clipboard: None,
+            clipboard_pending: None,
+            blurred: None,
             out: Vec::new(),
         }
     }
@@ -219,32 +284,37 @@ impl Viewer {
     }
 
     /// A connection came up with `windows`. Windows known from the last
-    /// connection keep their local window: by id (a restarted app keeps its
-    /// ids), else in order among main windows (a new host numbers anew).
-    /// Local windows nothing takes over close.
+    /// connection keep their local window by id (an app restarted under the
+    /// same host keeps its ids). When no id matches, the host is a new one
+    /// that numbers anew, and its main windows take over the old main windows
+    /// in order. Local windows nothing takes over close.
     pub fn connected(&mut self, windows: Vec<WindowInfo>, now: Instant, ui: &mut impl Windows) {
         self.link = Link::Up;
         self.check_at = None;
+        self.away_since = None;
+        self.closed_by_host = false;
         let mut taken = vec![false; self.windows.len()];
         let mut fresh = Vec::new();
         for info in windows {
             match self.index_of(info.id) {
                 Some(index) if !taken[index] => {
                     taken[index] = true;
-                    self.take_over(index, info, ui);
+                    self.take_over(index, info, now, ui);
                 }
                 _ => fresh.push(info),
             }
         }
+        let new_host = !taken.contains(&true);
         let mut added = Vec::new();
         for info in fresh {
             let main = |kind: WindowKind| kind == WindowKind::Toplevel;
             let free = (0..self.windows.len())
-                .find(|&index| !taken[index] && main(self.windows[index].info.kind));
-            match free.filter(|_| main(info.kind)) {
+                .find(|&index| !taken[index] && main(self.windows[index].info.kind))
+                .filter(|_| new_host && main(info.kind));
+            match free {
                 Some(index) => {
                     taken[index] = true;
-                    self.take_over(index, info, ui);
+                    self.take_over(index, info, now, ui);
                 }
                 None => added.push(info),
             }
@@ -261,22 +331,25 @@ impl Viewer {
         for info in added {
             self.add(info, ui);
         }
+        if let Some(text) = self.clipboard_pending.take() {
+            self.send_clipboard(text);
+        }
         self.redraw_changed(now, ui);
     }
 
-    /// The window at `index` now shows `info` of a new connection.
-    fn take_over(&mut self, index: usize, info: WindowInfo, ui: &mut impl Windows) {
+    /// The window at `index` now shows `info` of a new connection. Its size
+    /// is reconciled with the local window's: see [`Resize::reconnected`].
+    fn take_over(&mut self, index: usize, info: WindowInfo, now: Instant, ui: &mut impl Windows) {
         let win = &mut self.windows[index];
-        let size_changed = win.info.size != info.size && info.size.is_nonzero();
+        let size = win.resize.reconnected(info.size, now);
         win.lock = info.lock;
         win.closed_since = None;
-        win.resize = Resize::new(info.size);
         win.info = info;
         if win.open {
-            let (local, size) = (win.local, win.info.size);
+            let local = win.local;
             let spec = self.spec(&self.windows[index], false);
             ui.update(local, &spec);
-            if size_changed {
+            if let Some(size) = size {
                 ui.set_size(local, size);
             }
         }
@@ -301,6 +374,7 @@ impl Viewer {
             resize: Resize::new(info.size),
             buttons: Buttons::NONE,
             keys: Vec::new(),
+            texted: Vec::new(),
             pointer: None,
             closed_since: None,
             info,
@@ -342,6 +416,7 @@ impl Viewer {
         match event {
             Event::WindowAdded(info) => {
                 if self.index_of(info.id).is_none() {
+                    self.closed_by_host = false;
                     self.add(info, ui);
                 }
             }
@@ -368,6 +443,10 @@ impl Viewer {
                     self.windows[index].lock = state;
                     self.windows[index].resize.client_reported();
                 }
+                // Remembered, since windows that showed Closed go away
+                // before the connection ends.
+                self.closed_by_host = !self.windows.is_empty()
+                    && self.windows.iter().all(|win| win.lock == LockState::Closed);
             }
             Event::Cursor(cursor) => {
                 if let Some(index) = self.index_of(cursor.window)
@@ -381,8 +460,12 @@ impl Viewer {
                     return;
                 };
                 let decoration = frame::decoration(&self.windows[index].info, self.os);
+                let win = &self.windows[index];
+                // The OS drags only with the left button down, as the app's
+                // title bar did when it asked.
                 if let Some(drag) = frame::drag(decoration, started.edge)
-                    && self.windows[index].open
+                    && win.open
+                    && win.buttons.contains(Buttons::LEFT)
                 {
                     // The OS takes the pointer for the drag, so the release
                     // would never reach the app; it goes now, which also ends
@@ -434,16 +517,14 @@ impl Viewer {
         }
     }
 
-    /// The connection ended. When the host had closed every window, the
-    /// service is gone; otherwise the windows show Reconnecting and the
+    /// The connection ended. When the host had shown every window Closed,
+    /// the service is gone; otherwise the windows show Reconnecting and the
     /// connection reconnects.
     pub fn disconnected(&mut self, now: Instant, ui: &mut impl Windows) {
         if self.link == Link::Over {
             return;
         }
-        let gone = !self.windows.is_empty()
-            && self.windows.iter().all(|win| win.lock == LockState::Closed);
-        if gone {
+        if self.closed_by_host {
             self.over(now);
         } else {
             self.link = Link::Down;
@@ -452,18 +533,31 @@ impl Viewer {
         self.redraw_changed(now, ui);
     }
 
-    /// The daemon said whether the service still runs, after
-    /// [`Out::CheckUnit`]. A gone service ends the viewer; otherwise it asks
-    /// again later while the link stays down.
-    pub fn unit_checked(&mut self, running: bool, now: Instant, ui: &mut impl Windows) {
+    /// The daemon's answer about the service, after [`Out::CheckUnit`]. A
+    /// gone service ends the viewer, and so does a daemon that has not
+    /// answered for [`DAEMON_AWAY`]; otherwise it asks again later while the
+    /// link stays down.
+    pub fn unit_checked(&mut self, check: Check, now: Instant, ui: &mut impl Windows) {
         if self.link != Link::Down {
             return;
         }
-        if running {
-            self.check_at = Some(now + CHECK_AFTER);
-        } else {
+        let gone = match check {
+            Check::Gone => true,
+            Check::DaemonAway => {
+                let since = *self.away_since.get_or_insert(now);
+                now >= since + DAEMON_AWAY
+            }
+            Check::Runs => {
+                self.away_since = None;
+                false
+            }
+            Check::Unknown => false,
+        };
+        if gone {
             self.over(now);
             self.redraw_changed(now, ui);
+        } else {
+            self.check_at = Some(now + CHECK_AFTER);
         }
     }
 
@@ -504,6 +598,9 @@ impl Viewer {
             CloseAction::App => self.out.push(Out::Close(window)),
             CloseAction::Local => {
                 self.release_all(index);
+                if self.blurred == Some(local) {
+                    self.blurred = None;
+                }
                 for win in &mut self.windows {
                     if win.local == local || win.info.parent == Some(window) {
                         win.hidden = true;
@@ -526,49 +623,113 @@ impl Viewer {
         self.redraw_changed(now, ui);
     }
 
-    /// `local` gained or lost focus. On a gain, `clipboard` is the local
-    /// clipboard's text, sent when it changed; on a loss, held keys and
-    /// buttons are released, since their releases go to another window.
-    pub fn focused(&mut self, local: LocalId, focused: bool, clipboard: Option<String>) {
+    /// `local` gained or lost focus. A gain is said at once and cancels a
+    /// loss of another window of the service reported in the same turn of
+    /// the event loop (OSes report the loss first), so moving between the
+    /// viewer's windows does not look like leaving the app. A loss waits for
+    /// [`Viewer::settle_focus`].
+    pub fn focus(&mut self, local: LocalId, focused: bool, now: Instant) {
         let Some(index) = self.index_of_local(local) else {
             return;
         };
-        if focused {
-            if let Some(text) = clipboard
-                && self.clipboard.as_deref() != Some(text.as_str())
-            {
-                self.clipboard = Some(text.clone());
-                self.out.push(Out::Clipboard(text));
-            }
-        } else {
-            self.release_all(index);
+        if !focused {
+            self.blurred = Some(local);
+            return;
         }
-        let window = self.windows[index].info.id;
-        self.out.push(Out::Focus(window, focused));
+        if self.blurred == Some(local) {
+            self.blurred = None;
+            return;
+        }
+        if let Some(other) = self
+            .blurred
+            .take()
+            .and_then(|other| self.index_of_local(other))
+        {
+            // Its keys went to the window that has focus now.
+            let held = std::mem::take(&mut self.windows[other].keys);
+            let window = self.windows[other].info.id;
+            self.windows[other].texted.clear();
+            for code in held {
+                self.out.push(Out::Key(window, code, false));
+            }
+        }
+        if self.shown(&self.windows[index], now) != LockState::Frozen {
+            self.out.push(Out::Focus(self.windows[index].info.id, true));
+        }
     }
 
-    /// The pointer moved to `position` in `local`.
+    /// At the end of a turn of the event loop: a focus loss no other window
+    /// of the service took over means focus left the app, which releases
+    /// what was held and tells the host.
+    pub fn settle_focus(&mut self, now: Instant) {
+        let Some(index) = self
+            .blurred
+            .take()
+            .and_then(|local| self.index_of_local(local))
+        else {
+            return;
+        };
+        self.release_all(index);
+        if self.shown(&self.windows[index], now) != LockState::Frozen {
+            self.out
+                .push(Out::Focus(self.windows[index].info.id, false));
+        }
+    }
+
+    /// The local clipboard's text, read when a window of the service gained
+    /// focus. Sent when it changed, once the link can carry it.
+    pub fn local_clipboard(&mut self, text: String) {
+        if self.clipboard.as_deref() == Some(text.as_str()) {
+            return;
+        }
+        if self.link == Link::Up {
+            self.send_clipboard(text);
+        } else {
+            self.clipboard_pending = Some(text);
+        }
+    }
+
+    /// Sends `text` as the clipboard and records it as seen.
+    fn send_clipboard(&mut self, text: String) {
+        if self.clipboard.as_deref() != Some(text.as_str()) {
+            self.clipboard = Some(text.clone());
+            self.out.push(Out::Clipboard(text));
+        }
+    }
+
+    /// The pointer moved to `position` in `local`. Motion goes out while the
+    /// window is unlocked, and with a button held while it is locked for
+    /// anything but a frozen lane, where only presses go, since every input
+    /// the host gets would thaw the lane.
     pub fn pointer_moved(&mut self, local: LocalId, position: Point, now: Instant) {
         let Some(index) = self.index_of_local(local) else {
             return;
         };
         let buttons = self.windows[index].buttons;
-        if buttons.is_empty() && !self.accepts(index, now) {
+        let shown = self.shown(&self.windows[index], now);
+        let sends =
+            shown == LockState::Unlocked || (!buttons.is_empty() && shown != LockState::Frozen);
+        if !sends {
             self.windows[index].pointer = Some(position);
             return;
         }
         self.send_pointer(index, position, buttons);
     }
 
-    /// A mouse button went down or up in `local`. Releases of held buttons
-    /// always go out, so the app never keeps a button the user let go of.
+    /// A mouse button went down or up in `local`. Presses go out while the
+    /// window is unlocked or frozen (a click thaws the lane); releases of
+    /// held buttons always do, so the app never keeps a button the user let go
+    /// of.
     pub fn button(&mut self, local: LocalId, button: Buttons, pressed: bool, now: Instant) {
         let Some(index) = self.index_of_local(local) else {
             return;
         };
         let held = self.windows[index].buttons;
         let buttons = if pressed {
-            if !self.accepts(index, now) {
+            if !matches!(
+                self.shown(&self.windows[index], now),
+                LockState::Unlocked | LockState::Frozen
+            ) {
                 return;
             }
             held | button
@@ -582,19 +743,23 @@ impl Viewer {
     }
 
     /// The pointer left `local`.
-    pub fn pointer_left(&mut self, local: LocalId) {
+    pub fn pointer_left(&mut self, local: LocalId, now: Instant) {
         let Some(index) = self.index_of_local(local) else {
             return;
         };
+        let frozen = self.shown(&self.windows[index], now) == LockState::Frozen;
         let win = &mut self.windows[index];
         // A drag that leaves the window goes on on the app's side.
         if win.buttons.is_empty() {
             win.pointer = None;
-            self.out.push(Out::PointerLeft(win.info.id));
+            if !frozen {
+                self.out.push(Out::PointerLeft(win.info.id));
+            }
         }
     }
 
-    /// A scroll by `delta_x` and `delta_y` in `unit` in `local`.
+    /// A scroll by `delta_x` and `delta_y` in `unit` in `local`, while the
+    /// window is unlocked.
     pub fn wheel(
         &mut self,
         local: LocalId,
@@ -604,7 +769,7 @@ impl Viewer {
         let Some(index) = self.index_of_local(local) else {
             return;
         };
-        if !self.accepts(index, now) {
+        if self.shown(&self.windows[index], now) != LockState::Unlocked {
             return;
         }
         let win = &self.windows[index];
@@ -619,35 +784,60 @@ impl Viewer {
         }
     }
 
-    /// A key went down or up in `local`. Releases of held keys always go out.
-    pub fn key(&mut self, local: LocalId, code: KeyCode, pressed: bool, now: Instant) {
+    /// A key went down or up in `local`, with `modifiers` held.
+    ///
+    /// A press that types a character with the local layout goes out as that
+    /// text, and its release not at all; a repeat of it repeats the text.
+    /// Presses with Control (without Alt, which with Control is AltGr on
+    /// Windows) or with Super or Command held stay physical keys, so
+    /// shortcuts keep their positions. A dead key sends nothing; its
+    /// character comes as the text of the next press. Every other key goes
+    /// out as a physical key, modifiers included, and the app repeats a held
+    /// one itself. Presses go out only while the window is unlocked;
+    /// releases of held keys always do.
+    pub fn key(&mut self, local: LocalId, input: KeyInput, modifiers: Modifiers, now: Instant) {
         let Some(index) = self.index_of_local(local) else {
             return;
         };
-        if pressed && !self.accepts(index, now) {
-            return;
-        }
-        let win = &mut self.windows[index];
-        let held = win.keys.contains(&code);
-        if pressed && !held {
-            win.keys.push(code);
-        } else if !pressed {
-            if !held {
+        let window = self.windows[index].info.id;
+        if !input.pressed {
+            let Some(code) = input.code else {
                 return;
+            };
+            let win = &mut self.windows[index];
+            if let Some(at) = win.texted.iter().position(|held| *held == code) {
+                win.texted.remove(at);
+            } else if let Some(at) = win.keys.iter().position(|held| *held == code) {
+                win.keys.remove(at);
+                self.out.push(Out::Key(window, code, false));
             }
-            win.keys.retain(|key| *key != code);
+            return;
         }
-        self.out.push(Out::Key(win.info.id, code, pressed));
-    }
-
-    /// Text committed in `local`, such as by an input method.
-    pub fn text(&mut self, local: LocalId, text: String, now: Instant) {
-        let Some(index) = self.index_of_local(local) else {
+        if self.shown(&self.windows[index], now) != LockState::Unlocked || input.dead {
+            return;
+        }
+        let shortcut = (modifiers.ctrl && !modifiers.alt) || modifiers.meta;
+        let text = input
+            .text
+            .filter(|text| !shortcut && !text.is_empty() && !text.chars().any(char::is_control));
+        let win = &mut self.windows[index];
+        if let Some(text) = text {
+            if let Some(code) = input.code
+                && !win.texted.contains(&code)
+            {
+                win.texted.push(code);
+            }
+            self.out.push(Out::Text(window, text));
+            return;
+        }
+        let Some(code) = input.code else {
             return;
         };
-        if !text.is_empty() && self.accepts(index, now) {
-            self.out.push(Out::Text(self.windows[index].info.id, text));
+        if input.repeat || win.keys.contains(&code) {
+            return;
         }
+        win.keys.push(code);
+        self.out.push(Out::Key(window, code, true));
     }
 
     /// Does what is due at `now`: sends settled sizes, closes windows that
@@ -725,16 +915,6 @@ impl Viewer {
         }
     }
 
-    /// Whether the window at `index` takes presses, motion, wheel, keys and
-    /// text at `now`: when unlocked, and when frozen, where a click reaches
-    /// the host as activity that thaws the lane.
-    fn accepts(&self, index: usize, now: Instant) -> bool {
-        matches!(
-            self.shown(&self.windows[index], now),
-            LockState::Unlocked | LockState::Frozen
-        )
-    }
-
     /// Sends the pointer at `position` with `buttons` for the window at
     /// `index`, with the on-screen movement while a button stays held.
     fn send_pointer(&mut self, index: usize, position: Point, buttons: Buttons) {
@@ -767,6 +947,7 @@ impl Viewer {
     fn release_all(&mut self, index: usize) {
         let win = &mut self.windows[index];
         let window = win.info.id;
+        win.texted.clear();
         for code in std::mem::take(&mut win.keys) {
             self.out.push(Out::Key(window, code, false));
         }

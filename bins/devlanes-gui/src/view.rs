@@ -27,7 +27,7 @@ pub struct ViewArgs {
     #[arg(long, value_name = "DIR")]
     instance_dir: Option<PathBuf>,
     /// Started by the daemon's auto-open: windows open without taking focus,
-    /// and the daemon ends the viewer when the service stops.
+    /// and the daemon ends the viewer once the service stopped.
     #[arg(long)]
     auto: bool,
     /// The `devlanes` executable to ask whether the service still runs while
@@ -67,7 +67,7 @@ pub fn run(args: ViewArgs) -> Result<(), ViewError> {
     crate::host::init_logging();
     // Before the lock, so a machine without a display neither takes it nor
     // asks a running viewer for anything.
-    if !devlanes_gui_viewer::has_display() {
+    if !devlanes_gui_client::display::here() {
         return Err(ViewerError::NoDisplay.into());
     }
     let instance = match &args.instance_dir {
@@ -83,6 +83,7 @@ pub fn run(args: ViewArgs) -> Result<(), ViewError> {
                 } else {
                     StartedBy::User
                 },
+                service: args.service.clone(),
             };
             let failed = |error| ViewError::Instance(dir.clone(), error);
             match instance::claim(dir, &key, &info).map_err(failed)? {

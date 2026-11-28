@@ -7,21 +7,22 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::Instant;
 
+use devlanes_gui_client::Event;
 use devlanes_gui_proto::{CursorShape, Edge, Point, Size};
 use softbuffer::{Context, Surface};
 use tokio::sync::mpsc;
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, Ime, WindowEvent};
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, OwnedDisplayHandle};
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{Key, ModifiersState, PhysicalKey};
 use winit::window::{
     Cursor, CursorIcon, CustomCursor, ResizeDirection, Window, WindowId as OsWindowId, WindowLevel,
 };
 
 use crate::frame::{Decoration, Drag};
-use crate::link::FromLink;
-use crate::model::{LocalId, Out, Spec, Viewer, Windows, overlay_text};
+use crate::link::{Frames, FromLink, Tell};
+use crate::model::{KeyInput, LocalId, Modifiers, Out, Spec, Viewer, Windows, overlay_text};
 use crate::{ViewerError, input, paint};
 
 /// Size of a window whose app reported no size yet; replaced by the first.
@@ -47,21 +48,54 @@ pub(crate) struct App {
     context: Option<Context<OwnedDisplayHandle>>,
     clipboard: Option<arboard::Clipboard>,
     to_link: mpsc::UnboundedSender<Out>,
+    /// The newest frame of each window, which [`FromLink::Frame`] points at.
+    frames: Frames,
+    /// Back to this thread, for what blocking threads read.
+    tell: Tell,
+    /// The connection's runtime, whose blocking threads read the clipboard.
+    runtime: tokio::runtime::Handle,
+    /// The modifiers held now, from the windows' reports.
+    modifiers: ModifiersState,
     /// Why the viewer ended, when it failed.
     pub(crate) error: Option<ViewerError>,
 }
 
 impl App {
-    /// An application for `viewer`, sending what it asks on `to_link`.
-    pub(crate) fn new(viewer: Viewer, to_link: mpsc::UnboundedSender<Out>) -> Self {
+    /// An application for `viewer`, sending what it asks on `to_link`,
+    /// taking frames from `frames`, and reading the clipboard on `runtime`'s
+    /// blocking threads with the answer through `tell`.
+    pub(crate) fn new(
+        viewer: Viewer,
+        to_link: mpsc::UnboundedSender<Out>,
+        frames: Frames,
+        tell: Tell,
+        runtime: tokio::runtime::Handle,
+    ) -> Self {
         Self {
             viewer,
             locals: Locals::default(),
             context: None,
             clipboard: None,
             to_link,
+            frames,
+            tell,
+            runtime,
+            modifiers: ModifiersState::empty(),
             error: None,
         }
+    }
+
+    /// Reads the local clipboard on a blocking thread, since an X11 or
+    /// Wayland clipboard owner may take its time to answer, and hands the
+    /// text back to this thread.
+    fn read_clipboard(&self) {
+        let tell = self.tell.clone();
+        self.runtime.spawn_blocking(move || {
+            let text = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text());
+            if let Ok(text) = text {
+                tell(FromLink::LocalClipboard(text));
+            }
+        });
     }
 
     /// Runs `f` on the model with the OS windows behind [`Windows`], then
@@ -148,14 +182,27 @@ impl ApplicationHandler<FromLink> for App {
             FromLink::Disconnected => {
                 self.with_ui(event_loop, |viewer, ui| viewer.disconnected(now, ui));
             }
-            FromLink::UnitChecked(running) => {
-                self.with_ui(event_loop, |viewer, ui| {
-                    viewer.unit_checked(running, now, ui)
-                });
+            FromLink::Frame(window) => {
+                if let Some(frame) = self.frames.take(window) {
+                    self.with_ui(event_loop, |viewer, ui| {
+                        viewer.event(Event::Frame(frame), now, ui)
+                    });
+                }
+            }
+            FromLink::UnitChecked(check) => {
+                self.with_ui(event_loop, |viewer, ui| viewer.unit_checked(check, now, ui));
             }
             FromLink::Show => self.with_ui(event_loop, |viewer, ui| viewer.show(ui)),
+            FromLink::LocalClipboard(text) => {
+                self.viewer.local_clipboard(text);
+                self.with_ui(event_loop, |_, _| ());
+            }
             FromLink::Failed(error) => {
                 self.error = Some(ViewerError::Connect(error));
+                event_loop.exit();
+            }
+            FromLink::Crashed(message) => {
+                self.error = Some(ViewerError::Crashed(message));
                 event_loop.exit();
             }
         }
@@ -179,19 +226,20 @@ impl ApplicationHandler<FromLink> for App {
                 self.with_ui(event_loop, |viewer, ui| viewer.close_requested(local, ui));
             }
             WindowEvent::Focused(focused) => {
-                let text = focused
-                    .then(|| self.clipboard.as_mut()?.get_text().ok())
-                    .flatten();
-                self.viewer.focused(local, focused, text);
+                if focused {
+                    self.read_clipboard();
+                }
+                self.viewer.focus(local, focused, now);
                 self.with_ui(event_loop, |_, _| ());
             }
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {
                 let point = Point::new(position.x.floor() as i32, position.y.floor() as i32);
                 self.viewer.pointer_moved(local, point, now);
                 self.with_ui(event_loop, |_, _| ());
             }
             WindowEvent::CursorLeft { .. } => {
-                self.viewer.pointer_left(local);
+                self.viewer.pointer_left(local, now);
                 self.with_ui(event_loop, |_, _| ());
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -212,22 +260,29 @@ impl ApplicationHandler<FromLink> for App {
                 is_synthetic,
                 ..
             } => {
+                let key = match event.physical_key {
+                    PhysicalKey::Code(key) => Some(key),
+                    PhysicalKey::Unidentified(_) => None,
+                };
                 // X11 reports keys held while the window gained focus as
-                // synthetic presses, and repeats are the app's to make: it
-                // repeats a key the host holds down.
-                if is_synthetic || event.repeat {
+                // synthetic presses: only modifiers count, so a Control held
+                // while clicking into the window reaches the app.
+                if is_synthetic && !key.is_some_and(input::is_modifier) {
                     return;
                 }
-                if let PhysicalKey::Code(key) = event.physical_key
-                    && let Some(code) = input::key_code(key)
-                {
-                    let pressed = event.state == ElementState::Pressed;
-                    self.viewer.key(local, code, pressed, now);
-                    self.with_ui(event_loop, |_, _| ());
-                }
-            }
-            WindowEvent::Ime(Ime::Commit(text)) => {
-                self.viewer.text(local, text, now);
+                let input = KeyInput {
+                    code: key.and_then(input::key_code),
+                    pressed: event.state == ElementState::Pressed,
+                    repeat: event.repeat,
+                    text: event.text.as_ref().map(|text| text.to_string()),
+                    dead: matches!(event.logical_key, Key::Dead(_)),
+                };
+                let modifiers = Modifiers {
+                    ctrl: self.modifiers.control_key(),
+                    alt: self.modifiers.alt_key(),
+                    meta: self.modifiers.super_key(),
+                };
+                self.viewer.key(local, input, modifiers, now);
                 self.with_ui(event_loop, |_, _| ());
             }
             _ => {}
@@ -237,6 +292,9 @@ impl ApplicationHandler<FromLink> for App {
     /// Runs what is due and sleeps until the model's next deadline.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
+        // Every event of this turn is in, so a focus loss without a gain of
+        // another window of the service means focus left it.
+        self.viewer.settle_focus(now);
         self.with_ui(event_loop, |viewer, ui| viewer.tick(now, ui));
         event_loop.set_control_flow(match self.viewer.next_deadline() {
             Some(at) => ControlFlow::WaitUntil(at),

@@ -1,6 +1,6 @@
 //! The physical keys clients send, as USB HID usages (HID Usage Tables 1.5,
 //! keyboard page 0x07 and consumer page 0x0C). A key is named by what it
-//! shows on a US layout, as HID codes are: [`A`] is the key labelled A there,
+//! shows on a US layout, as HID codes are: `letter(b'a')` is the key labelled A there,
 //! wherever another layout puts its letter. The viewer maps its OS's key
 //! codes to these and `devlanes gui key` maps key names to them, so both send
 //! the same codes for the same key.

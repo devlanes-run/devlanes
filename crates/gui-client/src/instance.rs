@@ -51,6 +51,9 @@ pub struct Info {
     pub start_time: u64,
     /// Who started it.
     pub started_by: StartedBy,
+    /// The service it shows, as `lane:unit`, so a daemon that finds it after
+    /// a restart knows whose viewer it is.
+    pub service: String,
 }
 
 impl Info {
@@ -60,8 +63,10 @@ impl Info {
             StartedBy::Daemon => "daemon",
             StartedBy::User => "user",
         };
+        // A service label has no line break; one would only cut it short.
+        let service = self.service.lines().next().unwrap_or_default();
         format!(
-            "pid={}\nstart_time={}\nstarted_by={by}\n",
+            "pid={}\nstart_time={}\nstarted_by={by}\nservice={service}\n",
             self.pid, self.start_time
         )
     }
@@ -80,6 +85,7 @@ impl Info {
                 "user" => StartedBy::User,
                 _ => return None,
             },
+            service: field("service")?.to_owned(),
         })
     }
 }
@@ -143,17 +149,50 @@ pub fn claim(dir: &Path, key: &str, info: &Info) -> io::Result<Claim> {
             Err(std::fs::TryLockError::Error(error)) => return Err(error),
         }
     }
-    let info_path = path(dir, key, "info");
-    let temporary = path(dir, key, "info.tmp");
-    File::create(&temporary)?.write_all(info.to_text().as_bytes())?;
-    std::fs::rename(&temporary, &info_path)?;
+    write_info(dir, key, info)?;
     let show = path(dir, key, "show");
-    let seen = std::fs::metadata(&show).and_then(|m| m.modified()).ok();
+    // A request written in the moments before this claim was meant for this
+    // viewer (a `gui open` that found the lock held by one ending, or that
+    // raced this start); an older one was answered by an earlier viewer.
+    let seen = std::fs::metadata(&show)
+        .and_then(|m| m.modified())
+        .ok()
+        .filter(|modified| {
+            SystemTime::now()
+                .duration_since(*modified)
+                .is_ok_and(|age| age > FRESH_SHOW)
+        });
     Ok(Claim::Claimed(Instance {
         _lock: lock,
         show,
         seen,
     }))
+}
+
+/// How recent a show request at [`claim`] counts as one for the new viewer.
+const FRESH_SHOW: Duration = Duration::from_secs(5);
+
+/// Writes `<key>.info` through a temporary file, so a reader never sees half
+/// of it. On Windows the rename fails while a reader has the file open, so it
+/// is retried for a moment and then written in place.
+fn write_info(dir: &Path, key: &str, info: &Info) -> io::Result<()> {
+    let info_path = path(dir, key, "info");
+    let temporary = path(dir, key, "info.tmp");
+    File::create(&temporary)?.write_all(info.to_text().as_bytes())?;
+    let mut tries = 0;
+    loop {
+        match std::fs::rename(&temporary, &info_path) {
+            Ok(()) => return Ok(()),
+            Err(_) if tries < 10 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => {
+                let _ = std::fs::remove_file(&temporary);
+                return std::fs::write(&info_path, info.to_text());
+            }
+        }
+    }
 }
 
 /// Whether a viewer of `key` in `dir` runs. Blocking. It takes the lock for
@@ -233,6 +272,7 @@ mod tests {
             pid: 42,
             start_time: 7,
             started_by: StartedBy::Daemon,
+            service: "acme@2:desktop".into(),
         };
         assert!(!running(dir.path(), &key).expect("check"));
         let Claim::Claimed(mut first) = claim(dir.path(), &key, &info).expect("claim") else {

@@ -165,6 +165,7 @@ impl Reader {
         let at = now();
         let shared = self.shared.clone();
         let mut state = shared.state();
+        state.last_data = at;
         for win in state.windows.values_mut() {
             win.lock.data(at);
         }

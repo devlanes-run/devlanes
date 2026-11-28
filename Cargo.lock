@@ -1786,6 +1786,7 @@ dependencies = [
  "devlanes-gui-host",
  "devlanes-gui-proto",
  "devlanes-gui-tool",
+ "devlanes-proto",
  "serde_json",
  "softbuffer",
  "thiserror 2.0.21",

@@ -14,6 +14,8 @@ workspace = true
 devlanes-gui-client = { path = "../gui-client" }
 devlanes-gui-codec = { path = "../gui-codec" }
 devlanes-gui-proto = { path = "../gui-proto" }
+# `DEVLANES_NO_SPAWN`, so the unit check never starts a daemon.
+devlanes-proto = { path = "../proto" }
 # Text only: image support would pull in an image decoder. On Linux it talks to
 # X11 in Rust (x11rb), with nothing linked.
 arboard = { version = "3.7", default-features = false }
