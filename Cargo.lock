@@ -1498,6 +1498,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "devlanes-gui-client"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "devlanes-gui-codec",
+ "devlanes-gui-proto",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "devlanes-gui-codec"
 version = "0.1.0"
 dependencies = [
@@ -1505,6 +1518,21 @@ dependencies = [
  "devlanes-gui-proto",
  "thiserror 2.0.21",
  "zstd",
+]
+
+[[package]]
+name = "devlanes-gui-host"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "devlanes-gui-client",
+ "devlanes-gui-codec",
+ "devlanes-gui-host",
+ "devlanes-gui-proto",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

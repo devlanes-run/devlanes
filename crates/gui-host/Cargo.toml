@@ -1,0 +1,31 @@
+[package]
+name = "devlanes-gui-host"
+description = "The GUI host core of devlanes: the backend trait, the server, and a test-pattern backend"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# `conformance`, the checks every backend runs against itself; it drives the
+# host through the headless client.
+test-support = ["dep:devlanes-gui-client"]
+
+[dependencies]
+devlanes-gui-client = { path = "../gui-client", optional = true }
+devlanes-gui-codec = { path = "../gui-codec" }
+devlanes-gui-proto = { path = "../gui-proto" }
+bytes.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+devlanes-gui-client = { path = "../gui-client" }
+devlanes-gui-host = { path = ".", features = ["test-support"] }
+tokio = { workspace = true, features = ["test-util"] }
