@@ -1791,6 +1791,14 @@ mod tests {
         tokio::time::timeout(RELEASE_TEST, test).await?
     }
 
+    /// [`bounded`] with 30 s, for the test whose release follows an
+    /// abandoned dial: iroh's close waits about 3 s for that handshake, on
+    /// top of the bind and the dial, which a slow runner can stretch past
+    /// [`RELEASE_TEST`].
+    async fn bounded_long(test: impl Future<Output = TestResult>) -> TestResult {
+        tokio::time::timeout(Duration::from_secs(30), test).await?
+    }
+
     /// An endpoint that only dialed is released once unused: its socket can
     /// be bound by another program again, and the next call binds a new one
     /// that works.
@@ -1920,7 +1928,7 @@ mod tests {
     /// to a socket that never answers, cut off by the test after 5 idle times.
     #[tokio::test]
     async fn a_call_in_progress_keeps_the_endpoint() -> TestResult {
-        bounded(async {
+        bounded_long(async {
             let home = tempfile::tempdir()?;
             let inner = short_lived(&home, "client");
             let silent = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
