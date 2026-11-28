@@ -1444,6 +1444,8 @@ name = "devlanes-e2e"
 version = "0.3.0"
 dependencies = [
  "async-trait",
+ "devlanes-gui-client",
+ "devlanes-gui-proto",
  "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-testing",
