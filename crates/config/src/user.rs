@@ -76,6 +76,34 @@ pub struct UserConfig {
     /// Settings for `devlanes remote connect`: boxes reached by a command, and how this
     /// machine serves clients when it is a box.
     pub remote: RemoteConfig,
+    // Left out of the published schema while GUI services are off for users;
+    // see `user_schema`.
+    /// How the windows of GUI services (`gui: true`) open on this machine.
+    pub gui: GuiUserConfig,
+}
+
+/// How the windows of GUI services open on this machine. Changes apply after
+/// `devlanes daemon restart`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+#[schemars(extend("examples" = [{"auto_open":false}]))]
+pub struct GuiUserConfig {
+    /// Open a viewer window by itself for each window of a running GUI service whose
+    /// display is not this machine's desktop: every GUI service of a connected box, and
+    /// this machine's own on a display of their own. Defaults to true. A window you
+    /// close stays closed until `devlanes gui open`, which also opens windows when
+    /// this is false. On Linux the daemon needs `DISPLAY` or `WAYLAND_DISPLAY` from the
+    /// shell that started it; without either, nothing opens by itself and `devlanes gui
+    /// open` still works from a desktop terminal.
+    #[schemars(extend("examples" = [true,false]))]
+    pub auto_open: bool,
+}
+
+impl Default for GuiUserConfig {
+    /// Opens viewers by themselves unless turned off.
+    fn default() -> Self {
+        Self { auto_open: true }
+    }
 }
 
 /// What a plain `devlanes start`, or `s` on a lane in the TUI, starts. Changes apply

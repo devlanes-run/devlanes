@@ -78,6 +78,8 @@ pub fn effective_user_value(config: &UserConfig) -> Value {
             "terminal".into(),
             serde_json::to_value(terminal).unwrap_or_default(),
         );
+        // Unpublished while GUI services are off for users, as in the schema.
+        map.remove("gui");
     }
     shorten(&mut value);
     value
