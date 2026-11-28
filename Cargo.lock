@@ -1574,6 +1574,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "devlanes-gui-tool"
+version = "0.1.0"
+dependencies = [
+ "devlanes-gui-client",
+ "devlanes-gui-codec",
+ "devlanes-gui-host",
+ "devlanes-gui-proto",
+ "png",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "devlanes-hosts-helper"
 version = "0.17.0"
 dependencies = [

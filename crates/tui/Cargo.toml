@@ -58,7 +58,7 @@ devlanes-sys-windows = { path = "../sys-windows" }
 # The `screens` example draws every TUI page to PNG for design review.
 ab_glyph = "0.2"
 insta = { version = "1", features = ["filters"] }
-png = "0.18"
+png.workspace = true
 tempfile.workspace = true
 
 # A paused clock for the start handoff's open delay.

@@ -1,0 +1,22 @@
+[package]
+name = "devlanes-gui-tool"
+description = "What the devlanes gui commands do on a GUI host's port: input, sync and PNG screenshots"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+devlanes-gui-client = { path = "../gui-client" }
+devlanes-gui-codec = { path = "../gui-codec" }
+devlanes-gui-proto = { path = "../gui-proto" }
+png.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+devlanes-gui-host = { path = "../gui-host" }
