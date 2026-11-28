@@ -24,8 +24,10 @@ pub const READY_FORMAT: u32 = 1;
 /// that prints something else cannot make the reader buffer without end.
 pub const MAX_READY_LINE: usize = 64 * 1024;
 
-/// What a GUI host reports once it listens.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// What a GUI host reports once it listens. It has no `Deserialize`:
+/// [`Ready::parse`] is the only way to read one, so every reader gets its
+/// checks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Ready {
     /// [`READY_FORMAT`].
     pub ready: u32,
@@ -62,6 +64,61 @@ pub enum ReadyError {
     /// A variable name or value the environment cannot hold.
     #[error("the GUI host names an invalid variable {0:?}")]
     Variable(String),
+    /// A variable set twice, removed twice, or both set and removed.
+    #[error("the GUI host names the variable {0:?} more than once")]
+    Repeated(String),
+}
+
+/// The line as it is read, before the checks of [`Ready::parse`]. Unknown
+/// fields are ignored; a field given twice fails.
+#[derive(Deserialize)]
+struct Wire {
+    ready: u32,
+    devlanes: String,
+    protocol: u16,
+    address: SocketAddr,
+    set: Pairs,
+    remove: Vec<String>,
+    real_desktop: bool,
+}
+
+/// Just the format version, read before anything else.
+#[derive(Deserialize)]
+struct Format {
+    ready: Option<u64>,
+}
+
+/// The `set` object as its entries in order, so a name given twice shows
+/// instead of the last one silently winning.
+struct Pairs(Vec<(String, String)>);
+
+impl<'de> Deserialize<'de> for Pairs {
+    /// Collects every entry of a JSON object of strings.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        /// Reads the entries of one map.
+        struct Entries;
+        impl<'de> serde::de::Visitor<'de> for Entries {
+            type Value = Pairs;
+
+            /// What `set` must be.
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object of strings")
+            }
+
+            /// Every entry, in order.
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Pairs, A::Error> {
+                let mut entries = Vec::new();
+                while let Some(entry) = map.next_entry::<String, String>()? {
+                    entries.push(entry);
+                }
+                Ok(Pairs(entries))
+            }
+        }
+        deserializer.deserialize_map(Entries)
+    }
 }
 
 impl Ready {
@@ -109,35 +166,58 @@ impl Ready {
     }
 
     /// Reads a line (without its newline) strictly: the format must be
-    /// [`READY_FORMAT`], the address loopback with a port other than 0, and
-    /// every variable name non-empty without `=` or NUL, and values without
-    /// NUL. Fields this build does not know are ignored.
+    /// [`READY_FORMAT`], the address loopback with a port other than 0, every
+    /// variable name non-empty without `=` or NUL and named once across `set`
+    /// and `remove`, and values without NUL. Fields this build does not know
+    /// are ignored. The caller reads the line with a cap of
+    /// [`MAX_READY_LINE`] bytes, never with a line reader that buffers
+    /// without bound.
     pub fn parse(line: &str) -> Result<Self, ReadyError> {
         if line.len() > MAX_READY_LINE {
             return Err(ReadyError::TooLong(line.len()));
         }
-        let value: serde_json::Value = serde_json::from_str(line)?;
         // The format first, so a later format fails as such and not on a
         // field it renamed.
-        if let Some(format) = value.get("ready").and_then(serde_json::Value::as_u64)
+        let format: Format = serde_json::from_str(line)?;
+        if let Some(format) = format.ready
             && format != u64::from(READY_FORMAT)
         {
             return Err(ReadyError::Format(format));
         }
-        let ready: Self = serde_json::from_value(value)?;
-        if !ready.address.ip().is_loopback() || ready.address.port() == 0 {
-            return Err(ReadyError::Address(ready.address));
+        let wire: Wire = serde_json::from_str(line)?;
+        if !wire.address.ip().is_loopback() || wire.address.port() == 0 {
+            return Err(ReadyError::Address(wire.address));
         }
         let bad_name = |name: &str| name.is_empty() || name.contains(['=', '\0']);
-        for (name, value) in &ready.set {
-            if bad_name(name) || value.contains('\0') {
-                return Err(ReadyError::Variable(name.clone()));
+        let mut set = BTreeMap::new();
+        for (name, value) in wire.set.0 {
+            if bad_name(&name) || value.contains('\0') {
+                return Err(ReadyError::Variable(name));
             }
+            if set.contains_key(&name) {
+                return Err(ReadyError::Repeated(name));
+            }
+            set.insert(name, value);
         }
-        if let Some(name) = ready.remove.iter().find(|name| bad_name(name)) {
-            return Err(ReadyError::Variable(name.clone()));
+        let mut remove: Vec<String> = Vec::new();
+        for name in wire.remove {
+            if bad_name(&name) {
+                return Err(ReadyError::Variable(name));
+            }
+            if set.contains_key(&name) || remove.contains(&name) {
+                return Err(ReadyError::Repeated(name));
+            }
+            remove.push(name);
         }
-        Ok(ready)
+        Ok(Self {
+            ready: wire.ready,
+            devlanes: wire.devlanes,
+            protocol: wire.protocol,
+            address: wire.address,
+            set,
+            remove,
+            real_desktop: wire.real_desktop,
+        })
     }
 }
 
@@ -245,6 +325,23 @@ mod tests {
             v.as_object_mut().map(|object| object.remove("address"));
         });
         assert!(matches!(missing, Err(ReadyError::Json(_))), "{missing:?}");
+        let both = with(&|v| {
+            v["set"] = serde_json::json!({ "A": "x" });
+            v["remove"] = serde_json::json!(["A"]);
+        });
+        assert!(matches!(both, Err(ReadyError::Repeated(_))), "{both:?}");
+        let twice = with(&|v| v["remove"] = serde_json::json!(["A", "A"]));
+        assert!(matches!(twice, Err(ReadyError::Repeated(_))), "{twice:?}");
+        // JSON values hold one entry per key, so this one is written out.
+        let line = good
+            .to_line()
+            .replace(r#""set":{}"#, r#""set":{"A":"1","A":"2"}"#);
+        assert!(line.contains(r#""A":"2""#), "{line}");
+        let duplicate = Ready::parse(&line);
+        assert!(
+            matches!(duplicate, Err(ReadyError::Repeated(_))),
+            "{duplicate:?}"
+        );
         let long = " ".repeat(MAX_READY_LINE + 1);
         assert!(matches!(Ready::parse(&long), Err(ReadyError::TooLong(_))));
     }
