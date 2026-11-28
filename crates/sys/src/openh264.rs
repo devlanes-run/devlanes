@@ -632,9 +632,11 @@ impl Encoder {
         let mut raw: *mut EncoderObject = std::ptr::null_mut();
         // SAFETY: the function writes a new encoder's address to `raw`.
         let code = unsafe { (library.create_encoder)(&mut raw) };
-        let raw = NonNull::new(raw).filter(|_| code == 0).ok_or(Error::Call {
+        check("WelsCreateSVCEncoder", code)?;
+        // A success without an encoder is reported as code 0.
+        let raw = NonNull::new(raw).ok_or(Error::Call {
             call: "WelsCreateSVCEncoder",
-            code: i64::from(code),
+            code: 0,
         })?;
         let mut encoder = Self {
             library: library.clone(),
@@ -650,7 +652,7 @@ impl Encoder {
         let code = unsafe {
             ((**encoder.raw.as_ptr()).get_default_params)(encoder.raw.as_ptr(), &mut *params)
         };
-        check("GetDefaultParams", i64::from(code))?;
+        check("GetDefaultParams", code)?;
         params.usage_type = SCREEN_CONTENT_REAL_TIME;
         params.pic_width = config.width as c_int;
         params.pic_height = config.height as c_int;
@@ -688,7 +690,7 @@ impl Encoder {
         // the library reads its version's prefix of.
         let code =
             unsafe { ((**encoder.raw.as_ptr()).initialize_ext)(encoder.raw.as_ptr(), &*params) };
-        check("InitializeExt", i64::from(code))?;
+        check("InitializeExt", code)?;
         Ok(encoder)
     }
 
@@ -704,7 +706,7 @@ impl Encoder {
         let code = unsafe {
             ((**self.raw.as_ptr()).set_option)(self.raw.as_ptr(), id, (value as *mut T).cast())
         };
-        check(call, i64::from(code))
+        check(call, code)
     }
 
     /// Changes the target bitrate.
@@ -735,7 +737,7 @@ impl Encoder {
         // SAFETY: the encoder is alive; -1 means every layer.
         let code =
             unsafe { ((**self.raw.as_ptr()).force_intra_frame)(self.raw.as_ptr(), true, -1) };
-        check("ForceIntraFrame", i64::from(code))
+        check("ForceIntraFrame", code)
     }
 
     /// Encodes frames at the fixed quantizer `qp` (0 best to 51 worst) with
@@ -752,7 +754,7 @@ impl Encoder {
                     (&mut *params as *mut EncParamExt).cast(),
                 )
             };
-            check("GetOption(parameters)", i64::from(code))?;
+            check("GetOption(parameters)", code)?;
             params.spatial_layers[0].d_layer_qp = c_int::from(qp.min(51));
             params.rc_mode = RC_OFF_MODE;
             self.set_option(
@@ -812,7 +814,7 @@ impl Encoder {
         let code = unsafe {
             ((**self.raw.as_ptr()).encode_frame)(self.raw.as_ptr(), &source, output.cast())
         };
-        check("EncodeFrame", i64::from(code))?;
+        check("EncodeFrame", code)?;
         // SAFETY: the library wrote the output in its version's layout, which
         // `layout` names; the NAL lengths and buffer it points to stay valid
         // until the next call on this encoder.
@@ -925,9 +927,11 @@ impl Decoder {
         let mut raw: *mut DecoderObject = std::ptr::null_mut();
         // SAFETY: the function writes a new decoder's address to `raw`.
         let code = unsafe { (library.create_decoder)(&mut raw) };
-        let raw = NonNull::new(raw).filter(|_| code == 0).ok_or(Error::Call {
+        check("WelsCreateDecoder", code)?;
+        // A success without a decoder is reported as code 0.
+        let raw = NonNull::new(raw).ok_or(Error::Call {
             call: "WelsCreateDecoder",
-            code: i64::from(code),
+            code: 0,
         })?;
         let decoder = Self {
             library: library.clone(),
@@ -942,7 +946,7 @@ impl Decoder {
                 (&mut level as *mut c_int).cast(),
             )
         };
-        check("SetOption(trace level)", i64::from(code))?;
+        check("SetOption(trace level)", code)?;
         let params = DecodingParam {
             file_name_restructed: std::ptr::null_mut(),
             cpu_load: 0,
@@ -956,7 +960,7 @@ impl Decoder {
         };
         // SAFETY: the decoder is alive and `params` has the layout every 2.x reads.
         let code = unsafe { ((**decoder.raw.as_ptr()).initialize)(decoder.raw.as_ptr(), &params) };
-        check("Initialize", i64::from(code))?;
+        check("Initialize", code)?;
         Ok(decoder)
     }
 
@@ -989,7 +993,7 @@ impl Decoder {
                 &mut info,
             )
         };
-        check("DecodeFrameNoDelay", i64::from(state))?;
+        check("DecodeFrameNoDelay", state)?;
         if info.buffer_status != 1 {
             return Ok(None);
         }
@@ -1039,8 +1043,8 @@ impl Drop for Decoder {
 }
 
 /// `Ok` for a zero return, the call's error otherwise.
-fn check(call: &'static str, code: i64) -> Result<(), Error> {
-    match code {
+fn check(call: &'static str, code: impl Into<i64>) -> Result<(), Error> {
+    match code.into() {
         0 => Ok(()),
         code => Err(Error::Call { call, code }),
     }
