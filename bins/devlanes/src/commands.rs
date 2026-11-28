@@ -350,6 +350,9 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             args,
             context,
         } => crate::bundle::run(runtime, to, log_lines, args, context).await,
+        Action::Gui { command, context } => {
+            crate::gui_commands::run(runtime, command, context).await
+        }
         Action::Setup(action) => crate::setup::run(runtime, action).await,
         Action::Update(action) => crate::update::run(runtime, &paths()?, action).await,
         Action::Uninstall(action) => crate::uninstall::run(runtime, action).await,
@@ -426,7 +429,7 @@ async fn daemon_start(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> 
 }
 
 /// One-shot request returning the data, for actions that post-process it locally.
-async fn call(request: Request) -> Result<Value, RpcError> {
+pub(crate) async fn call(request: Request) -> Result<Value, RpcError> {
     let paths = paths()?;
     let mut client = connect(&paths).await?;
     client

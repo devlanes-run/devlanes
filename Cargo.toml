@@ -35,6 +35,8 @@ grass = { version = "0.13", default-features = false }
 # Agent detection: the CLI's actor and output mode, the agent markers lane units
 # do not inherit.
 is-ai-agent = "0.7"
+# PNG screenshots of GUI windows (crates/gui-tool) and the TUI's screen tests.
+png = "0.18"
 # The MCP server of `devlanes mcp` (crates/mcp). Pinned: the protocol revisions it
 # negotiates come with the version.
 rmcp = { version = "=3.9.0", default-features = false }

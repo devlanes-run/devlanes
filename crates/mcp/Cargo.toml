@@ -8,6 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# A `gui screenshot`'s PNG as image content.
+base64.workspace = true
 devlanes-cli = { path = "../cli" }
 devlanes-proto = { path = "../proto" }
 devlanes-version = { path = "../version" }

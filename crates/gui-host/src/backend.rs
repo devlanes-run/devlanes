@@ -13,7 +13,8 @@ use devlanes_gui_proto::{
 };
 use tokio::sync::mpsc;
 
-/// An OS backend before it starts.
+/// An OS backend before it starts. The frames it sends carry valid alpha,
+/// opaque where its capture has none ([`CapturedFrame::frame`]).
 pub trait Backend: Send + 'static {
     /// Starts the backend, which then reports through `events` from any of
     /// its threads until the returned control is dropped. Called once, on a
@@ -104,7 +105,9 @@ pub struct CapturedFrame {
     /// The window, as the backend named it.
     pub window: WindowId,
     /// The picture, cropped to the window geometry, with its capture time on
-    /// the host's monotonic clock.
+    /// the host's monotonic clock. Its alpha is valid: 0xff wherever the
+    /// window is opaque, and 0xff everywhere when the capture has no alpha
+    /// (an X8 format), since screenshots keep it and would be transparent.
     pub frame: Frame,
     /// The regions that changed since the window's previous frame; empty
     /// when the backend does not know, which means all of it.

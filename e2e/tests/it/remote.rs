@@ -18,10 +18,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use crate::{BUDGET, need};
 
 /// How long the client gets to connect and see the box's ports.
-const CONNECT: Duration = Duration::from_secs(60);
+pub(crate) const CONNECT: Duration = Duration::from_secs(60);
 
 /// The `remote ls` entry of `name` in `lab`, or `None` when it lists no such box.
-fn host(lab: &Lab, name: &str) -> Result<Option<Value>> {
+pub(crate) fn host(lab: &Lab, name: &str) -> Result<Option<Value>> {
     let list = lab.json(lab.repo(), &["remote", "ls", "--json"])?;
     Ok(list["items"]
         .as_array()
@@ -37,7 +37,7 @@ fn devlanes() -> Result<std::path::PathBuf> {
 /// The `remote.boxes` command that runs `boxed`'s tunnel: `env` sets its
 /// home on Unix.
 #[cfg(unix)]
-fn box_command(boxed: &Lab) -> Result<Value> {
+pub(crate) fn box_command(boxed: &Lab) -> Result<Value> {
     Ok(json!([
         "env",
         format!("DEVLANES_HOME={}", boxed.home().display()),
@@ -50,7 +50,7 @@ fn box_command(boxed: &Lab) -> Result<Value> {
 /// The `remote.boxes` command that runs `boxed`'s tunnel: PowerShell sets its
 /// home and runs it as on a Windows box whose sshd uses PowerShell.
 #[cfg(windows)]
-fn box_command(boxed: &Lab) -> Result<Value> {
+pub(crate) fn box_command(boxed: &Lab) -> Result<Value> {
     let script = format!(
         "$env:DEVLANES_HOME={}; & {} tunnel --stdio; exit $LASTEXITCODE",
         ps_quote(&boxed.home().to_string_lossy()),

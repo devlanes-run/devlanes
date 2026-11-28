@@ -1757,6 +1757,7 @@ mod ci;
 mod classify;
 mod codes;
 mod diagnostics;
+mod gui;
 mod help;
 mod progress;
 #[cfg(windows)]

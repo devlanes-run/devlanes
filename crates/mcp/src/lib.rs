@@ -71,6 +71,9 @@ pub struct Config {
     pub agent_detected: bool,
     /// Reads the login shell's environment when a lane has none from a shell.
     pub shell_env: shell_env::Resolver,
+    /// Offer the `gui_*` tools: GUI services are on in this build, as the
+    /// binary decides.
+    pub gui: bool,
 }
 
 impl Config {
@@ -90,6 +93,7 @@ impl Config {
             cwd: std::env::current_dir()?,
             agent_detected: devlanes_cli::Signals::detect().detected_actor.is_some(),
             shell_env: shell_env::resolve,
+            gui: false,
         })
     }
 }

@@ -81,6 +81,23 @@ impl<'a> Report<'a> {
     }
 }
 
+/// Which `devlanes gui` command a [`Reporter::gui`] result is from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuiOutput {
+    /// `gui ls`: `{lane, box, items: [{unit, state, host, address,
+    /// real_desktop, unmirrored, error, windows: [{id, title, app_id, width, height,
+    /// kind, lock, parent}]}]}`.
+    Ls,
+    /// `gui screenshot`: `{lane, unit, box, window: {id, title}, path, width, height}`.
+    Screenshot,
+    /// The input commands: `{lane, unit, box, window: {id, title}, action,
+    /// window_after}` and the action's fields; `window_after` is `open`,
+    /// `closed`, the lock state the window has once the app got the input,
+    /// or `outside` (with `window_size`) when the window shrank past the
+    /// point. A resize's `size` is null when the window closed.
+    Input,
+}
+
 /// Keep data and diagnostics separate until the binary writes its standard streams.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rendered {
@@ -220,6 +237,38 @@ pub trait Reporter: Send + Sync {
                 format!("{}\n", lines.join("\n"))
             }
         };
+        Ok(Rendered {
+            stdout,
+            ..Rendered::default()
+        })
+    }
+
+    /// The result of a `devlanes gui` command, which the CLI process gets from
+    /// a GUI host itself rather than from the daemon: `data` as JSON, or its
+    /// text, with nothing under `--quiet`.
+    fn gui(&self, output: GuiOutput, data: &Value) -> Result<Rendered, serde_json::Error> {
+        if self.mode() == OutputMode::Json {
+            return Ok(Rendered {
+                stdout: format!("{}\n", serde_json::to_string(data)?),
+                ..Rendered::default()
+            });
+        }
+        if self.runtime().quiet {
+            return Ok(Rendered::default());
+        }
+        let cx = render::Ctx {
+            mode: self.mode(),
+            color: self.runtime().color,
+            runtime: self.runtime(),
+        };
+        let mut stdout = format!("{}\n", render::gui::result(output, data, &cx).join("\n"));
+        if self.mode() == OutputMode::Agent {
+            stdout = budget_output(
+                &stdout,
+                self.runtime().budget,
+                "truncated; rerun this command with --json",
+            );
+        }
         Ok(Rendered {
             stdout,
             ..Rendered::default()
@@ -497,6 +546,14 @@ impl Reporter for JsonTee {
             self.append(&json.stdout);
         }
         self.inner.event(method, event)
+    }
+
+    /// Renders with `inner`, after appending the JSON document.
+    fn gui(&self, output: GuiOutput, data: &Value) -> Result<Rendered, serde_json::Error> {
+        if let Ok(json) = self.json.gui(output, data) {
+            self.append(&json.stdout);
+        }
+        self.inner.gui(output, data)
     }
 
     /// Renders with `inner`, after appending `{"error": {code, data, exit_code}}`.

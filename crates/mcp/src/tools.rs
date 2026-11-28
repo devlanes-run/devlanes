@@ -34,6 +34,9 @@ pub struct Spec {
     /// Whether its results can carry an MCP Apps card, so the tool names the
     /// cards resource.
     pub card: bool,
+    /// A `devlanes gui` command, offered only while GUI services are on
+    /// ([`crate::Config::gui`]), as the command itself is hidden until then.
+    pub gui: bool,
 }
 
 impl Spec {
@@ -44,6 +47,14 @@ impl Spec {
         globals: &[],
         idempotent: false,
         card: false,
+        gui: false,
+    };
+
+    /// A `devlanes gui` command's spec: it takes `--lane` and has no card.
+    const GUI: Self = Self {
+        globals: &["lane"],
+        gui: true,
+        ..Self::NONE
     };
 }
 
@@ -71,6 +82,7 @@ pub const CURATED: &[Spec] = &[
         globals: &["lane", "timeout", "env"],
         idempotent: true,
         card: true,
+        gui: false,
     },
     Spec {
         path: &["exec"],
@@ -102,6 +114,7 @@ pub const CURATED: &[Spec] = &[
         globals: &["lane", "timeout"],
         idempotent: true,
         card: true,
+        gui: false,
     },
     Spec {
         path: &["wait"],
@@ -169,6 +182,35 @@ pub const CURATED: &[Spec] = &[
         path: &["doctor"],
         ..Spec::NONE
     },
+    Spec {
+        path: &["gui", "ls"],
+        ..Spec::GUI
+    },
+    Spec {
+        path: &["gui", "screenshot"],
+        ..Spec::GUI
+    },
+    Spec {
+        path: &["gui", "click"],
+        ..Spec::GUI
+    },
+    Spec {
+        path: &["gui", "type"],
+        ..Spec::GUI
+    },
+    Spec {
+        path: &["gui", "key"],
+        ..Spec::GUI
+    },
+    Spec {
+        path: &["gui", "scroll"],
+        ..Spec::GUI
+    },
+    Spec {
+        path: &["gui", "resize"],
+        idempotent: true,
+        ..Spec::GUI
+    },
 ];
 
 /// How an argument goes on the command line.
@@ -198,6 +240,22 @@ struct Param {
     form: Form,
     kind: Kind,
     required: bool,
+    /// How many values one use of a flag takes, such as 2 for `--at X Y`.
+    per_flag: usize,
+    /// Whether a positional value may be a negative number.
+    negative: bool,
+    /// Whether a positional value may start with `-`, after a `--`.
+    hyphen: bool,
+    /// A value the argument takes, to try a line with it: its first possible
+    /// value, else `1`.
+    example: String,
+}
+
+/// How many values each use of `arg` takes when that is a fixed number above
+/// one (`--at X Y`), else `None`.
+fn values_per_use(arg: &clap::Arg) -> Option<usize> {
+    let range = arg.get_num_args()?;
+    (range.min_values() == range.max_values() && range.min_values() > 1).then(|| range.min_values())
 }
 
 /// A generated tool and how to turn its arguments into a command line.
@@ -227,22 +285,25 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// The tools of every curated command, or only of the read-only ones.
-    /// A spec whose command is gone from the CLI is left out with a warning;
-    /// a test makes sure none is.
-    pub fn new(read_only: bool) -> Self {
+    /// The tools of every curated command, or only of the read-only ones,
+    /// and the `gui_*` tools only with `gui`. A spec whose command is gone
+    /// from the CLI is left out with a warning; a test makes sure none is.
+    pub fn new(read_only: bool, gui: bool) -> Self {
         let mut root = Cli::command();
         // Propagates the global options and fills in each argument's num_args.
         root.build();
         let tools = CURATED
             .iter()
-            .filter_map(|spec| match generate(&root, spec, is_read_only) {
-                Ok(generated) => Some(generated),
-                Err(error) => {
-                    tracing::warn!(%error, "no MCP tool");
-                    None
-                }
-            })
+            .filter(|spec| gui || !spec.gui)
+            .filter_map(
+                |spec| match generate(&root, spec, is_read_only, read_only) {
+                    Ok(generated) => Some(generated),
+                    Err(error) => {
+                        tracing::warn!(%error, "no MCP tool");
+                        None
+                    }
+                },
+            )
             .filter(|generated| !read_only || generated.read_only)
             .collect();
         Self { tools }
@@ -261,19 +322,28 @@ impl Catalog {
 
 /// Whether `devlanes ARGS` parses to a command that only reads.
 fn is_read_only(args: &[String]) -> bool {
-    Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(args.iter().cloned()))
-        .ok()
-        .and_then(|cli| cli.command)
-        .is_some_and(|command| command.is_read_only())
+    classify(args) == Some(true)
 }
 
-/// The tool of `spec` from the built command tree `root`. `read_only` tells
-/// from the command's shortest valid line whether it only reads.
+/// Whether `devlanes ARGS` only reads, or `None` when it does not parse.
+fn classify(args: &[String]) -> Option<bool> {
+    Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(args.iter().cloned()))
+        .ok()?
+        .command
+        .map(|command| command.is_read_only())
+}
+
+/// The tool of `spec` from the built command tree `root`. `read_only_line`
+/// tells from a command line whether it only reads: the shortest valid one
+/// classifies the tool, and for a server with `only_reading` the options
+/// that would make it change something are left out.
 fn generate(
     root: &clap::Command,
     spec: &'static Spec,
-    read_only: impl Fn(&[String]) -> bool,
+    read_only_line: impl Fn(&[String]) -> bool,
+    only_reading: bool,
 ) -> Result<Generated, String> {
+    let read_only = &read_only_line;
     let name = spec.path.join("_");
     let mut command = root;
     for part in spec.path {
@@ -319,6 +389,35 @@ fn generate(
         );
         params.push(param);
     }
+    let shortest = shortest(spec, &params);
+    let read_only = read_only(&shortest);
+    // A read-only server leaves out the options that make a reading command
+    // change something, such as `gui screenshot --to`, which writes any file.
+    if only_reading && read_only {
+        // A line with the option that parses and does not only read; the
+        // value is one the option takes, or a number.
+        let writes = |param: &Param| {
+            let Form::Flag(flag) = &param.form else {
+                return false;
+            };
+            let mut line = shortest.clone();
+            match param.kind {
+                Kind::Boolean => line.push(flag.clone()),
+                _ if param.per_flag > 1 => {
+                    line.push(flag.clone());
+                    line.extend(std::iter::repeat_n("1".to_owned(), param.per_flag));
+                }
+                _ => line.push(format!("{flag}={}", param.example)),
+            }
+            classify(&line) == Some(false)
+        };
+        let (kept, dropped): (Vec<Param>, Vec<Param>) =
+            params.into_iter().partition(|param| !writes(param));
+        for param in dropped {
+            properties.remove(&param.property);
+        }
+        params = kept;
+    }
     properties.insert(
         "cwd".into(),
         json!({"type": "string", "description": text::CWD}),
@@ -340,8 +439,6 @@ fn generate(
         Value::Object(input) => input,
         _ => JsonObject::new(),
     };
-    let shortest = shortest(spec, &params);
-    let read_only = read_only(&shortest);
     let title = format!("devlanes {}", spec.path.join(" "));
     let annotations = if read_only {
         ToolAnnotations::with_title(title).read_only(true)
@@ -389,6 +486,13 @@ fn param(arg: &clap::Arg, last: &str) -> Param {
         form,
         kind: kind(arg),
         required: arg.is_required_set(),
+        per_flag: values_per_use(arg).unwrap_or(1),
+        negative: arg.is_allow_negative_numbers_set(),
+        hyphen: arg.is_allow_hyphen_values_set(),
+        example: arg
+            .get_possible_values()
+            .first()
+            .map_or_else(|| "1".to_owned(), |value| value.get_name().to_owned()),
     }
 }
 
@@ -444,7 +548,15 @@ fn schema(arg: &clap::Arg, kind: Kind, help: Option<&str>) -> Value {
         Kind::Boolean => json!({"type": "boolean"}),
         Kind::Integer => json!({"type": "integer"}),
         Kind::String => scalar("string"),
-        Kind::Array => json!({"type": "array", "items": scalar("string")}),
+        Kind::Array => match values_per_use(arg) {
+            Some(count) => json!({
+                "type": "array",
+                "items": scalar("string"),
+                "minItems": count,
+                "maxItems": count,
+            }),
+            None => json!({"type": "array", "items": scalar("string")}),
+        },
     };
     let defaults: Vec<String> = arg
         .get_default_values()
@@ -541,6 +653,7 @@ impl Generated {
             .map(|part| (*part).to_owned())
             .collect();
         let mut trailing = Vec::new();
+        let mut after_dashes = Vec::new();
         for param in &self.params {
             let values = match arguments.get(&param.property) {
                 None | Some(Value::Null) => Vec::new(),
@@ -556,25 +669,49 @@ impl Generated {
             }
             match &param.form {
                 Form::Flag(flag) if param.kind == Kind::Boolean => args.push(flag.clone()),
+                // `--at X Y`: the flag once, then its values.
+                Form::Flag(flag) if param.per_flag > 1 => {
+                    if values.len() != param.per_flag
+                        || values.iter().any(|value| value.starts_with('-'))
+                    {
+                        return Err(format!(
+                            "{} of {} must be {} values that do not start with -",
+                            param.property, self.name, param.per_flag
+                        ));
+                    }
+                    args.push(flag.clone());
+                    args.extend(values);
+                }
                 Form::Flag(flag) => {
                     args.extend(values.iter().map(|value| format!("{flag}={value}")));
                 }
                 Form::Positional => {
-                    if let Some(value) = values.iter().find(|value| value.starts_with('-')) {
-                        return Err(format!(
-                            "{} of {}: {value} starts with -, which the command line would read \
-                             as a flag",
-                            param.property, self.name
-                        ));
+                    let flag_like = |value: &&String| {
+                        value.starts_with('-') && !(param.negative && value.parse::<f64>().is_ok())
+                    };
+                    match values.iter().find(flag_like) {
+                        // `gui type desktop -- -n`: after `--` a value is
+                        // never read as a flag, so it and the positionals
+                        // after it go last.
+                        Some(_) if param.hyphen => after_dashes.extend(values),
+                        Some(value) => {
+                            return Err(format!(
+                                "{} of {}: {value} starts with -, which the command line would \
+                                 read as a flag",
+                                param.property, self.name
+                            ));
+                        }
+                        None if !after_dashes.is_empty() => after_dashes.extend(values),
+                        None => args.extend(values),
                     }
-                    args.extend(values);
                 }
                 Form::Last => trailing = values,
             }
         }
-        if !trailing.is_empty() {
+        after_dashes.extend(trailing);
+        if !after_dashes.is_empty() {
             args.push("--".into());
-            args.extend(trailing);
+            args.extend(after_dashes);
         }
         Ok(Line { args, cwd })
     }
@@ -654,7 +791,7 @@ mod tests {
     fn tools_cover_every_argument() {
         let mut root = Cli::command();
         root.build();
-        let catalog = Catalog::new(false);
+        let catalog = Catalog::new(false, true);
         for spec in CURATED {
             let name = spec.path.join("_");
             let tool = catalog
@@ -703,7 +840,7 @@ mod tests {
     /// lose its guidance without notice.
     #[test]
     fn guidance_names_real_tools() {
-        let catalog = Catalog::new(false);
+        let catalog = Catalog::new(false, true);
         for (tool, _) in text::GUIDANCE {
             assert!(
                 catalog.get(tool).is_some(),
@@ -746,7 +883,7 @@ mod tests {
                     ),
             );
         root.build();
-        let generated = generate(&root, &SPEC, |_| true).expect("tool");
+        let generated = generate(&root, &SPEC, |_| true, false).expect("tool");
         let properties = &generated.tool.input_schema["properties"];
         assert_eq!(
             properties["mode"],
@@ -779,7 +916,7 @@ mod tests {
     /// global options and the command after `--`.
     #[test]
     fn arguments_become_command_lines() {
-        let catalog = Catalog::new(false);
+        let catalog = Catalog::new(false, true);
         let cases = [
             ("status", json!({}), "status"),
             (
@@ -859,6 +996,37 @@ mod tests {
             ),
             ("daemon_pair", json!({}), "daemon pair"),
             ("doctor", json!({}), "doctor"),
+            ("gui_ls", json!({"lane": "2"}), "gui ls --lane=2"),
+            (
+                "gui_screenshot",
+                json!({"unit": "desktop", "window": "2", "to": "shot.png"}),
+                "gui screenshot desktop --window=2 --to=shot.png",
+            ),
+            (
+                "gui_click",
+                json!({"unit": "desktop", "x": 120, "y": 48, "button": "right", "double": true}),
+                "gui click desktop 120 48 --button=right --double",
+            ),
+            (
+                "gui_type",
+                json!({"unit": "desktop", "text": "hello"}),
+                "gui type desktop hello",
+            ),
+            (
+                "gui_key",
+                json!({"unit": "desktop", "keys": ["ctrl+s", "enter"]}),
+                "gui key desktop ctrl+s enter",
+            ),
+            (
+                "gui_scroll",
+                json!({"unit": "desktop", "dx": 0, "dy": -3, "at": [10, 20]}),
+                "gui scroll desktop 0 -3 --at 10 20",
+            ),
+            (
+                "gui_resize",
+                json!({"unit": "desktop", "size": "800x600"}),
+                "gui resize desktop 800x600",
+            ),
         ];
         for (tool, arguments, expected) in &cases {
             let args = line(&catalog, tool, arguments.clone());
@@ -884,7 +1052,7 @@ mod tests {
     /// runs.
     #[test]
     fn wrong_arguments_are_refused() {
-        let catalog = Catalog::new(false);
+        let catalog = Catalog::new(false, true);
         let refused = |tool: &str, arguments: Value| {
             catalog
                 .get(tool)
@@ -899,6 +1067,37 @@ mod tests {
         assert!(refused("logs", json!({"tail": true})).contains("an integer"));
         assert!(refused("stop", json!({"units": ["--all"]})).contains("read as a flag"));
         assert!(refused("status", json!({"cwd": 1})).contains("cwd"));
+        assert!(
+            refused(
+                "gui_scroll",
+                json!({"unit": "d", "dx": 0, "dy": 1, "at": [1]})
+            )
+            .contains("2 values")
+        );
+        // Text that looks like a flag goes after `--`, and arrives as text.
+        let line = catalog
+            .get("gui_type")
+            .expect("gui_type")
+            .line(&object(
+                json!({"unit": "d", "text": "--window=2", "window": "1"}),
+            ))
+            .expect("line");
+        assert_eq!(
+            line.args,
+            ["gui", "type", "d", "--window=1", "--", "--window=2"]
+        );
+        let cli = Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(line.args))
+            .expect("parses");
+        let Some(devlanes_cli::Command::Gui {
+            command: devlanes_cli::GuiCommand::Type { text, window, .. },
+        }) = cli.command
+        else {
+            panic!("gui type");
+        };
+        assert_eq!(
+            (text.as_str(), window.as_deref()),
+            ("--window=2", Some("1"))
+        );
         let line = catalog
             .get("status")
             .expect("status")
@@ -914,18 +1113,18 @@ mod tests {
     }
 
     /// Read-only tools come from `Command::is_read_only`, and `--read-only`
-    /// keeps only those.
+    /// keeps only those. The `gui_*` tools are there only with GUI services
+    /// on, where listing and screenshots count as reading.
     #[test]
     fn annotations_follow_the_classification() {
-        let catalog = Catalog::new(false);
-        let read_only: Vec<&str> = catalog
-            .iter()
-            .filter(|tool| tool.read_only)
-            .map(|tool| tool.name.as_str())
-            .collect();
-        assert_eq!(
-            read_only,
-            [
+        for gui in [false, true] {
+            let catalog = Catalog::new(false, gui);
+            let read_only: Vec<&str> = catalog
+                .iter()
+                .filter(|tool| tool.read_only)
+                .map(|tool| tool.name.as_str())
+                .collect();
+            let mut expected = vec![
                 "status",
                 "logs",
                 "wait",
@@ -936,24 +1135,46 @@ mod tests {
                 "url_ls",
                 "env_show",
                 "lane_ls",
-                "doctor"
-            ]
-        );
-        for tool in catalog.iter() {
-            let annotations = tool.tool.annotations.as_ref().expect("annotations");
-            assert_eq!(annotations.read_only_hint, Some(tool.read_only));
+                "doctor",
+            ];
+            if gui {
+                expected.extend(["gui_ls", "gui_screenshot"]);
+            }
+            assert_eq!(read_only, expected);
             assert_eq!(
-                annotations.destructive_hint,
-                (!tool.read_only).then_some(true),
-                "{}",
-                tool.name
+                catalog.iter().any(|tool| tool.name == "gui_click"),
+                gui,
+                "gui_click with gui: {gui}"
             );
+            for tool in catalog.iter() {
+                let annotations = tool.tool.annotations.as_ref().expect("annotations");
+                assert_eq!(annotations.read_only_hint, Some(tool.read_only));
+                assert_eq!(
+                    annotations.destructive_hint,
+                    (!tool.read_only).then_some(true),
+                    "{}",
+                    tool.name
+                );
+            }
+            let reading = Catalog::new(true, gui);
+            let names: Vec<String> = reading.iter().map(|tool| tool.name.clone()).collect();
+            assert_eq!(names, read_only);
+            // `--to` replaces a file, so a read-only server does not offer it.
+            if gui {
+                assert!(
+                    catalog
+                        .get("gui_screenshot")
+                        .is_some_and(|tool| tool.takes("to"))
+                );
+                let screenshot = reading.get("gui_screenshot").expect("gui_screenshot");
+                assert!(!screenshot.takes("to") && screenshot.takes("window"));
+                assert!(
+                    screenshot.tool.input_schema["properties"]
+                        .get("to")
+                        .is_none()
+                );
+            }
         }
-        let names: Vec<String> = Catalog::new(true)
-            .iter()
-            .map(|tool| tool.name.clone())
-            .collect();
-        assert_eq!(names, read_only);
     }
 
     /// The command line of every `TOOL {json}` call between backticks in
@@ -991,10 +1212,10 @@ mod tests {
     /// and the args arrays of the `devlanes` tool's texts parse too.
     #[test]
     fn quoted_calls_parse() {
-        let catalog = Catalog::new(false);
+        let catalog = Catalog::new(false, true);
         let mut lines = quoted_calls(&catalog, text::INSTRUCTIONS);
         lines.extend(quoted_calls(
-            &Catalog::new(true),
+            &Catalog::new(true, true),
             text::READ_ONLY_INSTRUCTIONS,
         ));
         for tool in catalog.iter() {

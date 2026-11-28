@@ -198,9 +198,10 @@ fn command_entries(
     flags.dedup();
     let aliases: Vec<&str> = command.get_all_aliases().collect();
     entries.push(serde_json::json!({ "path": path, "flags": flags, "aliases": aliases }));
+    let top = path.is_empty();
     for sub in command
         .get_subcommands()
-        .filter(|sub| sub.get_name() != "help")
+        .filter(|sub| sub.get_name() != "help" && !(top && unreleased(sub)))
     {
         path.push(sub.get_name().to_owned());
         command_entries(sub, path, entries);
@@ -391,7 +392,7 @@ fn hidden(command: &Command, path: &str, found: &mut Vec<(String, String)>) {
     }
     for sub in command
         .get_subcommands()
-        .filter(|sub| sub.get_name() != "help")
+        .filter(|sub| sub.get_name() != "help" && !(path == "devlanes" && unreleased(sub)))
     {
         if sub.is_hide_set() {
             let about = sub
@@ -403,6 +404,16 @@ fn hidden(command: &Command, path: &str, found: &mut Vec<(String, String)>) {
             hidden(sub, &format!("{path} {}", sub.get_name()), found);
         }
     }
+}
+
+/// Hidden top-level commands of a feature users cannot reach yet: `gui`,
+/// while GUI services are off in releases.
+const UNRELEASED: &[&str] = &["gui"];
+
+/// Whether the top-level command `sub` is one of [`UNRELEASED`], which the
+/// reference leaves out.
+fn unreleased(sub: &Command) -> bool {
+    sub.is_hide_set() && UNRELEASED.contains(&sub.get_name())
 }
 
 /// Subcommands a user can see, without clap's `help`.

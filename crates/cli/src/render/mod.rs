@@ -5,6 +5,7 @@
 //! agent budget. Agent lines that describe a state start with the lowercase state
 //! word (`ready`, `failed`, `stopped`, `starting`, `idle`) so agents can match them.
 
+pub(crate) mod gui;
 mod lanes;
 mod other;
 mod statusline;
