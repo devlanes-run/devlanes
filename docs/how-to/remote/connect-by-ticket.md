@@ -64,7 +64,7 @@ devlanes connects only over a direct path between the two machines and never sen
 
 ## If both machines are on one network
 
-Set [`remote.relays`](/docs/reference/config/user/remote/#remote-relays) to an empty list on both machines and run `devlanes daemon restart` on each, and they reach each other at the addresses in the ticket without contacting a relay.
+Set [`remote.relays`](/docs/reference/config/user/remote/#remote-relays) to an empty list on both machines and run `devlanes daemon restart` on each, and they reach each other at the addresses in the ticket without contacting a relay. Those addresses change when the box's daemon restarts, so pair again with a new ticket after that.
 
 ```yaml devlanes-user
 remote:

@@ -2480,11 +2480,15 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                 " For a box reached over SSH or remote.boxes instead: `{connect}`, where <box> is \
                  this machine's SSH host or remote.boxes name."
             )),
-            (Some(connect), None) => line.push_str(&format!(
-                ": ask the user to run `{connect}` on their machine. <box> is this machine's SSH \
-                 host or remote.boxes name. {OLD_DAEMON_NO_TICKETS}; `devlanes daemon restart` \
-                 starts this release's daemon."
-            )),
+            (Some(connect), None) => {
+                let mut old = OLD_DAEMON_NO_TICKETS.to_owned();
+                old[..1].make_ascii_uppercase();
+                line.push_str(&format!(
+                    ": ask the user to run `{connect}` on their machine. <box> is this machine's \
+                     SSH host or remote.boxes name. {old}; `devlanes daemon restart` starts this \
+                     release's daemon."
+                ));
+            }
             (None, _) => {}
         }
         if let Some(paused) = &paused {

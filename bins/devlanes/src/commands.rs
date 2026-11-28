@@ -1231,8 +1231,8 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
                 && error.data.get("name").is_none() =>
         {
             Some(Hint(
-                "if this machine's devlanes daemon is older than this devlanes, devlanes daemon \
-                 restart starts this release's"
+                "a devlanes daemon older than this devlanes cannot pair by ticket; devlanes \
+                 daemon restart starts this release's daemon"
                     .into(),
             ))
         }
