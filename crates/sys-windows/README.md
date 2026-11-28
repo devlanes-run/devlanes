@@ -61,7 +61,7 @@ Every call blocks. Async callers use `spawn_blocking`, except for the `pipe` mod
 
 ## Media Foundation
 
-The first use calls `CoIncrementMTAUsage`, which keeps COM's multithreaded apartment alive for the process without joining the calling thread to it, so codec threads that never initialized COM use the transforms as implicit members, and a thread initialized single-threaded (the viewer's winit thread) is never touched. `MFStartup`, `MFTEnumEx` and the sample constructors are looked up in `mfplat.dll` at run time, so a Windows without Media Foundation still starts the binary. An asynchronous (hardware) transform is driven through its events until the output for the frame just given arrives, at most 2 seconds; transforms are started one at a time, since an NVIDIA driver failed two starts at once. Microsoft documents its H.264 transforms for client Windows only.
+The first use calls `CoIncrementMTAUsage`, which keeps COM's multithreaded apartment alive for the process without joining the calling thread to it, so codec threads that never initialized COM use the transforms as implicit members, and a thread initialized single-threaded (the viewer's winit thread) is never touched. `MFStartup`, `MFTEnumEx` and the sample constructors are looked up in `mfplat.dll` at run time, so a Windows without Media Foundation still starts the binary. An asynchronous (hardware) transform is driven through its events until the output with the frame's sample time arrives, at most 2 seconds; hardware transforms are activated one at a time, since a driver may fail two activations at once. Microsoft documents its H.264 transforms for client Windows only.
 
 ## Behaviour
 
