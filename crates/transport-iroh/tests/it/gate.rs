@@ -55,6 +55,43 @@ async fn a_box_known_only_by_its_relay_is_reached_directly() -> TestResult {
     .await
 }
 
+/// A ticket naming a relay this machine does not use cannot make the dial
+/// contact it: the dial fails as transient, saying why, and a listener
+/// standing in for that relay on loopback got no connection by then. The
+/// client has a working relay of its own, so the foreign one is dropped by
+/// the allow-list, not by a client that cannot use relays at all.
+#[tokio::test]
+async fn a_relay_this_machine_does_not_use_is_never_contacted() -> TestResult {
+    bounded(Duration::from_secs(30), async {
+        let (_relay, url) = relay().await?;
+        let foreign = std::net::TcpListener::bind("127.0.0.1:0")?;
+        foreign.set_nonblocking(true)?;
+        let home = Home::new()?;
+        let client = home.endpoint("client", vec![url]);
+        let addr = PeerAddr {
+            id: PeerId(*iroh::SecretKey::generate().public().as_bytes()),
+            relay: Some(format!("http://{}", foreign.local_addr()?)),
+            direct: Vec::new(),
+        };
+        let Err(error) = client.connect(&addr, Alpn::Tunnel).await else {
+            return Err("a box was reached through no path".into());
+        };
+        assert!(!error.is_permanent(), "{error}");
+        let cause = error.downcast_ref::<PeerError>();
+        assert!(
+            matches!(cause, Some(PeerError::Unreachable(text)) if text.contains("not one this machine uses")),
+            "{error}"
+        );
+        assert!(
+            matches!(foreign.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
+            "the dial contacted the foreign relay"
+        );
+        client.close().await;
+        Ok(())
+    })
+    .await
+}
+
 /// A box with no IP transport, so the relay is its only path, and a dial
 /// from a client that knows its relay. The handshake crosses the relay and
 /// the box accepts the connection, but the dial fails as transient after the
