@@ -144,6 +144,12 @@ pub struct PeerIncoming {
 /// Every method but `accept` may be called concurrently. After `close`,
 /// `addr`, `connect` and `listen` fail with [`PeerError::Closed`], and `id`
 /// keeps working.
+///
+/// An implementation may release its sockets while it is idle (not
+/// listening, no open connection, not called for a while) and bind again on
+/// the next call, so a caller must not assume `addr` reports the same
+/// addresses forever: a box that listens keeps its ports, a released client
+/// may get new ones.
 #[async_trait]
 pub trait PeerEndpoint: Send + Sync {
     /// This machine's peer id. Creates the key file the first time; never binds.

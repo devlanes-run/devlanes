@@ -55,6 +55,39 @@ async fn a_box_known_only_by_its_relay_is_reached_directly() -> TestResult {
     .await
 }
 
+/// With a relay that never answers, only the first `addr` after the bind
+/// waits for it, and a caller that gave up during that wait left the bind
+/// and its deadline in place: the next caller waits out the rest only, and
+/// any later one returns at once with the configured relay. The relay is a
+/// loopback listener that never accepts.
+#[tokio::test]
+async fn an_unanswering_relay_delays_only_the_first_addr() -> TestResult {
+    bounded(Duration::from_secs(30), async {
+        let silent = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}", silent.local_addr()?);
+        let home = Home::new()?;
+        let endpoint = home.endpoint("box", vec![url.clone()]);
+        let gave_up = tokio::time::timeout(Duration::from_secs(4), endpoint.addr()).await;
+        assert!(gave_up.is_err(), "the silent relay answered");
+
+        let second = Instant::now();
+        let addr = endpoint.addr().await?;
+        let second = second.elapsed();
+        let third = Instant::now();
+        endpoint.addr().await?;
+        let third = third.elapsed();
+        eprintln!("second addr after {second:?}, third after {third:?}");
+        // The wait ends 5 s after the bind, about 1 s after the first caller
+        // gave up; a bind started again would wait 5 s more.
+        assert!(second < Duration::from_secs(3), "waited {second:?}");
+        assert!(third < Duration::from_secs(1), "waited {third:?}");
+        assert_eq!(addr.relay.as_deref(), Some(url.as_str()));
+        endpoint.close().await;
+        Ok(())
+    })
+    .await
+}
+
 /// A ticket naming a relay this machine does not use cannot make the dial
 /// contact it: the dial fails as transient, saying why, and a listener
 /// standing in for that relay on loopback got no connection by then. The

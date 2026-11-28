@@ -1,13 +1,15 @@
 //! The endpoint's ports across restarts, read from the addresses it reports
 //! for a ticket: a client that stored them must reach the box again after
-//! the box's daemon restarts, also with no relay.
+//! the box's daemon restarts, also with no relay. Only an endpoint that
+//! listened keeps them.
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::sync::Arc;
 use std::time::Duration;
 
 use devlanes_transport::{BoxError, PeerAddr, PeerEndpoint};
 
-use super::{Home, TestResult, bounded};
+use super::{Everyone, Home, TestResult, bounded};
 
 /// Every check binds a few endpoints on this machine.
 const CHECK: Duration = Duration::from_secs(20);
@@ -23,10 +25,12 @@ fn ports(addr: &PeerAddr) -> (Option<u16>, Option<u16>) {
     (port(true), port(false))
 }
 
-/// The ports the endpoint of `home` named `name` reports, after which it is
-/// closed and dropped, as a daemon that stops.
+/// The ports the endpoint of `home` named `name` reports while it listens,
+/// as a box's does, after which it is closed and dropped, as a daemon that
+/// stops.
 async fn run_once(home: &Home, name: &str) -> Result<(Option<u16>, Option<u16>), BoxError> {
     let endpoint = home.endpoint(name, Vec::new());
+    endpoint.listen(Some(Arc::new(Everyone))).await?;
     let addr = endpoint.addr().await?;
     endpoint.close().await;
     drop(endpoint);
@@ -89,6 +93,25 @@ async fn a_taken_port_is_replaced_and_kept() -> TestResult {
         drop(blocker);
         released(second).await;
         assert_eq!(run_once(&home, "box").await?.0, Some(moved));
+        Ok(())
+    })
+    .await
+}
+
+/// An endpoint that only dials keeps no ports: a client gains nothing from
+/// a fixed port, and one would link a laptop across the networks it visits.
+/// A box of the same home that listens afterwards does keep them.
+#[tokio::test]
+async fn an_endpoint_that_only_dials_keeps_no_ports() -> TestResult {
+    bounded(CHECK, async {
+        let home = Home::new()?;
+        let client = home.endpoint("client", Vec::new());
+        client.addr().await?;
+        client.close().await;
+        let port_file = home.key_file("client").with_file_name("p2p-port");
+        assert!(!port_file.exists(), "a dialing endpoint saved its ports");
+        run_once(&home, "client").await?;
+        assert!(port_file.exists(), "a listening endpoint saved no ports");
         Ok(())
     })
     .await
