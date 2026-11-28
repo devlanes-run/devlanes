@@ -1498,6 +1498,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "devlanes-gui-codec"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "devlanes-gui-proto",
+ "thiserror 2.0.21",
+ "zstd",
+]
+
+[[package]]
+name = "devlanes-gui-proto"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "subtle",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "devlanes-hosts-helper"
 version = "0.17.0"
 dependencies = [
