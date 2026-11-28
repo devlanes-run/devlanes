@@ -51,7 +51,8 @@ pub struct P2pBox {
     pub relay_url: Option<String>,
     /// The socket addresses from the ticket.
     pub direct_addrs: Vec<String>,
-    /// The client forgets the box once it stays unreachable for an hour.
+    /// The client forgets the box once its link stays unreachable for an
+    /// hour; a disconnected ephemeral box is never forgotten.
     pub ephemeral: bool,
     /// Unix milliseconds of the pairing.
     pub paired_at: i64,
@@ -76,11 +77,13 @@ impl From<P2pBoxRow> for P2pBox {
 }
 
 impl Store {
-    /// Stores `paired` and returns the name it is kept under: a row of the
-    /// same box key keeps its name and gets the rest of `paired`, so pairing
-    /// with a box again never renames it. A new key takes `paired.name`,
-    /// and a name another key holds fails with [`Error::Conflict`].
-    pub async fn add_p2p_box(&self, paired: P2pBox) -> Result<String, Error> {
+    /// Stores `paired` and returns the row as stored: a row of the same box
+    /// key keeps its name and gets the rest of `paired`, so pairing with a
+    /// box again never renames it, and stays permanent when it was, so an
+    /// ephemeral ticket never makes a kept box one the client forgets. A new
+    /// key takes `paired.name`, and a name another key holds fails with
+    /// [`Error::Conflict`].
+    pub async fn add_p2p_box(&self, paired: P2pBox) -> Result<P2pBox, Error> {
         if paired.name.is_empty() || paired.peer_key.is_empty() {
             return Err(Error::Invalid("empty box name or peer key".into()));
         }
@@ -95,17 +98,21 @@ impl Store {
         }
         self.call(move |c| {
             c.immediate_transaction(|c| {
-                let kept: Option<String> = p2p_boxes::table
+                let kept: Option<(String, i32)> = p2p_boxes::table
                     .filter(p2p_boxes::peer_key.eq(&paired.peer_key))
-                    .select(p2p_boxes::name)
+                    .select((p2p_boxes::name, p2p_boxes::ephemeral))
                     .first(c)
                     .optional()?;
+                let (name, ephemeral) = match kept {
+                    Some((name, ephemeral)) => (name, ephemeral != 0 && paired.ephemeral),
+                    None => (paired.name, paired.ephemeral),
+                };
                 let row = P2pBoxRow {
-                    name: kept.unwrap_or(paired.name),
+                    name,
                     peer_key: paired.peer_key,
                     relay_url: paired.relay_url,
                     direct_addrs: paired.direct_addrs.join(" "),
-                    ephemeral: i32::from(paired.ephemeral),
+                    ephemeral: i32::from(ephemeral),
                     paired_at: paired.paired_at,
                 };
                 diesel::insert_into(p2p_boxes::table)
@@ -119,8 +126,21 @@ impl Store {
                         p2p_boxes::paired_at.eq(row.paired_at),
                     ))
                     .execute(c)?;
-                Ok(row.name)
+                Ok(P2pBox::from(row))
             })
+        })
+        .await
+    }
+
+    /// The box paired by ticket whose key is `peer_key`.
+    pub async fn p2p_box_by_key(&self, peer_key: String) -> Result<Option<P2pBox>, Error> {
+        self.call(move |c| {
+            Ok(p2p_boxes::table
+                .filter(p2p_boxes::peer_key.eq(peer_key))
+                .select(P2pBoxRow::as_select())
+                .first::<P2pBoxRow>(c)
+                .optional()?
+                .map(P2pBox::from))
         })
         .await
     }
@@ -156,6 +176,28 @@ impl Store {
     pub async fn delete_p2p_box(&self, name: String) -> Result<bool, Error> {
         self.call(move |c| Ok(diesel::delete(p2p_boxes::table.find(name)).execute(c)? > 0))
             .await
+    }
+
+    /// Deletes the box paired by ticket under `name` only while it is the
+    /// pairing with key `peer_key` made at `paired_at`, so a pairing made
+    /// again since is kept. False when no such row was there.
+    pub async fn delete_p2p_pairing(
+        &self,
+        name: String,
+        peer_key: String,
+        paired_at: i64,
+    ) -> Result<bool, Error> {
+        self.call(move |c| {
+            let deleted = diesel::delete(
+                p2p_boxes::table
+                    .find(name)
+                    .filter(p2p_boxes::peer_key.eq(peer_key))
+                    .filter(p2p_boxes::paired_at.eq(paired_at)),
+            )
+            .execute(c)?;
+            Ok(deleted > 0)
+        })
+        .await
     }
 
     /// Pins `client`'s key, replacing the row of the same key, and keeps at

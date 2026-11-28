@@ -677,10 +677,20 @@ impl Store {
         })
         .await
     }
-    /// Deletes the row of remote host `name`. Returns false when there was none.
-    pub async fn delete_remote_host(&self, name: String) -> Result<bool, Error> {
-        self.call(move |c| Ok(diesel::delete(remote_hosts::table.find(name)).execute(c)? > 0))
-            .await
+    /// Deletes the row of remote host `name` while it records `transport`,
+    /// so forgetting a box of one transport never deletes the row another
+    /// one took under the name. Returns false when there was no such row.
+    pub async fn delete_remote_host(&self, name: String, transport: String) -> Result<bool, Error> {
+        self.call(move |c| {
+            let deleted = diesel::delete(
+                remote_hosts::table
+                    .find(name)
+                    .filter(remote_hosts::transport.eq(transport)),
+            )
+            .execute(c)?;
+            Ok(deleted > 0)
+        })
+        .await
     }
     /// Lists registered remote hosts by name.
     pub async fn remote_hosts(&self) -> Result<Vec<RemoteHost>, Error> {

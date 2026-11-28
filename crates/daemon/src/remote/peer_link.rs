@@ -16,7 +16,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use devlanes_proto::RpcError;
+use devlanes_proto::{
+    RpcError,
+    remote::{PAIRING_CODE_TTL_MS, TICKET_PREFIX},
+};
 use devlanes_state::P2pBox;
 use devlanes_transport::{
     Alpn, BoxConnection, BoxDuplex, Connection, ConnectionError, PairAnswer, PairRequest, PeerAddr,
@@ -24,7 +27,7 @@ use devlanes_transport::{
 };
 use futures_util::FutureExt as _;
 use serde_json::json;
-use tokio::time::Instant;
+use tokio::{sync::OwnedMutexGuard, time::Instant};
 
 use super::feed::clean;
 use crate::{engine::Inner, model::lock};
@@ -37,29 +40,41 @@ pub(super) const RETRY_FOR: Duration = Duration::from_secs(24 * 60 * 60);
 /// forgotten.
 pub(super) const EPHEMERAL_RETRY_FOR: Duration = Duration::from_secs(60 * 60);
 
+/// The least a link the restore opens tries before it may give up, also
+/// when the box was last reached longer ago than its window: the time this
+/// machine was off says nothing about the box, and right after a start the
+/// network may not be up yet.
+pub(super) const RESTORE_GRACE: Duration = Duration::from_secs(10 * 60);
+
 /// Why a link to a box paired by ticket stopped for good. Not a
 /// [`PeerError`]: their texts are about one dial, and wrapping these in one
 /// would say twice that the box is not reachable.
 #[derive(Debug, thiserror::Error)]
 pub(super) enum PeerLinkError {
-    /// The box was unreachable for [`RETRY_FOR`].
+    /// The box stayed unreachable for its window; `since` says for how
+    /// long, as [`Unreached::text`] words it.
     #[error(
-        "box {name} has not been reachable for 24 hours, so devlanes stopped trying. Run \
-         `devlanes remote connect {name}` once it is back."
+        "box {name} has not been reachable {since}, so devlanes stopped trying. Run `devlanes \
+         remote connect {name}` once it is back."
     )]
     GaveUp {
         /// The box's name here.
         name: String,
+        /// Such as "for 24 hours".
+        since: String,
     },
-    /// An ephemeral box was unreachable for [`EPHEMERAL_RETRY_FOR`], so it
-    /// is forgotten.
+    /// An ephemeral box stayed unreachable for its window, so it is
+    /// forgotten.
     #[error(
-        "box {name} has not been reachable for an hour, so devlanes stopped trying and forgot \
-         it. Pair with it again using a new ticket from `devlanes daemon pair` on the box."
+        "box {name} has not been reachable {since}, so devlanes stopped trying and forgot it. To \
+         use it again, run `devlanes daemon pair` on the box, then `devlanes remote connect \
+         <ticket>` here."
     )]
     GaveUpEphemeral {
         /// The box's name here.
         name: String,
+        /// Such as "for an hour".
+        since: String,
     },
     /// The box refused this machine's key, as after `daemon revoke` there.
     #[error(
@@ -70,6 +85,28 @@ pub(super) enum PeerLinkError {
         /// The box's name here.
         name: String,
     },
+}
+
+/// Longest text a box chose that this daemon passes on in a P2P message,
+/// in bytes. More than [`clean`] keeps, which is sized for names and would
+/// cut this daemon's own messages around such a text.
+const MAX_REASON: usize = 1024;
+
+/// `text`, part of which a box may have chosen (a close reason, a decode
+/// error quoting what it sent), without the characters [`clean`] drops,
+/// cut to [`MAX_REASON`] bytes. Each character goes through [`clean`], so
+/// the two never differ in what they keep.
+pub(super) fn clean_reason(text: &str) -> String {
+    let mut cleaned = String::new();
+    let mut buffer = [0u8; 4];
+    for c in text.chars() {
+        let kept = clean(c.encode_utf8(&mut buffer));
+        if cleaned.len() + kept.len() > MAX_REASON {
+            break;
+        }
+        cleaned.push_str(&kept);
+    }
+    cleaned
 }
 
 /// What [`PeerTransport`] remembers of the last connection it returned.
@@ -210,14 +247,68 @@ impl Connection for Watched {
     }
 }
 
+/// How long before a restored link started its box was last reached, from
+/// the stored times.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Unreached {
+    /// The time between that and the start of the link.
+    pub(super) away: Duration,
+    /// It was the pairing, not a connection.
+    pub(super) paired: bool,
+}
+
+impl Unreached {
+    /// From the box's stored `last_connected` and `paired_at` at `now`,
+    /// all Unix milliseconds: the later of the two, since a pairing made
+    /// after the last connection reached the box too. A time ahead of the
+    /// clock, after the clock stepped back, counts as now.
+    pub(super) fn at(last_connected: Option<i64>, paired_at: i64, now: i64) -> Self {
+        let (last, paired) = match last_connected {
+            Some(connected) if connected > paired_at => (connected, false),
+            _ => (paired_at, true),
+        };
+        let away = u64::try_from(now.saturating_sub(last)).unwrap_or(0);
+        Self {
+            away: Duration::from_millis(away),
+            paired,
+        }
+    }
+
+    /// Since when the box was not reached, when `more` passed after the
+    /// link started: "since it was last connected 3 days ago".
+    fn text(self, more: Duration) -> String {
+        let what = if self.paired {
+            "it was paired"
+        } else {
+            "it was last connected"
+        };
+        format!("since {what} {} ago", span(self.away + more))
+    }
+}
+
+/// `duration` in words, rounded down to whole days from two days, hours
+/// from one hour, or minutes.
+fn span(duration: Duration) -> String {
+    let minutes = duration.as_secs() / 60;
+    let (hours, days) = (minutes / 60, minutes / (24 * 60));
+    match (days, hours, minutes) {
+        (2.., _, _) => format!("{days} days"),
+        (_, 1, _) => "an hour".to_owned(),
+        (_, 2.., _) => format!("{hours} hours"),
+        (_, _, 0..=1) => "a minute".to_owned(),
+        _ => format!("{minutes} minutes"),
+    }
+}
+
 /// Bounds how long the link to a box paired by ticket keeps trying, around
 /// its [`PeerTransport`].
 ///
 /// A failed dial past the deadline, and a refused key at once, become
 /// permanent [`PeerLinkError`]s, which end the link `failed`. The deadline
-/// is on tokio's clock: it only measures time this daemon ran, and the
-/// time a box was away before the daemon started comes in through
-/// [`PeerAttempts::new`], from stored wall-clock times.
+/// is on tokio's clock: it only measures time this daemon ran. The time a
+/// box was away before the daemon started comes in through
+/// [`PeerAttempts::new`] from stored wall-clock times, and never cuts the
+/// link's own attempts below [`RESTORE_GRACE`].
 pub(super) struct PeerAttempts {
     inner: Arc<dyn Transport>,
     name: String,
@@ -225,27 +316,37 @@ pub(super) struct PeerAttempts {
     /// When the next failed dial ends the link; `None` while the last dial
     /// connected, so the box was reachable then.
     deadline: Mutex<Option<Instant>>,
+    /// For a restored link that has not connected yet: when it started and
+    /// how long its box had been away then, for the give-up text.
+    restored: Mutex<Option<(Instant, Unreached)>>,
     /// Set once the link stopped trying because the box stayed away.
     gave_up: Arc<AtomicBool>,
 }
 
 impl PeerAttempts {
     /// Tries box `name` through `inner` for [`RETRY_FOR`], or
-    /// [`EPHEMERAL_RETRY_FOR`] when `ephemeral`, less `away`: how long the
-    /// box had not been reached when the link started (zero for a link a
-    /// person started).
+    /// [`EPHEMERAL_RETRY_FOR`] when `ephemeral`. A link the restore opened
+    /// (`restored`) gets what is left of that since the box was last
+    /// reached, and at least [`RESTORE_GRACE`]; one a person started gets it
+    /// all.
     pub(super) fn new(
         inner: Arc<dyn Transport>,
         name: &str,
         ephemeral: bool,
-        away: Duration,
+        restored: Option<Unreached>,
     ) -> Self {
         let window = Self::window(ephemeral);
+        let now = Instant::now();
+        let left = match restored {
+            Some(unreached) => window.saturating_sub(unreached.away).max(RESTORE_GRACE),
+            None => window,
+        };
         Self {
             inner,
             name: name.to_owned(),
             ephemeral,
-            deadline: Mutex::new(Some(Instant::now() + window.saturating_sub(away))),
+            deadline: Mutex::new(Some(now + left)),
+            restored: Mutex::new(restored.map(|unreached| (now, unreached))),
             gave_up: Arc::default(),
         }
     }
@@ -272,6 +373,7 @@ impl Transport for PeerAttempts {
         let error = match self.inner.connect().await {
             Ok(connection) => {
                 *lock(&self.deadline) = None;
+                *lock(&self.restored) = None;
                 return Ok(connection);
             }
             Err(error) => error,
@@ -291,24 +393,29 @@ impl Transport for PeerAttempts {
             return Err(error);
         }
         self.gave_up.store(true, Ordering::SeqCst);
-        tracing::info!(host = %self.name, %error, "stopped trying a box that stayed unreachable");
+        let last = clean_reason(&error.to_string());
+        tracing::info!(host = %self.name, error = %last, "stopped trying a box that stayed unreachable");
+        let since = match *lock(&self.restored) {
+            Some((started, unreached)) => unreached.text(now - started),
+            None => format!("for {}", span(Self::window(self.ephemeral))),
+        };
         Err(TransportError::permanent(if self.ephemeral {
-            PeerLinkError::GaveUpEphemeral { name }
+            PeerLinkError::GaveUpEphemeral { name, since }
         } else {
-            PeerLinkError::GaveUp { name }
+            PeerLinkError::GaveUp { name, since }
         }))
     }
 }
 
 impl Inner {
     /// The bounded transport of box `paired`: a link a person started gets
-    /// the whole window, a link the restore opens (`connected_before`) what
-    /// is left of it since the box was last reached, from
-    /// `remote_hosts.last_connected`, or the pairing when it never connected.
+    /// the whole window, a link the restore opens (`restored`) what is left
+    /// of it since the box was last reached ([`Unreached::at`]), at least
+    /// [`RESTORE_GRACE`].
     pub(super) async fn peer_attempts(
         &self,
         paired: &P2pBox,
-        connected_before: bool,
+        restored: bool,
     ) -> Result<PeerAttempts, RpcError> {
         let Some(endpoint) = self.integ.peer.clone() else {
             return Err(RpcError::new(
@@ -337,29 +444,26 @@ impl Inner {
             relay: paired.relay_url.clone(),
             direct,
         };
-        let away = if connected_before {
+        let unreached = if restored {
             let last = self
                 .store
                 .remote_hosts()
                 .await
                 .map_err(crate::registry::store_error)?
                 .into_iter()
-                .find(|host| host.name == paired.name)
-                .and_then(|host| host.last_connected)
-                .unwrap_or(paired.paired_at);
-            // Stored times are wall-clock milliseconds; a time ahead of the
-            // clock, after the clock stepped back, counts as just now.
+                .find(|host| host.name == paired.name && host.transport == super::P2P)
+                .and_then(|host| host.last_connected);
             let now = i64::try_from(super::now_ms()).unwrap_or(i64::MAX);
-            Duration::from_millis(u64::try_from(now.saturating_sub(last)).unwrap_or(0))
+            Some(Unreached::at(last, paired.paired_at, now))
         } else {
-            Duration::ZERO
+            None
         };
         let transport = Arc::new(PeerTransport::new(endpoint, addr));
         Ok(PeerAttempts::new(
             transport,
             &paired.name,
             paired.ephemeral,
-            away,
+            unreached,
         ))
     }
 }
@@ -367,43 +471,66 @@ impl Inner {
 /// Longest box name this client keeps for a box paired by ticket, in bytes.
 const MAX_NAME: usize = 63;
 
-/// What a refused pairing dial means: the box listens, but for sessions
-/// of keys it paired only, since no ticket is outstanding there.
-const NO_TICKET_OUT: &str = "the box takes no pairing ticket now: the ticket expired or was \
-                             already used. Get a new one with `devlanes daemon pair` on the box";
+/// What a pairing dial the box refuses in the handshake means: it listens,
+/// but takes no pairing because it has no ticket open, which its admission
+/// says the same way for every cause.
+const NO_TICKET_OPEN: &str = "the box has no pairing ticket open: the ticket expired, was already \
+                              used, or the box's daemon restarted since it was printed. Get a new \
+                              one with `devlanes daemon pair` on the box";
+
+/// Longest wait before pairing again that a box may ask for, in
+/// milliseconds; a longer one is passed on as this.
+const MAX_RETRY_AFTER_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// Whether `name` starts with the ticket prefix, in any case, which the
+/// CLI would take for a ticket.
+fn looks_like_ticket(name: &str) -> bool {
+    name.get(..TICKET_PREFIX.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(TICKET_PREFIX))
+}
 
 /// Whether `name` may be given for a box paired by ticket: what
 /// `remote.boxes` allows (letters, digits, `-` and `_`), at most
-/// [`MAX_NAME`] bytes, and no leading `-`, which `remote connect` would
-/// read as an option.
+/// [`MAX_NAME`] bytes, no leading `-`, which `remote connect` would read as
+/// an option, and not the ticket prefix.
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_NAME
         && !name.starts_with('-')
+        && !looks_like_ticket(name)
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// The name a box that calls itself `answered` gets here: lowercase, every
-/// character but letters, digits, `-` and `_` turned into `-`, no leading
-/// `-`, cut so that a `-9` suffix still fits in [`MAX_NAME`], and `box`
-/// when nothing is left. The box chooses `answered`, so it is never shown
-/// or stored as sent.
+/// character but letters, digits, `-` and `_` turned into `-`, no `-` at
+/// either end, `box-` before a name that starts like a ticket, cut so that
+/// a `-9` suffix still fits in [`MAX_NAME`], and `box` when nothing is
+/// left. The box chooses `answered`, so it is never shown or stored as sent.
 fn derived_name(answered: &str) -> String {
-    let mut name: String = answered
+    let mapped: String = answered
         .chars()
         .map(|c| match c.to_ascii_lowercase() {
             c @ ('a'..='z' | '0'..='9' | '-' | '_') => c,
             _ => '-',
         })
         .skip_while(|c| *c == '-')
-        .take(MAX_NAME - 2)
+        .take(MAX_NAME)
         .collect();
+    let mut name = if looks_like_ticket(&mapped) {
+        format!("box-{mapped}")
+    } else {
+        mapped
+    };
+    // ASCII only by now, so any byte is a character boundary.
+    name.truncate(MAX_NAME - 2);
+    let name = name.trim_end_matches('-');
     if name.is_empty() {
-        name.push_str("box");
+        "box".to_owned()
+    } else {
+        name.to_owned()
     }
-    name
 }
 
 /// `bad_ticket`: text that is not a usable ticket.
@@ -414,9 +541,10 @@ fn bad_ticket(message: impl std::fmt::Display) -> RpcError {
 /// `pairing_refused`: the box answered the pairing with a refusal, whose
 /// text says what to do, and how long to wait when it said so.
 fn pairing_refused(message: &str, retry_after_ms: Option<u64>) -> RpcError {
+    let retry_after_ms = retry_after_ms.map(|wait| wait.min(MAX_RETRY_AFTER_MS));
     RpcError::new(
         "pairing_refused",
-        json!({"message": clean(message), "retry_after_ms": retry_after_ms}),
+        json!({"message": clean_reason(message), "retry_after_ms": retry_after_ms}),
         4,
     )
 }
@@ -461,20 +589,68 @@ fn name_taken(name: &str, holder: Holder, message: String) -> RpcError {
     )
 }
 
+/// A box [`Inner::pair_by_ticket`] paired with, and the connect lock it
+/// still holds.
+pub(super) struct Paired {
+    /// The name the box is kept under.
+    pub(super) name: String,
+    /// The box was paired with before, so it kept that pairing's name.
+    pub(super) kept: bool,
+    /// [`Remotes::connecting`](super::Remotes), held from writing the row
+    /// until the caller opened the link, so no forget or restore runs in
+    /// between.
+    pub(super) connecting: OwnedMutexGuard<()>,
+}
+
+/// The error of a pairing dial that failed, for the box called `label`
+/// here. An unreachable box is most often one whose ticket expired, after
+/// which it stops listening, so that text says a ticket expires too.
+fn pairing_dial_failed(label: &str, error: &TransportError) -> RpcError {
+    let reason = clean_reason(&error.to_string());
+    match error.downcast_ref::<PeerError>() {
+        Some(PeerError::InvalidId(_)) => bad_ticket(reason),
+        Some(PeerError::Refused) => pairing_refused(NO_TICKET_OPEN, None),
+        Some(PeerError::Unreachable(_)) => super::remote_failed(
+            label,
+            format!(
+                "{reason}; a ticket also stops working {} minutes after `devlanes daemon pair` \
+                 printed it",
+                PAIRING_CODE_TTL_MS / 60_000
+            ),
+        ),
+        _ => super::remote_failed(label, reason),
+    }
+}
+
+/// The `bad_request` for a name a box cannot be given.
+fn bad_name(name: &str) -> RpcError {
+    RpcError::new(
+        "bad_request",
+        json!({
+            "message": format!(
+                "a box name has at most {MAX_NAME} letters, digits, `-` and `_`, does not start \
+                 with `-` and does not start with `{TICKET_PREFIX}`"
+            ),
+            "name": name,
+        }),
+        2,
+    )
+}
+
 impl Inner {
-    /// `connect` with a ticket: pairs with the box in `text` and stores it,
-    /// then returns the name it is kept under, which the caller connects.
-    /// The name is `given` or the box's host name made safe, with `-2` to
-    /// `-9` when that is taken; a box this client already paired with
-    /// keeps its name. A `given` name another box has fails before the
-    /// ticket is used. The secret goes only to the ticket's key over the
-    /// pairing ALPN, on a direct path, and is neither logged nor stored; a
-    /// pairing that fails stores nothing.
+    /// `connect` with a ticket: pairs with the box in `text` and stores it.
+    /// A box paired with before keeps its name and ignores `given`; a new
+    /// one is kept under `given` or its host name made safe, with `-2` to
+    /// `-9` when that is taken, and a `given` name another box has fails
+    /// before the ticket is used. The secret goes only to the ticket's key
+    /// over the pairing ALPN, on a direct path, and is neither logged nor
+    /// stored; a pairing that fails stores nothing. Text the box chose
+    /// reaches the error messages cleaned.
     pub(super) async fn pair_by_ticket(
         self: &Arc<Self>,
         text: &str,
         given: Option<String>,
-    ) -> Result<String, RpcError> {
+    ) -> Result<Paired, RpcError> {
         let ticket = Ticket::parse(text).map_err(bad_ticket)?;
         let Some(endpoint) = self.integ.peer.clone() else {
             return Err(RpcError::new(
@@ -484,19 +660,13 @@ impl Inner {
             ));
         };
         let key = ticket.addr.id.to_string();
+        let stored = self.paired_key(&key).await?;
+        // A box paired with before keeps its name, so a name given for it
+        // is no reason to fail.
+        let given = given.filter(|_| stored.is_none());
         if let Some(name) = &given {
             if !valid_name(name) {
-                return Err(RpcError::new(
-                    "bad_request",
-                    json!({
-                        "message": format!(
-                            "a box name has at most {MAX_NAME} letters, digits, `-` and `_`, and \
-                             does not start with `-`"
-                        ),
-                        "name": name,
-                    }),
-                    2,
-                ));
+                return Err(bad_name(name));
             }
             if let Some(holder) = self.name_holder(name, &key).await? {
                 return Err(name_taken(
@@ -511,16 +681,14 @@ impl Inner {
         }
         let identity = self.client_identity().await?;
         // Named after the pairing's box until it has a name here.
-        let label = given.clone().unwrap_or_else(|| super::p2p_address(&key));
+        let label = stored
+            .as_ref()
+            .map(|stored| stored.name.clone())
+            .or_else(|| given.clone())
+            .unwrap_or_else(|| super::p2p_address(&key));
         let connection = match endpoint.connect(&ticket.addr, Alpn::Pair).await {
             Ok(connection) => connection,
-            Err(error) => {
-                return Err(match error.downcast_ref::<PeerError>() {
-                    Some(PeerError::InvalidId(_)) => bad_ticket(&error),
-                    Some(PeerError::Refused) => pairing_refused(NO_TICKET_OUT, None),
-                    _ => super::remote_failed(&label, &error),
-                });
-            }
+            Err(error) => return Err(pairing_dial_failed(&label, &error)),
         };
         let request = PairRequest::new(
             &ticket.secret,
@@ -531,7 +699,8 @@ impl Inner {
         let answer = request_pairing(connection, request)
             .await
             .map_err(|error| {
-                super::remote_failed(&label, format!("pairing with the box failed: {error}"))
+                let reason = clean_reason(&error.to_string());
+                super::remote_failed(&label, format!("pairing with the box failed: {reason}"))
             })?;
         let answered = match answer {
             PairAnswer::Paired { name, .. } => name,
@@ -540,11 +709,16 @@ impl Inner {
                 retry_after_ms,
             } => return Err(pairing_refused(&message, retry_after_ms)),
         };
-        // Under the connect lock, so no other connect takes the name
-        // between the check and the row.
-        let _connecting = self.remote.connecting.lock().await;
-        let name = match given {
-            Some(name) => match self.name_holder(&name, &key).await? {
+        // Held until the caller opened the link: no other connect takes the
+        // name between the check and the row, and no forget of an earlier
+        // link deletes the row before the new link reads it.
+        let connecting = self.remote.connecting.clone().lock_owned().await;
+        // Looked up again under the lock: a pairing or a forget since the
+        // first look decides which name rule applies.
+        let stored = self.paired_key(&key).await?;
+        let name = match (&stored, given) {
+            (Some(stored), _) => stored.name.clone(),
+            (None, Some(name)) => match self.name_holder(&name, &key).await? {
                 None => name,
                 Some(holder) => {
                     return Err(name_taken(
@@ -559,7 +733,7 @@ impl Inner {
                     ));
                 }
             },
-            None => self.free_name(&derived_name(&answered), &key).await?,
+            (None, None) => self.free_name(&derived_name(&answered), &key).await?,
         };
         let paired = P2pBox {
             name,
@@ -569,28 +743,70 @@ impl Inner {
             ephemeral: ticket.ephemeral,
             paired_at: i64::try_from(super::now_ms()).unwrap_or(i64::MAX),
         };
-        let name = self
+        let row = self
             .store
             .add_p2p_box(paired)
             .await
             .map_err(crate::registry::store_error)?;
-        tracing::info!(host = %name, peer = %ticket.addr.id.short(), ephemeral = ticket.ephemeral, "paired with a box by ticket");
-        Ok(name)
+        tracing::info!(host = %row.name, peer = %ticket.addr.id.short(), ephemeral = row.ephemeral, "paired with a box by ticket");
+        Ok(Paired {
+            name: row.name,
+            kept: stored.is_some(),
+            connecting,
+        })
     }
 
-    /// Forgets the box paired by ticket under `name`, whose link with
-    /// connect serial `serial` gave up: closes that link and deletes the
-    /// box's `remote_hosts` row, its lane choices and its `p2p_boxes` row,
-    /// and nothing else. A newer link of the name, which `remote connect`
-    /// opened meanwhile, keeps everything. The box keeps its own record of
-    /// this client until `daemon revoke` there.
-    pub(super) async fn forget_peer_box(self: &Arc<Self>, name: &str, serial: u64) {
+    /// Whether `host` names a box paired by ticket.
+    pub(super) async fn is_peer_box(&self, host: &str) -> Result<bool, RpcError> {
+        Ok(self
+            .store
+            .p2p_box(host.to_owned())
+            .await
+            .map_err(crate::registry::store_error)?
+            .is_some())
+    }
+
+    /// The stored pairing with the box whose key is `key`.
+    async fn paired_key(&self, key: &str) -> Result<Option<P2pBox>, RpcError> {
+        self.store
+            .p2p_box_by_key(key.to_owned())
+            .await
+            .map_err(crate::registry::store_error)
+    }
+
+    /// Forgets the ephemeral box paired by ticket under `name`, whose link
+    /// with connect serial `serial`, for the pairing `pairing`, gave up:
+    /// closes that link and deletes the box's `p2p` row in `remote_hosts`,
+    /// its lane choices and that pairing's `p2p_boxes` row, and nothing
+    /// else. A pairing made again since, or a newer link of the name, keeps
+    /// everything: the connect lock, which pairing by ticket holds from its
+    /// row to the new link, orders this against them. The box keeps its own
+    /// record of this client until `daemon revoke` there.
+    pub(super) async fn forget_peer_box(
+        self: &Arc<Self>,
+        name: &str,
+        serial: u64,
+        pairing: &super::PeerPairing,
+    ) {
         if self.shutdown.is_cancelled() {
             return;
         }
         // Held throughout, so a connect or the restore never opens the
         // name halfway through.
         let connecting = self.remote.connecting.lock().await;
+        let current = match self.store.p2p_box(name.to_owned()).await {
+            Ok(current) => current,
+            Err(error) => {
+                tracing::warn!(%error, host = %name, "cannot read the pairing to forget");
+                return;
+            }
+        };
+        if !current
+            .is_some_and(|row| row.peer_key == pairing.key && row.paired_at == pairing.paired_at)
+        {
+            tracing::debug!(host = %name, "not forgetting a box paired again since its link gave up");
+            return;
+        }
         let conn = {
             let mut hosts = lock(&self.remote.hosts);
             match hosts.get(name) {
@@ -607,11 +823,19 @@ impl Inner {
         // restores a box whose pairing is gone, and `p2p_boxes` last, so
         // what is left is a pairing `remote ls` lists and that can be
         // connected or forgotten again.
-        if let Err(error) = self.store.delete_remote_host(name.to_owned()).await {
+        let deleted = self
+            .store
+            .delete_remote_host(name.to_owned(), super::P2P.to_owned())
+            .await;
+        if let Err(error) = deleted {
             tracing::warn!(%error, host = %name, "cannot forget the box's connection record");
         }
         self.forget_choices_of(name).await;
-        if let Err(error) = self.store.delete_p2p_box(name.to_owned()).await {
+        let deleted = self
+            .store
+            .delete_p2p_pairing(name.to_owned(), pairing.key.clone(), pairing.paired_at)
+            .await;
+        if let Err(error) = deleted {
             tracing::warn!(%error, host = %name, "cannot forget the pairing with the box");
         }
         lock(&self.remote.restore_errors).remove(name);
@@ -628,40 +852,47 @@ impl Inner {
     }
 
     /// `base`, or the first of `base-2` to `base-9` no other box here has,
-    /// for the box with key `key`; `box_name_taken` when all are taken.
+    /// for the box with key `key`. When all are taken, `box_name_taken`
+    /// with `taken_by` the holder of `base` itself, the name the box asked
+    /// for.
     async fn free_name(&self, base: &str, key: &str) -> Result<String, RpcError> {
-        let mut holder = Holder::Paired;
-        for candidate in
-            std::iter::once(base.to_owned()).chain((2..=9).map(|n| format!("{base}-{n}")))
-        {
-            match self.name_holder(&candidate, key).await? {
-                None => return Ok(candidate),
-                Some(taken) => holder = taken,
+        let Some(holder) = self.name_holder(base, key).await? else {
+            return Ok(base.to_owned());
+        };
+        for candidate in (2..=9).map(|n| format!("{base}-{n}")) {
+            if self.name_holder(&candidate, key).await?.is_none() {
+                return Ok(candidate);
             }
         }
         Err(name_taken(
             base,
             holder,
             format!(
-                "the box is called {base}, and {base} and {base}-2 to {base}-9 are taken here, so \
-                 this machine kept nothing of the pairing, which used the ticket. Get a new ticket \
-                 with `devlanes daemon pair` on the box and choose a name with `--name`"
+                "the box calls itself {base}, and {base} and {base}-2 to {base}-9 are all taken \
+                 here, so this machine did not keep the pairing and the ticket is used up. Get a \
+                 new ticket with `devlanes daemon pair` on the box, then run `devlanes remote \
+                 connect <ticket> --name NAME` with a free name"
             ),
         ))
     }
 
-    /// What already has box name `name` here, other than the box with key
-    /// `key`: another box paired by ticket, a box reached by SSH or a
-    /// command, or an entry of `remote.boxes` in the user config. `None`
-    /// when the name is free.
+    /// What already has box name `name` here, in any case, other than the
+    /// box with key `key`: another box paired by ticket, a box reached by
+    /// SSH or a command, or an entry of `remote.boxes` in the user config.
+    /// `None` when the name is free. Case is ignored because `Acme` and
+    /// `acme` share a sync directory on a file system that ignores case.
     async fn name_holder(&self, name: &str, key: &str) -> Result<Option<Holder>, RpcError> {
+        let same = |other: &str| other.eq_ignore_ascii_case(name);
         let paired = self
             .store
-            .p2p_box(name.to_owned())
+            .p2p_boxes()
             .await
             .map_err(crate::registry::store_error)?;
-        if let Some(paired) = paired {
-            return Ok((paired.peer_key != key).then_some(Holder::Paired));
+        if paired
+            .iter()
+            .any(|paired| same(&paired.name) && paired.peer_key != key)
+        {
+            return Ok(Some(Holder::Paired));
         }
         let recorded = self
             .store
@@ -669,29 +900,37 @@ impl Inner {
             .await
             .map_err(crate::registry::store_error)?
             .into_iter()
-            .any(|host| host.name == name && host.transport != super::P2P);
+            .any(|host| same(&host.name) && host.transport != super::P2P);
         let live = lock(&self.remote.hosts)
-            .get(name)
-            .is_some_and(|conn| conn.kind != super::P2P);
+            .iter()
+            .any(|(other, conn)| same(other) && conn.kind != super::P2P);
         if recorded || live {
             return Ok(Some(Holder::Reached));
         }
+        Ok(self
+            .configured_box(name)
+            .await
+            .then_some(Holder::Configured))
+    }
+
+    /// Whether `remote.boxes` in the user config has an entry named `name`,
+    /// in any case. Read on a blocking thread, leniently, so a problem
+    /// elsewhere in the file hides no entry.
+    pub(super) async fn configured_box(&self, name: &str) -> bool {
         let home = self.opts.home.clone();
-        let configured = tokio::task::spawn_blocking({
-            let name = name.to_owned();
-            move || {
-                let path = home.join("config.yaml");
-                path.exists()
-                    && devlanes_config::load_user_lenient(&path)
-                        .0
-                        .remote
-                        .boxes
-                        .contains_key(&name)
-            }
+        let name = name.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let path = home.join("config.yaml");
+            path.exists()
+                && devlanes_config::load_user_lenient(&path)
+                    .0
+                    .remote
+                    .boxes
+                    .keys()
+                    .any(|entry| entry.eq_ignore_ascii_case(&name))
         })
         .await
-        .unwrap_or(false);
-        Ok(configured.then_some(Holder::Configured))
+        .unwrap_or(false)
     }
 }
 
@@ -716,16 +955,21 @@ mod tests {
             ("Acme-Box_2", "acme-box_2"),
             ("acme.local", "acme-local"),
             ("--acme", "acme"),
-            ("\u{1b}[31macme\n", "31macme-"),
+            ("\u{1b}[31macme\n", "31macme"),
             ("büro", "b-ro"),
             ("../..", "box"),
             ("", "box"),
+            ("DLP1-desk", "box-dlp1-desk"),
             (long.as_str(), &long[..61]),
         ];
         for (answered, expected) in rows {
             let name = derived_name(answered);
             assert_eq!(name, expected, "{answered:?}");
             assert!(valid_name(&format!("{name}-9")), "{name}");
+        }
+        // A given name is held to the same rules.
+        for given in ["dlp1desk", "Dlp1", "-acme", "acme box", ""] {
+            assert!(!valid_name(given), "{given:?}");
         }
     }
 
@@ -840,76 +1084,173 @@ mod tests {
         PeerError::Refused.into()
     }
 
+    /// What a dial in [`attempts_give_up_once_the_box_stayed_away_too_long`]
+    /// ends in.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Ends {
+        /// A connection.
+        Connected,
+        /// A failure that is retried.
+        Retried,
+        /// A failure that ends the link with this text, and whether it set
+        /// `gave_up`.
+        Stopped(&'static str, bool),
+    }
+
     /// Failures stay transient until the window since the box was last
     /// reached is over, and the first one after it is permanent with the
-    /// give-up text and sets `gave_up`; a refused key is permanent at once
-    /// and gives up nothing.
+    /// give-up text saying since when and sets `gave_up`. A restored link
+    /// tries for at least `RESTORE_GRACE` of its own, so a machine that was
+    /// off for a weekend connects to a box that is back and gives up only
+    /// after the grace on one that is gone. A refused key is permanent at
+    /// once and gives up nothing.
     #[tokio::test(start_paused = true)]
     async fn attempts_give_up_once_the_box_stayed_away_too_long() {
         let hour = Duration::from_secs(60 * 60);
         let second = Duration::from_secs(1);
-        type Row = (
-            bool,
-            Duration,
-            Duration,
-            fn() -> TransportError,
-            Option<&'static str>,
-            bool,
-        );
-        let rows: [Row; 6] = [
-            // (ephemeral, away at start, then waited, dial, permanent text, gave up)
-            (false, Duration::ZERO, 23 * hour, unreachable, None, false),
-            (false, 23 * hour, hour - second, unreachable, None, false),
+        let weekend = 60 * hour;
+        let connected = |away| {
+            Some(Unreached {
+                away,
+                paired: false,
+            })
+        };
+        let paired = |away| Some(Unreached { away, paired: true });
+        let fails = Some(unreachable as fn() -> TransportError);
+        type Row = (bool, Option<Unreached>, Duration, Outcome, Ends);
+        let rows: [Row; 12] = [
+            // (ephemeral, restored, then waited, dial, ends)
+            (false, None, 23 * hour, fails, Ends::Retried),
             (
                 false,
-                23 * hour,
+                None,
+                24 * hour,
+                fails,
+                Ends::Stopped("for 24 hours", true),
+            ),
+            (
+                true,
+                None,
                 hour,
-                unreachable,
-                Some("for 24 hours"),
-                true,
+                fails,
+                Ends::Stopped(
+                    "for an hour, so devlanes stopped trying and forgot it",
+                    true,
+                ),
             ),
             (
                 false,
-                25 * hour,
-                Duration::ZERO,
-                unreachable,
-                Some("for 24 hours"),
-                true,
-            ),
-            (
-                true,
-                2 * hour,
-                Duration::ZERO,
-                unreachable,
-                Some("forgot it"),
-                true,
+                connected(23 * hour),
+                hour - second,
+                fails,
+                Ends::Retried,
             ),
             (
                 false,
-                Duration::ZERO,
-                Duration::ZERO,
-                refused,
-                Some("no longer accepts"),
+                connected(23 * hour),
+                hour,
+                fails,
+                Ends::Stopped("since it was last connected 24 hours ago", true),
+            ),
+            (
                 false,
+                connected(weekend),
+                Duration::ZERO,
+                None,
+                Ends::Connected,
+            ),
+            (
+                false,
+                connected(weekend),
+                Duration::ZERO,
+                fails,
+                Ends::Retried,
+            ),
+            (
+                false,
+                connected(weekend),
+                RESTORE_GRACE - second,
+                fails,
+                Ends::Retried,
+            ),
+            (
+                false,
+                connected(weekend),
+                RESTORE_GRACE,
+                fails,
+                Ends::Stopped("since it was last connected 2 days ago", true),
+            ),
+            (
+                true,
+                paired(2 * hour),
+                RESTORE_GRACE - second,
+                fails,
+                Ends::Retried,
+            ),
+            (
+                true,
+                paired(2 * hour),
+                RESTORE_GRACE,
+                fails,
+                Ends::Stopped(
+                    "since it was paired 2 hours ago, so devlanes stopped trying and forgot it",
+                    true,
+                ),
+            ),
+            (
+                false,
+                None,
+                Duration::ZERO,
+                Some(refused),
+                Ends::Stopped("no longer accepts", false),
             ),
         ];
         let (memory, _listener) = memory_transport();
-        for (ephemeral, away, waited, dial, permanent, gave_up) in rows {
+        for (ephemeral, restored, waited, dial, ends) in rows {
             let inner = Arc::new(Scripted {
-                outcomes: Mutex::new(VecDeque::from([Some(dial)])),
+                outcomes: Mutex::new(VecDeque::from([dial])),
                 memory: memory.clone(),
             });
-            let attempts = PeerAttempts::new(inner, "acme", ephemeral, away);
+            let attempts = PeerAttempts::new(inner, "acme", ephemeral, restored);
             tokio::time::advance(waited).await;
-            let Err(error) = attempts.connect().await else {
-                panic!("connected");
-            };
-            let row = format!("{ephemeral} {away:?} {waited:?}: {error}");
-            assert_eq!(error.is_permanent(), permanent.is_some(), "{row}");
-            if let Some(text) = permanent {
-                assert!(error.to_string().contains(text), "{row}");
+            let row = format!("{ephemeral} {restored:?} {waited:?}");
+            let gave_up = || attempts.gave_up().load(Ordering::SeqCst);
+            match (attempts.connect().await, ends) {
+                (Ok(_), Ends::Connected) => assert!(!gave_up(), "{row}"),
+                (Err(error), Ends::Retried) => {
+                    assert!(!error.is_permanent() && !gave_up(), "{row}: {error}");
+                }
+                (Err(error), Ends::Stopped(text, stopped)) => {
+                    assert!(error.is_permanent(), "{row}: {error}");
+                    assert!(error.to_string().contains(text), "{row}: {error}");
+                    assert_eq!(gave_up(), stopped, "{row}: {error}");
+                }
+                (Ok(_), _) => panic!("{row}: connected"),
+                (Err(error), Ends::Connected) => panic!("{row}: {error}"),
             }
-            assert_eq!(attempts.gave_up().load(Ordering::SeqCst), gave_up, "{row}");
+        }
+    }
+
+    /// "Last reached" is the later of the last connection and the pairing,
+    /// and a stored time ahead of the clock counts as now.
+    #[test]
+    fn a_restored_box_counts_from_when_it_was_last_reached() {
+        let hour = 60 * 60 * 1000;
+        let now = 100 * hour;
+        let rows = [
+            // (last connected, paired at, away in hours, it was the pairing)
+            (Some(now - 23 * hour), now - 30 * hour, 23, false),
+            (None, now - 30 * hour, 30, true),
+            (Some(now - 30 * hour), now - 2 * hour, 2, true),
+            (Some(now + hour), now - 30 * hour, 0, false),
+        ];
+        for (last, paired_at, hours, paired) in rows {
+            let unreached = Unreached::at(last, paired_at, now);
+            let expected = Unreached {
+                away: Duration::from_secs(hours * 60 * 60),
+                paired,
+            };
+            assert_eq!(unreached, expected, "{last:?} {paired_at}");
         }
     }
 
@@ -928,7 +1269,11 @@ mod tests {
             ])),
             memory,
         });
-        let attempts = PeerAttempts::new(inner, "acme", false, 23 * hour);
+        let restored = Unreached {
+            away: 23 * hour,
+            paired: false,
+        };
+        let attempts = PeerAttempts::new(inner, "acme", false, Some(restored));
         assert!(attempts.connect().await.is_ok(), "the box answered");
         tokio::time::advance(2 * hour).await;
         let first = attempts.connect().await.err().expect("unreachable");

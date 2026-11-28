@@ -303,15 +303,29 @@ pub enum Method {
     /// attempt settled. Params `{host, background?, code?}`, or `{ticket,
     /// name?, background?}` to pair with the box in a peer-to-peer pairing
     /// ticket ([`remote::TICKET_PREFIX`]) first: the box is then kept under
-    /// `name` or its own host name made safe (with `-2` to `-9` when that is
-    /// taken), or the name it already has here, and the answer's `host` is
-    /// that name. Pairing by ticket fails with `bad_ticket` (`{message}`)
-    /// for text that is not a usable ticket, `box_name_taken` (`{name,
-    /// taken_by, message}`, `taken_by` one of `p2p`, `ssh_or_command` and
-    /// `user_config`) for a name another box has, `pairing_refused`
-    /// (`{message, retry_after_ms}`) with the box's own reason, and
-    /// `remote_failed` (`{host, message}`) when the box cannot be reached,
-    /// where `host` is `name` or `p2p:` and the box key's first 8 hex digits.
+    /// the name it already has here when it was paired before (`name` is
+    /// then ignored), else under `name` or its own host name made safe
+    /// (with `-2` to `-9` when that is taken), with a new link, and the
+    /// answer has `host` and `paired: {name, kept}`, `kept` true when an
+    /// earlier pairing's name was kept. Pairing by ticket fails with
+    /// `bad_ticket` (`{message}`) for text that is not a usable ticket,
+    /// `box_name_taken` (`{name, taken_by, message}`, `taken_by` one of
+    /// `p2p`, `ssh_or_command` and `user_config`, for the name asked for)
+    /// for a name another box has, compared without case,
+    /// `pairing_refused` (`{message, retry_after_ms}`, the wait at most a
+    /// day) with the box's own reason, `remote_failed` (`{host, message}`)
+    /// when the box cannot be reached, where `host` is the name or `p2p:`
+    /// and the box key's first 8 hex digits, `not_supported_yet`
+    /// (`{feature: "pairing by ticket"}`) without a peer-to-peer endpoint,
+    /// and `bad_request` for a ticket with `host` or `code`, a `name`
+    /// without a ticket, and a `name` that is not 1 to 63 letters, digits,
+    /// `-` and `_` or starts with `-` or the ticket prefix. Connecting a box
+    /// paired by ticket fails with `box_name_ambiguous` (`{name, message}`)
+    /// when `remote.boxes` has an entry of that name too,
+    /// `box_pairing_missing` (`{host, message}`) when its pairing is gone,
+    /// `not_supported_yet` (`{feature: "boxes paired by ticket"}`) without
+    /// an endpoint, and `bad_request` with a `code`; its
+    /// `remote_needs_pairing` has `transport: "p2p"`.
     #[serde(rename = "connect")]
     Connect,
     #[serde(rename = "disconnect")]

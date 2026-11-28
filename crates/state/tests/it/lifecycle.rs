@@ -175,9 +175,10 @@ async fn migration_adds_p2p_clients_and_down_drops_them() {
 
 #[tokio::test]
 /// Migration 017 adds `p2p_boxes` to a version 16 database: pairing with a
-/// box again keeps its name and takes the new addresses, a name another box
-/// key holds is refused, and a state reset deletes the rows. Its down
-/// script drops the table.
+/// box again keeps its name, takes the new addresses and stays permanent, a
+/// name another box key holds is refused, forgetting deletes only the
+/// pairing and transport it names, and a state reset deletes the rows. Its
+/// down script drops the table.
 async fn migration_adds_p2p_boxes_and_down_drops_them() {
     use devlanes_state::{Error, P2pBox};
     use diesel::{migration::MigrationSource, prelude::*};
@@ -204,34 +205,60 @@ async fn migration_adds_p2p_boxes_and_down_drops_them() {
         paired_at: 1,
     };
     let first = paired("acme", "a", &["192.0.2.7:4433", "[2001:db8::1]:4433"]);
+    assert_eq!(store.add_p2p_box(first.clone()).await.expect("pair"), first);
     assert_eq!(
-        store.add_p2p_box(first.clone()).await.expect("pair"),
-        "acme"
-    );
-    assert_eq!(
-        store.p2p_box("acme".into()).await.expect("read"),
+        store
+            .p2p_box_by_key("a".repeat(64))
+            .await
+            .expect("read by key"),
         Some(first)
     );
-    // A new ticket from the same box, under another name, keeps the name.
+    // A new ticket from the same box, under another name and ephemeral,
+    // keeps the name and stays permanent.
     let again = P2pBox {
         relay_url: None,
         ephemeral: true,
         ..paired("acme-2", "a", &["192.0.2.8:4433"])
     };
-    assert_eq!(
-        store.add_p2p_box(again.clone()).await.expect("pair again"),
-        "acme"
-    );
-    assert_eq!(
-        store.p2p_boxes().await.expect("boxes"),
-        [P2pBox {
-            name: "acme".into(),
-            ..again
-        }]
-    );
+    let kept = P2pBox {
+        name: "acme".into(),
+        ephemeral: false,
+        ..again.clone()
+    };
+    assert_eq!(store.add_p2p_box(again).await.expect("pair again"), kept);
+    assert_eq!(store.p2p_boxes().await.expect("boxes"), [kept]);
     // Another box cannot take the name.
     let taken = store.add_p2p_box(paired("acme", "b", &[])).await;
     assert!(matches!(taken, Err(Error::Conflict { .. })), "{taken:?}");
+    // Forgetting deletes only the pairing it was about: not one made again
+    // since, and not another transport's row under the name.
+    let stale = store
+        .delete_p2p_pairing("acme".into(), "a".repeat(64), 0)
+        .await
+        .expect("forget a stale pairing");
+    assert!(!stale && store.p2p_box("acme".into()).await.expect("read").is_some());
+    store
+        .upsert_remote_host(devlanes_state::RemoteHost {
+            name: "acme".into(),
+            transport: "ssh".into(),
+            address: "acme".into(),
+            daemon_version: None,
+            last_connected: Some(1),
+            wanted: true,
+        })
+        .await
+        .expect("ssh row");
+    let other = store
+        .delete_remote_host("acme".into(), "p2p".into())
+        .await
+        .expect("forget a p2p row");
+    assert!(!other && store.remote_hosts().await.expect("hosts").len() == 1);
+    assert!(
+        store
+            .delete_p2p_pairing("acme".into(), "a".repeat(64), 1)
+            .await
+            .expect("forget the pairing")
+    );
     store.reset().await.expect("reset");
     assert!(store.p2p_boxes().await.expect("boxes").is_empty());
     store.close().await.expect("close");
