@@ -1,6 +1,6 @@
 # devlanes-gui-host
 
-The GUI host core: the `Backend` trait an OS backend implements, and `serve`, which serves a backend's windows to viewers, tools and the daemon over the devlanes GUI protocol. The only backend so far is the test pattern in this crate; it builds on `devlanes-gui-proto` for the messages and state machines and `devlanes-gui-codec` for encoding, and its tests drive it with `devlanes-gui-client`.
+The GUI host core: the `Backend` trait an OS backend implements, and `serve`, which serves a backend's windows to viewers, tools and the daemon over the devlanes GUI protocol. The test pattern in this crate is its one backend; the crate builds on `devlanes-gui-proto` for the messages and state machines and `devlanes-gui-codec` for encoding, and its tests drive it with `devlanes-gui-client`.
 
 ## Usage
 
@@ -76,7 +76,7 @@ impl Backend for Acme {
 
 ## Limits
 
-At most 64 connections at once; a connection that does not read is closed past its write queue cap, and one with more than 4 screenshots or 16 syncs unanswered is closed too.
+At most 64 welcomed connections at once, and at most 16 that have not sent their hello yet; more are dropped. A connection that does not read is closed past its write queue cap, and one with more than 4 screenshots or 16 syncs unanswered is closed too. Past 16 screenshots encoding across the host, a request is answered as failed, and clipboard text reaches the app at most every 200 ms, the newest text winning.
 
 ## License
 

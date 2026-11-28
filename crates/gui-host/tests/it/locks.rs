@@ -172,6 +172,13 @@ async fn the_lane_and_the_app_lock_the_window_end_to_end() {
         .any(|c| matches!(c, devlanes_gui_host::Command::Resize { .. }));
     assert!(!resized);
     daemon.lane_frozen(false).expect("sends");
+    // After the thaw the app gets the size the viewer asked for meanwhile,
+    // as a change that answers nobody's request.
+    until(&mut events, |e| {
+        matches!(e, Event::ResizeApplied { request: 0, .. }).then_some(())
+    })
+    .await;
+    assert_eq!(host.pattern.window_size(window), Some(Size::new(200, 100)));
     locked(&mut events, window, LockState::Unlocked).await;
     ada.click(window, at, Buttons::LEFT).expect("sends");
     ada.sync().await.expect("synced");

@@ -31,7 +31,9 @@ async fn sleep_until(at: Option<Instant>) {
 
 /// Writes queued messages, and a keep-alive whenever the client holds a
 /// button or key and sent nothing for [`HEARTBEAT_INTERVAL`]. Ends when the
-/// connection is closed or a write fails.
+/// connection is closed or a write fails. On close it still writes what was
+/// queued before, for up to [`DRAIN_TIMEOUT`], so a command that sends input
+/// and exits does not lose it.
 pub(crate) async fn write_loop<S: AsyncWrite>(
     mut writer: WriteHalf<S>,
     mut rx: mpsc::UnboundedReceiver<Bytes>,
@@ -42,24 +44,38 @@ pub(crate) async fn write_loop<S: AsyncWrite>(
     let _ = ClientMessage::KeepAlive.encode(&mut keep_alive);
     let keep_alive = keep_alive.freeze();
     let mut last_sent = now();
-    loop {
+    let drain = loop {
         let holding = shared.state().held.any();
         let due = holding.then(|| last_sent + HEARTBEAT_INTERVAL);
         let bytes = tokio::select! {
-            _ = shared.close.cancelled() => break,
+            _ = shared.close.cancelled() => break true,
             next = rx.recv() => match next {
                 Some(bytes) => bytes,
-                None => break,
+                None => break false,
             },
             _ = sleep_until(due) => keep_alive.clone(),
         };
         if writer.write_all(&bytes).await.is_err() {
-            break;
+            break false;
         }
         last_sent = now();
+    };
+    if drain {
+        // `Shared::send` refuses new messages once closed, so this ends.
+        let queued = async {
+            while let Ok(bytes) = rx.try_recv() {
+                if writer.write_all(&bytes).await.is_err() {
+                    return;
+                }
+            }
+        };
+        let _ = tokio::time::timeout(DRAIN_TIMEOUT, queued).await;
     }
     let _ = writer.shutdown().await;
 }
+
+/// How long a closing connection may take to write what was queued.
+const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Reads and handles host messages until the connection ends, then reports
 /// every window locked and [`Event::Closed`].

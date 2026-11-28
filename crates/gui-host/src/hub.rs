@@ -95,6 +95,11 @@ struct Window {
     frame_after_resize: bool,
     /// A size change waits for its first frame to be queued to every viewer.
     awaiting_frame: bool,
+    /// The request each session's answer to the last size change named, so
+    /// a viewer moved to another stream can be told again.
+    resize_answers: HashMap<SessionId, u32>,
+    /// The newest size asked for while the lane was frozen, applied on thaw.
+    frozen_resize: Option<Size>,
     /// Closed while the service runs; waiting for the app to open another.
     gone: bool,
     /// What the backend was last told with [`Command::Watch`].
@@ -686,6 +691,9 @@ impl Hub {
                     true => Command::Frozen,
                     false => Command::Thawed,
                 });
+                if !frozen {
+                    self.apply_frozen_resizes();
+                }
             }
             // The reader never forwards a hello.
             ClientMessage::Hello(_) => {}
@@ -734,11 +742,9 @@ impl Hub {
             return;
         };
         // A release always goes through, so nothing stays held on the app,
-        // or with the arbiter, because the window locked meanwhile.
+        // or with the arbiter, because the window locked or went meanwhile.
         let release = match &message {
-            ClientMessage::Pointer(p) => {
-                p.buttons != self.buttons && p.buttons.pressed_since(self.buttons).is_empty()
-            }
+            ClientMessage::Pointer(p) => !Buttons(self.buttons.0 & !p.buttons.0).is_empty(),
             ClientMessage::Key(k) => !k.down,
             _ => false,
         };
@@ -747,37 +753,57 @@ impl Hub {
             .get(&window)
             .filter(|w| !w.gone)
             .map(|w| (w.backend_id, w.lock.state(now).is_locked()));
-        let target = match target {
-            Some((id, locked)) if !locked || release => Some(id),
-            // The window is gone: the arbiter still lets go, the app has nothing to get.
-            None if release => None,
+        let (target, only_release) = match target {
+            Some((id, false)) => (Some(id), false),
+            Some((id, true)) if release => (Some(id), true),
+            None if release => (None, true),
             _ => {
                 self.arbiter.alive(session, now);
                 return;
             }
         };
+        let mut message = message;
+        if only_release && let ClientMessage::Pointer(pointer) = &mut message {
+            // A press that came with the release is dropped; the release stays.
+            pointer.buttons = Buttons(pointer.buttons.0 & self.buttons.0);
+        }
         let command = match message {
             ClientMessage::Pointer(pointer) => {
                 match self.arbiter.pointer(session, pointer.buttons, now) {
-                    Verdict::Accept => target.map(|target| {
+                    Verdict::Accept => {
                         self.buttons = pointer.buttons;
-                        self.last_pointer = Some((target, pointer.position));
-                        Command::Pointer(Pointer {
-                            window: target,
-                            ..pointer
-                        })
-                    }),
+                        match target {
+                            Some(target) => {
+                                self.last_pointer = Some((target, pointer.position));
+                                Some(Command::Pointer(Pointer {
+                                    window: target,
+                                    ..pointer
+                                }))
+                            }
+                            // The window is gone; the pointer is still down on
+                            // the display (a Windows host's real one), so release
+                            // it where it last was.
+                            None => self.last_pointer.map(|(window, position)| {
+                                Command::Pointer(Pointer {
+                                    window,
+                                    position,
+                                    buttons: pointer.buttons,
+                                    screen_delta: None,
+                                })
+                            }),
+                        }
+                    }
                     Verdict::Drop => None,
                 }
             }
             ClientMessage::Key(key) => match self.arbiter.key(session, key.code, key.down, now) {
-                Verdict::Accept => target.map(|target| {
-                    self.last_key_window = Some(target);
-                    Command::Key(Key {
-                        window: target,
-                        ..key
-                    })
-                }),
+                Verdict::Accept => match target.or(self.last_key_window) {
+                    Some(window) => {
+                        self.last_key_window = Some(window);
+                        Some(Command::Key(Key { window, ..key }))
+                    }
+                    None => None,
+                },
                 Verdict::Drop => None,
             },
             ClientMessage::Text { text, .. } => match (target, self.arbiter.text(session, now)) {
@@ -898,8 +924,14 @@ impl Hub {
         let Some(win) = self.windows.get(&window).filter(|w| !w.gone) else {
             return;
         };
+        let backend_id = win.backend_id;
         if self.frozen {
-            // Any frame from now on ends the viewer's own Resizing; Frozen shows meanwhile.
+            // Any frame from now on ends the viewer's own Resizing; Frozen
+            // shows meanwhile. The newest size is applied on thaw, so the
+            // window ends at the size the viewer has.
+            if let Some(win) = self.windows.get_mut(&window) {
+                win.frozen_resize = Some(size);
+            }
             let answer = HostMessage::ResizeApplied {
                 window,
                 request,
@@ -907,7 +939,6 @@ impl Hub {
             };
             return self.send(session, &answer);
         }
-        let backend_id = win.backend_id;
         let id = self.next_id;
         self.next_id += 1;
         let pending = self.resizes.iter().filter(|r| r.window == window).count();
@@ -927,6 +958,25 @@ impl Hub {
             size,
             id,
         });
+    }
+
+    /// Sends the backend the newest size asked for per window while the lane
+    /// was frozen. The requests were answered then, so the change that
+    /// follows answers nobody's request, as a change the app made would.
+    fn apply_frozen_resizes(&mut self) {
+        let mut resizes = Vec::new();
+        for win in self.windows.values_mut() {
+            if let Some(size) = win.frozen_resize.take()
+                && !win.gone
+            {
+                resizes.push((win.backend_id, size));
+            }
+        }
+        for (window, size) in resizes {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.backend.send(Command::Resize { window, size, id });
+        }
     }
 
     /// Answers a screenshot: from the cached frame of a window viewers watch,
@@ -1241,6 +1291,8 @@ impl Hub {
                 resized_at: None,
                 frame_after_resize: false,
                 awaiting_frame: false,
+                resize_answers: HashMap::new(),
+                frozen_resize: None,
                 gone: false,
                 watched: false,
             },
@@ -1364,6 +1416,9 @@ impl Hub {
                 }
                 !covered
             });
+        }
+        if let Some(win) = self.windows.get_mut(&shown) {
+            win.resize_answers = answered.clone();
         }
         let mut from = HashMap::new();
         for ((window, _), stream) in &mut self.streams {
@@ -1558,22 +1613,68 @@ impl Hub {
             .filter(|(_, s)| s.codec == Some(offer))
             .map(|(id, s)| (*id, self.choose(&s.decoders)))
             .collect();
-        for (session, codec) in &moved {
-            if codec.is_none() {
-                tracing::warn!(session = session.0, "a GUI viewer has no codec left");
-            }
-            if let Some(s) = self.sessions.get_mut(session) {
-                s.codec = *codec;
+        let mut moved_to = Vec::new();
+        for (session, codec) in moved {
+            match codec {
+                Some(codec) => {
+                    if let Some(s) = self.sessions.get_mut(&session) {
+                        s.codec = Some(codec);
+                    }
+                    moved_to.push((session, codec));
+                }
+                // It would wait for frames forever; closing lets it see why.
+                None => {
+                    tracing::warn!(
+                        session = session.0,
+                        "closing a GUI viewer that has no codec left"
+                    );
+                    self.closing.push(session);
+                }
             }
         }
         let windows: Vec<_> = self.windows.keys().copied().collect();
         for window in windows {
-            for (session, _) in &moved {
+            for (session, codec) in &moved_to {
+                let key = (window, *codec);
+                let new_stream = !self.streams.contains_key(&key);
                 self.watch(window, *session);
+                self.resize_again(window, *session, key, new_stream);
             }
             self.refresh_watch(window);
             self.check_resize_done(window);
         }
+    }
+
+    /// Tells a viewer moved to the stream `key` from which sequence number
+    /// its frames follow the size change `window` still waits on, since the
+    /// number it got belongs to its old stream.
+    fn resize_again(
+        &mut self,
+        window: WindowId,
+        session: SessionId,
+        key: StreamKey,
+        new_stream: bool,
+    ) {
+        let Some(win) = self.windows.get(&window).filter(|w| w.awaiting_frame) else {
+            return;
+        };
+        let request = win.resize_answers.get(&session).copied().unwrap_or(0);
+        let Some(stream) = self.streams.get_mut(&key) else {
+            return;
+        };
+        // Every frame of a new stream comes after the change (a cached one
+        // from before it is held back), and so does every frame of an
+        // existing stream that already sent its first one after it.
+        if new_stream {
+            stream.awaiting_from = Some(1);
+        }
+        let from_seq = stream.awaiting_from.unwrap_or(1);
+        let answer = HostMessage::ResizeApplied {
+            window,
+            request,
+            from_seq,
+        };
+        self.send(session, &answer);
     }
 
     /// The backend stopped: every window is Closed, and connections send what

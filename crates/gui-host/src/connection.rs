@@ -10,7 +10,7 @@ use devlanes_gui_proto::{
     RefusalReason, Role, SessionId, Token,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 use crate::HELLO_TIMEOUT;
 use crate::hub::Inbox;
@@ -28,6 +28,8 @@ pub(crate) struct Settings {
     pub(crate) encoders: Vec<CodecOffer>,
     /// The write queue cap.
     pub(crate) write_queue_cap: usize,
+    /// One permit per welcomed connection.
+    pub(crate) welcomed: Arc<Semaphore>,
 }
 
 /// Why the hello could not be read.
@@ -39,14 +41,21 @@ enum HelloError {
     Decode(DecodeError),
 }
 
-/// Runs one connection to its end.
-pub(crate) async fn run<S>(stream: S, inbox: mpsc::Sender<Inbox>, settings: Arc<Settings>)
-where
+/// Runs one connection to its end. `pending` is its place among the
+/// connections still saying hello, given up once the hello is read.
+pub(crate) async fn run<S>(
+    stream: S,
+    pending: OwnedSemaphorePermit,
+    inbox: mpsc::Sender<Inbox>,
+    settings: Arc<Settings>,
+) where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     let (mut reader, mut writer) = tokio::io::split(stream);
     let mut buf = BytesMut::with_capacity(16 * 1024);
-    let hello = match tokio::time::timeout(HELLO_TIMEOUT, read_hello(&mut reader, &mut buf)).await {
+    let hello = tokio::time::timeout(HELLO_TIMEOUT, read_hello(&mut reader, &mut buf)).await;
+    drop(pending);
+    let hello = match hello {
         Ok(Ok(hello)) => hello,
         Ok(Err(HelloError::Decode(DecodeError::VersionMismatch { theirs, .. }))) => {
             let message = format!(
@@ -68,6 +77,11 @@ where
             refuse(&mut writer, reason, message.to_owned()).await;
             return;
         }
+    };
+    // Held for the rest of the connection.
+    let Ok(_place) = settings.welcomed.clone().try_acquire_owned() else {
+        tracing::debug!("dropping a GUI connection past the limit");
+        return;
     };
     let role = hello.role;
     let outbox = Arc::new(Outbox::new(settings.write_queue_cap));

@@ -3,7 +3,9 @@
 
 use devlanes_gui_client::{ClientError, connect};
 use devlanes_gui_host::conformance::{self, TestPatternProbe};
-use devlanes_gui_host::{Command, HELLO_TIMEOUT, MAX_CONNECTIONS, MAX_SCREENSHOTS_IN_FLIGHT};
+use devlanes_gui_host::{
+    Command, HELLO_TIMEOUT, MAX_CONNECTIONS, MAX_PENDING_HELLOS, MAX_SCREENSHOTS_IN_FLIGHT,
+};
 use devlanes_gui_proto::{
     Buttons, HEADER_LEN, MAGIC, Point, Pointer, RefusalReason, ScreenshotResult, WindowId,
 };
@@ -235,6 +237,23 @@ async fn connections_past_the_limit_are_dropped() {
     tokio::time::timeout(PATIENCE, welcomed)
         .await
         .expect("welcomed once a place is free");
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn silent_connections_take_no_place_of_welcomed_ones() {
+    let host = Host::default().await;
+    let (daemon, _events) = host.tool("daemon").await;
+    let mut silent = Vec::new();
+    for _ in 0..MAX_PENDING_HELLOS {
+        silent.push(host.pipe().await);
+    }
+    let opened = tokio::time::Instant::now();
+    let mut extra = Raw::hello(&host, Role::Tool, None).await;
+    assert!(extra.closed().await.is_empty(), "no welcome past the limit");
+    assert!(opened.elapsed() < HELLO_TIMEOUT, "dropped as it arrived");
+    // The connection that was welcomed before them goes on.
+    daemon.screenshot(None).await.expect("a screenshot");
     host.stop().await;
 }
 

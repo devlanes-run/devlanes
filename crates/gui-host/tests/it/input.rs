@@ -1,6 +1,6 @@
 //! Input arbitration between clients, releases of held input, and `Sync`.
 
-use devlanes_gui_host::{Command, Echo, MAX_PENDING_SYNCS};
+use devlanes_gui_host::{CLIPBOARD_GAP, Command, Echo, MAX_PENDING_SYNCS};
 use devlanes_gui_proto::{
     Buttons, HELD_INPUT_TIMEOUT, HOLD_AFTER_TYPING, Key, KeyCode, LockState, Point, Pointer,
     WindowId,
@@ -222,6 +222,33 @@ async fn syncs_share_one_frame_request_per_window_and_are_capped() {
             .any(|m| matches!(m, HostMessage::Synced { .. })),
         "{after:?}"
     );
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn clipboard_text_within_the_gap_reaches_the_app_once_and_newest() {
+    let host = Host::default().await;
+    let (tool, _events) = host.tool("agent").await;
+    let texts = |host: &Host| {
+        host.pattern
+            .commands()
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::Clipboard { text } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for text in ["zero", "one", "two"] {
+        tool.clipboard(text).expect("sends");
+    }
+    // Answered at once, after the clipboard messages were handled.
+    let _ = tool.screenshot(Some(WindowId(999))).await;
+    assert_eq!(texts(&host), vec!["zero"]);
+    let sent = tokio::time::Instant::now();
+    eventually("the newest text follows", || texts(&host).len() == 2).await;
+    assert!(sent.elapsed() >= CLIPBOARD_GAP - Duration::from_millis(10));
+    assert_eq!(texts(&host), vec!["zero", "two"]);
     host.stop().await;
 }
 

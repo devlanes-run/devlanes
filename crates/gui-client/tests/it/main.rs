@@ -197,6 +197,25 @@ async fn keep_alives_go_out_only_while_input_is_held() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn input_sent_right_before_the_client_is_dropped_still_reaches_the_host() {
+    let (client, mut host) = connect(Role::Tool, bytes(&welcome())).await;
+    let (client, events) = client.expect("welcomed");
+    client
+        .click(W, Point::new(3, 4), Buttons::LEFT)
+        .expect("sends");
+    // A command that clicks and exits drops its client at once.
+    drop((client, events));
+    let buttons: Vec<_> = [host.read().await, host.read().await, host.read().await]
+        .into_iter()
+        .map(|message| match message {
+            ClientMessage::Pointer(pointer) => pointer.buttons,
+            other => panic!("expected the click, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(buttons, vec![Buttons::NONE, Buttons::LEFT, Buttons::NONE]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_host_of_another_version_or_protocol_is_a_typed_error() {
     let mut newer = BytesMut::from(&bytes(&welcome())[..]);
     let at = HEADER_LEN + MAGIC.len();
