@@ -1942,8 +1942,15 @@ impl Inner {
             items.insert(host.name.clone(), item);
         }
         // A box paired by ticket that never connected, or whose row
-        // retention deleted, keeps its pairing and is listed with it.
-        for paired in self.store.p2p_boxes().await.unwrap_or_default() {
+        // retention deleted, keeps its pairing and is listed with it. Best
+        // effort, as the `remote_hosts` read above is: `remote ls` still
+        // shows every live link, and the failure is logged. A connect fails
+        // closed instead, since there a missing row could mean an SSH dial.
+        let paired = self.store.p2p_boxes().await.unwrap_or_else(|error| {
+            tracing::warn!(%error, "cannot read the boxes paired by ticket for remote ls");
+            Vec::new()
+        });
+        for paired in paired {
             items.entry(paired.name.clone()).or_insert_with(|| {
                 json!({
                     "host": paired.name,
