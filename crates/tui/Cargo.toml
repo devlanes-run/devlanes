@@ -59,6 +59,8 @@ devlanes-sys-windows = { path = "../sys-windows" }
 [dev-dependencies]
 # The `screens` example draws every TUI page to PNG for design review.
 ab_glyph = "0.2"
+# A fake daemon socket records what the client sends.
+devlanes-ipc = { path = "../ipc" }
 insta = { version = "1", features = ["filters"] }
 png = "0.18"
 tempfile.workspace = true

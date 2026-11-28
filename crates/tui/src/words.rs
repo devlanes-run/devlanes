@@ -853,6 +853,40 @@ mod tests {
         );
     }
 
+    /// Refusals of a ticket pairing keep the daemon's words, which say what
+    /// to do, with no hint and no backticks; a name the daemon refused is
+    /// named.
+    #[test]
+    fn ticket_errors_keep_the_daemons_words() {
+        let worded = |code: &str, data| rpc(&RpcError::new(code, data, 2));
+        let bad = worded(
+            "bad_ticket",
+            json!({"message": "the pairing ticket does not match its checksum; copy it again from `devlanes daemon pair` on the box"}),
+        );
+        assert_eq!(
+            bad.summary,
+            "the pairing ticket does not match its checksum; copy it again from devlanes daemon pair on the box"
+        );
+        assert_eq!(bad.hint, None);
+        let taken = worded(
+            "box_name_taken",
+            json!({"name": "acme", "taken_by": "user_config",
+                   "message": "acme is a box in remote.boxes already; pass another name"}),
+        );
+        assert_eq!(
+            taken.summary,
+            "acme is a box in remote.boxes already; pass another name"
+        );
+        let refused = worded(
+            "bad_request",
+            json!({"name": "dlp1x", "message": "a box name cannot start with dlp1"}),
+        );
+        assert_eq!(
+            refused.summary,
+            "dlp1x cannot be a box name: a box name cannot start with dlp1"
+        );
+    }
+
     #[test]
     fn one_line_collapses_detail() {
         let worded = Worded::local("could not open\nsecond line");

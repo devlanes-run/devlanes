@@ -16,6 +16,7 @@ macro_rules! assert_screen {
     }};
 }
 
+mod api;
 mod boxes;
 mod choice;
 mod clients;

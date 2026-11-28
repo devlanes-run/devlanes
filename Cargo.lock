@@ -2610,6 +2610,7 @@ dependencies = [
  "devlanes-client",
  "devlanes-config",
  "devlanes-core",
+ "devlanes-ipc",
  "devlanes-proto",
  "devlanes-sys",
  "devlanes-sys-windows",
