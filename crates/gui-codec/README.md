@@ -1,6 +1,6 @@
 # devlanes-gui-codec
 
-Video codecs for devlanes GUI streaming: the BGRA frame type, the `VideoEncoder` and `VideoDecoder` traits that each OS backend implements, the `raw` codec every build has, and the selector that picks the codec a window streams in. `devlanes-gui-host` encodes with it and `devlanes-gui-client` decodes with it; the message types come from `devlanes-gui-proto`.
+Video codecs for devlanes GUI streaming: the BGRA frame type, the `VideoEncoder` and `VideoDecoder` traits that each OS backend implements, the `raw` codec every build has, the H.264 backends of each OS, and the selector that picks the codec a window streams in. `devlanes-gui-host` encodes with it and `devlanes-gui-client` decodes with it; the message types come from `devlanes-gui-proto`.
 
 ## Usage
 
@@ -51,6 +51,11 @@ fn stream_one_frame(pixels: Vec<u8>, captured: Duration) -> Result<(), CodecErro
 - `EncoderBackend`, `DecoderBackend`: what a host or viewer registers per codec implementation, with its `CodecOffer` (codec and whether it is hardware).
 - `RawBackend`, `RawEncoder`, `RawDecoder`: full frames compressed with zstd; the encoder skips a picture identical to the previous one.
 - `select`: the best codec both ends have, hardware before software and `h264` before `raw`.
+- `h264()` (feature `h264`): this machine's H.264 backends and why a part is missing: `OpenH264` on Linux, `MediaFoundationEncoder` (hardware and software) and `MediaFoundationDecoder` on Windows, the `VideoToolbox` decoder on macOS. Only `devlanes-gui` enables the feature; the FFI lives in `devlanes-sys` and `devlanes-sys-windows`.
+
+## H.264
+
+Every H.264 backend converts BGRA to 4:2:0 and back here, with one BT.709 limited-range matrix, about 1.4 ms per 1440x900 frame each way in a release build. H.264 needs even sides: the encoder pads an odd side by repeating the last column or row, the frame message carries the real size, and the decoder crops to it. A new size starts a new encoder, whose first frame is a keyframe. A refinement (`EncodeParams::refine`, asked for by the pacer once a lossy picture stops changing) is coded at a fine quantizer. Decoders decode every frame; the viewer shows the newest.
 
 ## License
 

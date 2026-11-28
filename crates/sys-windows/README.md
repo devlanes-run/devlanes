@@ -1,6 +1,6 @@
 # devlanes-sys-windows
 
-Safe wrappers over the Win32 calls devlanes makes on Windows. The `sys` facade, the Windows runner, the client and the daemon call it and add their own policy; it is the only Windows crate allowed `unsafe` code, and it is empty on other platforms.
+Safe wrappers over the Win32 calls devlanes makes on Windows. The `sys` facade, the Windows runner, the client, the daemon and the GUI codecs call it and add their own policy; it is the only Windows crate allowed `unsafe` code, and it is empty on other platforms.
 
 ## Usage
 
@@ -57,6 +57,11 @@ Every call blocks. Async callers use `spawn_blocking`, except for the `pipe` mod
 - `cert`: `CertStore` over the user's certificate stores (logical view read-only, changes through the user's registry store), `interactive_desktop`; the `test-support` feature adds `ScratchStore`, a throwaway store deleted on drop.
 - `net`: `set_exclusive_address_use` and `exclusive_address_use` (`SO_EXCLUSIVEADDRUSE`).
 - `system`: `computer_name`, the DNS host name `hostname.exe` prints, independent of the environment.
+- `media_foundation` (feature `media-foundation`, which only `devlanes-gui` enables): the H.264 `Encoder` (hardware where the GPU has one, Microsoft's software encoder otherwise, low-latency, a quantizer per frame) and `Decoder` (NV12 out), with `has_hardware_encoder` and `has_software_encoder`. It uses the `windows` crate for the COM interfaces.
+
+## Media Foundation
+
+The first use calls `CoIncrementMTAUsage`, which keeps COM's multithreaded apartment alive for the process without joining the calling thread to it, so codec threads that never initialized COM use the transforms as implicit members, and a thread initialized single-threaded (the viewer's winit thread) is never touched. `MFStartup`, `MFTEnumEx` and the sample constructors are looked up in `mfplat.dll` at run time, so a Windows without Media Foundation still starts the binary. An asynchronous (hardware) transform is driven through its events until the output for the frame just given arrives, at most 2 seconds; transforms are started one at a time, since an NVIDIA driver failed two starts at once. Microsoft documents its H.264 transforms for client Windows only.
 
 ## Behaviour
 
