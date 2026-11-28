@@ -21,12 +21,14 @@ pub enum Applies {
 /// `terminal` and `remote` are read by each command (`devlanes tunnel` reads
 /// `remote` at each client connection, the daemon reads `remote.boxes` at each
 /// `remote connect`), and so is `updates.highlights`, which the TUI reads when it
-/// opens; everything else by the daemon.
+/// opens; everything else by the daemon, including `remote.relays` and
+/// `remote.port_mapping`, which build its peer-to-peer endpoint at start.
 pub fn applies(key: &str) -> Applies {
     let section = key.split('.').next().unwrap_or(key);
     match key {
         "tui.theme" | "tui.glyphs" => Applies::Now,
         "updates.highlights" => Applies::NextCommand,
+        "remote.relays" | "remote.port_mapping" => Applies::Daemon,
         _ if matches!(section, "start" | "tui" | "terminal" | "remote") => Applies::NextCommand,
         _ => Applies::Daemon,
     }
@@ -397,6 +399,8 @@ mod tests {
         assert_eq!(applies("remote.allow_connections"), Applies::NextCommand);
         assert_eq!(applies("remote.start_daemon"), Applies::NextCommand);
         assert_eq!(applies("remote.require_pairing"), Applies::NextCommand);
+        assert_eq!(applies("remote.relays"), Applies::Daemon);
+        assert_eq!(applies("remote.port_mapping"), Applies::Daemon);
         assert_eq!(applies("updates.highlights"), Applies::NextCommand);
         assert_eq!(applies("updates.mode"), Applies::Daemon);
         assert_eq!(applies("startup.mode"), Applies::Daemon);

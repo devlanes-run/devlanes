@@ -786,9 +786,20 @@ fn box_settings_fall_to_the_safe_side_when_the_whole_file_fails() {
 }
 
 /// Command boxes need a name `remote connect` can take and a program; the
-/// rest of the command is passed as written.
+/// rest of the command is passed as written. Relays must be web URLs short
+/// enough for a ticket, and an empty list is allowed.
 #[test]
 fn remote_boxes_need_a_name_and_a_program() {
+    let relays = parse_user("remote: { relays: [] }").expect("no relays");
+    assert!(relays.remote.relays.is_empty());
+    let own = format!("https://relay.example.invalid/{}", "r".repeat(170));
+    assert!(
+        parse_user(&format!(
+            "remote: {{ relays: ['http://10.0.0.1:3340', '{own}'] }}"
+        ))
+        .is_ok()
+    );
+    let long = format!("https://relay.example.invalid/{}", "r".repeat(172));
     let config = parse_user(
         "remote:\n  boxes:\n    acme_2:\n      command: [docker, exec, -i, acme, devlanes, tunnel, --stdio]\n",
     )
@@ -824,6 +835,18 @@ fn remote_boxes_need_a_name_and_a_program() {
         (
             "remote: { boxes: { acme: { command: [ssh], shell: true } } }",
             "unknown field `shell`",
+        ),
+        (
+            "remote: { relays: ['relay.example.invalid'] }",
+            "remote.relays: relay.example.invalid is not an http or https URL",
+        ),
+        (
+            "remote: { relays: ['ftp://relay.example.invalid'] }",
+            "is not an http or https URL",
+        ),
+        (
+            &format!("remote: {{ relays: ['{long}'] }}"),
+            "is longer than 200 bytes",
         ),
     ] {
         let error = parse_user(source).expect_err(source);

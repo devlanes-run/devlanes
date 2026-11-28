@@ -84,6 +84,11 @@ expression: user
     "boxes": {},
     "allow_connections": true,
     "start_daemon": true,
-    "require_pairing": true
+    "require_pairing": true,
+    "relays": [
+      "https://relay1.devlanes.run",
+      "https://relay2.devlanes.run"
+    ],
+    "port_mapping": true
   }
 }

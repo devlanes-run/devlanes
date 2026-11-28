@@ -244,7 +244,7 @@ pub async fn engine(
         home: paths.home.clone(),
         exe: std::env::current_exe().ok(),
     });
-    integ.peer = Some(peer_endpoint(&paths.home));
+    integ.peer = Some(peer_endpoint(&paths.home, &user.remote));
     integ.box_serving = Some(Arc::new(TunnelServing {
         paths: paths.clone(),
         label: std::sync::OnceLock::new(),
@@ -1147,26 +1147,24 @@ impl RemoteConnector for BoxConnector {
     }
 }
 
-/// The relays a peer-to-peer endpoint uses until `remote.relays` exists.
-/// Two, because iroh tells whether a NAT changes ports per destination only
-/// from the answers of two relays. Numbered, with no region in the name,
-/// because the list is compiled into released binaries and a server may
-/// move without its name changing.
-const DEFAULT_RELAYS: [&str; 2] = ["https://relay1.devlanes.run", "https://relay2.devlanes.run"];
-
-/// This machine's peer-to-peer endpoint. Building it binds nothing and
+/// This machine's peer-to-peer endpoint, with the relays and port mapping
+/// of the user config read at daemon start. Building it binds nothing and
 /// reads no key: the daemon binds it only once a ticket is minted or a
 /// client paired by ticket exists.
-fn peer_endpoint(home: &std::path::Path) -> Arc<dyn devlanes_transport::PeerEndpoint> {
+fn peer_endpoint(
+    home: &std::path::Path,
+    remote: &devlanes_config::RemoteConfig,
+) -> Arc<dyn devlanes_transport::PeerEndpoint> {
     Arc::new(devlanes_transport_iroh::IrohEndpoint::new(
         devlanes_transport_iroh::IrohOptions {
             key_file: home.join("p2p-key"),
-            relays: DEFAULT_RELAYS.map(str::to_owned).to_vec(),
+            relays: remote.relays.clone(),
             // n0's DNS (dns.iroh.link), whose docs allow production use "if
             // you find performance acceptable"; a ticket carries the relay
-            // and addresses, so pairing does not wait for it.
+            // and addresses, so pairing does not wait for it. The endpoint
+            // ignores it without relays.
             address_lookup: true,
-            port_mapping: true,
+            port_mapping: remote.port_mapping,
         },
     ))
 }

@@ -465,7 +465,7 @@ impl Default for DaemonConfig {
 /// machine serves clients when it is a box.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-#[schemars(extend("examples" = [{"allow_connections":false},{"start_daemon":false},{"require_pairing":false},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
+#[schemars(extend("examples" = [{"allow_connections":false},{"start_daemon":false},{"require_pairing":false},{"relays":[]},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
 pub struct RemoteConfig {
     /// Boxes that `devlanes remote connect <name>` reaches by running a command instead of
     /// SSH, keyed by that name. Use it for a container, a WSL distribution or a codespace.
@@ -490,17 +490,46 @@ pub struct RemoteConfig {
     /// reaches this machine over SSH or its command. An invalid value counts as true.
     #[schemars(extend("examples" = [true,false]))]
     pub require_pairing: bool,
+    /// Relays for boxes paired by ticket. A relay helps two machines find each other
+    /// and open a direct connection; lane traffic never goes through it. Defaults to
+    /// `https://relay1.devlanes.run` and `https://relay2.devlanes.run`. Each entry is an
+    /// `http` or `https` URL of at most 200 bytes. A box on a relay that is not in this
+    /// list is reached only at the addresses in its ticket, so to reach a box on your
+    /// own relay, list that relay here too. An empty list turns off relays and the
+    /// lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are reached only
+    /// at their ticket's addresses, such as on the same network. Applies when the
+    /// daemon starts.
+    #[schemars(extend("examples" = [["https://relay1.devlanes.run","https://relay2.devlanes.run"],["https://relay.example.invalid"],[]]))]
+    pub relays: Vec<String>,
+    /// Ask the router to forward a port to this machine (UPnP, NAT-PMP or PCP), which
+    /// helps a direct connection to a box paired by ticket form behind some routers.
+    /// Defaults to true. Set false to keep devlanes from contacting the router.
+    /// Applies when the daemon starts.
+    #[schemars(extend("examples" = [true,false]))]
+    pub port_mapping: bool,
 }
+
+/// The relays `remote.relays` defaults to. Two, because iroh tells whether a
+/// NAT changes ports per destination only from the answers of two relays.
+/// Numbered, with no region in the name, because the list is compiled into
+/// released binaries and a server may move without its name changing.
+const DEFAULT_RELAYS: [&str; 2] = ["https://relay1.devlanes.run", "https://relay2.devlanes.run"];
+
+/// The longest `remote.relays` entry: the most a pairing ticket can carry
+/// (`Ticket::MAX_RELAY` in devlanes-transport, which this crate cannot use).
+const MAX_RELAY_URL: usize = 200;
 
 impl Default for RemoteConfig {
     /// Connections are allowed, start the daemon and need pairing unless
-    /// turned off; no command boxes.
+    /// turned off; no command boxes; the built-in relays and port mapping.
     fn default() -> Self {
         Self {
             boxes: std::collections::BTreeMap::new(),
             allow_connections: true,
             start_daemon: true,
             require_pairing: true,
+            relays: DEFAULT_RELAYS.map(str::to_owned).to_vec(),
+            port_mapping: true,
         }
     }
 }
@@ -521,8 +550,14 @@ pub struct RemoteBox {
 
 impl RemoteConfig {
     /// Rejects box names that `remote connect` and dotted setting keys cannot
-    /// name, and commands without a program.
+    /// name, commands without a program, and relays the daemon could not use
+    /// or put in a ticket.
     fn validate(&self) -> Result<(), ConfigError> {
+        for relay in &self.relays {
+            relay_problem(relay).map_or(Ok(()), |problem| {
+                Err(ConfigError::plain(format!("remote.relays: {problem}")))
+            })?;
+        }
         for (name, entry) in &self.boxes {
             let plain = !name.is_empty()
                 && !name.starts_with('-')
@@ -544,6 +579,21 @@ impl RemoteConfig {
         }
         Ok(())
     }
+}
+
+/// Why `relay` cannot be a `remote.relays` entry, or `None` when it can.
+fn relay_problem(relay: &str) -> Option<String> {
+    if relay.len() > MAX_RELAY_URL {
+        return Some(format!(
+            "{relay} is longer than {MAX_RELAY_URL} bytes, the most a pairing ticket can carry"
+        ));
+    }
+    let usable = url::Url::parse(relay).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https") && url.host_str().is_some_and(|h| !h.is_empty())
+    });
+    (!usable).then(|| {
+        format!("{relay} is not an http or https URL, such as https://relay.example.invalid")
+    })
 }
 
 /// How long the daemon's database keeps records of finished runs and of remote boxes.
