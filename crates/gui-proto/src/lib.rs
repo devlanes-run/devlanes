@@ -59,10 +59,7 @@ pub use message::{
     MAX_TEXT, MAX_WINDOWS, MoveResize, Pointer, Refusal, RefusalReason, SYNC_FEATURE, Screenshot,
     ScreenshotResult, VideoFrame, Welcome, Wheel,
 };
-pub use pacer::{
-    Encode, MAX_IN_FLIGHT, Pacer, REFINE_AFTER, REFINE_LINK_BUDGET, REFINE_QUALITY_STEP,
-    STALL_AFTER, Target,
-};
+pub use pacer::{Encode, MAX_IN_FLIGHT, Pacer, STALL_AFTER, Target};
 pub use types::{
     Buttons, CodecId, CodecOffer, CursorImage, CursorShape, Edge, KeyCode, LockState, MAX_APP_ID,
     MAX_CURSOR_SIDE, MAX_DIMENSION, MAX_TITLE, Point, Role, SessionId, Size, Token, WheelUnit,
