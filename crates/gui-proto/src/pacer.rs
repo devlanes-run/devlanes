@@ -78,6 +78,19 @@ struct Viewer {
     /// their size over the time from sending to acknowledgement less the
     /// base delay. `None` until one was measured.
     throughput: Option<f64>,
+    /// When `throughput` was last measured; older than [`RATE_MAX_AGE`] it
+    /// counts as unmeasured.
+    measured_at: Option<Instant>,
+}
+
+impl Viewer {
+    /// The throughput measured within [`RATE_MAX_AGE`] of `now`.
+    fn fresh_rate(&self, now: Instant) -> Option<f64> {
+        let fresh = self
+            .measured_at
+            .is_some_and(|at| now.saturating_duration_since(at) < RATE_MAX_AGE);
+        self.throughput.filter(|_| fresh)
+    }
 }
 
 /// Where a viewer's last honored keyframe request stands.
@@ -160,6 +173,10 @@ const PROBE_INTERVAL: Duration = Duration::from_secs(30);
 /// The most of a measured link's time a probe may take: on a slower link
 /// no probe goes out, since it would sit in front of the user's next input.
 const PROBE_ALLOWANCE: Duration = Duration::from_secs(1);
+
+/// How long a measured throughput counts. An older one counts as unmeasured,
+/// so a link measured once very low is probed again.
+const RATE_MAX_AGE: Duration = Duration::from_secs(300);
 
 /// The lowest the calibration of refinement estimates goes, so one estimate
 /// inflated by a large frame among the recent ones cannot make the next
@@ -301,17 +318,17 @@ impl<F: Clone> Pacer<F> {
         let stream = self.target().quality;
         let candidates = refine_candidates(stream);
         let lowest = *candidates.last()?;
-        let slowest = self.slowest_rate();
-        let fits = |quality: u8, within: Duration| {
+        let (slowest, slowest_measured) = self.slowest_rate(now);
+        let fits = |quality: u8, within: Duration, rate: Option<f64>| {
             matches!(
-                (self.refine_cost(stream, quality), slowest),
+                (self.refine_cost(stream, quality), rate),
                 (Some(cost), Some(rate)) if cost <= rate * within.as_secs_f64()
             )
         };
         let fitting = candidates
             .iter()
             .copied()
-            .find(|q| fits(*q, REFINE_LINK_BUDGET));
+            .find(|q| fits(*q, REFINE_LINK_BUDGET, slowest));
         let qp = |quality: u8| refine_qp(quality, quantizer(stream));
         match fitting {
             // Finer than the picture had: a lower quantizer, since qualities
@@ -321,10 +338,12 @@ impl<F: Clone> Pacer<F> {
             }
             Some(_) => None,
             None => {
-                // An unmeasured link is probed; a measured one only when the
-                // lowest step takes at most PROBE_ALLOWANCE of it, so a slow
-                // link is not held up by probes. A keyframe measures it again.
-                let worth = slowest.is_none() || fits(lowest, PROBE_ALLOWANCE);
+                // With no link measured the probe goes out unchecked; with any
+                // measured, only when the lowest step takes at most
+                // PROBE_ALLOWANCE of the slowest of them, so a slow link is
+                // not held up by probes. A keyframe measures it again.
+                let worth =
+                    slowest_measured.is_none() || fits(lowest, PROBE_ALLOWANCE, slowest_measured);
                 let probe = worth
                     && self.last_keyframe.is_some()
                     && self.refined_qp.is_none()
@@ -334,14 +353,16 @@ impl<F: Clone> Pacer<F> {
         }
     }
 
-    /// The throughput of the slowest viewer not set aside, or `None` while
-    /// one of them is not measured.
-    fn slowest_rate(&self) -> Option<f64> {
-        self.viewers
-            .iter()
-            .filter(|v| !v.stalled)
-            .map(|v| v.throughput)
-            .try_fold(f64::INFINITY, |slowest, rate| Some(slowest.min(rate?)))
+    /// The throughput of the slowest viewer not set aside, `None` while one
+    /// of them is not measured within [`RATE_MAX_AGE`] of `now`; and the
+    /// slowest of those that are, `None` when none is.
+    fn slowest_rate(&self, now: Instant) -> (Option<f64>, Option<f64>) {
+        let active = || self.viewers.iter().filter(|v| !v.stalled);
+        let every = active()
+            .map(|v| v.fresh_rate(now))
+            .try_fold(f64::INFINITY, |slowest, rate| Some(slowest.min(rate?)));
+        let measured = active().filter_map(|v| v.fresh_rate(now)).reduce(f64::min);
+        (every, measured)
     }
 
     /// The calibrated estimate of a refinement's bytes at `quality` of a
@@ -383,6 +404,7 @@ impl<F: Clone> Pacer<F> {
             key_request: KeyRequest::Idle,
             rate: RateController::new(),
             throughput: None,
+            measured_at: None,
         });
     }
 
@@ -584,6 +606,7 @@ impl<F: Clone> Pacer<F> {
             if keyframe || frame.refine || delay >= LARGE_FRAME_DELAY * base.max(0.001) {
                 let sample = bytes as f64 / (delay - base).max(0.001);
                 viewer.throughput = Some(average(viewer.throughput, sample, SHORT_WEIGHT));
+                viewer.measured_at = Some(now);
             }
         }
         let mut sent_at = None;
@@ -641,7 +664,13 @@ impl<F: Clone> Pacer<F> {
             let probe = self
                 .last_probe
                 .map_or(still, |at| (at + PROBE_INTERVAL).max(still));
-            return [still, probe]
+            // So is one held back by a slow rate once that rate is too old to count.
+            let aged = active()
+                .filter_map(|v| v.measured_at)
+                .map(|at| (at + RATE_MAX_AGE).max(probe))
+                .min()
+                .unwrap_or(probe);
+            return [still, probe, aged]
                 .into_iter()
                 .find(|at| self.refine_plan(*at).is_some());
         }
@@ -1133,9 +1162,17 @@ mod tests {
         assert_eq!(lossless.poll(t0 + REFINE_AFTER * 2), None);
     }
 
-    /// Sets `viewer`'s measured throughput to `rate` bytes a second.
+    /// Sets `viewer`'s measured throughput to `rate` bytes a second, as
+    /// measured now.
     fn measured(pacer: &mut Pacer<u32>, viewer: SessionId, rate: f64) {
-        pacer.viewer(viewer).expect("the viewer").throughput = Some(rate);
+        measured_at(pacer, viewer, rate, Instant::now());
+    }
+
+    /// Sets `viewer`'s measured throughput to `rate`, as measured at `at`.
+    fn measured_at(pacer: &mut Pacer<u32>, viewer: SessionId, rate: f64, at: Instant) {
+        let viewer = pacer.viewer(viewer).expect("the viewer");
+        viewer.throughput = Some(rate);
+        viewer.measured_at = Some(at);
     }
 
     /// The refinement after a keyframe of `bytes` at the stream's quality,
@@ -1161,7 +1198,7 @@ mod tests {
         pacer.viewer(A).expect("A").rate.level = level;
         measured(&mut pacer, A, rate);
         let at = t0 + REFINE_AFTER;
-        let due = pacer.wake_at(at).is_some();
+        let due = pacer.wake_at(at) == Some(at);
         let refined = pacer.poll(at);
         assert_eq!(due, refined.is_some(), "the timer agrees with poll");
         if let Some(r) = &refined {
@@ -1238,6 +1275,33 @@ mod tests {
             refinement_after(0.5, 150_000, 300_000.0).is_some(),
             "300 KB/s"
         );
+    }
+
+    /// A probe is checked against the slowest viewer that is measured, even
+    /// while another is not; a rate measured more than [`RATE_MAX_AGE`] ago
+    /// counts as unmeasured, so a link measured once very low is probed
+    /// again.
+    #[test]
+    fn a_probe_checks_measured_links_and_old_rates_count_as_unmeasured() {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new().with_refinement();
+        pacer.add_viewer(A);
+        pacer.add_viewer(B);
+        let first = step(&mut pacer, 1, t0, &[]).expect("first frame");
+        pacer.encoded(first.seq, 150_000, true);
+        pacer.ack(A, first.seq, t0 + ms(10));
+        pacer.ack(B, first.seq, t0 + ms(10));
+        for viewer in [A, B] {
+            pacer.viewer(viewer).expect("viewer").rate.level = 0.5;
+        }
+        // A is measured at 32 KB/s, B not at all: no probe for A's sake.
+        measured_at(&mut pacer, A, 32_000.0, t0 + ms(10));
+        assert_eq!(pacer.poll(t0 + REFINE_AFTER), None);
+        let aged = t0 + ms(10) + RATE_MAX_AGE;
+        assert_eq!(pacer.wake_at(t0 + REFINE_AFTER), Some(aged));
+        // Five minutes on, A's rate no longer counts, and a probe measures again.
+        let probe = pacer.poll(aged).expect("a probe");
+        assert!(probe.refine && pacer.last_probe == Some(aged), "{probe:?}");
     }
 
     /// A viewer that joins a refined picture gets its keyframe at the
