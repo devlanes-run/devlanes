@@ -184,6 +184,8 @@ Run a crate's ignored tests with `cargo nextest run -p <crate> --run-ignored onl
 | `devlanes-resolver-dns` | dig |
 | `devlanes-daemon` | `DEVLANES_FIXTURE_SERVER=$PWD/target/debug/fixture-server` |
 
+The H.264 tests of `devlanes-gui-codec` are not ignored: they run with `--all-features` and skip, printing why, where the machine has no H.264. On Linux they need the distribution's OpenH264 (`libopenh264-dev` on Debian and Ubuntu, `openh264` on Arch and Fedora); on Windows they use Media Foundation, which client editions have.
+
 ## Design
 
 A lane corresponds to a Git worktree. Lane 0 is the main checkout (git identity `main`, the folder holding `.git`) on any branch; only a repository without one, such as a bare clone, gives lane 0 to the worktree on the primary branch. Other worktrees keep persisted indexes, and a linked worktree that held lane 0 before the main checkout got a lane moves off it at its next idle start. Under CI whichever lane holds lane 0 keeps it. A worktree other than the main checkout gets its lane the first time a command that acts on lanes (`start`, `status`, `env` and the like, not reads such as `logs`) runs in it, and a lane whose folder is gone stays until `lane gc` cleans it, unless `lanes.removed_worktrees: clean` has the daemon clean it once nothing runs in it. Worktree identity uses the Git common directory and worktree administration entry, so moving a worktree preserves its identity. `lane new --name` adds another lane for one folder: a worktree row whose identity is the folder's plus `#lane=<name>`, which follows that folder and never takes lane 0. Non-Git projects have one lane per folder unless extra lanes are added.
