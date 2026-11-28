@@ -13,7 +13,7 @@ cargo/devlanes-mcp: minor
 
 Added `devlanes remote connect <ticket>`, which pairs with a box and connects to it peer to peer, without SSH.
 
-[Connect to a box with a ticket](https://devlanes.run/docs/how-to/remote/connect-by-ticket/) has the steps; the box is reachable only while its daemon runs. On a terminal, `devlanes daemon pair` now prints a ticket before the code and starts peer-to-peer networking, which stops a few minutes after the ticket expires, unless a machine pairs with it. A `remote.boxes` name longer than 63 characters now fails the config. An older devlanes cannot open the state database once this release has run.
+Run `devlanes daemon pair` on the box, then `devlanes remote connect <ticket>` here. [Connect to a box with a ticket](https://devlanes.run/docs/how-to/remote/connect-by-ticket/) has the steps. On a terminal, `devlanes daemon pair` now prints a ticket before the code and starts peer-to-peer networking, which stops a few minutes after the ticket expires, unless a machine pairs with it. A `remote.boxes` name longer than 63 characters now fails the config. An older devlanes cannot open the state database once this release has run.
 
 <!-- highlight
 title: Connect to a box without SSH
