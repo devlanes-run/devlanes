@@ -17,6 +17,8 @@ use iroh::endpoint::{self, RecvStream, SendStream, VarInt, WeakConnectionHandle}
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::time::Instant;
 
+use crate::text::peer_text;
+
 /// How long a session may go without a direct path selected (the relay or
 /// nothing) before the client closes the connection, counted from when the
 /// watcher notices, which is at most [`SELECTION_TICK`] late. On a network
@@ -105,6 +107,8 @@ fn duplex(send: SendStream, recv: RecvStream, activity: &Arc<Activity>) -> BoxDu
 
 /// The text a session shows for how a connection closed; `None` for a close
 /// either side asked for. `recorded` is a reason this side closed it for.
+/// noq's text of a close includes the reason bytes the box sent, so it goes
+/// through [`peer_text`] before anyone shows it.
 fn failure(recorded: Option<String>, closed: Option<endpoint::ConnectionError>) -> Option<String> {
     if recorded.is_some() {
         return recorded;
@@ -115,10 +119,12 @@ fn failure(recorded: Option<String>, closed: Option<endpoint::ConnectionError>) 
             match close.error_code.into_inner() {
                 0 => None,
                 code if code == u64::from(REFUSED) => Some(PeerError::Refused.to_string()),
-                _ => Some(endpoint::ConnectionError::ApplicationClosed(close).to_string()),
+                _ => Some(peer_text(
+                    &endpoint::ConnectionError::ApplicationClosed(close).to_string(),
+                )),
             }
         }
-        other => Some(other.to_string()),
+        other => Some(peer_text(&other.to_string())),
     }
 }
 

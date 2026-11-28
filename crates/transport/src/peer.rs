@@ -89,7 +89,10 @@ pub struct PeerIdError;
 pub struct PeerAddr {
     /// The peer's key.
     pub id: PeerId,
-    /// The relay the peer was on, such as `https://relay1.devlanes.run`.
+    /// The relay the peer was on, such as `https://relay1.devlanes.run`. A
+    /// dial uses it only when it is one of the dialing endpoint's own
+    /// relays: it comes from a ticket someone pasted, so it must not make
+    /// this machine contact a host of the ticket's choosing.
     pub relay: Option<String>,
     /// IP addresses the peer reported, tried directly.
     pub direct: Vec<SocketAddr>,
