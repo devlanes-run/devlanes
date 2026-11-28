@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -147,8 +148,9 @@ impl Drop for Bound {
     }
 }
 
-/// Weak handles of one peer's session connections, by `stable_id`.
-type Sessions = HashMap<usize, WeakConnectionHandle>;
+/// Weak handles of one peer's session connections, by a number unique to
+/// the endpoint.
+type Sessions = HashMap<u64, WeakConnectionHandle>;
 
 /// What the handshake hook and the accept task share with the endpoint.
 /// Never holds the iroh `Endpoint`: the hook lives inside it, and a strong
@@ -160,6 +162,8 @@ struct Shared {
     /// stay closable without being kept open, and each removed when its
     /// connection closes.
     peers: Mutex<HashMap<PeerId, Sessions>>,
+    /// Numbers recorded session connections, as the keys of `Sessions`.
+    next_session: AtomicU64,
 }
 
 impl Shared {
@@ -196,7 +200,11 @@ impl Shared {
     /// this map, and nothing closes a pairing connection by peer.
     fn record(self: &Arc<Self>, peer: PeerId, connection: &endpoint::Connection) {
         let handle = connection.weak_handle();
-        let id = connection.stable_id();
+        // Not `stable_id`: that is the address of the connection's
+        // allocation, which a later connection of the same peer can reuse
+        // once this one is freed, and this connection's cleanup task, running
+        // late after `close_peer`, would then remove the new entry.
+        let id = self.next_session.fetch_add(1, Ordering::Relaxed);
         // Registered while the connection is alive, so it resolves however
         // the connection ends.
         let closed = handle.closed();
@@ -466,8 +474,7 @@ impl IrohEndpoint {
 
     /// The iroh address of `addr`: its relay and direct addresses.
     fn target(addr: &PeerAddr) -> Result<EndpointAddr, PeerError> {
-        let id = PublicKey::from_bytes(&addr.id.0)
-            .map_err(|_| PeerError::Unreachable(format!("{} is not a valid peer id", addr.id)))?;
+        let id = PublicKey::from_bytes(&addr.id.0).map_err(|_| PeerError::InvalidId(addr.id))?;
         let mut target = EndpointAddr::new(id);
         if let Some(relay) = &addr.relay {
             match relay.parse::<RelayUrl>() {

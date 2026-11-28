@@ -18,11 +18,13 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio::time::Instant;
 
 /// How long a session may go without a direct path selected (the relay or
-/// nothing) before the client closes the connection. On a network switch iroh selected the relay for 1 to 22 ms
-/// before a new direct path; a blocked direct path left it there for 24 to
-/// 37 s. 3 s keeps switches alive with room for internet round trips and
-/// still ends blocked paths, so relayed session data is bounded by the
-/// relay's rate limit over 3 s.
+/// nothing) before the client closes the connection, counted from when the
+/// watcher notices, which is at most [`SELECTION_TICK`] late. On a network
+/// switch iroh selected the relay for 1 to 22 ms before a new direct path; a
+/// blocked direct path left it there for 24 to 37 s. 3 s keeps switches
+/// alive with room for internet round trips and still ends blocked paths,
+/// so relayed session data is bounded by the relay's rate limit over about
+/// 3 s.
 pub(crate) const RELAY_GRACE: Duration = Duration::from_secs(3);
 
 /// How long a dropped box side waits for the client to close before closing
@@ -268,8 +270,11 @@ impl Drop for IrohServerConnection {
 /// How often the relay watcher reads the selected path without an event:
 /// iroh clears the selection without one when the selected path's address
 /// is no longer among the connection's paths (`record_selected` in
-/// `path_watcher.rs`).
-const SELECTION_TICK: Duration = Duration::from_secs(1);
+/// `path_watcher.rs`). The grace starts only when the watcher notices, so
+/// this is how much a session may run past [`RELAY_GRACE`] without a direct
+/// path; 250 ms keeps that near 3 s for one cheap read of the path list
+/// four times a second.
+const SELECTION_TICK: Duration = Duration::from_millis(250);
 
 /// Whether a session has gone without a direct path long enough to give
 /// up: anything but a direct (IP) path selected, a relay or nothing, starts

@@ -171,12 +171,13 @@ pub trait PeerEndpoint: Send + Sync {
 
     /// Closes every session (`Alpn::Tunnel`) connection `peer` opened to this
     /// endpoint with the refused-key code, so its client shows that reason.
-    /// The caller removes `peer` from the admission first: then its next dial
-    /// is refused as a permanent error, and a connection in the middle of its
-    /// handshake is closed too.
+    /// The caller removes `peer` from the admission first: then, while the
+    /// endpoint keeps listening, its next dial is refused as a permanent
+    /// error, and a connection in the middle of its handshake is closed too.
     fn close_peer(&self, peer: &PeerId);
 
-    /// Closes the endpoint and its connections gracefully, for daemon shutdown.
+    /// Closes the endpoint and its connections gracefully, for daemon
+    /// shutdown: clients see a clean close, with no failure reason.
     async fn close(&self);
 }
 
@@ -200,6 +201,11 @@ pub enum PeerError {
     /// The box refused this machine's key.
     #[error("the box does not accept this machine; pair it again with a new ticket")]
     Refused,
+    /// The box's id is 32 bytes that are not a public key, so no dial can
+    /// reach it; only a damaged stored pairing holds one, since a ticket's
+    /// checksum catches typing mistakes.
+    #[error("the stored id of the box ({0}) is not a valid key; pair it again with a new ticket")]
+    InvalidId(PeerId),
     /// The key file could not be read or written.
     #[error("peer-to-peer key {}: {source}", .path.display())]
     Key {
@@ -218,11 +224,14 @@ pub enum PeerError {
 }
 
 impl From<PeerError> for TransportError {
-    /// Classifies a peer failure for reconnect decisions: only a refused key
-    /// and an unusable key file need a person before another attempt helps.
+    /// Classifies a peer failure for reconnect decisions: only a refused key,
+    /// an invalid box id and an unusable key file need a person before
+    /// another attempt helps.
     fn from(error: PeerError) -> Self {
         match error {
-            PeerError::Refused | PeerError::Key { .. } => Self::permanent(error),
+            PeerError::Refused | PeerError::InvalidId(_) | PeerError::Key { .. } => {
+                Self::permanent(error)
+            }
             PeerError::NoDirectPath { .. }
             | PeerError::Unreachable(_)
             | PeerError::Bind(_)
