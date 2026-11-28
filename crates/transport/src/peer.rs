@@ -92,7 +92,7 @@ pub struct PeerAddr {
     /// The relay the peer was on, such as `https://relay1.devlanes.run`. A
     /// dial uses it only when it is one of the dialing endpoint's own
     /// relays: it comes from a ticket someone pasted, so it must not make
-    /// this machine contact a host of the ticket's choosing.
+    /// this machine contact an address the ticket chose.
     pub relay: Option<String>,
     /// IP addresses the peer reported, tried directly.
     pub direct: Vec<SocketAddr>,
