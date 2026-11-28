@@ -385,6 +385,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
             autostart: layout.autostart,
             hidden: layout.hidden,
             keep_awake: layout.keep_awake,
+            gui: layout.gui,
             tags: layout.tags.clone(),
             color: layout.color.clone(),
             sync,

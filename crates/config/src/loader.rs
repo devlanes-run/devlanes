@@ -681,6 +681,16 @@ pub(crate) fn locate(error: ConfigError, file: &str, source: &str) -> ConfigErro
     locate_in(error, std::slice::from_ref(&source), 0)
 }
 
+/// What the composition root accepts in project files beyond the published keys.
+/// The default accepts none; the loader never reads the process environment to
+/// decide.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProjectOptions {
+    /// Accept `services.<name>.gui`, a plain `true` or `false`. When off, the key
+    /// fails with "`gui` is not supported yet".
+    pub gui_services: bool,
+}
+
 /// Parse and validate an in-memory project plus an optional local overlay.
 pub fn parse_project(source: &str, local: Option<&str>) -> Result<ProjectConfig, ConfigError> {
     parse_project_with::<OpaqueExtensions>(source, local)
@@ -692,7 +702,16 @@ pub fn parse_project_with<E: Extensions>(
     source: &str,
     local: Option<&str>,
 ) -> Result<ProjectConfig<E>, ConfigError> {
-    let entry = parse_document::<E>("devlanes.yaml", source, false)?;
+    parse_project_with_options(source, local, ProjectOptions::default())
+}
+
+/// [`parse_project_with`] with the keys `options` accept.
+pub fn parse_project_with_options<E: Extensions>(
+    source: &str,
+    local: Option<&str>,
+    options: ProjectOptions,
+) -> Result<ProjectConfig<E>, ConfigError> {
+    let entry = parse_document::<E>("devlanes.yaml", source, false, options)?;
     if entry.partial.extends.is_some() {
         return Err(locate(
             ConfigError::plain("extends: needs the project files on disk; load the file instead"),
@@ -702,7 +721,7 @@ pub fn parse_project_with<E: Extensions>(
     }
     let mut documents = vec![entry];
     if let Some(local) = local {
-        documents.push(parse_document("devlanes.local.yaml", local, true)?);
+        documents.push(parse_document("devlanes.local.yaml", local, true, options)?);
     }
     merge_documents(documents, 0).map(|(config, _)| config)
 }
@@ -718,15 +737,64 @@ fn parse_document<E: Extensions>(
     file: &str,
     text: &str,
     local: bool,
+    options: ProjectOptions,
 ) -> Result<Document<E>, ConfigError> {
+    let partial: PartialProject<E> = parse_yaml(file, text)?;
+    let entries = partial
+        .services
+        .iter()
+        .map(|(name, service)| (format!("services.{name}"), service))
+        .chain(
+            partial
+                .templates
+                .iter()
+                .map(|(name, service)| (format!("templates.{name}"), service)),
+        );
+    for (path, service) in entries {
+        check_gui(file, text, &path, service, options)?;
+    }
     Ok(Document {
-        partial: parse_yaml(file, text)?,
+        partial,
         source: Source {
             file: file.into(),
             text: text.into(),
             local,
         },
     })
+}
+
+/// Fails, at the value, for a `gui` the options do not accept, and when accepted
+/// for anything but a plain boolean: it reserves a port in every lane's block,
+/// so like `replicas` it cannot depend on the lane.
+fn check_gui<E: Extensions>(
+    file: &str,
+    text: &str,
+    path: &str,
+    service: &PartialService<E>,
+    options: ProjectOptions,
+) -> Result<(), ConfigError> {
+    let Some(gui) = &service.gui else {
+        return Ok(());
+    };
+    let at = |message: String| {
+        let offset = line_offset(
+            text,
+            gui.referenced.line() as usize,
+            gui.referenced.column() as usize,
+        );
+        ConfigError::at(file, text, offset, message)
+    };
+    if !options.gui_services {
+        return Err(at(crate::service::GUI_UNSUPPORTED.to_owned()));
+    }
+    match &gui.value {
+        serde_json::Value::Bool(_) => Ok(()),
+        serde_json::Value::String(value) if value.contains("${{") => Err(at(format!(
+            "{path}.gui: {}; this setting takes a plain value, not a `${{{{ ... }}}}` expression",
+            crate::service::GUI_NOT_BOOL
+        ))),
+        _ => Err(at(format!("{path}.gui: {}", crate::service::GUI_NOT_BOOL))),
+    }
 }
 
 /// The last component of a diagnostic file name, for messages that name another file.
@@ -873,6 +941,7 @@ pub fn is_local_overlay(file: &Path) -> bool {
 pub fn load_project_files<E: Extensions>(
     entry: &Path,
     fallback: Option<LocalFallback<'_>>,
+    options: ProjectOptions,
 ) -> ProjectLoad<E> {
     let mut files = Vec::new();
     let mut documents = Vec::new();
@@ -886,7 +955,10 @@ pub fn load_project_files<E: Extensions>(
     } else {
         collect(
             entry,
-            fallback,
+            Walk {
+                fallback,
+                options,
+            },
             &mut Vec::new(),
             &mut Vec::new(),
             &mut documents,
@@ -906,7 +978,7 @@ pub fn load_project_files<E: Extensions>(
 /// that named `file`, where a failure to read it is reported.
 fn collect<E: Extensions>(
     file: &Path,
-    fallback: Option<LocalFallback<'_>>,
+    walk: Walk<'_>,
     stack: &mut Vec<(PathBuf, String)>,
     merged: &mut Vec<PathBuf>,
     documents: &mut Vec<Document<E>>,
@@ -928,7 +1000,7 @@ fn collect<E: Extensions>(
             });
         }
     };
-    let document = parse_document::<E>(&name, &text, false)?;
+    let document = parse_document::<E>(&name, &text, false, walk.options)?;
     let key = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
     if let Some(start) = stack.iter().position(|(known, _)| *known == key) {
         let chain: Vec<&str> = stack[start..]
@@ -959,7 +1031,7 @@ fn collect<E: Extensions>(
             };
             collect(
                 &dir.join(base),
-                fallback,
+                walk,
                 stack,
                 merged,
                 documents,
@@ -972,21 +1044,29 @@ fn collect<E: Extensions>(
     let index = documents.len();
     documents.push(document);
     merged.push(key);
-    if let Some(local) = read_local(file, fallback, files)? {
+    if let Some(local) = read_local(file, walk, files)? {
         documents.push(local);
     }
     Ok(index)
+}
+
+/// What every file of one load shares: where missing overlays come from and
+/// the keys the composition root accepts.
+#[derive(Debug, Clone, Copy)]
+struct Walk<'a> {
+    fallback: Option<LocalFallback<'a>>,
+    options: ProjectOptions,
 }
 
 /// The local overlay of `file`, or of the same file in the primary worktree when the lane
 /// has none. Recording each path tried in `files`.
 fn read_local<E: Extensions>(
     file: &Path,
-    fallback: Option<LocalFallback<'_>>,
+    walk: Walk<'_>,
     files: &mut Vec<PathBuf>,
 ) -> Result<Option<Document<E>>, ConfigError> {
     let mut candidates = vec![local_overlay_path(file)];
-    if let Some(fallback) = fallback
+    if let Some(fallback) = walk.fallback
         && let Ok(relative) = candidates[0].strip_prefix(fallback.lane_dir)
     {
         let primary = fallback.primary_dir.join(relative);
@@ -998,7 +1078,8 @@ fn read_local<E: Extensions>(
         files.push(path.clone());
         match std::fs::read_to_string(&path) {
             Ok(text) => {
-                return parse_document(&path.display().to_string(), &text, true).map(Some);
+                return parse_document(&path.display().to_string(), &text, true, walk.options)
+                    .map(Some);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(ConfigError::io(&path, error)),
@@ -1017,23 +1098,25 @@ pub fn load_project(path: impl AsRef<Path>) -> Result<ProjectConfig, ConfigError
 pub fn load_project_with<E: Extensions>(
     path: impl AsRef<Path>,
 ) -> Result<ProjectConfig<E>, ConfigError> {
-    load_named(path.as_ref(), None).map(|(config, _)| config)
+    load_named(path.as_ref(), None, ProjectOptions::default()).map(|(config, _)| config)
 }
 
 /// Like [`load_project_with`] for a lane's worktree: a local overlay the lane does not
 /// have is read from `primary_dir` (the primary worktree's directory of the project
-/// file) instead, as lanes do.
+/// file) instead, as lanes do. `options` are the keys the composition root accepts.
 pub fn load_lane_project_with<E: Extensions>(
     path: impl AsRef<Path>,
     primary_dir: &Path,
+    options: ProjectOptions,
 ) -> Result<ProjectConfig<E>, ConfigError> {
-    load_named(path.as_ref(), Some(primary_dir)).map(|(config, _)| config)
+    load_named(path.as_ref(), Some(primary_dir), options).map(|(config, _)| config)
 }
 
 /// Load a project file and check its Compose files, returning the validation report too.
 fn load_named<E: Extensions>(
     path: &Path,
     primary_dir: Option<&Path>,
+    options: ProjectOptions,
 ) -> Result<(ProjectConfig<E>, CheckReport), ConfigError> {
     let file = if path.is_dir() {
         path.join("devlanes.yaml")
@@ -1045,7 +1128,7 @@ fn load_named<E: Extensions>(
         lane_dir: dir,
         primary_dir,
     });
-    let (config, report) = load_project_files::<E>(&file, fallback).result?;
+    let (config, report) = load_project_files::<E>(&file, fallback, options).result?;
     check_compose_files(&config, dir)?;
     Ok((config, report))
 }
@@ -1080,7 +1163,8 @@ pub fn check_compose_files<E: Extensions>(
 
 /// Load and return warnings for `config check`; validation failures are errors.
 pub fn check(path: impl AsRef<Path>) -> Result<CheckReport, ConfigError> {
-    load_named::<OpaqueExtensions>(path.as_ref(), None).map(|(_, report)| report)
+    load_named::<OpaqueExtensions>(path.as_ref(), None, ProjectOptions::default())
+        .map(|(_, report)| report)
 }
 
 /// Determine all transitively referenced templates for unused-template warnings.

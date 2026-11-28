@@ -377,6 +377,52 @@ async fn replicas_have_distinct_ports() {
     assert_eq!(lane.units_of("desktop").count(), 2);
 }
 
+#[tokio::test]
+/// Each replica of a GUI service gets a `devlanes_gui` port of its own, and
+/// turning `gui` on moves none of the ports the lane had.
+async fn gui_replicas_get_their_own_gui_port() {
+    let yaml = |gui: bool| {
+        format!(
+            "project: demo\nservices:\n  api: {{ run: a }}\n  desktop: {{ run: d, replicas: 2, gui: {gui} }}\n"
+        )
+    };
+    let options = devlanes_config::ProjectOptions { gui_services: true };
+    let load = |gui| {
+        devlanes_config::parse_project_with_options::<devlanes_config::OpaqueExtensions>(
+            &yaml(gui),
+            None,
+            options,
+        )
+        .expect("valid config")
+    };
+    let (before, with) = (load(false), load(true));
+    let block = PortBlock::new(21_000, 16).expect("block");
+    let plan = |config: &devlanes_config::ProjectConfig, previous: &BTreeMap<PortName, u16>| {
+        let needs = port_needs(config, &[]).expect("port needs");
+        devlanes_core::ports::allocate_offsets(previous, &needs.names, &needs.reserved, &[block])
+            .expect("offsets")
+    };
+    let old = plan(&before, &BTreeMap::new());
+    let offsets = plan(&with, &old);
+    for (name, offset) in &old {
+        assert_eq!(offsets.get(name), Some(offset), "{name:?} moved");
+    }
+    let facts = facts("demo", 1, Some("main"));
+    let lane = resolve_lane(ResolveInput::new(&with, &facts, block, &offsets))
+        .await
+        .expect("resolves");
+    let gui_port = |unit: &str| {
+        let service = &lane.services[unit];
+        assert!(service.gui, "{unit}");
+        service.ports[devlanes_core::ports::GUI_PORT]
+    };
+    let ports = [gui_port("desktop.1"), gui_port("desktop.2")];
+    assert_ne!(ports[0], ports[1]);
+    let defaults: Vec<u16> = lane.services.values().map(|s| s.port).collect();
+    assert!(ports.iter().all(|port| !defaults.contains(port)), "{ports:?}");
+    assert!(!lane.services["api"].gui);
+}
+
 #[test]
 /// Profiles, globs, tags, exclusions and on-demand services.
 fn selection() {

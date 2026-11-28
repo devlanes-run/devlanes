@@ -50,6 +50,8 @@ pub(crate) struct Fingerprint {
     ports: BTreeMap<String, u16>,
     ready: devlanes_resolve::Ready,
     stop: String,
+    /// `gui: true`: the run has a GUI host.
+    gui: bool,
     /// The key of the plan the run was spawned from.
     inputs: InputsKey,
 }
@@ -92,6 +94,7 @@ impl Fingerprint {
             ports,
             ready: service.ready.clone(),
             stop: format!("{:?}", service.stop),
+            gui: service.gui,
             inputs,
         }
     }
@@ -120,6 +123,9 @@ impl Fingerprint {
         }
         if self.files != now.files {
             fields.push("files".to_owned());
+        }
+        if self.gui != now.gui {
+            fields.push("gui".to_owned());
         }
         // The lane's hostnames: one service gaining or losing hosts would mark
         // every other one changed. It is the lane's, not this unit's.

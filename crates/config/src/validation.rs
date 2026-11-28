@@ -408,6 +408,20 @@ fn validate_inner<E: Extensions>(
             ));
         }
         hosts(&format!("{path}.hosts"), service.hosts.iter().flatten())?;
+        for host in service.hosts.iter().flatten() {
+            if let crate::HostConfig::Route(route) = host
+                && let Some(port) = &route.port
+                && is_reserved_port(port)
+            {
+                return Err(fail(&format!("{path}.hosts"), reserved_port(port)));
+            }
+        }
+        if let Some(ReadyConfig::Check(ready)) = &service.ready
+            && let Some(crate::TcpReady::Port(port)) = &ready.tcp
+            && is_reserved_port(port)
+        {
+            return Err(fail(&format!("{path}.ready.tcp"), reserved_port(port)));
+        }
         if let Some(stop) = &service.stop
             && let Some(signal) = &stop.signal
             && ![
@@ -796,6 +810,19 @@ fn windows_unit_folders<E: Extensions>(config: &ProjectConfig<E>) -> Result<(), 
     ))
 }
 
+/// Whether a port name is one devlanes keeps for itself, such as `devlanes_gui`.
+fn is_reserved_port(name: &str) -> bool {
+    name.starts_with(devlanes_core::ports::RESERVED_PORT_PREFIX)
+}
+
+/// The error for a project naming a port devlanes keeps for itself.
+fn reserved_port(name: &str) -> String {
+    format!(
+        "port `{name}`: names starting with `{}` are reserved for devlanes",
+        devlanes_core::ports::RESERVED_PORT_PREFIX
+    )
+}
+
 /// Count distinct allocated names, including preset ports, before accepting a fixed block.
 fn validate_port_capacity<E: Extensions>(
     config: &ProjectConfig<E>,
@@ -808,6 +835,9 @@ fn validate_port_capacity<E: Extensions>(
     for (name, service) in &config.services {
         if !service.env.contains_key("PORT") {
             ports.insert((name.clone(), "default".to_owned()));
+        }
+        if service.gui == Some(true) {
+            ports.insert((name.clone(), devlanes_core::ports::GUI_PORT.to_owned()));
         }
         if let Some(preset) = &service.preset
             && let Some(preset_ports) = preset_ports
@@ -1036,6 +1066,20 @@ fn check_reference<E: Extensions>(
             )
         })
     };
+    // Where the port name sits in `self.ports.<name>`,
+    // `services.<alias>.ports.<name>` and `lanes.main.services.<alias>.ports.<name>`.
+    let ports = match components[0] {
+        "self" => Some(1),
+        "services" => Some(2),
+        "lanes" => Some(4),
+        _ => None,
+    };
+    if let Some(ports) = ports
+        && at(ports) == Some("ports")
+        && let Some(name) = at(ports + 1).filter(|name| is_reserved_port(name))
+    {
+        return Err(fail(path, reserved_port(name)));
+    }
     match components[0] {
         "lane" => attribute(path, "lane", at(1), lane_keys.iter().map(String::as_str)),
         "project" => attribute(path, "project", at(1), PROJECT_ATTRS.iter().copied()),

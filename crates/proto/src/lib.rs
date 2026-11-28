@@ -931,7 +931,39 @@ pub struct UnitSummary {
     /// applies it. Absent while the unit matches the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drift: Option<UnitDrift>,
+    /// Set for a GUI service (`gui: true`), whose host listens on the port
+    /// named [`GUI_PORT`] in `ports`. Absent for every other unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gui: Option<GuiStatus>,
 }
+
+/// The name of a GUI service's port in [`UnitSummary::ports`]: clients find
+/// GUI services by it, on a connected machine as the mirrored port. The
+/// daemon allocates it under `devlanes_core::ports::GUI_PORT`, the same name;
+/// the protocol crate has no dependency on core to share it from.
+pub const GUI_PORT: &str = "devlanes_gui";
+
+/// A GUI service's host as [`UnitSummary::gui`] reports it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GuiStatus {
+    /// [`GUI_HOST_RUNNING`], [`GUI_HOST_EXITED`], [`GUI_HOST_STOPPED`] or
+    /// [`GUI_HOST_NONE`].
+    pub host: String,
+    /// Whether the unit's display is this machine's real desktop, as its host
+    /// said when it started; absent while no host runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub real_desktop: Option<bool>,
+}
+
+/// [`GuiStatus::host`]: the host runs and serves the unit's windows.
+pub const GUI_HOST_RUNNING: &str = "running";
+/// [`GuiStatus::host`]: the host ended while the unit runs on without it.
+pub const GUI_HOST_EXITED: &str = "exited";
+/// [`GuiStatus::host`]: the unit does not run, so neither does its host.
+pub const GUI_HOST_STOPPED: &str = "stopped";
+/// [`GuiStatus::host`]: this machine has no GUI backend, so the unit runs
+/// without a host and its windows open on this machine's desktop.
+pub const GUI_HOST_NONE: &str = "none";
 
 /// A unit's difference from the current project file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -990,6 +1022,7 @@ impl Default for UnitSummary {
             public_url: None,
             power: None,
             drift: None,
+            gui: None,
         }
     }
 }
@@ -1120,7 +1153,8 @@ pub struct LanePower {
     pub last_activity_ms: Option<u64>,
     /// What that activity was: `proxy` (a request or WebSocket bytes through the
     /// proxy), `connection` (a new TCP connection to one of the lane's ports),
-    /// `cpu`, `command` (a client command) or `stop` (a stop, restart or clean).
+    /// `cpu`, `command` (a client command), `gui` (input from a viewer or tool
+    /// in a GUI service's window) or `stop` (a stop, restart or clean).
     /// Absent when nothing was seen since the daemon started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_activity: Option<String>,

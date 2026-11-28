@@ -12,6 +12,10 @@ pub enum EnvLayer {
     Service,
     Profile,
     Override,
+    /// What a GUI service's host announced when it started (`WAYLAND_DISPLAY`
+    /// and the like). Applied by the daemon at spawn over every other layer,
+    /// since the unit must reach the display its host runs.
+    Gui,
 }
 
 /// Effective environment with provenance. No serialization or debug implementation

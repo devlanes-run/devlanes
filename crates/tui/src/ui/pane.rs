@@ -792,6 +792,7 @@ fn idle_fact(power: &devlanes_proto::LanePower) -> String {
             "connection" => "a connection".to_owned(),
             "cpu" => "CPU use".to_owned(),
             "command" => "a command".to_owned(),
+            "gui" => "input in a GUI window".to_owned(),
             "start" => "a start".to_owned(),
             "stop" => "a stop".to_owned(),
             other => clean(other),

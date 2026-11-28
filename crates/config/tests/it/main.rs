@@ -469,7 +469,11 @@ fn yaml_language_server_schemas() {
 #[test]
 fn prod_example_extends_the_reference() {
     let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/examples");
-    let load = load_project_files::<OpaqueExtensions>(&examples.join("devlanes.prod.yaml"), None);
+    let load = load_project_files::<OpaqueExtensions>(
+        &examples.join("devlanes.prod.yaml"),
+        None,
+        Default::default(),
+    );
     let (config, _) = load.result.expect("prod example");
     assert_eq!(config.project, "acme-prod");
     let Some(ProfileConfig::Object(profile)) = config.profiles.get("default") else {

@@ -210,6 +210,8 @@ pub(crate) async fn read_dotenv(lane_dir: PathBuf, primary_dir: PathBuf) -> EnvM
 pub(crate) struct ConfigChecks {
     pub presets: Vec<crate::integrations::PresetEntry>,
     pub contributors: Vec<Arc<dyn devlanes_core::contrib::Contributor>>,
+    /// The keys project files may use beyond the published ones.
+    pub options: devlanes_config::ProjectOptions,
 }
 
 impl Inner {
@@ -218,6 +220,9 @@ impl Inner {
         ConfigChecks {
             presets: self.integ.presets.clone(),
             contributors: self.integ.contributors.clone(),
+            options: devlanes_config::ProjectOptions {
+                gui_services: self.opts.gui.enabled,
+            },
         }
     }
 }
@@ -283,7 +288,11 @@ pub(crate) async fn load_config(
             lane_dir: &lane_dir,
             primary_dir: &primary_dir,
         };
-        let load = devlanes_config::load_project_files::<OpaqueExtensions>(&entry, Some(fallback));
+        let load = devlanes_config::load_project_files::<OpaqueExtensions>(
+            &entry,
+            Some(fallback),
+            checks.options,
+        );
         let checked = load
             .result
             .and_then(|(config, _)| check_config(&config, &checks).map(|_| config));
@@ -2405,6 +2414,7 @@ impl Inner {
                 autostart: service.autostart,
                 color: service.color.clone(),
                 display_name: service.display_name.clone(),
+                gui: service.gui,
             })
             .collect();
         let infra_routes = infra_routes(
@@ -2973,6 +2983,7 @@ mod tests {
                 })
                 .to_vec(),
             contributors: Vec::new(),
+            options: Default::default(),
         };
         let error = check_config(&config, &checks).expect_err("unknown preset");
         assert!(

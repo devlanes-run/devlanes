@@ -190,6 +190,8 @@ pub(crate) fn activity(word: &str) -> String {
         "connection" => "a connection".into(),
         "cpu" => "CPU use".into(),
         "command" => "a command".into(),
+        // Input from a viewer or tool of a GUI service's window.
+        "gui" => "input in a GUI window".into(),
         "start" => "a start".into(),
         // A stop, restart or clean thaws the lane before it stops anything.
         "stop" => "a stop".into(),

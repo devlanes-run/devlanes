@@ -159,6 +159,7 @@ fn layer_word(layer: EnvLayer) -> &'static str {
         EnvLayer::Service => "service",
         EnvLayer::Profile => "profile",
         EnvLayer::Override => "override",
+        EnvLayer::Gui => "gui",
     }
 }
 
@@ -994,6 +995,14 @@ impl Inner {
                     json!({"port": service.port, "pid": pid}),
                 );
             }
+        }
+        // A GUI service running without its host: it died, or this machine has none.
+        let gui = lane
+            .st()
+            .unit_or_past(&name)
+            .and_then(|rec| rec.gui.clone());
+        if alive && let Some((code, data)) = gui.and_then(|gui| gui.why()) {
+            push(&mut reasons, code, data);
         }
         if alive && host.as_ref().is_some_and(|h| h.state() == UnitState::Ready) {
             for (port, listening) in self.closed_ports(&lane, &name).await {

@@ -17,6 +17,7 @@ mod drift;
 mod engine;
 mod external;
 mod files;
+pub mod gui;
 pub mod hosts;
 pub mod idle;
 mod infra_logs;

@@ -31,6 +31,11 @@ pub struct StopConfig {
     pub timeout: Option<Templated<ConfigDuration>>,
 }
 
+/// The error for `gui` when the loader does not enable GUI services.
+pub(crate) const GUI_UNSUPPORTED: &str = "`gui` is not supported yet";
+/// The error for a `gui` value that is not a plain boolean.
+pub(crate) const GUI_NOT_BOOL: &str = "expected true or false";
+
 macro_rules! service_fields {
     ($($(#[$meta:meta])* $field:ident: $ty:ty),* $(,)?) => {
         /// A long-running process started with the lane, such as a dev server or a worker.
@@ -52,6 +57,11 @@ macro_rules! service_fields {
             #[schemars(skip)]
             /// Options under the selected preset's name, validated by that integration.
             pub preset_options: IndexMap<String, E::Options>,
+            /// `gui: true`: the service gets a `devlanes_gui` port and a GUI host per
+            /// replica. Accepted only when the loader's [`crate::ProjectOptions`] enable
+            /// GUI services, and left out of the published schema until then.
+            #[schemars(skip)]
+            pub gui: Option<bool>,
         }
 
         /// Optional source-bearing fields keep local overrides separate from defaults.
@@ -59,6 +69,9 @@ macro_rules! service_fields {
         pub(crate) struct PartialService<E: Extensions> {
             $(pub $field: Option<Spanned<$ty>>,)*
             pub env: Option<Spanned<Env>>,
+            /// `gui` as written: whether it may be used and what it may hold is
+            /// decided per document, where the loader knows its options.
+            pub gui: Option<Spanned<serde_json::Value>>,
             // An option key cannot be classified until the preset has been inherited.
             pub preset_candidates: IndexMap<String, Spanned<serde_json::Value>>,
             extensions: PhantomData<E>,
@@ -67,13 +80,13 @@ macro_rules! service_fields {
         impl<E: Extensions> Default for PartialService<E> {
             /// Keep every field absent until base and local sources have been merged.
             fn default() -> Self {
-                Self { $($field: None,)* env: None, preset_candidates: IndexMap::new(), extensions: PhantomData }
+                Self { $($field: None,)* env: None, gui: None, preset_candidates: IndexMap::new(), extensions: PhantomData }
             }
         }
 
         impl<E: Extensions> Default for ServiceConfig<E> {
             /// Construct an empty template; runnable services require a command.
-            fn default() -> Self { Self { $($field: None,)* env: Env::new(), preset_options: IndexMap::new() } }
+            fn default() -> Self { Self { $($field: None,)* env: Env::new(), preset_options: IndexMap::new(), gui: None } }
         }
 
         impl<E: Extensions> PartialService<E> {
@@ -99,6 +112,7 @@ macro_rules! service_fields {
                     if local.value.timeout.is_none() { local.value.timeout = base.value.timeout.clone(); }
                 }
                 $(if let Some(value) = overlay.$field { self.$field = Some(value); })*
+                if let Some(value) = overlay.gui { self.gui = Some(value); }
                 if let Some(overlay) = overlay.env {
                     if let Some(base) = &mut self.env { base.value.extend(overlay.value); }
                     else { self.env = Some(overlay); }
@@ -128,10 +142,18 @@ macro_rules! service_fields {
                     let parsed = E::parse_preset_options(&key, value.value).map_err(fail)?;
                     preset_options.insert(key, parsed);
                 }
+                // The loader refused anything else already; a service read on its
+                // own has no loader, so it refuses here.
+                let gui = match self.gui.map(|v| v.value) {
+                    None => None,
+                    Some(serde_json::Value::Bool(gui)) => Some(gui),
+                    Some(_) => return Err(crate::ConfigError::plain(format!("{path}.gui: {GUI_NOT_BOOL}"))),
+                };
                 Ok(ServiceConfig {
                     $($field: self.$field.map(|v| v.value),)*
                     env: self.env.map(|v| v.value).unwrap_or_default(),
                     preset_options,
+                    gui,
                 })
             }
         }
@@ -153,7 +175,7 @@ macro_rules! service_fields {
                             match key.as_str() {
                                 $(stringify!($field) => result.$field = map.next_value()?,)*
                                 "env" => result.env = Some(map.next_value()?),
-                                "gui" => return Err(serde::de::Error::custom("`gui` is not supported yet")),
+                                "gui" => result.gui = Some(map.next_value()?),
                                 key => {
                                     result.preset_candidates.insert(key.into(), map.next_value()?);
                                 }
@@ -203,6 +225,7 @@ macro_rules! service_fields {
                 let mut map = s.serialize_map(None)?;
                 $(if let Some(value) = &self.$field { map.serialize_entry(stringify!($field), value)?; })*
                 if !self.env.is_empty() { map.serialize_entry("env", &self.env)?; }
+                if let Some(gui) = self.gui { map.serialize_entry("gui", &gui)?; }
                 for (key, value) in &self.preset_options { map.serialize_entry(key, value)?; }
                 map.end()
             }
