@@ -1,6 +1,6 @@
 ---
 title: Security
-description: The daemon answers only your own account, a lane separates ports and hostnames but not processes, the CA signs only local names, and pairing decides which machines see a box's lanes.
+description: The daemon answers only your own account, a lane separates ports and hostnames but not processes, the CA signs only local names, pairing decides which machines see a box's lanes, and tickets bring in a relay and n0's DNS.
 kind: concept
 ---
 
@@ -56,17 +56,21 @@ The token is a bearer secret: any process running as you on the paired machine c
 
 ## A ticket pairs whoever holds it
 
-A box paired by ticket needs no SSH, so the pairing is the whole of the access check. Each machine has its own key, kept in `p2p-key` in the devlanes home and readable by your account only. A ticket from `devlanes daemon pair` holds the box's public key, a one-time secret, the box's relay and up to 8 of its IP addresses, local and public. The first machine that presents the secret within 10 minutes is paired, so pass a ticket on only over a channel you would trust with a password.
+A box paired by ticket needs no SSH, so the pairing is the whole of the access check. Each machine has its own key, kept in `p2p-key` in the devlanes home and readable by your account only. A ticket from `devlanes daemon pair` holds the box's public key, a one-time secret, the box's relay and up to 8 of its IP addresses, local and public. The first machine that presents the secret within 10 minutes is paired, so pass a ticket on only over a channel you would trust with a password. Anyone who sees a ticket, also after it was used or expired, learns the box's IP addresses on its network and on the internet.
 
 Pairing pins both keys. The box serves only the keys it paired with, and your machine accepts only the box's key from the ticket, so nobody in between can pose as either. While a ticket is open, the box takes pairing requests from any machine that reaches it; otherwise it turns away every key it did not pair with before any data is exchanged. Revoking a machine on the box deletes its keys and ends its connections, and nothing else gives it access. Any process running as you on a paired machine can copy its key and connect as that machine, as with the token.
 
-## A relay and n0's DNS see who connects
+## Tickets bring in a relay, n0's DNS and your router
 
-Two machines find each other through a relay, by default `relay1.devlanes.run` and `relay2.devlanes.run`. Until a direct path forms, the relay forwards the encrypted handshake between them; lane traffic never goes through it. The relay sees which keys connect, from which IP address and port, when, and the size of each packet it forwards, and it cannot read them. The [devlanes relay](https://github.com/devlanes-run/relay) repository describes what it logs and how to host your own.
+Nothing is contacted for tickets until this machine makes one or connects with one. `devlanes daemon pair` on a terminal, with `--json` or through `devlanes mcp` makes a ticket; without a terminal it makes only a code. From then until the daemon stops, the daemon keeps a connection to one relay, checks the network with both relays, by default `relay1.devlanes.run` and `relay2.devlanes.run`, and, with port mapping on, keeps a port forwarded on your router over UPnP, NAT-PMP or PCP. A box that listens for machines, because a ticket is open or a machine is paired with it, also publishes a signed record of its key and its relay to n0's DNS service, `dns.iroh.link`, and stops when it stops listening. n0 makes the iroh library devlanes connects with, and sees the key, the relay and the IP address of each lookup. devlanes sends no telemetry.
 
-A box that waits for its paired machines publishes its key and its relay in n0's DNS service, `dns.iroh.link`, run by n0, the company that makes the iroh library devlanes connects with, and a machine that connects to the box may look that key up there. n0 sees the key, the relay and the IP address of each request. devlanes also asks your router to forward a port to your machine, over UPnP, NAT-PMP or PCP. [`remote.relays`](/docs/reference/config/user/remote/#remote-relays) set to an empty list turns off the relay and n0's DNS, and [`remote.port_mapping`](/docs/reference/config/user/remote/#remote-port_mapping) set to false turns off the router request.
+[`remote.relays`](/docs/reference/config/user/remote/#remote-relays) set to an empty list turns off the relay and n0's DNS, and [`remote.port_mapping`](/docs/reference/config/user/remote/#remote-port_mapping) set to false turns off the router request.
 
-On Windows, the firewall may ask once whether devlanes may use the network. Peer-to-peer connections can form without that permission, because each machine sends first and the firewall lets the answers in.
+## A relay sees who connects
+
+A relay sees which keys connect, from which IP addresses, when, and the sender, recipient and size of each packet it forwards. The packets are encrypted end to end, so it cannot read them. Until a direct path forms, the relay passes the two machines' encrypted handshake between them. When a direct path breaks, devlanes closes the connection within about 3 seconds, and what the session sends in that time can cross the relay, still encrypted end to end. The [devlanes relay](https://github.com/devlanes-run/relay) repository says what a relay logs and how to host your own.
+
+On Windows, the firewall may ask once whether devlanes may use the network. With a relay, connections can form without that permission, because each machine sends first and the firewall lets the answers in. With `remote.relays` empty, allow devlanes on a Windows box, or the box does not answer.
 
 ## A box trusts what it serves
 

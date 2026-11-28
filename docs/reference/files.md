@@ -25,6 +25,8 @@ Each home has its own daemon, lanes and port pool, and is private to your accoun
 | `ca/` | The CA. |
 | `data/<project>/<lane id>/` | The lane data folders. |
 | `sync/` | Folders synced from boxes. |
+| `p2p-key` | This machine's key for boxes and machines paired by ticket, readable by your account only. Created the first time this machine makes a ticket or connects by ticket. |
+| `p2p-port` | The ports the daemon binds for connections by ticket, kept so they stay the same across restarts. |
 
 ## Logs
 

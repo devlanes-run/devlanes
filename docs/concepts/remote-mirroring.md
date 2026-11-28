@@ -8,7 +8,7 @@ A box is a machine that runs devlanes for its own lanes, such as a server that h
 
 ## Two daemons share one session
 
-Each machine runs its own daemon. The daemon on your machine owns the connection: it opens one session to the box, over SSH, over a command that reaches a container, or peer to peer over a direct path to a box paired by ticket, listens on the box's ports, adds the box's hostnames to its proxy and writes the folders the box syncs. The daemon on the box runs the box's lanes as it would with nobody connected.
+Each machine runs its own daemon. The daemon on your machine owns the connection. It opens one session to the box, over SSH, over a command that reaches a container, or peer to peer to a box paired by ticket. Then it listens on the box's ports, adds the box's hostnames to its proxy and writes the folders the box syncs. The daemon on the box runs the box's lanes as it would with nobody connected.
 
 ```mermaid
 flowchart LR
@@ -28,7 +28,7 @@ flowchart LR
   port -- "one connection, by SSH, a command or peer to peer" --> boxdaemon --> svc
 ```
 
-A peer-to-peer session needs a direct path between the two machines. A relay helps them find each other and open that path through their routers, and the session never sends lane traffic through it; when no direct path forms, the connect fails, and SSH or Tailscale reaches the box instead. [Connect to a box with a ticket](../how-to/remote/connect-by-ticket.md) has the steps.
+A peer-to-peer session runs over a direct path between the two machines. A relay helps them find each other and open that path through their routers, and devlanes does not keep a session going through the relay. [Connect to a box with a ticket](../how-to/remote/connect-by-ticket.md) says what to do when no direct path forms.
 
 The session belongs to your daemon and not to a terminal, so it outlives the terminal that opened it and reconnects on its own after the network drops. Run the same devlanes release on both machines; [Prepare a box](../how-to/remote/prepare-a-box.md) covers installing one.
 

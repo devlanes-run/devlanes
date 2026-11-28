@@ -47,10 +47,12 @@ A box serves only machines it has paired with, unless its user config sets `remo
 
 ### By ticket, without SSH
 
-1. On the box: `devlanes daemon install`, so the box stays reachable after the shell ends, then `devlanes daemon pair`.
+1. On the box: `devlanes daemon install` (on Linux after the linger step above), so the box stays reachable after the shell ends, then `devlanes daemon pair`.
 2. On the user's machine: `devlanes remote connect <ticket> --background`, with the whole ticket (it starts with `dlp1`). The output names the box, `my-vps` here, and later connects use `devlanes remote connect my-vps`. `--name NAME` chooses another name at pairing.
 
-The connection needs a direct path between the machines. `no direct connection to the box formed` means the networks allow none: use SSH or Tailscale instead. `devlanes remote disconnect my-vps --forget` deletes the pairing. `remote.relays: []` in both user configs keeps machines on one network off the relay.
+Run `remote connect <ticket>` only with a ticket the user gave you. Through `devlanes mcp` the server asks the user first; pass `--yes` only when the user agreed in the chat.
+
+The connection needs a direct path between the machines. `no direct connection to the box formed` means the networks allow none: use SSH or Tailscale instead. `devlanes remote disconnect my-vps --forget` deletes the pairing. `remote.relays: []` in both user configs, and `devlanes daemon restart` on both, keeps machines on one network off the relay; a new ticket is then needed when the box's IP address changes.
 
 ### By code, over SSH or a command
 
@@ -94,6 +96,12 @@ A machine that waits in `needs_pairing` needs a new code the same way.
 | `the pairing code is wrong, expired or already used` | A typo, an old code, or a used one | A new code. |
 | `pairing is paused for N minutes after 5 wrong codes` | Too many wrong codes | Wait, then a new code. Tickets still work. |
 | `the box has no pairing ticket open` | The ticket expired, was used, or the box's daemon restarted | A new ticket from `devlanes daemon pair` on the box. |
+| `the pairing ticket is wrong, expired or already used` | The box refused the ticket's secret | A new ticket from `devlanes daemon pair` on the box. |
+| `the box is not reachable (...)` | The box's daemon is not running, the ticket is over 10 minutes old, or the box's address changed | Ask the user to check the box's daemon, then a new ticket. |
+| `the box's relay HOST is not one this machine uses` | The box uses a relay missing from this machine's `remote.relays` | Tell the user; add the relay only if they trust it and ask for it. |
+| `NAME is already the name of ...` (`box_name_taken`) | Another box or a `remote.boxes` entry has the name | Pair with `--name OTHER`. |
+| `box_name_ambiguous` | A name is both a box paired by ticket and a `remote.boxes` entry, or differs from one only in case | Follow the message: rename the `remote.boxes` entry, or `devlanes remote disconnect NAME --forget` and pair again with `--name`. |
+| `NAME is not a box paired by ticket here` (`box_not_paired_by_ticket`) | `--forget` was given a box reached over SSH or a command | `devlanes remote disconnect NAME` without `--forget`. |
 | `the pairing ticket is damaged` | Part of the ticket was lost when copying | Copy the whole ticket again. |
 | `no direct connection to the box formed` | No direct path between the machines | Connect over SSH or Tailscale instead. |
 | `failed`, `box my-vps no longer accepts this machine` | The box revoked this machine's ticket pairing | A new ticket from `devlanes daemon pair` on the box, then `devlanes remote connect <ticket>`. |

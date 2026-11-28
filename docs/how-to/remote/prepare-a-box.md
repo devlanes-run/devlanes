@@ -46,7 +46,7 @@ See [`ports.range`](/docs/reference/config/user/ports/#ports-range) for the sett
 
 ## Keep the daemon running after you log out
 
-On a Linux box, turn on linger so the daemon outlives your SSH session, and install it as a service so it comes back after a reboot.
+On a Linux box, turn on linger so the daemon outlives your SSH session, and install it as a service so it comes back after a reboot. A box paired by ticket is reachable only while its daemon runs, so install the service on a box of any system.
 
 ```console title="on the box"
 $ sudo loginctl enable-linger "$USER"
@@ -63,7 +63,7 @@ $ cd ~/dev/myapp
 $ devlanes start --no-ui
 ```
 
-The box is ready; [Connect to a box](connect.md) opens its lanes on your machine.
+The box is ready; [Connect to a box with a ticket](connect-by-ticket.md) or, over SSH, [Connect to a box](connect.md) opens its lanes on your machine.
 
 ## If the box runs Windows
 
