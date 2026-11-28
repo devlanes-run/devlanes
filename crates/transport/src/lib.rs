@@ -37,7 +37,11 @@
 //! [`Link::resume`] after a [`TransportError::NeedsAuth`] one or a session
 //! that needs pairing ([`SessionError::is_needs_pairing`]).
 //! [`memory`] provides an in-process transport with fault injection for tests.
+//! With the `test-support` feature, `conformance` holds the checks every
+//! connection type must pass, for transports in other crates.
 
+#[cfg(feature = "test-support")]
+pub mod conformance;
 pub mod memory;
 mod mux;
 pub mod pairing;

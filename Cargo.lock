@@ -2239,6 +2239,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "devlanes-loopback",
+ "devlanes-transport",
  "futures-util",
  "serde",
  "serde_json",
