@@ -29,6 +29,7 @@ Auto-spawn is refused when sandbox markers are present or the socket-bind probe 
 ## API
 
 - `Paths::discover()` resolves paths without writing files; `Paths::new(home)` selects an explicit home.
+- `Paths::private_subdirectory(name)` creates a folder of the home private, as `prepare` does the home's own, and refuses a link or another account's folder.
 - `Client::request` returns response data or a typed error, including `Error::Rpc`.
 - `begin_request`, `next_frame`, and `send_bytes` support events and raw terminal traffic.
 - `Client::peer` exposes the daemon hello; `Client::spawned` records whether this connection started the daemon.

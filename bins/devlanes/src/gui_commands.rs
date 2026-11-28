@@ -859,5 +859,29 @@ mod tests {
             "gui_not_running"
         );
         assert!(box_lane(&boxes("ready", true), "acme@3").is_none());
+
+        // Two boxes with the lane: the mirrored one, else the one `remote
+        // use` chose.
+        let mut two = boxes("ready", false);
+        let mut other = two["items"][0].clone();
+        other["host"] = json!("fork");
+        two["items"]
+            .as_array_mut()
+            .expect("items")
+            .push(other.clone());
+        assert_eq!(
+            box_lane(&two, "acme@2").and_then(|found| found.host_box),
+            Some("hetzner".into())
+        );
+        two["items"][1]["chosen_lanes"] = json!(["acme@2"]);
+        assert_eq!(
+            box_lane(&two, "acme@2").and_then(|found| found.host_box),
+            Some("fork".into())
+        );
+        two["items"][0] = boxes("ready", true)["items"][0].clone();
+        assert_eq!(
+            box_lane(&two, "acme@2").and_then(|found| found.host_box),
+            Some("hetzner".into())
+        );
     }
 }
