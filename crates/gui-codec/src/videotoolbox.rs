@@ -43,6 +43,9 @@ impl VideoDecoder for Decode {
     /// Decodes a packet and crops the picture to the size it announces.
     fn decode(&mut self, packet: &Packet<'_>) -> Result<Option<Frame>, CodecError> {
         let (width, height) = (packet.width, packet.height);
+        if packet.payload.is_empty() {
+            return Err(CodecError::BadPayload { width, height });
+        }
         let picture = self
             .0
             .decode(packet.payload)

@@ -1,5 +1,7 @@
-//! The VideoToolbox H.264 decoder of macOS, for the GUI viewer: an Annex B
-//! byte stream in, NV12 pictures out, one access unit at a time.
+//! The VideoToolbox H.264 decoder of macOS, for the GUI viewer, behind the
+//! `videotoolbox` feature, which only `devlanes-gui` enables: an Annex B
+//! byte stream in, NV12 pictures out, one access unit at a time. Pictures
+//! with a side above [`MAX_SIDE`] are refused.
 //!
 //! VideoToolbox takes length-prefixed NAL units and a format description
 //! made from the stream's parameter sets, so each access unit is split at
@@ -61,10 +63,14 @@ const K_CF_NUMBER_SINT32_TYPE: isize = 3;
 /// `kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange`, `'420v'`.
 const PIXEL_FORMAT_NV12_VIDEO_RANGE: i32 = 0x3432_3076;
 const K_CV_PIXEL_BUFFER_LOCK_READ_ONLY: u64 = 1;
+/// `kCMBlockBufferAssureMemoryNowFlag`: allocate the block's memory at once.
+const K_CM_BLOCK_BUFFER_ASSURE_MEMORY_NOW: u32 = 1;
+
+/// The largest picture side the decoder returns, the GUI protocol's limit.
+pub const MAX_SIDE: u32 = 8192;
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
-    static kCFAllocatorNull: CfAllocatorRef;
     static kCFTypeDictionaryKeyCallBacks: CfCallBacks;
     static kCFTypeDictionaryValueCallBacks: CfCallBacks;
     fn CFRelease(cf: CfTypeRef);
@@ -100,6 +106,12 @@ unsafe extern "C" {
         data_length: usize,
         flags: u32,
         block_buffer_out: *mut CmBlockBufferRef,
+    ) -> OsStatus;
+    fn CMBlockBufferReplaceDataBytes(
+        source_bytes: *const c_void,
+        destination_buffer: CmBlockBufferRef,
+        offset_into_destination: usize,
+        data_length: usize,
     ) -> OsStatus;
     fn CMSampleBufferCreateReady(
         allocator: CfAllocatorRef,
@@ -392,6 +404,9 @@ impl Decoder {
     /// Decodes one access unit and returns its picture, or `None` when it
     /// held no slice (parameter sets only).
     pub fn decode(&mut self, access_unit: &[u8]) -> Result<Option<Nv12Picture>, Error> {
+        if access_unit.is_empty() {
+            return Err(Error::Picture);
+        }
         let mut slices = Vec::new();
         let mut changed = false;
         for unit in nal_units(access_unit) {
@@ -412,8 +427,16 @@ impl Decoder {
                 _ => {}
             }
         }
-        if changed && !self.sps.is_empty() && !self.pps.is_empty() {
-            self.refresh()?;
+        if changed
+            && !self.sps.is_empty()
+            && !self.pps.is_empty()
+            && let Err(error) = self.refresh()
+        {
+            // Slices of these parameter sets must never reach a session
+            // built from others.
+            self.close();
+            self.format = None;
+            return Err(error);
         }
         if slices.is_empty() {
             return Ok(None);
@@ -424,23 +447,28 @@ impl Decoder {
         let mut block: CmBlockBufferRef = std::ptr::null();
         let mut sample: CmSampleBufferRef = std::ptr::null();
         let sizes = [slices.len()];
-        // SAFETY: the block buffer points at `slices` without owning it
-        // (kCFAllocatorNull), and both buffers are released before `slices`
-        // goes, since the decode is synchronous and waited for.
+        // SAFETY: CoreMedia allocates the block's memory with the default
+        // allocator and owns it (no memory block of ours is passed), the
+        // slices are copied in with their exact length, and the block and
+        // sample buffers are released by their owners after the synchronous,
+        // waited-for decode.
         unsafe {
             let status = CMBlockBufferCreateWithMemoryBlock(
                 std::ptr::null(),
-                slices.as_mut_ptr().cast(),
+                std::ptr::null_mut(),
                 slices.len(),
-                kCFAllocatorNull,
+                std::ptr::null(),
                 std::ptr::null(),
                 0,
                 slices.len(),
-                0,
+                K_CM_BLOCK_BUFFER_ASSURE_MEMORY_NOW,
                 &mut block,
             );
             check("CMBlockBufferCreateWithMemoryBlock", status)?;
             let block = Owned(block);
+            let status =
+                CMBlockBufferReplaceDataBytes(slices.as_ptr().cast(), block.0, 0, slices.len());
+            check("CMBlockBufferReplaceDataBytes", status)?;
             let status = CMSampleBufferCreateReady(
                 std::ptr::null(),
                 block.0,
@@ -534,6 +562,9 @@ fn copy_planes(image: CvImageBufferRef) -> Result<Nv12Picture, Error> {
         let (Some((y, y_stride)), Some((uv, uv_stride))) = planes else {
             return Err(Error::Picture);
         };
+        if width > MAX_SIDE as usize || height > MAX_SIDE as usize {
+            return Err(Error::Picture);
+        }
         Ok(Nv12Picture {
             y,
             uv,
