@@ -37,6 +37,7 @@
 
 mod arbiter;
 mod error;
+pub mod keys;
 mod lock;
 mod message;
 mod pacer;
