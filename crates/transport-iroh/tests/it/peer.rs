@@ -43,6 +43,16 @@ async fn iroh_close_peer_ends_only_that_peers_connections() -> TestResult {
 }
 
 #[tokio::test]
+async fn iroh_a_closed_endpoint_ends_its_connections_cleanly() -> TestResult {
+    let home = Home::new()?;
+    bounded(
+        CHECK,
+        conformance::a_closed_endpoint_ends_its_connections_cleanly(iroh(&home)),
+    )
+    .await
+}
+
+#[tokio::test]
 async fn iroh_a_listener_that_stopped_accepts_nothing() -> TestResult {
     let home = Home::new()?;
     bounded(

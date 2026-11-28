@@ -137,6 +137,10 @@ enum Mode {
     /// Broken by the box refusing the client's key ([`PeerEndpoint::close_peer`]),
     /// so the client's failure reason says so as it does over iroh.
     Refused,
+    /// Ended cleanly by an endpoint's `close`: both ends read the end of the
+    /// pipe and writes go nowhere, so yamux closes without a failure reason,
+    /// as an iroh endpoint's close (code 0) does.
+    Ended,
 }
 
 /// Link state plus parked tasks, indexed by `[end][read=0|write=1]`.
@@ -203,7 +207,8 @@ impl MemoryStream {
         let mut gate = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
         gate.park(self.end, direction, cx.waker());
         match gate.mode {
-            Mode::Open => None,
+            // The callers answer for an ended link themselves (`is_ended`).
+            Mode::Open | Mode::Ended => None,
             Mode::Frozen => Some(Poll::Pending),
             Mode::Severed => Some(Poll::Ready(Err(io::Error::from(
                 io::ErrorKind::ConnectionReset,
@@ -214,6 +219,15 @@ impl MemoryStream {
             )))),
         }
     }
+
+    /// Whether an endpoint's `close` ended the link.
+    fn is_ended(&self) -> bool {
+        self.gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .mode
+            == Mode::Ended
+    }
 }
 
 impl AsyncRead for MemoryStream {
@@ -222,6 +236,9 @@ impl AsyncRead for MemoryStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        if self.is_ended() {
+            return Poll::Ready(Ok(()));
+        }
         if let Some(poll) = self.check(0, cx) {
             return poll;
         }
@@ -235,6 +252,9 @@ impl AsyncWrite for MemoryStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        if self.is_ended() {
+            return Poll::Ready(Ok(buf.len()));
+        }
         if let Some(poll) = self.check(1, cx) {
             return poll;
         }
@@ -242,6 +262,9 @@ impl AsyncWrite for MemoryStream {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.is_ended() {
+            return Poll::Ready(Ok(()));
+        }
         if let Some(poll) = self.check(1, cx) {
             return poll;
         }
@@ -249,6 +272,9 @@ impl AsyncWrite for MemoryStream {
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.is_ended() {
+            return Poll::Ready(Ok(()));
+        }
         if let Some(poll) = self.check(1, cx) {
             return poll;
         }
@@ -341,8 +367,10 @@ struct PeerState {
 /// is forgotten at the next dial.
 struct PeerLink {
     remote: PeerId,
-    /// Whether the other peer dialed this endpoint, which `close_peer` ends.
+    /// Whether the other peer dialed this endpoint, which `close_peer` ends
+    /// for sessions.
     incoming: bool,
+    alpn: Alpn,
     gate: Weak<Mutex<Gate>>,
 }
 
@@ -357,13 +385,15 @@ impl MemoryPeer {
         locked(&self.state)
     }
 
-    /// Records a link to `remote`, dropping links both ends have let go.
-    fn record(&self, remote: PeerId, incoming: bool, gate: &Arc<Mutex<Gate>>) {
+    /// Records a link to `remote` for `alpn`, dropping links both ends have
+    /// let go.
+    fn record(&self, remote: PeerId, incoming: bool, alpn: Alpn, gate: &Arc<Mutex<Gate>>) {
         let mut state = self.state();
         state.links.retain(|link| link.gate.strong_count() > 0);
         state.links.push(PeerLink {
             remote,
             incoming,
+            alpn,
             gate: Arc::downgrade(gate),
         });
     }
@@ -378,6 +408,9 @@ impl PeerEndpoint for MemoryPeer {
 
     /// The id alone: memory endpoints have no relay and no addresses.
     async fn addr(&self) -> Result<PeerAddr, PeerError> {
+        if self.state().incoming.is_none() {
+            return Err(PeerError::Closed);
+        }
         Ok(PeerAddr {
             id: self.id,
             relay: None,
@@ -426,8 +459,8 @@ impl PeerEndpoint for MemoryPeer {
         if incoming.send(arrived).is_err() {
             return Err(unreachable().into());
         }
-        self.record(target.id, false, &gate);
-        target.record(self.id, true, &gate);
+        self.record(target.id, false, alpn, &gate);
+        target.record(self.id, true, alpn, &gate);
         Ok(mux_client(Box::new(client)))
     }
 
@@ -446,10 +479,11 @@ impl PeerEndpoint for MemoryPeer {
         self.incoming.lock().await.recv().await
     }
 
-    /// Breaks the links `peer` dialed, with the refused-key reason.
+    /// Breaks the session links `peer` dialed, with the refused-key reason.
     fn close_peer(&self, peer: &PeerId) {
         for link in &self.state().links {
             if link.incoming
+                && link.alpn == Alpn::Tunnel
                 && link.remote == *peer
                 && let Some(gate) = link.gate.upgrade()
             {
@@ -458,8 +492,8 @@ impl PeerEndpoint for MemoryPeer {
         }
     }
 
-    /// Breaks every link, refuses new dials either way and ends `accept`
-    /// once the queued connections are taken.
+    /// Ends every link cleanly, refuses new dials either way and ends
+    /// `accept` once the queued connections are taken.
     async fn close(&self) {
         let links = {
             let mut state = self.state();
@@ -468,7 +502,7 @@ impl PeerEndpoint for MemoryPeer {
             std::mem::take(&mut state.links)
         };
         for gate in links.iter().filter_map(|link| link.gate.upgrade()) {
-            locked(&gate).set(Mode::Severed);
+            locked(&gate).set(Mode::Ended);
         }
         locked(&self.hub).peers.remove(&self.id);
     }

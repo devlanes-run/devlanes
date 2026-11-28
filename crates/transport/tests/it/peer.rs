@@ -36,3 +36,11 @@ async fn memory_a_listener_that_stopped_accepts_nothing() -> TestResult {
     ))
     .await
 }
+
+#[tokio::test]
+async fn memory_a_closed_endpoint_ends_its_connections_cleanly() -> TestResult {
+    bounded(conformance::a_closed_endpoint_ends_its_connections_cleanly(
+        memory(),
+    ))
+    .await
+}

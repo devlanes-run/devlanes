@@ -72,6 +72,8 @@ async fn opened(pair: &mut Pair, hello: &[u8]) -> Result<(BoxDuplex, BoxDuplex),
 /// No sleep separates the marks: tokio's clock never goes back, and every
 /// frame yamux sends on its own at the start (its first ping and pong) is on
 /// the pipe before the box's first data, so nothing else arrives in between.
+/// Over QUIC only stream data counts, so keep-alives and ACKs arriving in
+/// between cannot move the mark either.
 pub async fn last_inbound_moves_with_what_the_peer_sends(mut pair: Pair) -> CheckResult {
     let (mut client, mut boxed) = opened(&mut pair, b"open").await?;
     let mark = Instant::now();
@@ -298,48 +300,57 @@ pub struct Peers {
     pub listener: Arc<dyn PeerEndpoint>,
 }
 
-/// An admission that lets in the peers in its set for any protocol, as the
-/// daemon's lets in pinned keys.
-struct Allowed(Mutex<HashSet<PeerId>>);
+/// An admission that lets in the peers in its set, each for the protocols
+/// listed with it, as the daemon lets in pinned keys for sessions and any key
+/// for pairing while a ticket is outstanding.
+struct Allowed(Mutex<HashSet<(PeerId, Alpn)>>);
 
 impl Allowed {
     /// An admission for `peers`, shared with the check that changes it.
-    fn new(peers: impl IntoIterator<Item = PeerId>) -> Arc<Self> {
+    fn new(peers: impl IntoIterator<Item = (PeerId, Alpn)>) -> Arc<Self> {
         Arc::new(Self(Mutex::new(peers.into_iter().collect())))
     }
 
-    /// Stops admitting `peer`, as revoking a client does.
+    /// An admission for `peers` for sessions only.
+    fn sessions(peers: impl IntoIterator<Item = PeerId>) -> Arc<Self> {
+        Self::new(peers.into_iter().map(|peer| (peer, Alpn::Tunnel)))
+    }
+
+    /// Stops admitting `peer` for anything, as revoking a client does.
     fn remove(&self, peer: &PeerId) {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .remove(peer);
+            .retain(|(allowed, _)| allowed != peer);
     }
 }
 
 impl Admission for Allowed {
-    /// Whether `peer` is in the set.
-    fn admit(&self, peer: &PeerId, _alpn: Alpn) -> bool {
+    /// Whether `peer` is in the set for `alpn`.
+    fn admit(&self, peer: &PeerId, alpn: Alpn) -> bool {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .contains(peer)
+            .contains(&(*peer, alpn))
     }
 }
 
-/// Dials `listener` from `dialer` for a session.
+/// Dials `listener` from `dialer` for `alpn`.
 async fn dial(
     dialer: &dyn PeerEndpoint,
     listener: &dyn PeerEndpoint,
+    alpn: Alpn,
 ) -> Result<BoxConnection, TransportError> {
     let addr = listener.addr().await.map_err(TransportError::from)?;
-    dialer.connect(&addr, Alpn::Tunnel).await
+    dialer.connect(&addr, alpn).await
 }
 
-/// The next connection `listener` accepts, which must come from `from`.
+/// The next connection `listener` accepts, which must come from `from` for
+/// `alpn`.
 async fn accepted(
     listener: &dyn PeerEndpoint,
     from: &dyn PeerEndpoint,
+    alpn: Alpn,
 ) -> Result<PeerIncoming, BoxError> {
     let incoming = listener.accept().await.ok_or("the listener closed")?;
     assert_eq!(
@@ -347,8 +358,33 @@ async fn accepted(
         from.id().await?,
         "accepted a connection from another peer"
     );
-    assert_eq!(incoming.alpn, Alpn::Tunnel);
+    assert_eq!(
+        incoming.alpn, alpn,
+        "accepted a connection for another protocol"
+    );
     Ok(incoming)
+}
+
+/// Opens a stream on `client`, accepts it on `server` and checks bytes go
+/// both ways.
+async fn exchanged(
+    client: &BoxConnection,
+    server: &mut BoxServerConnection,
+) -> Result<(BoxDuplex, BoxDuplex), BoxError> {
+    let mut stream = client.open().await?;
+    stream.write_all(b"open").await?;
+    let mut boxed = server.accept().await.ok_or("no stream")?;
+    expect(&mut boxed, b"open").await?;
+    talk(&mut stream, &mut boxed).await?;
+    Ok((stream, boxed))
+}
+
+/// Sends a line each way on an open stream.
+async fn talk(stream: &mut BoxDuplex, boxed: &mut BoxDuplex) -> CheckResult {
+    stream.write_all(b"ping").await?;
+    expect(boxed, b"ping").await?;
+    boxed.write_all(b"pong").await?;
+    expect(stream, b"pong").await
 }
 
 /// Asserts that a dial failed in the given class, for a cause `reason` accepts.
@@ -365,71 +401,135 @@ fn assert_failed_with(
     assert!(cause.is_some_and(reason), "{error}");
 }
 
-/// A key the admission does not know is refused during the handshake as a
-/// permanent error, and the box never sees its connection: the next one it
-/// accepts is an admitted peer's, dialed afterwards.
+/// The admission sees the protocol a peer dials for: a key admitted for
+/// pairing only is refused for a session, and its pairing dial arrives as
+/// one. A key the admission does not know is refused during the handshake
+/// as a permanent error, and the box never sees either refused connection:
+/// the next one it accepts is the pairing dial made afterwards.
 pub async fn an_unadmitted_peer_is_refused_before_any_stream(peers: Peers) -> CheckResult {
-    let [known, stranger] = &peers.dialers;
+    let [pairing, stranger] = &peers.dialers;
     let listener = &*peers.listener;
     listener
-        .listen(Some(Allowed::new([known.id().await?])))
+        .listen(Some(Allowed::new([(pairing.id().await?, Alpn::Pair)])))
         .await?;
-    assert_failed_with(dial(&**stranger, listener).await, true, |cause| {
-        matches!(cause, PeerError::Refused)
-    });
-    let _client = dial(&**known, listener).await?;
-    let _server = accepted(listener, &**known).await?;
+    let refused = |cause: &PeerError| matches!(cause, PeerError::Refused);
+    assert_failed_with(
+        dial(&**stranger, listener, Alpn::Tunnel).await,
+        true,
+        refused,
+    );
+    assert_failed_with(
+        dial(&**pairing, listener, Alpn::Tunnel).await,
+        true,
+        refused,
+    );
+    let _client = dial(&**pairing, listener, Alpn::Pair).await?;
+    let _server = accepted(listener, &**pairing, Alpn::Pair).await?;
     Ok(())
 }
 
-/// Closing one peer ends its connection and, once the admission drops it,
-/// refuses its next dial, while another peer's connection keeps working.
+/// Closing one peer ends its connection with the refused-key reason and,
+/// once the admission drops it, refuses its next dial, while another peer's
+/// connection keeps working.
 pub async fn close_peer_ends_only_that_peers_connections(peers: Peers) -> CheckResult {
     let [closed, kept] = &peers.dialers;
     let listener = &*peers.listener;
     let closed_id = closed.id().await?;
-    let admission = Allowed::new([closed_id, kept.id().await?]);
+    let admission = Allowed::sessions([closed_id, kept.id().await?]);
     listener.listen(Some(admission.clone())).await?;
-    let closed_client = dial(&**closed, listener).await?;
-    let mut closed_server = accepted(listener, &**closed).await?.connection;
-    let kept_client = dial(&**kept, listener).await?;
-    let mut kept_server = accepted(listener, &**kept).await?.connection;
-    let mut kept_stream = kept_client.open().await?;
-    kept_stream.write_all(b"open").await?;
-    let mut kept_boxed = kept_server.accept().await.ok_or("no stream")?;
-    expect(&mut kept_boxed, b"open").await?;
+    let closed_client = dial(&**closed, listener, Alpn::Tunnel).await?;
+    let mut closed_server = accepted(listener, &**closed, Alpn::Tunnel)
+        .await?
+        .connection;
+    let kept_client = dial(&**kept, listener, Alpn::Tunnel).await?;
+    let mut kept_server = accepted(listener, &**kept, Alpn::Tunnel).await?.connection;
+    let (mut kept_stream, mut kept_boxed) = exchanged(&kept_client, &mut kept_server).await?;
 
     admission.remove(&closed_id);
     listener.close_peer(&closed_id);
     closed_client.closed().await;
+    let failure = closed_client
+        .failure_within(Duration::from_secs(1))
+        .await
+        .unwrap_or_default();
+    assert!(
+        failure.contains(&PeerError::Refused.to_string()),
+        "the closed peer's reason: {failure:?}"
+    );
     assert!(
         closed_server.accept().await.is_none(),
         "the box accepted a stream from the closed peer"
     );
-    assert_failed_with(dial(&**closed, listener).await, true, |cause| {
-        matches!(cause, PeerError::Refused)
-    });
+    assert_failed_with(
+        dial(&**closed, listener, Alpn::Tunnel).await,
+        true,
+        |cause| matches!(cause, PeerError::Refused),
+    );
 
-    kept_stream.write_all(b"still here").await?;
-    expect(&mut kept_boxed, b"still here").await?;
-    kept_boxed.write_all(b"and back").await?;
-    expect(&mut kept_stream, b"and back").await?;
-    Ok(())
+    talk(&mut kept_stream, &mut kept_boxed).await
 }
 
 /// A listener that stopped refuses new dials as a transient failure, since
-/// it may listen again, and admits again once it does.
+/// it may listen again, and admits again once it does. The connection made
+/// before keeps carrying bytes both ways through both changes, as a paired
+/// client's session does when the box mints a ticket or one expires.
 pub async fn a_listener_that_stopped_accepts_nothing(peers: Peers) -> CheckResult {
     let [dialer, _] = &peers.dialers;
     let listener = &*peers.listener;
-    let admission = Allowed::new([dialer.id().await?]);
+    let admission = Allowed::sessions([dialer.id().await?]);
     listener.listen(Some(admission.clone())).await?;
+    let client = dial(&**dialer, listener, Alpn::Tunnel).await?;
+    let mut server = accepted(listener, &**dialer, Alpn::Tunnel)
+        .await?
+        .connection;
+    let (mut stream, mut boxed) = exchanged(&client, &mut server).await?;
+
     listener.listen(None).await?;
-    assert_failed_with(dial(&**dialer, listener).await, false, |cause| {
-        matches!(cause, PeerError::Unreachable(_))
-    });
+    assert_failed_with(
+        dial(&**dialer, listener, Alpn::Tunnel).await,
+        false,
+        |cause| matches!(cause, PeerError::Unreachable(_)),
+    );
+    talk(&mut stream, &mut boxed).await?;
+
     listener.listen(Some(admission)).await?;
-    let _client = dial(&**dialer, listener).await?;
-    let _server = accepted(listener, &**dialer).await?;
+    let _again = dial(&**dialer, listener, Alpn::Tunnel).await?;
+    let _server = accepted(listener, &**dialer, Alpn::Tunnel).await?;
+    talk(&mut stream, &mut boxed).await
+}
+
+/// Closing an endpoint ends its connections as a clean close, with no
+/// failure reason for the client, ends `accept`, and fails everything that
+/// needs the network with [`PeerError::Closed`], while `id` keeps working.
+pub async fn a_closed_endpoint_ends_its_connections_cleanly(peers: Peers) -> CheckResult {
+    let [dialer, _] = &peers.dialers;
+    let listener = &*peers.listener;
+    let id = listener.id().await?;
+    listener
+        .listen(Some(Allowed::sessions([dialer.id().await?])))
+        .await?;
+    let client = dial(&**dialer, listener, Alpn::Tunnel).await?;
+    let mut server = accepted(listener, &**dialer, Alpn::Tunnel)
+        .await?
+        .connection;
+    let _streams = exchanged(&client, &mut server).await?;
+    let dialer_addr = dialer.addr().await?;
+
+    listener.close().await;
+    client.closed().await;
+    assert_eq!(client.failure_within(Duration::from_secs(1)).await, None);
+    assert!(listener.accept().await.is_none(), "accepted after close");
+    let closed = |cause: &PeerError| matches!(cause, PeerError::Closed);
+    assert!(matches!(listener.addr().await, Err(PeerError::Closed)));
+    assert!(matches!(
+        listener.listen(None).await,
+        Err(PeerError::Closed)
+    ));
+    assert_failed_with(
+        listener.connect(&dialer_addr, Alpn::Tunnel).await,
+        false,
+        closed,
+    );
+    assert_eq!(listener.id().await?, id);
     Ok(())
 }

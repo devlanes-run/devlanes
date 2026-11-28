@@ -136,14 +136,19 @@ pub struct PeerIncoming {
 
 /// This machine's peer-to-peer endpoint, one per daemon, for dialing and
 /// listening. Nothing binds a socket or contacts a relay until `addr`,
-/// `connect` or `listen` needs it.
+/// `connect` or `listen(Some(..))` needs it.
+///
+/// Every method but `accept` may be called concurrently. After `close`,
+/// `addr`, `connect` and `listen` fail with [`PeerError::Closed`], and `id`
+/// keeps working.
 #[async_trait]
 pub trait PeerEndpoint: Send + Sync {
     /// This machine's peer id. Creates the key file the first time; never binds.
     async fn id(&self) -> Result<PeerId, PeerError>;
 
     /// Where other peers reach this one, for a ticket. Binds when needed and
-    /// waits, bounded, for the relay connection.
+    /// waits, bounded, for the relay connection and for the first local
+    /// addresses.
     async fn addr(&self) -> Result<PeerAddr, PeerError>;
 
     /// Dials `addr` for `alpn` and returns the connection once a direct path
@@ -153,16 +158,22 @@ pub trait PeerEndpoint: Send + Sync {
     async fn connect(&self, addr: &PeerAddr, alpn: Alpn) -> Result<BoxConnection, TransportError>;
 
     /// With `Some`, accepts connections the admission lets in and publishes
-    /// this endpoint's relay for lookup by id; with `None`, refuses every new
-    /// connection and stops publishing. Open connections stay either way.
+    /// this endpoint's relay for lookup by id; a later `Some` replaces the
+    /// admission. With `None`, refuses every new connection and stops
+    /// publishing; on an endpoint that never bound it binds nothing. Open
+    /// connections stay either way.
     async fn listen(&self, admission: Option<Arc<dyn Admission>>) -> Result<(), PeerError>;
 
     /// The next admitted connection. Waits while not listening; `None` once
-    /// the endpoint is closed. One caller at a time.
+    /// the endpoint is closed. One caller at a time. An implementation may
+    /// drop admitted connections while too many wait here.
     async fn accept(&self) -> Option<PeerIncoming>;
 
-    /// Closes every connection `peer` opened to this endpoint, with the
-    /// refused-key code, so its client stops instead of retrying.
+    /// Closes every session (`Alpn::Tunnel`) connection `peer` opened to this
+    /// endpoint with the refused-key code, so its client shows that reason.
+    /// The caller removes `peer` from the admission first: then its next dial
+    /// is refused as a permanent error, and a connection in the middle of its
+    /// handshake is closed too.
     fn close_peer(&self, peer: &PeerId);
 
     /// Closes the endpoint and its connections gracefully, for daemon shutdown.
@@ -184,13 +195,13 @@ pub enum PeerError {
         waited: Duration,
     },
     /// The box could not be reached at all: offline, or no relay or address works.
-    #[error("the box is not reachable: {0}")]
+    #[error("the box is not reachable ({0}); check that its devlanes daemon is running")]
     Unreachable(String),
     /// The box refused this machine's key.
     #[error("the box does not accept this machine; pair it again with a new ticket")]
     Refused,
     /// The key file could not be read or written.
-    #[error("{}: {source}", .path.display())]
+    #[error("peer-to-peer key {}: {source}", .path.display())]
     Key {
         /// The key file.
         path: PathBuf,
