@@ -134,8 +134,8 @@ fn screenshot(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 }
 
 /// The input commands: what the app got, and what became of the window.
-/// Nothing here says the app drew its result: the command waits for one
-/// frame after the input, or 3 seconds.
+/// Nothing here says the app drew its result, which a slow app may not have
+/// done yet.
 fn input(data: &Value) -> Vec<String> {
     let place = format!("{} of {}", window(&data["window"]), target(data));
     let point = |key: &str| {
@@ -191,7 +191,9 @@ fn input(data: &Value) -> Vec<String> {
                 )
             };
             let (asked, took) = (size("requested"), size("size"));
-            if asked == took {
+            if data["size"].is_null() {
+                format!("asked {place} for {asked}")
+            } else if asked == took {
                 format!("resized {place} to {took}")
             } else {
                 format!("asked {place} for {asked}; it is {took}")
@@ -203,6 +205,14 @@ fn input(data: &Value) -> Vec<String> {
     let after = match text(data, "window_after").as_str() {
         "" | "open" => String::new(),
         "closed" => "; the window closed after it".into(),
+        "outside" => {
+            let size = &data["window_size"];
+            format!(
+                "; the window is {}x{} now, so the point may have been outside it and the input dropped",
+                int(size, "width").unwrap_or_default(),
+                int(size, "height").unwrap_or_default()
+            )
+        }
         lock => format!("; the window is {lock} now, so it takes no input until that ends"),
     };
     vec![format!("{line}{after}")]

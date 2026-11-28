@@ -46,7 +46,7 @@ pub use loader::{
 };
 pub use model::*;
 pub use scalar::{ByteSize, ConfigDuration, Percent, Scalar, Templated};
-pub use service::{ServiceConfig, StopConfig};
+pub use service::{GUI_UNSUPPORTED, ServiceConfig, StopConfig};
 pub use setting::{
     Applies, applies, check_user_key, effective_user_value, parse_setting_value, to_yaml,
     user_keys, user_setting,

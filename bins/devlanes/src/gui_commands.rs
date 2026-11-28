@@ -76,6 +76,16 @@ pub(crate) async fn run(
         ));
     }
     let chords = chords(&command)?;
+    // Refused before anything connects, as the host would refuse it.
+    if let GuiCommand::Resize { size, .. } = &command
+        && size.width.max(size.height) > devlanes_gui_proto::MAX_DIMENSION
+    {
+        return Err(RpcError::new(
+            "gui_size_too_large",
+            json!({"max": devlanes_gui_proto::MAX_DIMENSION}),
+            exit::USAGE,
+        ));
+    }
     let cwd = context.cwd.clone();
     let (lane, names) = split_units(&command.units())?;
     let found = find(context, lane).await?;
@@ -194,13 +204,15 @@ async fn drive(
                 session.scroll(id, at, *dx as f32, *dy as f32).await?
             }
             GuiCommand::Resize { size, .. } => {
-                let taken = session
+                let (taken, after) = session
                     .resize(id, Size::new(size.width, size.height))
                     .await?;
                 data["action"] = json!("resize");
                 data["requested"] = json!({"width": size.width, "height": size.height});
-                data["size"] = json!({"width": taken.width, "height": taken.height});
-                After::Open
+                // A window that closed meanwhile has no size to report.
+                data["size"] =
+                    json!(taken.map(|taken| json!({"width": taken.width, "height": taken.height})));
+                after
             }
             GuiCommand::Ls { .. } => After::Open,
         };
@@ -210,6 +222,10 @@ async fn drive(
             After::Open => json!("open"),
             After::Closed => json!("closed"),
             After::Locked(lock) => json!(lock_word(lock)),
+            After::Outside(size) => {
+                data["window_size"] = json!({"width": size.width, "height": size.height});
+                json!("outside")
+            }
         };
         Ok::<_, ToolError>((GuiOutput::Input, None))
     };
@@ -290,7 +306,7 @@ async fn find(mut context: Context, lane: Option<String>) -> Result<Found, RpcEr
     .await;
     match status {
         Ok(data) => local_lane(&data, named.is_some()),
-        Err(error) if gui_off_in_daemon(&error.data) => Err(daemon_off()),
+        Err(error) if gui_off_in_daemon(&error) => Err(daemon_off()),
         Err(error) => {
             let Some(reference) = named.filter(|_| error.exit_code == exit::NOT_FOUND) else {
                 return Err(error);
@@ -308,15 +324,14 @@ async fn find(mut context: Context, lane: Option<String>) -> Result<Found, RpcEr
     }
 }
 
-/// What the config loader of a daemon with GUI services off says about a
-/// `gui` key (`devlanes_config`'s wording), the only sign of that switch in
-/// what the daemon answers.
-const GUI_OFF_MARKER: &str = "`gui` is not supported yet";
-
 /// Whether an error or a lane's reason is the daemon refusing `gui` keys,
-/// which means GUI services are off in the daemon though this CLI has them on.
-fn gui_off_in_daemon(data: &Value) -> bool {
-    data.to_string().contains(GUI_OFF_MARKER)
+/// which means GUI services are off in the daemon though this CLI has them
+/// on. Its message has the loader's [`devlanes_config::GUI_UNSUPPORTED`]: the
+/// only sign of that switch in what a daemon answers, released ones included.
+fn gui_off_in_daemon(error: &RpcError) -> bool {
+    error.data["message"]
+        .as_str()
+        .is_some_and(|message| message.contains(devlanes_config::GUI_UNSUPPORTED))
 }
 
 /// `gui_off_in_daemon`: the daemon runs with GUI services off.
@@ -364,12 +379,7 @@ fn local_lane(data: &Value, named: bool) -> Result<Found, RpcError> {
             })
         })
         .collect::<Vec<_>>();
-    if services.is_empty()
-        && lane
-            .reason
-            .as_ref()
-            .is_some_and(|reason| gui_off_in_daemon(&json!(reason)))
-    {
+    if services.is_empty() && lane.reason.as_ref().is_some_and(gui_off_in_daemon) {
         return Err(daemon_off());
     }
     Ok(Found {
@@ -824,6 +834,33 @@ mod tests {
                  "hidden": false, "state": state, "ports": [{"name": "default", "port": 26011}], "hosts": []},
             ]},
         }]})
+    }
+
+    /// The loader's error for a `gui: true` service with GUI services off, as
+    /// the daemon sends it (`config_error`, the file's text in `message`'s
+    /// neighbours), tells that the daemon has them off; another config error
+    /// in a file that mentions `gui` does not.
+    #[test]
+    fn a_daemon_with_gui_services_off_is_recognised() {
+        let dir = tempfile::tempdir().expect("dir");
+        let load = |yaml: &str| {
+            let file = dir.path().join("devlanes.yaml");
+            std::fs::write(&file, yaml).expect("write");
+            let error = devlanes_config::check(&file, devlanes_config::ProjectOptions::default())
+                .expect_err("refused");
+            RpcError::new(
+                "config_error",
+                json!({"message": error.message, "file": error.location.file, "line": error.location.line}),
+                1,
+            )
+        };
+        let off = load("project: acme\nservices:\n  desktop:\n    run: [app]\n    gui: true\n");
+        assert!(gui_off_in_daemon(&off), "{off:?}");
+        let other = load(&format!(
+            "project: acme\n# {}\nservices:\n  desktop:\n    runn: [app]\n",
+            devlanes_config::GUI_UNSUPPORTED
+        ));
+        assert!(!gui_off_in_daemon(&other), "{other:?}");
     }
 
     /// A box lane's GUI service is reached through the port its mirror binds

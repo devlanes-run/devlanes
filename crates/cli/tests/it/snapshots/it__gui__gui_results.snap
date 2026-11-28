@@ -68,3 +68,15 @@ asked window 1 "Test pattern 1" of acme@2:desktop for 2000x900; it is 1920x900
 asked window 1 "Test pattern 1" of acme@2:desktop for 2000x900; it is 1920x900
 --- resize agent
 asked window 1 "Test pattern 1" of acme@2:desktop for 2000x900; it is 1920x900
+--- resize_closed human
+asked window 1 "Test pattern 1" of acme@2:desktop for 800x600; the window closed after it
+--- resize_closed plain
+asked window 1 "Test pattern 1" of acme@2:desktop for 800x600; the window closed after it
+--- resize_closed agent
+asked window 1 "Test pattern 1" of acme@2:desktop for 800x600; the window closed after it
+--- scroll_outside human
+scrolled 0,3 lines at 300,10 in window 1 "Test pattern 1" of acme@2:desktop; the window is 200x120 now, so the point may have been outside it and the input dropped
+--- scroll_outside plain
+scrolled 0,3 lines at 300,10 in window 1 "Test pattern 1" of acme@2:desktop; the window is 200x120 now, so the point may have been outside it and the input dropped
+--- scroll_outside agent
+scrolled 0,3 lines at 300,10 in window 1 "Test pattern 1" of acme@2:desktop; the window is 200x120 now, so the point may have been outside it and the input dropped

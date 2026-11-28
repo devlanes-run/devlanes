@@ -100,6 +100,15 @@ fn fixtures() -> Vec<(&'static str, GuiOutput, Value)> {
     let mut resized = target("resize");
     resized["requested"] = json!({"width": 2000, "height": 900});
     resized["size"] = json!({"width": 1920, "height": 900});
+    let mut closed = target("resize");
+    closed["requested"] = json!({"width": 800, "height": 600});
+    closed["size"] = Value::Null;
+    closed["window_after"] = json!("closed");
+    let mut missed = target("scroll");
+    missed["delta"] = json!({"x": 0, "y": 3});
+    missed["at"] = json!({"x": 300, "y": 10});
+    missed["window_after"] = json!("outside");
+    missed["window_size"] = json!({"width": 200, "height": 120});
     vec![
         (
             "ls",
@@ -142,6 +151,8 @@ fn fixtures() -> Vec<(&'static str, GuiOutput, Value)> {
         ("key", GuiOutput::Input, key),
         ("scroll", GuiOutput::Input, scroll),
         ("resize", GuiOutput::Input, resized),
+        ("resize_closed", GuiOutput::Input, closed),
+        ("scroll_outside", GuiOutput::Input, missed),
     ]
 }
 

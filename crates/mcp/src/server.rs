@@ -762,19 +762,34 @@ async fn screenshot(call: &Call, output: &Output) -> Option<Result<ContentBlock,
     let path = output.data.get("path")?.as_str()?.to_owned();
     let note = |why: &str| format!("note: the picture is not attached: {path} {why}");
     let read = async {
-        let meta = tokio::fs::symlink_metadata(&path)
+        use tokio::io::AsyncReadExt as _;
+        let unreadable = |error: std::io::Error| note(&format!("cannot be read ({error})"));
+        // By path first, so a link or a pipe is never opened (opening a FIFO
+        // waits for a writer); then by the handle that is read, so the file
+        // cannot be swapped between the checks and the read.
+        let link = tokio::fs::symlink_metadata(&path)
             .await
-            .map_err(|error| note(&format!("cannot be read ({error})")))?;
+            .map_err(unreadable)?;
+        if !link.file_type().is_file() {
+            return Err(note("is not a regular file"));
+        }
+        let file = tokio::fs::File::open(&path).await.map_err(unreadable)?;
+        let meta = file.metadata().await.map_err(unreadable)?;
         if !meta.file_type().is_file() {
             return Err(note("is not a regular file"));
         }
         if meta.len() > IMAGE_LIMIT {
             return Err(note(&format!("is over {} MiB", IMAGE_LIMIT >> 20)));
         }
-        let png = tokio::fs::read(&path)
+        let mut png = Vec::new();
+        file.take(IMAGE_LIMIT + 1)
+            .read_to_end(&mut png)
             .await
-            .map_err(|error| note(&format!("cannot be read ({error})")))?;
-        if !png.starts_with(PNG_SIGNATURE) || png.len() as u64 > IMAGE_LIMIT {
+            .map_err(unreadable)?;
+        if png.len() as u64 > IMAGE_LIMIT {
+            return Err(note(&format!("is over {} MiB", IMAGE_LIMIT >> 20)));
+        }
+        if !png.starts_with(PNG_SIGNATURE) {
             return Err(note("is not a PNG"));
         }
         Ok(ContentBlock::image(

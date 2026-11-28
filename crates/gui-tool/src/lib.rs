@@ -93,6 +93,9 @@ pub enum After {
     Closed,
     /// It is locked now, so later input is dropped until it unlocks.
     Locked(LockState),
+    /// It is open, but smaller than the point the input went to, so the host
+    /// may have dropped it as outside the window.
+    Outside(Size),
 }
 
 /// A tool connection to one GUI host.
@@ -101,6 +104,8 @@ pub struct Session {
     client: Client,
     events: Events,
     windows: Vec<WindowInfo>,
+    /// Windows this session asked for a size.
+    resized: Vec<WindowId>,
 }
 
 /// Connects to the host at `address` as a tool named `name`.
@@ -117,6 +122,7 @@ pub async fn connect(address: SocketAddr, name: &str) -> Result<Session, ToolErr
         client,
         events,
         windows,
+        resized: Vec::new(),
     })
 }
 
@@ -172,7 +178,8 @@ impl Session {
         if double {
             self.client.click(window, at, button)?;
         }
-        self.finish(window).await
+        let after = self.finish(window).await?;
+        Ok(self.still_inside(window, at, after))
     }
 
     /// Types `text` into `window`, in pieces of at most the protocol's
@@ -219,17 +226,33 @@ impl Session {
             delta_y: dy,
             unit: WheelUnit::Lines,
         })?;
-        self.finish(window).await
+        let after = self.finish(window).await?;
+        Ok(self.still_inside(window, at, after))
+    }
+
+    /// `after`, or [`After::Outside`] when `window` is open but no longer
+    /// covers `at`: it shrank between the session's start and the input.
+    fn still_inside(&self, window: WindowId, at: Point, after: After) -> After {
+        match (after, self.inside(window, at)) {
+            (After::Open, Err(ToolError::OutsideWindow { size, .. })) => After::Outside(size),
+            (after, _) => after,
+        }
     }
 
     /// Asks for `window` at `size`, waits until the host applied it and a
-    /// frame came, and returns the size the window has then, which an app
-    /// that clamps its size may make another one.
-    pub async fn resize(&mut self, window: WindowId, size: Size) -> Result<Size, ToolError> {
+    /// frame came, and returns the size the window has then (which an app
+    /// that clamps its size may make another one) and what became of it. A
+    /// window that closed meanwhile has no size.
+    pub async fn resize(
+        &mut self,
+        window: WindowId,
+        size: Size,
+    ) -> Result<(Option<Size>, After), ToolError> {
         if !size.is_valid() {
             return Err(ToolError::TooLarge { max: MAX_DIMENSION });
         }
         let request = self.client.resize(window, size)?;
+        self.resized.push(window);
         let events = &mut self.events;
         let windows = &mut self.windows;
         step("the resize", async {
@@ -248,9 +271,16 @@ impl Session {
             Err(ToolError::Closed)
         })
         .await??;
-        self.finish(window).await?;
-        let taken = self.windows.iter().find(|info| info.id == window);
-        Ok(taken.map_or(size, |info| info.size))
+        let after = self.finish(window).await?;
+        let taken = match after {
+            After::Closed => None,
+            _ => self
+                .windows
+                .iter()
+                .find(|info| info.id == window)
+                .map(|info| info.size),
+        };
+        Ok((taken, after))
     }
 
     /// Refuses `at` when it is outside `window`'s size.
@@ -284,6 +314,10 @@ impl Session {
         Ok(match self.client.lock_state(window) {
             None => After::Closed,
             Some(LockState::Unlocked) => After::Open,
+            // The client shows a window this session resized as Resizing until
+            // it sees a frame, which a tool never streams. The sync waited for
+            // the host's frame after the resize, so the host has ended it.
+            Some(LockState::Resizing) if self.resized.contains(&window) => After::Open,
             Some(LockState::Closed) => After::Closed,
             Some(lock) => After::Locked(lock),
         })
@@ -323,6 +357,10 @@ fn pieces(text: &str, limit: usize) -> Vec<&str> {
         let mut end = rest.len().min(limit);
         while !rest.is_char_boundary(end) {
             end -= 1;
+        }
+        // A limit below one character's width still moves on by a character.
+        if end == 0 {
+            end = rest.chars().next().map_or(rest.len(), char::len_utf8);
         }
         let (piece, tail) = rest.split_at(end);
         pieces.push(piece);
@@ -460,18 +498,5 @@ mod tests {
             pick(&windows[..2], None),
             Err(ToolError::NoMainWindow { windows }) if windows.len() == 2
         ));
-    }
-
-    /// Text splits between characters into pieces within the limit, and the
-    /// pieces put back together are the text.
-    #[test]
-    fn text_splits_between_characters() {
-        // 'é' is two bytes, so a 5-byte limit falls inside one at "aé|é".
-        let text = "aééé€b";
-        let split = pieces(text, 5);
-        assert!(split.iter().all(|piece| piece.len() <= 5), "{split:?}");
-        assert_eq!(split, ["aéé", "é€", "b"]);
-        assert_eq!(split.concat(), text);
-        assert!(pieces("", 5).is_empty());
     }
 }

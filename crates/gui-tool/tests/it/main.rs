@@ -59,12 +59,12 @@ async fn a_session_drives_the_window_it_picked() {
             .resize(window, Size::new(200, 120))
             .await
             .expect("resize");
-        assert_eq!(taken, Size::new(200, 120));
+        assert_eq!(taken, (Some(Size::new(200, 120)), After::Open));
         let kept = session
             .resize(window, Size::new(200, 120))
             .await
             .expect("resize");
-        assert_eq!(kept, Size::new(200, 120));
+        assert_eq!(kept, (Some(Size::new(200, 120)), After::Open));
 
         let frame = session.screenshot(window).await.expect("screenshot");
         let mut png = Vec::new();
@@ -75,6 +75,20 @@ async fn a_session_drives_the_window_it_picked() {
             .info()
             .clone();
         assert_eq!((info.width, info.height), (200, 120));
+
+        // Another session shrinks the window; a click this session still
+        // thinks is inside is dropped by the host and reported as outside.
+        let mut other = connect(address, "other").await.expect("connect");
+        other
+            .resize(window, Size::new(100, 100))
+            .await
+            .expect("resize");
+        other.close();
+        let after = session
+            .click(window, Point::new(150, 10), Buttons::LEFT, false)
+            .await
+            .expect("click");
+        assert_eq!(after, After::Outside(Size::new(100, 100)));
         session.close();
     };
     tokio::time::timeout(PATIENCE, work)

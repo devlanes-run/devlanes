@@ -669,10 +669,9 @@ const GUI_ABOUT: &str = "\
 List, screenshot and drive the windows of GUI services: click, type, press keys, scroll and resize.
 
 Works on services with gui: true without opening their windows. Each command
-does one thing and returns once the app has the input and has drawn once
-after it, or after 3 seconds, so a slow app may not show its result in a
-screenshot taken right after. Coordinates are window pixels from the window's
-top-left corner, and a point outside the window is refused.
+does one thing and returns once the app has the input. A slow app may not show
+the result in a screenshot taken right after. Coordinates are window pixels
+from the window's top-left corner, and a point outside the window is refused.
 
 --window picks a window by the id or title gui ls prints; without it, the
 service's first main window. A box's GUI service works the same from your

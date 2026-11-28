@@ -92,7 +92,9 @@ pub enum GuiOutput {
     Screenshot,
     /// The input commands: `{lane, unit, box, window: {id, title}, action,
     /// window_after}` and the action's fields; `window_after` is `open`,
-    /// `closed` or the lock state the window has once the app got the input.
+    /// `closed`, the lock state the window has once the app got the input,
+    /// or `outside` (with `window_size`) when the window shrank past the
+    /// point. A resize's `size` is null when the window closed.
     Input,
 }
 

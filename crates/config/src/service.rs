@@ -31,8 +31,11 @@ pub struct StopConfig {
     pub timeout: Option<Templated<ConfigDuration>>,
 }
 
-/// The error for `gui` when the loader does not enable GUI services.
-pub(crate) const GUI_UNSUPPORTED: &str = "`gui` is not supported yet";
+/// The error for `gui` when the loader does not enable GUI services. Clients
+/// match this exact wording in a `config_error` message to tell that the
+/// daemon runs with GUI services off, and daemons already released say it,
+/// so it must not change.
+pub const GUI_UNSUPPORTED: &str = "`gui` is not supported yet";
 /// The error for a `gui` value that is not a plain boolean.
 pub(crate) const GUI_NOT_BOOL: &str = "expected true or false";
 
