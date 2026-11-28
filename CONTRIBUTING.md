@@ -184,7 +184,7 @@ Run a crate's ignored tests with `cargo nextest run -p <crate> --run-ignored onl
 | `devlanes-resolver-dns` | dig |
 | `devlanes-daemon` | `DEVLANES_FIXTURE_SERVER=$PWD/target/debug/fixture-server` |
 
-The H.264 tests of `devlanes-gui-codec` are not ignored: they run with `--all-features` and skip, printing why, where the machine has no H.264. On Linux they need the distribution's OpenH264 (`libopenh264-dev` on Debian and Ubuntu, `openh264` on Arch and Fedora); on Windows they use Media Foundation, which client editions have.
+The H.264 tests of `devlanes-gui-codec` are not ignored: they run with `--all-features` and skip, printing why, where the machine has no H.264. On Linux they need the distribution's OpenH264 (`libopenh264-dev` on Debian and Ubuntu, `openh264` on Arch and Alpine, and on Fedora `openh264` from the `fedora-cisco-openh264` repository); the decoding tests also need version 2.6 or later, which Debian 13 and Ubuntu 26.04 ship, and otherwise run with Cisco's build through `LD_LIBRARY_PATH`, as CI does. On Windows they use Media Foundation, which client editions have except the N editions without the Media Feature Pack. `DEVLANES_REQUIRE_H264=encode,decode` (or one of the two) turns a skip for that side into a failure.
 
 ## Design
 
