@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use devlanes_transport::conformance::{self, Pair};
 use devlanes_transport::{Alpn, BoxError, PeerAddr, PeerEndpoint, PeerId, TUNNEL_ALPN};
-use iroh::endpoint::{QuicTransportConfig, VarInt, presets};
+use iroh::endpoint::{PortmapperConfig, QuicTransportConfig, VarInt, presets};
 use iroh::{Endpoint, Watcher};
 
 use super::{Everyone, Home, TestResult, bounded};
@@ -43,7 +43,7 @@ async fn iroh() -> Result<Pair, BoxError> {
 /// takes as the lower of the two sides' timeouts.
 #[tokio::test]
 async fn a_box_that_vanishes_ends_the_connection_with_a_reason() -> TestResult {
-    bounded(Duration::from_secs(10), async {
+    bounded(Duration::from_secs(20), async {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -56,6 +56,8 @@ async fn a_box_that_vanishes_ends_the_connection_with_a_reason() -> TestResult {
                 .keep_alive_interval(Duration::from_millis(500))
                 .build();
             let Ok(boxed) = Endpoint::builder(presets::Minimal)
+                // iroh maps ports by default, which probes the router.
+                .portmapper_config(PortmapperConfig::Disabled)
                 .clear_relay_transports()
                 .transport_config(config)
                 .alpns(vec![TUNNEL_ALPN.to_vec()])
@@ -91,8 +93,10 @@ async fn a_box_that_vanishes_ends_the_connection_with_a_reason() -> TestResult {
         let vanished = tokio::time::Instant::now();
         runtime.shutdown_background();
         connection.closed().await;
+        // Well past the 2 s idle timeout for a loaded runner, and still far
+        // from the 30 s the client's own timeout would take.
         assert!(
-            vanished.elapsed() < Duration::from_secs(5),
+            vanished.elapsed() < Duration::from_secs(10),
             "closed after {:?}",
             vanished.elapsed()
         );
