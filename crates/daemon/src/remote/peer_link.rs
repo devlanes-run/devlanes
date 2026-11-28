@@ -770,7 +770,8 @@ impl Inner {
                 .await
         })
         .await
-        .map_err(|error| RpcError::new("internal", json!({"message": error.to_string()}), 1))?
+        // As other failed tasks report it (`spawn_task`, an internal failure).
+        .map_err(|error| crate::registry::internal("spawn_task", error))?
     }
 
     /// [`Inner::pair_by_ticket`]'s work after the box paired with this
