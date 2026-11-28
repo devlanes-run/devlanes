@@ -257,9 +257,10 @@ impl Call {
                 command: LaneCommand::Gc,
             } => "Clean every lane whose worktree or project file is gone, with its data?".into(),
             Command::Daemon { command } => match command {
-                DaemonCommand::Pair { .. } => {
-                    "Print a one-time code that lets another machine pair with this one?".into()
-                }
+                DaemonCommand::Pair { .. } => "Print a one-time ticket and code that let another \
+                     machine connect to this one? While the ticket is open, this machine listens \
+                     for it."
+                    .into(),
                 DaemonCommand::Stop => "Stop the daemon and every process it manages?".into(),
                 DaemonCommand::Restart => {
                     "Restart the daemon? Running services stop and start again.".into()
@@ -273,9 +274,20 @@ impl Call {
                 _ => return None,
             },
             Command::Remote { command } => match command {
+                // The ticket is a secret, and too long to read in a question.
+                RemoteCommand::Connect { host, .. } if devlanes_cli::is_ticket(host) => {
+                    "Pair with the box in this ticket and mirror its lanes here?".into()
+                }
                 RemoteCommand::Connect { host, .. } => {
                     format!("Connect to {host} and mirror its lanes here?")
                 }
+                RemoteCommand::Disconnect {
+                    host: Some(host),
+                    forget: true,
+                } => format!(
+                    "Disconnect from {host} and forget its pairing? Connecting it again needs a \
+                     new ticket from the box."
+                ),
                 RemoteCommand::Disconnect { host, .. } => match host {
                     Some(host) => format!("Disconnect from {host}?"),
                     None => "Disconnect from every box?".into(),

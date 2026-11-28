@@ -728,10 +728,18 @@ expression: tools
   },
   {
     "name": "daemon_pair",
-    "description": "Print a one-time code that pairs another machine with this one. Call it on the box the user wants to reach from another machine; the result has the command to run there. The server asks the user first.",
+    "description": "Print a one-time ticket and code that pair another machine with this one. Call it on the box the user wants to reach from another machine; the result has the ticket and the command to run there, and a code for a machine that reaches this one over SSH. Show the ticket to the user whole, on a line of its own. The server asks the user first.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "ticket": {
+          "type": "boolean",
+          "description": "Print only the ticket, with or without a terminal, and make no code"
+        },
+        "ephemeral": {
+          "type": "boolean",
+          "description": "Make a ticket for a throwaway box: the other machine forgets it once it is unreachable for an hour. Without a terminal it prints only the ticket, as --ticket does"
+        },
         "yes": {
           "type": "boolean",
           "description": "Skip the server's question to the user; set it only when the user already agreed in the chat"

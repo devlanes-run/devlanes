@@ -17,6 +17,7 @@ const ASKING: &[&[&str]] = &[
     &["daemon", "revoke", "laptop"],
     &["remote", "connect", "box"],
     &["remote", "disconnect", "box"],
+    &["remote", "disconnect", "box", "--forget"],
     &["config", "set", "remote.require_pairing", "false"],
     &["config", "unset", "remote.require_pairing"],
 ];
@@ -168,6 +169,41 @@ async fn named_tools_ask_too() {
             assert!(!failed(&result), "{tool}: {}", text(&result));
             assert_eq!(unasked.lines(), [format!("--output agent {line} --yes")]);
         }
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// Pairing by ticket asks about the box in the ticket without showing the
+/// ticket, a secret, and runs with it after a yes.
+async fn a_ticket_is_never_shown_in_the_question() {
+    tokio::time::timeout(LIMIT, async {
+        // Made up: right prefix and letters, nothing a box would accept.
+        let ticket = format!("dlp1{}", "example".repeat(20));
+        let harness = connect(
+            TestClient::new().answering(ElicitationAction::Accept),
+            Lifecycle::Initialize,
+            |_| {},
+        )
+        .await;
+        let result = harness
+            .call("devlanes", &["remote", "connect", &ticket])
+            .await;
+        assert!(!failed(&result), "{}", text(&result));
+        let questions = harness.handler.questions();
+        assert_eq!(questions.len(), 1);
+        assert!(
+            questions[0].contains("Pair with the box in this ticket")
+                && questions[0].contains("devlanes remote connect <ticket>"),
+            "{}",
+            questions[0]
+        );
+        assert!(!questions[0].contains(&ticket), "{}", questions[0]);
+        assert_eq!(
+            ran(&harness),
+            [format!("--output agent remote connect {ticket} --yes")]
+        );
     })
     .await
     .expect("in time");

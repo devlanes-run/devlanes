@@ -813,7 +813,19 @@ async fn consent_message(
         message.push_str("\n\n");
         message.push_str(output.stdout.trim_end());
     }
-    message.push_str(&format!("\n\ndevlanes {}", call.args.join(" ")));
+    // A pairing ticket is a secret, and too long to read in a question.
+    let shown: Vec<&str> = call
+        .args
+        .iter()
+        .map(|arg| {
+            if devlanes_cli::is_ticket(arg) {
+                "<ticket>"
+            } else {
+                arg.as_str()
+            }
+        })
+        .collect();
+    message.push_str(&format!("\n\ndevlanes {}", shown.join(" ")));
     message
 }
 
