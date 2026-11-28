@@ -51,6 +51,18 @@ mod os;
 #[path = "darwin.rs"]
 pub mod macos;
 
+/// OpenH264 loaded at run time, for the GUI host and viewer on Linux. Behind
+/// the `openh264` feature, which only `devlanes-gui` enables.
+#[cfg(all(target_os = "linux", feature = "openh264"))]
+#[allow(unsafe_code)]
+pub mod openh264;
+
+/// The VideoToolbox H.264 decoder, for the GUI viewer on macOS. Behind the
+/// `videotoolbox` feature, which only `devlanes-gui` enables.
+#[cfg(all(target_os = "macos", feature = "videotoolbox"))]
+#[allow(unsafe_code)]
+pub mod videotoolbox;
+
 pub use rlimit::{NofileLimit, child_nofile_limit, raise_nofile_limit};
 pub use tree::{DescendantTracker, session_members, session_members_known};
 pub use wsl::{
