@@ -491,18 +491,20 @@ pub struct RemoteConfig {
     #[schemars(extend("examples" = [true,false]))]
     pub require_pairing: bool,
     /// Relays for boxes paired by ticket. A relay helps two machines find each other
-    /// and open a direct connection; lane traffic never goes through it. Defaults to
-    /// `https://relay1.devlanes.run` and `https://relay2.devlanes.run`. Each entry is an
-    /// `http` or `https` URL of at most 200 bytes. A box on a relay that is not in this
-    /// list is reached only at the addresses in its ticket, so to reach a box on your
-    /// own relay, list that relay here too. An empty list turns off relays and the
-    /// lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are reached only
-    /// at their ticket's addresses, such as on the same network. Applies when the
-    /// daemon starts.
+    /// and open a direct connection; devlanes does not keep a connection going through
+    /// it. Defaults to `https://relay1.devlanes.run` and `https://relay2.devlanes.run`.
+    /// The daemon contacts only these relays, and a box writes the one it uses into its
+    /// tickets. A box on a relay that is not in this list is reached only at the
+    /// addresses in its ticket, so to reach a box on your own relay, list that relay
+    /// here too. Up to 8 entries, each an `http` or `https` URL of at most 200 bytes
+    /// with no user name, password, query or fragment. An empty list turns off relays
+    /// and the lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are
+    /// reached only at their ticket's addresses, such as on the same network. Applies
+    /// when the daemon starts.
     #[schemars(extend("examples" = [["https://relay1.devlanes.run","https://relay2.devlanes.run"],["https://relay.example.invalid"],[]]))]
     pub relays: Vec<String>,
-    /// Ask the router to forward a port to this machine (UPnP, NAT-PMP or PCP), which
-    /// helps a direct connection to a box paired by ticket form behind some routers.
+    /// Ask the router, over UPnP, NAT-PMP or PCP, to forward a port to this machine, so
+    /// direct connections with machines paired by ticket form behind more routers.
     /// Defaults to true. Set false to keep devlanes from contacting the router.
     /// Applies when the daemon starts.
     #[schemars(extend("examples" = [true,false]))]
@@ -553,6 +555,12 @@ impl RemoteConfig {
     /// name, commands without a program, and relays the daemon could not use
     /// or put in a ticket.
     fn validate(&self) -> Result<(), ConfigError> {
+        if self.relays.len() > MAX_RELAYS {
+            return Err(ConfigError::plain(format!(
+                "remote.relays: lists {} relays, and at most {MAX_RELAYS} are allowed",
+                self.relays.len()
+            )));
+        }
         for relay in &self.relays {
             relay_problem(relay).map_or(Ok(()), |problem| {
                 Err(ConfigError::plain(format!("remote.relays: {problem}")))
@@ -582,19 +590,36 @@ impl RemoteConfig {
 }
 
 /// Why `relay` cannot be a `remote.relays` entry, or `None` when it can.
-fn relay_problem(relay: &str) -> Option<String> {
-    if relay.len() > MAX_RELAY_URL {
-        return Some(format!(
-            "{relay} is longer than {MAX_RELAY_URL} bytes, the most a pairing ticket can carry"
-        ));
-    }
-    let usable = url::Url::parse(relay).is_ok_and(|url| {
+/// The length is checked on the URL as parsed, the form a ticket carries,
+/// which may have gained a trailing `/`. Public so a client can check a
+/// relay a ticket names by the same rule.
+pub fn relay_problem(relay: &str) -> Option<String> {
+    let parsed = url::Url::parse(relay).ok().filter(|url| {
         matches!(url.scheme(), "http" | "https") && url.host_str().is_some_and(|h| !h.is_empty())
     });
-    (!usable).then(|| {
-        format!("{relay} is not an http or https URL, such as https://relay.example.invalid")
+    let Some(url) = parsed else {
+        return Some(format!(
+            "{relay} is not an http or https URL, such as https://relay.example.invalid"
+        ));
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return Some(format!(
+            "{relay} holds a user name or password, which a relay URL cannot have"
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Some(format!(
+            "{relay} has a query or a fragment, which a relay URL cannot have"
+        ));
+    }
+    (url.as_str().len() > MAX_RELAY_URL).then(|| {
+        format!("{relay} is longer than {MAX_RELAY_URL} bytes, the most a pairing ticket can carry")
     })
 }
+
+/// The most `remote.relays` entries: iroh probes every relay, so more than
+/// a few only add probes.
+const MAX_RELAYS: usize = 8;
 
 /// How long the daemon's database keeps records of finished runs and of remote boxes.
 /// An hourly cleanup deletes what is older.
@@ -1446,7 +1471,8 @@ pub struct BoxSettings {
 /// [`BoxSettings`] from a lenient load ([`load_user_lenient`],
 /// [`parse_user_lenient`]), with the load's problems that concern this
 /// machine as a box: those under `remote`, except `remote.boxes`, which is
-/// about the boxes this machine connects to, and a failure of the whole file
+/// about the boxes this machine connects to, `remote.relays` and
+/// `remote.port_mapping`, which the daemon reads at start, and a failure of the whole file
 /// (unreadable, not YAML, or too many problems to keep any setting), which
 /// loses `remote` with everything else. With any such problem every setting
 /// falls to the safe side instead of its default: connections are refused,
@@ -1464,9 +1490,15 @@ pub fn box_settings(
             let message = &problem.message;
             // A lenient load ends each per-key problem this way; any other
             // problem is about the whole file.
+            // `remote.relays` and `remote.port_mapping` only shape
+            // peer-to-peer networking, so a typo there must not turn SSH and
+            // command clients away.
+            let peer_to_peer =
+                message.starts_with("remote.relays") || message.starts_with("remote.port_mapping");
             !message.ends_with("; the default applies")
                 || ((message.starts_with("remote.") || message.starts_with("remote:"))
-                    && !message.starts_with("remote.boxes"))
+                    && !message.starts_with("remote.boxes")
+                    && !peer_to_peer)
         })
         .collect();
     let settings = if remote.is_empty() {

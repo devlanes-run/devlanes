@@ -644,12 +644,12 @@
         },
         "port_mapping": {
           "default": true,
-          "description": "Ask the router to forward a port to this machine (UPnP, NAT-PMP or PCP), which helps a direct connection to a box paired by ticket form behind some routers. Defaults to true. Set false to keep devlanes from contacting the router. Applies when the daemon starts.",
+          "description": "Ask the router, over UPnP, NAT-PMP or PCP, to forward a port to this machine, so direct connections with machines paired by ticket form behind more routers. Defaults to true. Set false to keep devlanes from contacting the router. Applies when the daemon starts.",
           "examples": [
             true,
             false
           ],
-          "markdownDescription": "Ask the router to forward a port to this machine (UPnP, NAT-PMP or PCP), which helps a direct connection to a box paired by ticket form behind some routers. Defaults to true. Set false to keep devlanes from contacting the router. Applies when the daemon starts.",
+          "markdownDescription": "Ask the router, over UPnP, NAT-PMP or PCP, to forward a port to this machine, so direct connections with machines paired by ticket form behind more routers. Defaults to true. Set false to keep devlanes from contacting the router. Applies when the daemon starts.",
           "type": "boolean"
         },
         "relays": {
@@ -657,7 +657,7 @@
             "https://relay1.devlanes.run",
             "https://relay2.devlanes.run"
           ],
-          "description": "Relays for boxes paired by ticket. A relay helps two machines find each other and open a direct connection; lane traffic never goes through it. Defaults to `https://relay1.devlanes.run` and `https://relay2.devlanes.run`. Each entry is an `http` or `https` URL of at most 200 bytes. A box on a relay that is not in this list is reached only at the addresses in its ticket, so to reach a box on your own relay, list that relay here too. An empty list turns off relays and the lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are reached only at their ticket's addresses, such as on the same network. Applies when the daemon starts.",
+          "description": "Relays for boxes paired by ticket. A relay helps two machines find each other and open a direct connection; devlanes does not keep a connection going through it. Defaults to `https://relay1.devlanes.run` and `https://relay2.devlanes.run`. The daemon contacts only these relays, and a box writes the one it uses into its tickets. A box on a relay that is not in this list is reached only at the addresses in its ticket, so to reach a box on your own relay, list that relay here too. Up to 8 entries, each an `http` or `https` URL of at most 200 bytes with no user name, password, query or fragment. An empty list turns off relays and the lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are reached only at their ticket's addresses, such as on the same network. Applies when the daemon starts.",
           "examples": [
             [
               "https://relay1.devlanes.run",
@@ -669,16 +669,16 @@
             []
           ],
           "items": {
-            "description": "Relays for boxes paired by ticket. A relay helps two machines find each other and open a direct connection; lane traffic never goes through it. Defaults to `https://relay1.devlanes.run` and `https://relay2.devlanes.run`. Each entry is an `http` or `https` URL of at most 200 bytes. A box on a relay that is not in this list is reached only at the addresses in its ticket, so to reach a box on your own relay, list that relay here too. An empty list turns off relays and the lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are reached only at their ticket's addresses, such as on the same network. Applies when the daemon starts.",
+            "description": "Relays for boxes paired by ticket. A relay helps two machines find each other and open a direct connection; devlanes does not keep a connection going through it. Defaults to `https://relay1.devlanes.run` and `https://relay2.devlanes.run`. The daemon contacts only these relays, and a box writes the one it uses into its tickets. A box on a relay that is not in this list is reached only at the addresses in its ticket, so to reach a box on your own relay, list that relay here too. Up to 8 entries, each an `http` or `https` URL of at most 200 bytes with no user name, password, query or fragment. An empty list turns off relays and the lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are reached only at their ticket's addresses, such as on the same network. Applies when the daemon starts.",
             "examples": [
               "https://relay1.devlanes.run",
               "https://relay2.devlanes.run",
               "https://relay.example.invalid"
             ],
-            "markdownDescription": "Relays for boxes paired by ticket. A relay helps two machines find each other and open a direct connection; lane traffic never goes through it. Defaults to `https://relay1.devlanes.run` and `https://relay2.devlanes.run`. Each entry is an `http` or `https` URL of at most 200 bytes. A box on a relay that is not in this list is reached only at the addresses in its ticket, so to reach a box on your own relay, list that relay here too. An empty list turns off relays and the lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are reached only at their ticket's addresses, such as on the same network. Applies when the daemon starts.",
+            "markdownDescription": "Relays for boxes paired by ticket. A relay helps two machines find each other and open a direct connection; devlanes does not keep a connection going through it. Defaults to `https://relay1.devlanes.run` and `https://relay2.devlanes.run`. The daemon contacts only these relays, and a box writes the one it uses into its tickets. A box on a relay that is not in this list is reached only at the addresses in its ticket, so to reach a box on your own relay, list that relay here too. Up to 8 entries, each an `http` or `https` URL of at most 200 bytes with no user name, password, query or fragment. An empty list turns off relays and the lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are reached only at their ticket's addresses, such as on the same network. Applies when the daemon starts.",
             "type": "string"
           },
-          "markdownDescription": "Relays for boxes paired by ticket. A relay helps two machines find each other and open a direct connection; lane traffic never goes through it. Defaults to `https://relay1.devlanes.run` and `https://relay2.devlanes.run`. Each entry is an `http` or `https` URL of at most 200 bytes. A box on a relay that is not in this list is reached only at the addresses in its ticket, so to reach a box on your own relay, list that relay here too. An empty list turns off relays and the lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are reached only at their ticket's addresses, such as on the same network. Applies when the daemon starts.",
+          "markdownDescription": "Relays for boxes paired by ticket. A relay helps two machines find each other and open a direct connection; devlanes does not keep a connection going through it. Defaults to `https://relay1.devlanes.run` and `https://relay2.devlanes.run`. The daemon contacts only these relays, and a box writes the one it uses into its tickets. A box on a relay that is not in this list is reached only at the addresses in its ticket, so to reach a box on your own relay, list that relay here too. Up to 8 entries, each an `http` or `https` URL of at most 200 bytes with no user name, password, query or fragment. An empty list turns off relays and the lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are reached only at their ticket's addresses, such as on the same network. Applies when the daemon starts.",
           "type": "array"
         },
         "require_pairing": {

@@ -740,6 +740,13 @@ fn box_settings_fall_to_the_safe_side() {
         settings("remote:\n  require_pairing: false\n  boxes:\n    acme:\n      command: []\n"),
         (true, true, false, 0)
     );
+    // Peer-to-peer settings: a typo there keeps SSH and command clients served.
+    for source in [
+        "remote:\n  require_pairing: false\n  relays: [relay.example.invalid]\n",
+        "remote:\n  require_pairing: false\n  port_mapping: \"no\"\n",
+    ] {
+        assert_eq!(settings(source), (true, true, false, 0), "{source}");
+    }
     for source in [
         "remote:\n  start_daemon: flase\n",
         "remote:\n  require_pairing: false\n  requre_pairing: false\n",
@@ -800,6 +807,17 @@ fn remote_boxes_need_a_name_and_a_program() {
         .is_ok()
     );
     let long = format!("https://relay.example.invalid/{}", "r".repeat(172));
+    // 200 bytes as written, 201 once parsing adds the trailing `/`.
+    let label = "r".repeat(63);
+    let slashless = format!("http://{label}.{label}.{label}.x");
+    assert_eq!(slashless.len(), 200);
+    let many = format!(
+        "remote: {{ relays: [{}] }}",
+        (0..9)
+            .map(|n| format!("'https://relay{n}.example.invalid'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let config = parse_user(
         "remote:\n  boxes:\n    acme_2:\n      command: [docker, exec, -i, acme, devlanes, tunnel, --stdio]\n",
     )
@@ -848,6 +866,23 @@ fn remote_boxes_need_a_name_and_a_program() {
             &format!("remote: {{ relays: ['{long}'] }}"),
             "is longer than 200 bytes",
         ),
+        (
+            &format!("remote: {{ relays: ['{slashless}'] }}"),
+            "is longer than 200 bytes",
+        ),
+        (
+            "remote: { relays: ['https://user:secret@relay.example.invalid'] }",
+            "holds a user name or password",
+        ),
+        (
+            "remote: { relays: ['https://relay.example.invalid/?a=1'] }",
+            "has a query or a fragment",
+        ),
+        (
+            "remote: { relays: ['https://relay.example.invalid/#top'] }",
+            "has a query or a fragment",
+        ),
+        (&many, "at most 8 are allowed"),
     ] {
         let error = parse_user(source).expect_err(source);
         assert!(
