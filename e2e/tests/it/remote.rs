@@ -214,8 +214,14 @@ fn two_daemons_pair_by_ticket() -> Result<()> {
     let client = Lab::without_config(BUDGET)?;
     add_config(&client, NO_RELAYS)?;
 
-    let pair = boxed.json(boxed.repo(), &["daemon", "pair"])?;
-    let ticket = need(pair["ticket"].as_str(), "a ticket from daemon pair")?.to_owned();
+    // The ticket alone: with a code too, the daemon waits only a second for
+    // it, which the first bind on a slow runner can take.
+    let pair = boxed.json(boxed.repo(), &["daemon", "pair", "--ticket"])?;
+    let Some(ticket) = pair["ticket"].as_str().map(str::to_owned) else {
+        return Err(Error::Unexpected(format!(
+            "daemon pair --ticket printed no ticket: {pair}"
+        )));
+    };
     // Without a relay the addresses are the only way to the box, and a dial
     // with none fails as unreachable, which would point at the box instead.
     let parsed = devlanes_transport::Ticket::parse(&ticket)
