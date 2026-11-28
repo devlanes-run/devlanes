@@ -1,17 +1,17 @@
  devlanes  1 acme   2 billing   3 shop   starting feat…  M  D · 2 issues  Boxes
 ┌ boxes ───────────────────────────────────────────────────────────────────────┐
-│ no boxes yet                                                                 │
-│     ┌ pair another machine ────────────────────────────────────────────┐     │
-│   n │ On the other machine, press n in its Boxes view and paste this   │     │
-│     │ ticket:                                                          │     │
-│ A bo│                                                                  │ top │
-│ bar.│ dlp1exampleticketforscreensonlyexampleticketforscreensonlyexampl │     │
-│     │ eticketforscreensonlyexampleticketforscreensonlyexampleticketfor │     │
-│     │ screensonly                                                      │     │
+│ no b┌ pair another machine ────────────────────────────────────────────┐     │
+│     │ Press y to copy this ticket, then on the other machine press n   │     │
+│   n │ in its Boxes view and paste it:                                  │     │
 │     │                                                                  │     │
-│     │ It works once and expires in 9m 59s. It lets that machine pair   │     │
-│     │ with this one without SSH.                                       │     │
-│     │ Or run devlanes remote connect <ticket> there.                   │     │
+│ A bo│ dlp1q7xkexamplem2vz4h3dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3 │ top │
+│ bar.│ dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3dexamplew6yr5jtnexampl │     │
+│     │ epq7xkexamplem2vz4h3dexamplew6yr5jtnexamplepq7xkexam             │     │
+│     │                                                                  │     │
+│     │ It works once, within 9m 59s, and pairs that machine with this   │     │
+│     │ one without SSH.                                                 │     │
+│     │ If your terminal does not copy, run devlanes daemon pair         │     │
+│     │ --ticket in a shell here.                                        │     │
 │     │                                                                  │     │
 │     │ A machine that reaches this one over SSH or a command uses the   │     │
 │     │ code K7QM-3XWD instead:                                          │     │
@@ -26,18 +26,18 @@
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 57 bold, 60 bold, 61-71 red, 74 bold underlined, 75-78 bold underlined yellow
 1: 0 darkgray, 1-7 bold, 8-79 darkgray
-2: 0 darkgray, 2-13 bold, 79 darkgray
-3: 0 darkgray, 6-73 bold yellow, 79 darkgray
+2: 0 darkgray, 2-5 bold, 6-73 bold yellow, 79 darkgray
+3: 0 darkgray, 6 bold yellow, 73 bold yellow, 79 darkgray
 4: 0 darkgray, 4 bold, 6 bold yellow, 73 bold yellow, 79 darkgray
 5: 0 darkgray, 6 bold yellow, 73 bold yellow, 79 darkgray
-6: 0 darkgray, 2-5 dim, 6 bold yellow, 73 bold yellow, 74-77 dim, 79 darkgray
+6: 0 darkgray, 2-5 dim, 6 bold yellow, 8-71 bold yellow, 73 bold yellow, 74-77 dim, 79 darkgray
 7: 0 darkgray, 2-5 dim, 6 bold yellow, 8-71 bold yellow, 73 bold yellow, 79 darkgray
-8: 0 darkgray, 6 bold yellow, 8-71 bold yellow, 73 bold yellow, 79 darkgray
-9: 0 darkgray, 6 bold yellow, 8-18 bold yellow, 73 bold yellow, 79 darkgray
-10: 0 darkgray, 6 bold yellow, 73 bold yellow, 79 darkgray
-11: 0 darkgray, 6 bold yellow, 8-69 dim, 73 bold yellow, 79 darkgray
-12: 0 darkgray, 6 bold yellow, 8-33 dim, 73 bold yellow, 79 darkgray
-13: 0 darkgray, 6 bold yellow, 8-53 dim, 73 bold yellow, 79 darkgray
+8: 0 darkgray, 6 bold yellow, 8-59 bold yellow, 73 bold yellow, 79 darkgray
+9: 0 darkgray, 6 bold yellow, 73 bold yellow, 79 darkgray
+10: 0 darkgray, 6 bold yellow, 8-69 dim, 73 bold yellow, 79 darkgray
+11: 0 darkgray, 6 bold yellow, 8-23 dim, 73 bold yellow, 79 darkgray
+12: 0 darkgray, 6 bold yellow, 8-63 dim, 73 bold yellow, 79 darkgray
+13: 0 darkgray, 6 bold yellow, 8-32 dim, 73 bold yellow, 79 darkgray
 14: 0 darkgray, 6 bold yellow, 73 bold yellow, 79 darkgray
 15: 0 darkgray, 6 bold yellow, 73 bold yellow, 79 darkgray
 16: 0 darkgray, 6 bold yellow, 73 bold yellow, 79 darkgray

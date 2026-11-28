@@ -314,6 +314,14 @@ the boxes view on studio, paired by ticket, which no longer accepts this machine
 - 120x40: [txt](boxes-ticket-pairing-120x40.txt) · [png](boxes-ticket-pairing-120x40.png) · [ansi](boxes-ticket-pairing-120x40.ansi)
 - 80x24: [txt](boxes-ticket-pairing-80x24.txt) · [png](boxes-ticket-pairing-80x24.png) · [ansi](boxes-ticket-pairing-80x24.ansi)
 
+## boxes-long-name
+
+the boxes view with a box paired by ticket under the longest name it can have, 63 characters
+
+- 200x60: [txt](boxes-long-name-200x60.txt) · [png](boxes-long-name-200x60.png) · [ansi](boxes-long-name-200x60.ansi)
+- 120x40: [txt](boxes-long-name-120x40.txt) · [png](boxes-long-name-120x40.png) · [ansi](boxes-long-name-120x40.ansi)
+- 80x24: [txt](boxes-long-name-80x24.txt) · [png](boxes-long-name-80x24.png) · [ansi](boxes-long-name-80x24.ansi)
+
 ## dialog-forget
 
 f on studio, paired by ticket: asks before forgetting it
@@ -356,7 +364,7 @@ a new connection (n) with a ticket pasted, shown by its start and length only, a
 
 ## dialog-connect-paired
 
-enter on a pasted ticket: the box was paired before, so it keeps its name and the typed one is ignored; the ticket is gone from the screen
+enter on a pasted ticket of studio, listed already: it was paired before, so it keeps its name and the typed one is ignored; the ticket is gone from the screen
 
 - 200x60: [txt](dialog-connect-paired-200x60.txt) · [png](dialog-connect-paired-200x60.png) · [ansi](dialog-connect-paired-200x60.ansi)
 - 120x40: [txt](dialog-connect-paired-120x40.txt) · [png](dialog-connect-paired-120x40.png) · [ansi](dialog-connect-paired-120x40.ansi)
@@ -425,6 +433,14 @@ pairing another machine (p): the ticket first with its countdown and what to do 
 - 200x60: [txt](dialog-pair-200x60.txt) · [png](dialog-pair-200x60.png) · [ansi](dialog-pair-200x60.ansi)
 - 120x40: [txt](dialog-pair-120x40.txt) · [png](dialog-pair-120x40.png) · [ansi](dialog-pair-120x40.ansi)
 - 80x24: [txt](dialog-pair-80x24.txt) · [png](dialog-pair-80x24.png) · [ansi](dialog-pair-80x24.ansi)
+
+## dialog-pair-long
+
+pairing another machine with a 250-character ticket, as a box with more addresses gives: the code and the keys stay on the modal
+
+- 200x60: [txt](dialog-pair-long-200x60.txt) · [png](dialog-pair-long-200x60.png) · [ansi](dialog-pair-long-200x60.ansi)
+- 120x40: [txt](dialog-pair-long-120x40.txt) · [png](dialog-pair-long-120x40.png) · [ansi](dialog-pair-long-120x40.ansi)
+- 80x24: [txt](dialog-pair-long-80x24.txt) · [png](dialog-pair-long-80x24.png) · [ansi](dialog-pair-long-80x24.ansi)
 
 ## dialog-pair-not-ready
 
@@ -697,6 +713,14 @@ revoking laptop (x on a client in the boxes view): asks first, y revokes
 - 200x60: [txt](dialog-revoke-200x60.txt) · [png](dialog-revoke-200x60.png) · [ansi](dialog-revoke-200x60.ansi)
 - 120x40: [txt](dialog-revoke-120x40.txt) · [png](dialog-revoke-120x40.png) · [ansi](dialog-revoke-120x40.ansi)
 - 80x24: [txt](dialog-revoke-80x24.txt) · [png](dialog-revoke-80x24.png) · [ansi](dialog-revoke-80x24.ansi)
+
+## dialog-revoke-ticket
+
+revoking laptop, paired by ticket: it needs a new ticket to connect again
+
+- 200x60: [txt](dialog-revoke-ticket-200x60.txt) · [png](dialog-revoke-ticket-200x60.png) · [ansi](dialog-revoke-ticket-200x60.ansi)
+- 120x40: [txt](dialog-revoke-ticket-120x40.txt) · [png](dialog-revoke-ticket-120x40.png) · [ansi](dialog-revoke-ticket-120x40.ansi)
+- 80x24: [txt](dialog-revoke-ticket-80x24.txt) · [png](dialog-revoke-ticket-80x24.png) · [ansi](dialog-revoke-ticket-80x24.ansi)
 
 ## dialog-revoke-unpaired
 

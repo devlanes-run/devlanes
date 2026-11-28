@@ -10,21 +10,21 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-│                          ┌ pair another machine ─────────────────────────────────────────┐                           │
-│                          │ No ticket yet: this machine is still reaching the network for │                           │
-│                          │ peer-to-peer connections.                                     │                           │
-│                          │ Press t to get the ticket alone.                              │                           │
-│                          │                                                               │                           │
-│                          │                           K7QM-3XWD                           │                           │
-│                          │               It works once and expires in 10m.               │                           │
-│                          │                                                               │                           │
-│                          │ On the other machine, run                                     │                           │
-│                          │   devlanes remote connect <box> --code K7QM-3XWD              │                           │
-│                          │ <box> is this machine's SSH name there.                       │                           │
-│                          │ Or press n in its Boxes view and type the code.               │                           │
-│                          │                                                               │                           │
-│                          │ y copy code   t get ticket   p new ticket   esc close         │                           │
-│                          └───────────────────────────────────────────────────────────────┘                           │
+│                                                                                                                      │
+│                            ┌ pair another machine ──────────────────────────────────────┐                            │
+│                            │ No ticket yet: this machine is still reaching its relay.   │                            │
+│                            │ Press t to wait for the ticket.                            │                            │
+│                            │                                                            │                            │
+│                            │                          K7QM-3XWD                         │                            │
+│                            │              It works once and expires in 10m.             │                            │
+│                            │                                                            │                            │
+│                            │ On the other machine, run                                  │                            │
+│                            │   devlanes remote connect <box> --code K7QM-3XWD           │                            │
+│                            │ <box> is this machine's SSH name there.                    │                            │
+│                            │ Or press n in its Boxes view and type the code.            │                            │
+│                            │                                                            │                            │
+│                            │ y copy code   t wait for ticket   p new ticket   esc close │                            │
+│                            └────────────────────────────────────────────────────────────┘                            │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -52,21 +52,21 @@
 9: 0 darkgray, 119 darkgray
 10: 0 darkgray, 119 darkgray
 11: 0 darkgray, 119 darkgray
-12: 0 darkgray, 27-91 bold yellow, 119 darkgray
-13: 0 darkgray, 27 bold yellow, 29-89 yellow, 91 bold yellow, 119 darkgray
-14: 0 darkgray, 27 bold yellow, 29-53 yellow, 91 bold yellow, 119 darkgray
-15: 0 darkgray, 27 bold yellow, 29-60 dim, 91 bold yellow, 119 darkgray
-16: 0 darkgray, 27 bold yellow, 91 bold yellow, 119 darkgray
-17: 0 darkgray, 27 bold yellow, 55-63 bold yellow, 91 bold yellow, 119 darkgray
-18: 0 darkgray, 27 bold yellow, 43-75 dim, 91 bold yellow, 119 darkgray
-19: 0 darkgray, 27 bold yellow, 91 bold yellow, 119 darkgray
-20: 0 darkgray, 27 bold yellow, 91 bold yellow, 119 darkgray
-21: 0 darkgray, 27 bold yellow, 29-76 bold, 91 bold yellow, 119 darkgray
-22: 0 darkgray, 27 bold yellow, 29-67 dim, 91 bold yellow, 119 darkgray
-23: 0 darkgray, 27 bold yellow, 29-75 dim, 91 bold yellow, 119 darkgray
-24: 0 darkgray, 27 bold yellow, 91 bold yellow, 119 darkgray
-25: 0 darkgray, 27 bold yellow, 29 bold, 30-39 dim, 43 bold, 44-54 dim, 58 bold, 59-69 dim, 73-75 bold, 76-81 dim, 91 bold yellow, 119 darkgray
-26: 0 darkgray, 27-91 bold yellow, 119 darkgray
+12: 0 darkgray, 119 darkgray
+13: 0 darkgray, 29-90 bold yellow, 119 darkgray
+14: 0 darkgray, 29 bold yellow, 31-86 yellow, 90 bold yellow, 119 darkgray
+15: 0 darkgray, 29 bold yellow, 31-61 dim, 90 bold yellow, 119 darkgray
+16: 0 darkgray, 29 bold yellow, 90 bold yellow, 119 darkgray
+17: 0 darkgray, 29 bold yellow, 56-64 bold yellow, 90 bold yellow, 119 darkgray
+18: 0 darkgray, 29 bold yellow, 44-76 dim, 90 bold yellow, 119 darkgray
+19: 0 darkgray, 29 bold yellow, 90 bold yellow, 119 darkgray
+20: 0 darkgray, 29 bold yellow, 90 bold yellow, 119 darkgray
+21: 0 darkgray, 29 bold yellow, 31-78 bold, 90 bold yellow, 119 darkgray
+22: 0 darkgray, 29 bold yellow, 31-69 dim, 90 bold yellow, 119 darkgray
+23: 0 darkgray, 29 bold yellow, 31-77 dim, 90 bold yellow, 119 darkgray
+24: 0 darkgray, 29 bold yellow, 90 bold yellow, 119 darkgray
+25: 0 darkgray, 29 bold yellow, 31 bold, 32-41 dim, 45 bold, 46-61 dim, 65 bold, 66-76 dim, 80-82 bold, 83-88 dim, 90 bold yellow, 119 darkgray
+26: 0 darkgray, 29-90 bold yellow, 119 darkgray
 27: 0 darkgray, 119 darkgray
 28: 0 darkgray, 119 darkgray
 29: 0 darkgray, 119 darkgray

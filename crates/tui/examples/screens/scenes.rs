@@ -824,6 +824,17 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "boxes-long-name",
+            what: "the boxes view with a box paired by ticket under the longest name it can have, 63 characters",
+            setup: |f| {
+                f.show_boxes(data::boxes_long_name());
+                f.shifted('B');
+                for _ in 0..4 {
+                    f.key(KeyCode::Char('j'));
+                }
+            },
+        },
+        Scene {
             name: "dialog-forget",
             what: "f on studio, paired by ticket: asks before forgetting it",
             setup: |f| {
@@ -864,18 +875,19 @@ fn scenes() -> Vec<Scene> {
             setup: |f| {
                 f.shifted('B');
                 f.key(KeyCode::Char('n'));
-                f.send(Msg::Paste(format!("{}\n", data::SAMPLE_TICKET)));
+                f.send(Msg::Paste(format!("{}\n", data::whole_ticket())));
                 f.key(KeyCode::Tab);
                 f.type_text("studio");
             },
         },
         Scene {
             name: "dialog-connect-paired",
-            what: "enter on a pasted ticket: the box was paired before, so it keeps its name and the typed one is ignored; the ticket is gone from the screen",
+            what: "enter on a pasted ticket of studio, listed already: it was paired before, so it keeps its name and the typed one is ignored; the ticket is gone from the screen",
             setup: |f| {
+                f.connect_boxes();
                 f.shifted('B');
                 f.key(KeyCode::Char('n'));
-                f.send(Msg::Paste(data::SAMPLE_TICKET.to_owned()));
+                f.send(Msg::Paste(data::whole_ticket()));
                 f.key(KeyCode::Tab);
                 f.type_text("work");
                 f.key(KeyCode::Enter);
@@ -1007,6 +1019,15 @@ fn scenes() -> Vec<Scene> {
                 f.shifted('B');
                 f.key(KeyCode::Char('p'));
                 f.send(Msg::Tick);
+            },
+        },
+        Scene {
+            name: "dialog-pair-long",
+            what: "pairing another machine with a 250-character ticket, as a box with more addresses gives: the code and the keys stay on the modal",
+            setup: |f| {
+                f.pairing = Ok(data::pair_long_ticket());
+                f.shifted('B');
+                f.key(KeyCode::Char('p'));
             },
         },
         Scene {
@@ -1313,6 +1334,15 @@ fn scenes() -> Vec<Scene> {
                 for _ in 0..5 {
                     f.key(KeyCode::Char('j'));
                 }
+                f.key(KeyCode::Char('x'));
+            },
+        },
+        Scene {
+            name: "dialog-revoke-ticket",
+            what: "revoking laptop, paired by ticket: it needs a new ticket to connect again",
+            setup: |f| {
+                f.clients = data::clients_ticket();
+                f.shifted('B');
                 f.key(KeyCode::Char('x'));
             },
         },

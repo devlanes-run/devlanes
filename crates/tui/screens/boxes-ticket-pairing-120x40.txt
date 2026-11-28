@@ -27,8 +27,8 @@
 │   link      waiting for a new ticket, with ports and hostnames kept                                                  │
 │   error     box studio no longer accepts this machine's pairing. Run devlanes daemon pair on the box, then devlanes  │
 │             remote connect <ticket> here.                                                                            │
-│   fix       press p on studio or run devlanes daemon pair there, then enter here and paste the ticket                │
-│                                                                                                                      │
+│   fix       on studio, press p in its Boxes view or run devlanes daemon pair; then press enter here and paste the    │
+│             ticket                                                                                                   │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -69,8 +69,8 @@
 26: 0 bold yellow, 4-13 dim, 14-68 yellow, 119 bold yellow
 27: 0 bold yellow, 4-13 dim, 14-116 yellow, 119 bold yellow
 28: 0 bold yellow, 4-13 dim, 14-42 yellow, 119 bold yellow
-29: 0 bold yellow, 4-13 dim, 14-102 bold, 119 bold yellow
-30: 0 bold yellow, 119 bold yellow
+29: 0 bold yellow, 4-13 dim, 14-114 bold, 119 bold yellow
+30: 0 bold yellow, 4-13 dim, 14-19 bold, 119 bold yellow
 31: 0 bold yellow, 119 bold yellow
 32: 0 bold yellow, 119 bold yellow
 33: 0 bold yellow, 119 bold yellow

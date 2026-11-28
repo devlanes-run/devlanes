@@ -6,7 +6,7 @@
 │                                                                              │
 │ A bo┌ connect a box ───────────────────────────────────────────────────┐ top │
 │ bar.│   Reach by   (•) ticket    ( ) SSH name    ( ) command           │     │
-│     │   Ticket     dlp1… 139 characters                                │     │
+│     │   Ticket     dlp1… 150 characters                                │     │
 │     │ ▌ Name       studio▏                                             │     │
 │     │                                                                  │     │
 │     │ Get a ticket on the box: press p in its Boxes view, or run       │     │

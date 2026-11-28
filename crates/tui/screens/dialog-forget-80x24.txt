@@ -8,7 +8,7 @@
 │ ✕ stu┌───────────────────────────────────────────────────────────────┐ · p2p │
 │   lin│ Forget studio?                                                │       │
 │   err│                                                               │s      │
-│      │ Connecting to it again needs a new ticket from it.            │ is    │
+│      │ To connect to it again, you need a new ticket from the box.   │ is    │
 │      │ Its lanes keep running on the box, and folders synced from it │       │
 │   fix│ stay here.                                                    │chine, │
 │      │                                                               │       │

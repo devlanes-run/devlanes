@@ -592,8 +592,49 @@ pub fn boxes() -> Value {
 }
 
 /// A ticket's shape for the screens, which no daemon would parse: `dlp1`
-/// and as many letters as a ticket with a relay and no address has.
-pub const SAMPLE_TICKET: &str = "dlp1exampleticketforscreensonlyexampleticketforscreensonlyexampleticketforscreensonlyexampleticketforscreensonlyexampleticketforscreensonly";
+/// and base32 with `example` in it, `len` characters in all. Real tickets
+/// are 177 to 184 characters with one relay and two addresses.
+pub fn sample_ticket(len: usize) -> String {
+    let body: String = "q7xkexamplem2vz4h3dexamplew6yr5jtnexamplep"
+        .chars()
+        .cycle()
+        .take(len.saturating_sub(4))
+        .collect();
+    format!("dlp1{body}")
+}
+
+/// A ticket the connect form takes whole, which is never shown: a fixed key
+/// and secret, the relay and an address on documentation networks.
+pub fn whole_ticket() -> String {
+    devlanes_transport::Ticket {
+        addr: devlanes_transport::PeerAddr {
+            id: devlanes_transport::PeerId([7; 32]),
+            relay: Some("https://relay.example.invalid".into()),
+            direct: vec![std::net::SocketAddr::from(([192, 0, 2, 4], 4242))],
+        },
+        secret: devlanes_transport::TicketSecret([9; 16]),
+        ephemeral: false,
+    }
+    .encode()
+}
+
+/// [`boxes`] with `studio` under the longest name a box paired by ticket
+/// can have, 63 characters.
+pub fn boxes_long_name() -> Value {
+    let mut list = boxes();
+    for item in list["items"].as_array_mut().into_iter().flatten() {
+        if item["host"] == "studio" {
+            let name = "acme-gpu-builder-eu-west-1-a-very-long-box-name-for-the-screens";
+            let error = item["error"]
+                .as_str()
+                .unwrap_or_default()
+                .replace("studio", name);
+            item["host"] = json!(name);
+            item["error"] = json!(error);
+        }
+    }
+    list
+}
 
 /// [`boxes`] after `studio`, paired by ticket, revoked this machine: its
 /// link waits for a new ticket, in the daemon's words.
@@ -838,7 +879,15 @@ pub fn no_clients_off() -> Value {
 /// answers.
 pub fn pair_code() -> Value {
     let mut answer = pair_code_alone();
-    answer["ticket"] = json!(SAMPLE_TICKET);
+    answer["ticket"] = json!(sample_ticket(180));
+    answer
+}
+
+/// [`pair_code`] with a 250-character ticket, as a box with more addresses
+/// gives.
+pub fn pair_long_ticket() -> Value {
+    let mut answer = pair_code_alone();
+    answer["ticket"] = json!(sample_ticket(250));
     answer
 }
 
@@ -861,7 +910,7 @@ pub fn pair_ticket_not_ready() -> Value {
 /// `remote.pair`'s answer to a request for the ticket alone.
 pub fn ticket_alone() -> Value {
     let valid = devlanes_proto::remote::PAIRING_CODE_TTL_MS;
-    json!({"ticket": SAMPLE_TICKET, "expires_at_ms": NOW_MS + valid, "valid_ms": valid})
+    json!({"ticket": sample_ticket(180), "expires_at_ms": NOW_MS + valid, "valid_ms": valid})
 }
 
 /// `remote.pair`'s ticket while 5 wrong codes keep codes paused 4m 12s more.
@@ -899,6 +948,17 @@ pub fn connect_refused(host: &str) -> RpcError {
                "message": "the box does not accept connections. Set remote.allow_connections to true there"}),
         4,
     )
+}
+
+/// [`clients`] with the laptop paired by ticket, as `remote.clients` marks
+/// a client with a ticket pairing.
+pub fn clients_ticket() -> Value {
+    let mut list = clients();
+    if let Some(laptop) = list["items"].get_mut(0) {
+        laptop["transport"] = json!("p2p");
+        laptop["key"] = json!("1a2b3c4d");
+    }
+    list
 }
 
 /// `remote.clients` on this machine as a box, connected clients first as the

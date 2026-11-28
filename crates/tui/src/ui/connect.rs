@@ -632,7 +632,7 @@ fn offer(app: &App, dialog: &PairDialog, offer: &Offer, width: usize) -> Parts {
         (false, false) => {}
     }
     if dialog.may_fetch_ticket() {
-        pairs.push(("t", "get ticket"));
+        pairs.push(("t", "wait for ticket"));
     }
     let new = if ticket.is_some() || offer.no_ticket != Some(NoTicket::OldDaemon) {
         "new ticket"

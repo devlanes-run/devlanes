@@ -26,7 +26,7 @@
 │ ✕ studio                                                         ┌───────────────────────────────────────────────────────────────┐                                                      failed · p2p │
 │   link      failed, so nothing is mirrored                       │ Forget studio?                                                │                                                                   │
 │   error     box studio has not been reachable for 24 hours, so de│                                                               │ is back.                                                          │
-│   fix       enter connects again; if the box no longer accepts th│ Connecting to it again needs a new ticket from it.            │                                                                   │
+│   fix       enter connects again; if the box no longer accepts th│ To connect to it again, you need a new ticket from the box.   │                                                                   │
 │                                                                  │ Its lanes keep running on the box, and folders synced from it │                                                                   │
 │                                                                  │ stay here.                                                    │                                                                   │
 │                                                                  │                                                               │                                                                   │

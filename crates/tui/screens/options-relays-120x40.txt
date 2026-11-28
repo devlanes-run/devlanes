@@ -25,8 +25,8 @@
 │   │   remote.port_mapping                   true│ lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes │   │
 │   │                                             │ are reached only at their ticket's addresses, such as on the   │157│
 │   │                                             │ same network. Applies when the daemon starts.                  │   │
-│   │                                             │ Separate the entries with commas, or type none for an empty    │170│
-│   │                                             │ list.                                                          │   │
+│   │                                             │ Separate the relays with commas. Type none for no relay: boxes │170│
+│   │                                             │ are then reached only at the addresses in their tickets.       │   │
 │   │                                             │                                                                │183│
 │   │                                             │ default  https://relay1.devlanes.run, https://relay2.devlanes. │   │
 │   │                                             │ example  https://relay1.devlanes.run, https://relay2.devlanes… │196│
@@ -67,8 +67,8 @@
 24: 0 darkgray, 4 bold yellow, 6 bold yellow, 46-49 dim, 50 darkgray, 115 bold yellow, 119 darkgray
 25: 0 darkgray, 4 bold yellow, 50 darkgray, 115 bold yellow, 119 darkgray
 26: 0 darkgray, 4 bold yellow, 50 darkgray, 115 bold yellow, 119 darkgray
-27: 0 darkgray, 4 bold yellow, 50 darkgray, 52-110 dim, 115 bold yellow, 119 darkgray
-28: 0 darkgray, 4 bold yellow, 50 darkgray, 52-56 dim, 115 bold yellow, 119 darkgray
+27: 0 darkgray, 4 bold yellow, 50 darkgray, 52-113 dim, 115 bold yellow, 119 darkgray
+28: 0 darkgray, 4 bold yellow, 50 darkgray, 52-107 dim, 115 bold yellow, 119 darkgray
 29: 0 darkgray, 4 bold yellow, 50 darkgray, 115 bold yellow, 119 darkgray
 30: 0 darkgray, 4 bold yellow, 50 darkgray, 52-60 dim, 115 bold yellow, 119 darkgray
 31: 0 darkgray, 4 bold yellow, 50 darkgray, 52-60 dim, 115 bold yellow, 119 darkgray

@@ -10,8 +10,8 @@
 │   error     box studio no longer accepts this machine's pairing. Run         │
 │             devlanes daemon pair on the box, then devlanes remote connect    │
 │             <ticket> here.                                                   │
-│   fix       press p on studio or run devlanes daemon pair there, then enter  │
-│             here and paste the ticket                                        │
+│   fix       on studio, press p in its Boxes view or run devlanes daemon      │
+│             pair; then press enter here and paste the ticket                 │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -36,8 +36,8 @@
 9: 0 bold yellow, 4-13 dim, 14-69 yellow, 79 bold yellow
 10: 0 bold yellow, 4-13 dim, 14-74 yellow, 79 bold yellow
 11: 0 bold yellow, 4-13 dim, 14-27 yellow, 79 bold yellow
-12: 0 bold yellow, 4-13 dim, 14-76 bold, 79 bold yellow
-13: 0 bold yellow, 4-13 dim, 14-38 bold, 79 bold yellow
+12: 0 bold yellow, 4-13 dim, 14-72 bold, 79 bold yellow
+13: 0 bold yellow, 4-13 dim, 14-61 bold, 79 bold yellow
 14: 0 bold yellow, 79 bold yellow
 15: 0 bold yellow, 79 bold yellow
 16: 0 bold yellow, 79 bold yellow

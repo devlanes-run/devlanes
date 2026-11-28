@@ -20,21 +20,21 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                  ┌ pairing code ──────────────────────────────────────────────────┐                                                                  │
-│                                                                  │ No ticket: the devlanes daemon running here is older than this │                                                                  │
-│                                                                  │ devlanes and makes no tickets. Run devlanes daemon restart to  │                                                                  │
-│                                                                  │ start this release's daemon.                                   │                                                                  │
-│                                                                  │                                                                │                                                                  │
-│                                                                  │                            K7QM-3XWD                           │                                                                  │
-│                                                                  │                It works once and expires in 10m.               │                                                                  │
-│                                                                  │                                                                │                                                                  │
-│                                                                  │ On the other machine, run                                      │                                                                  │
-│                                                                  │   devlanes remote connect <box> --code K7QM-3XWD               │                                                                  │
-│                                                                  │ <box> is this machine's SSH name there.                        │                                                                  │
-│                                                                  │ Or press n in its Boxes view and type the code.                │                                                                  │
-│                                                                  │                                                                │                                                                  │
-│                                                                  │ y copy code   p new code   esc close                           │                                                                  │
-│                                                                  └────────────────────────────────────────────────────────────────┘                                                                  │
+│                                                                 ┌ pairing code ───────────────────────────────────────────────────┐                                                                  │
+│                                                                 │ No ticket: the devlanes daemon running here is older than this  │                                                                  │
+│                                                                 │ devlanes and makes no tickets. Close this, then press D, then R │                                                                  │
+│                                                                 │ to restart it.                                                  │                                                                  │
+│                                                                 │                                                                 │                                                                  │
+│                                                                 │                            K7QM-3XWD                            │                                                                  │
+│                                                                 │                It works once and expires in 10m.                │                                                                  │
+│                                                                 │                                                                 │                                                                  │
+│                                                                 │ On the other machine, run                                       │                                                                  │
+│                                                                 │   devlanes remote connect <box> --code K7QM-3XWD                │                                                                  │
+│                                                                 │ <box> is this machine's SSH name there.                         │                                                                  │
+│                                                                 │ Or press n in its Boxes view and type the code.                 │                                                                  │
+│                                                                 │                                                                 │                                                                  │
+│                                                                 │ y copy code   p new code   esc close                            │                                                                  │
+│                                                                 └─────────────────────────────────────────────────────────────────┘                                                                  │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -82,21 +82,21 @@
 19: 0 darkgray, 199 darkgray
 20: 0 darkgray, 199 darkgray
 21: 0 darkgray, 199 darkgray
-22: 0 darkgray, 67-132 bold yellow, 199 darkgray
-23: 0 darkgray, 67 bold yellow, 69-130 yellow, 132 bold yellow, 199 darkgray
-24: 0 darkgray, 67 bold yellow, 69-129 yellow, 132 bold yellow, 199 darkgray
-25: 0 darkgray, 67 bold yellow, 69-96 yellow, 132 bold yellow, 199 darkgray
-26: 0 darkgray, 67 bold yellow, 132 bold yellow, 199 darkgray
-27: 0 darkgray, 67 bold yellow, 96-104 bold yellow, 132 bold yellow, 199 darkgray
-28: 0 darkgray, 67 bold yellow, 84-116 dim, 132 bold yellow, 199 darkgray
-29: 0 darkgray, 67 bold yellow, 132 bold yellow, 199 darkgray
-30: 0 darkgray, 67 bold yellow, 132 bold yellow, 199 darkgray
-31: 0 darkgray, 67 bold yellow, 69-116 bold, 132 bold yellow, 199 darkgray
-32: 0 darkgray, 67 bold yellow, 69-107 dim, 132 bold yellow, 199 darkgray
-33: 0 darkgray, 67 bold yellow, 69-115 dim, 132 bold yellow, 199 darkgray
-34: 0 darkgray, 67 bold yellow, 132 bold yellow, 199 darkgray
-35: 0 darkgray, 67 bold yellow, 69 bold, 70-79 dim, 83 bold, 84-92 dim, 96-98 bold, 99-104 dim, 132 bold yellow, 199 darkgray
-36: 0 darkgray, 67-132 bold yellow, 199 darkgray
+22: 0 darkgray, 66-132 bold yellow, 199 darkgray
+23: 0 darkgray, 66 bold yellow, 68-129 yellow, 132 bold yellow, 199 darkgray
+24: 0 darkgray, 66 bold yellow, 68-130 yellow, 132 bold yellow, 199 darkgray
+25: 0 darkgray, 66 bold yellow, 68-81 yellow, 132 bold yellow, 199 darkgray
+26: 0 darkgray, 66 bold yellow, 132 bold yellow, 199 darkgray
+27: 0 darkgray, 66 bold yellow, 95-103 bold yellow, 132 bold yellow, 199 darkgray
+28: 0 darkgray, 66 bold yellow, 83-115 dim, 132 bold yellow, 199 darkgray
+29: 0 darkgray, 66 bold yellow, 132 bold yellow, 199 darkgray
+30: 0 darkgray, 66 bold yellow, 132 bold yellow, 199 darkgray
+31: 0 darkgray, 66 bold yellow, 68-115 bold, 132 bold yellow, 199 darkgray
+32: 0 darkgray, 66 bold yellow, 68-106 dim, 132 bold yellow, 199 darkgray
+33: 0 darkgray, 66 bold yellow, 68-114 dim, 132 bold yellow, 199 darkgray
+34: 0 darkgray, 66 bold yellow, 132 bold yellow, 199 darkgray
+35: 0 darkgray, 66 bold yellow, 68 bold, 69-78 dim, 82 bold, 83-91 dim, 95-97 bold, 98-103 dim, 132 bold yellow, 199 darkgray
+36: 0 darkgray, 66-132 bold yellow, 199 darkgray
 37: 0 darkgray, 199 darkgray
 38: 0 darkgray, 199 darkgray
 39: 0 darkgray, 199 darkgray

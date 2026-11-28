@@ -16,7 +16,7 @@
 │   error     docker exec e┌───────────────────────────────────────────────────────────────┐ing                        │
 │   box       proxy on 9443│ Forget studio?                                                │                           │
 │   proxy     this machine │                                                               │                           │
-│   mirror    1 lane · no p│ Connecting to it again needs a new ticket from it.            │                           │
+│   mirror    1 lane · no p│ To connect to it again, you need a new ticket from the box.   │                           │
 │                          │ Its lanes keep running on the box, and folders synced from it │                           │
 │ ! gpu                    │ stay here.                                                    │     needs a sign-in · ssh │
 │   link      waiting for y│                                                               │                           │

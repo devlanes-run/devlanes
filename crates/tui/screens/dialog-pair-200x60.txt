@@ -18,18 +18,18 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
 │                                                                 ┌ pair another machine ────────────────────────────────────────────┐                                                                 │
-│                                                                 │ On the other machine, press n in its Boxes view and paste this   │                                                                 │
-│                                                                 │ ticket:                                                          │                                                                 │
+│                                                                 │ Press y to copy this ticket, then on the other machine press n   │                                                                 │
+│                                                                 │ in its Boxes view and paste it:                                  │                                                                 │
 │                                                                 │                                                                  │                                                                 │
-│                                                                 │ dlp1exampleticketforscreensonlyexampleticketforscreensonlyexampl │                                                                 │
-│                                                                 │ eticketforscreensonlyexampleticketforscreensonlyexampleticketfor │                                                                 │
-│                                                                 │ screensonly                                                      │                                                                 │
+│                                                                 │ dlp1q7xkexamplem2vz4h3dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3 │                                                                 │
+│                                                                 │ dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3dexamplew6yr5jtnexampl │                                                                 │
+│                                                                 │ epq7xkexamplem2vz4h3dexamplew6yr5jtnexamplepq7xkexam             │                                                                 │
 │                                                                 │                                                                  │                                                                 │
-│                                                                 │ It works once and expires in 9m 59s. It lets that machine pair   │                                                                 │
-│                                                                 │ with this one without SSH.                                       │                                                                 │
-│                                                                 │ Or run devlanes remote connect <ticket> there.                   │                                                                 │
+│                                                                 │ It works once, within 9m 59s, and pairs that machine with this   │                                                                 │
+│                                                                 │ one without SSH.                                                 │                                                                 │
+│                                                                 │ If your terminal does not copy, run devlanes daemon pair         │                                                                 │
+│                                                                 │ --ticket in a shell here.                                        │                                                                 │
 │                                                                 │                                                                  │                                                                 │
 │                                                                 │ A machine that reaches this one over SSH or a command uses the   │                                                                 │
 │                                                                 │ code K7QM-3XWD instead:                                          │                                                                 │
@@ -80,18 +80,18 @@
 17: 0 darkgray, 199 darkgray
 18: 0 darkgray, 199 darkgray
 19: 0 darkgray, 199 darkgray
-20: 0 darkgray, 199 darkgray
-21: 0 darkgray, 66-133 bold yellow, 199 darkgray
+20: 0 darkgray, 66-133 bold yellow, 199 darkgray
+21: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
 22: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
 23: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
-24: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
+24: 0 darkgray, 66 bold yellow, 68-131 bold yellow, 133 bold yellow, 199 darkgray
 25: 0 darkgray, 66 bold yellow, 68-131 bold yellow, 133 bold yellow, 199 darkgray
-26: 0 darkgray, 66 bold yellow, 68-131 bold yellow, 133 bold yellow, 199 darkgray
-27: 0 darkgray, 66 bold yellow, 68-78 bold yellow, 133 bold yellow, 199 darkgray
-28: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
-29: 0 darkgray, 66 bold yellow, 68-129 dim, 133 bold yellow, 199 darkgray
-30: 0 darkgray, 66 bold yellow, 68-93 dim, 133 bold yellow, 199 darkgray
-31: 0 darkgray, 66 bold yellow, 68-113 dim, 133 bold yellow, 199 darkgray
+26: 0 darkgray, 66 bold yellow, 68-119 bold yellow, 133 bold yellow, 199 darkgray
+27: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
+28: 0 darkgray, 66 bold yellow, 68-129 dim, 133 bold yellow, 199 darkgray
+29: 0 darkgray, 66 bold yellow, 68-83 dim, 133 bold yellow, 199 darkgray
+30: 0 darkgray, 66 bold yellow, 68-123 dim, 133 bold yellow, 199 darkgray
+31: 0 darkgray, 66 bold yellow, 68-92 dim, 133 bold yellow, 199 darkgray
 32: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
 33: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
 34: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
