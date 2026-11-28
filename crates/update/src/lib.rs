@@ -33,9 +33,14 @@ pub use notice::{
 #[cfg(not(target_family = "wasm"))]
 pub use notice::{claim_whats_new, update_command};
 #[cfg(windows)]
-pub use old_copies::{OldCopies, remove_old_copies};
+pub use old_copies::{OldCopies, is_old_copy, remove_old_copies};
 #[cfg(windows)]
 pub use retain::{Retained, retain_own_exe};
+
+/// The package `cargo install` builds `devlanes-gui` from. It gets a cargo
+/// command of its own after the other packages, so a build of it that fails
+/// leaves `devlanes` installed.
+pub(crate) const GUI_PACKAGE: &str = "devlanes-gui";
 
 /// Whether a package manager may replace this process's executable while it
 /// runs: always on macOS and Linux; on Windows only while this process keeps

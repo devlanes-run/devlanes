@@ -242,21 +242,15 @@ fn joined(paths: &[PathBuf]) -> String {
 }
 
 /// The devlanes files in a script install's `dir`: the release's binaries,
-/// and on Windows the `devlanes.exe.old-*` copies updates leave. Blocking.
+/// `devlanes-gui`, and on Windows the `devlanes.exe.old-*` and
+/// `devlanes-gui.exe.old-*` copies updates leave. Blocking.
 fn script_files(dir: &Path) -> Vec<PathBuf> {
     let mut old: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|entries| {
             entries
                 .flatten()
                 .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-                .filter(|entry| {
-                    cfg!(windows)
-                        && entry
-                            .file_name()
-                            .to_string_lossy()
-                            .to_lowercase()
-                            .starts_with("devlanes.exe.old-")
-                })
+                .filter(|entry| old_copy(&entry.file_name().to_string_lossy()))
                 .map(|entry| entry.path())
                 .collect()
         })
@@ -264,10 +258,22 @@ fn script_files(dir: &Path) -> Vec<PathBuf> {
     old.sort();
     install::BINARIES
         .iter()
+        .chain([&install::GUI_BINARY])
         .map(|name| dir.join(name))
         .filter(|path| path.is_file())
         .chain(old)
         .collect()
+}
+
+/// Whether `name` is a copy an update renamed aside, which only Windows makes.
+fn old_copy(name: &str) -> bool {
+    #[cfg(windows)]
+    return devlanes_update::is_old_copy(name);
+    #[cfg(not(windows))]
+    {
+        let _ = name;
+        false
+    }
 }
 
 /// The plan's [`Binary`] for the running executable. Blocking.
