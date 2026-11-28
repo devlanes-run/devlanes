@@ -1,18 +1,22 @@
-//! In-process transport for tests, with fault injection.
+//! In-process transport and peer endpoints for tests, with fault injection.
 //!
 //! Lives here rather than in `testing` so the transport's own tests and
 //! downstream mirroring tests can use it without a dependency cycle.
 
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::task::{Context, Poll, Waker};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf};
 use tokio::sync::mpsc;
 
 use crate::mux::{mux_client, mux_server};
+use crate::peer::{Admission, Alpn, PeerAddr, PeerEndpoint, PeerError, PeerId, PeerIncoming};
 use crate::transport::{BoxConnection, BoxServerConnection, Transport, TransportError};
 
 /// Buffer per direction; large enough that yamux frames rarely block.
@@ -76,24 +80,30 @@ impl MemoryTransport {
             Some(false) => return Err(TransportError::transient("memory transport refused")),
             None => {}
         }
-        let (client, server) = tokio::io::duplex(BUFFER);
-        let gate = Arc::new(Mutex::new(Gate::default()));
-        let server = MemoryStream {
-            inner: server,
-            gate: gate.clone(),
-            end: 1,
-        };
+        let (client, server, gate) = link();
         self.accept_tx
             .send(server)
             .map_err(|_| TransportError::transient("memory listener closed"))?;
-        let control = LinkControl { gate: gate.clone() };
-        self.lock().links.push(control);
-        Ok(MemoryStream {
-            inner: client,
-            gate,
-            end: 0,
-        })
+        self.lock().links.push(LinkControl { gate });
+        Ok(client)
     }
+}
+
+/// A fresh in-memory link: its client end, its box end and their shared gate.
+fn link() -> (MemoryStream, MemoryStream, Arc<Mutex<Gate>>) {
+    let (client, server) = tokio::io::duplex(BUFFER);
+    let gate = Arc::new(Mutex::new(Gate::default()));
+    let client = MemoryStream {
+        inner: client,
+        gate: gate.clone(),
+        end: 0,
+    };
+    let server = MemoryStream {
+        inner: server,
+        gate: gate.clone(),
+        end: 1,
+    };
+    (client, server, gate)
 }
 
 #[async_trait]
@@ -124,6 +134,13 @@ enum Mode {
     Open,
     Frozen,
     Severed,
+    /// Broken by the box refusing the client's key ([`PeerEndpoint::close_peer`]),
+    /// so the client's failure reason says so as it does over iroh.
+    Refused,
+    /// Ended cleanly by an endpoint's `close`: both ends read the end of the
+    /// pipe and writes go nowhere, so yamux closes without a failure reason,
+    /// as an iroh endpoint's close (code 0) does.
+    Ended,
 }
 
 /// Link state plus parked tasks, indexed by `[end][read=0|write=1]`.
@@ -190,12 +207,26 @@ impl MemoryStream {
         let mut gate = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
         gate.park(self.end, direction, cx.waker());
         match gate.mode {
-            Mode::Open => None,
+            // The callers answer for an ended link themselves (`is_ended`).
+            Mode::Open | Mode::Ended => None,
             Mode::Frozen => Some(Poll::Pending),
             Mode::Severed => Some(Poll::Ready(Err(io::Error::from(
                 io::ErrorKind::ConnectionReset,
             )))),
+            Mode::Refused => Some(Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                PeerError::Refused.to_string(),
+            )))),
         }
+    }
+
+    /// Whether an endpoint's `close` ended the link.
+    fn is_ended(&self) -> bool {
+        self.gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .mode
+            == Mode::Ended
     }
 }
 
@@ -205,6 +236,9 @@ impl AsyncRead for MemoryStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        if self.is_ended() {
+            return Poll::Ready(Ok(()));
+        }
         if let Some(poll) = self.check(0, cx) {
             return poll;
         }
@@ -218,6 +252,9 @@ impl AsyncWrite for MemoryStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        if self.is_ended() {
+            return Poll::Ready(Ok(buf.len()));
+        }
         if let Some(poll) = self.check(1, cx) {
             return poll;
         }
@@ -225,6 +262,9 @@ impl AsyncWrite for MemoryStream {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.is_ended() {
+            return Poll::Ready(Ok(()));
+        }
         if let Some(poll) = self.check(1, cx) {
             return poll;
         }
@@ -232,9 +272,238 @@ impl AsyncWrite for MemoryStream {
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.is_ended() {
+            return Poll::Ready(Ok(()));
+        }
         if let Some(poll) = self.check(1, cx) {
             return poll;
         }
         Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+/// Numbers the ids of memory endpoints, so endpoints of separate hubs in one
+/// test process never share an id and a test's ids do not change between runs.
+static NEXT_PEER: AtomicU64 = AtomicU64::new(1);
+
+/// Locks a mutex; poisoning only happens if a test panicked mid-update.
+fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// In-memory peer endpoints that reach each other through one shared hub,
+/// with yamux over memory links as their connections. Uses no sockets and
+/// no clock.
+#[derive(Clone, Default)]
+pub struct MemoryPeers {
+    hub: Arc<Mutex<Hub>>,
+}
+
+/// The endpoints a hub knows and the ones dials cannot reach directly.
+#[derive(Default)]
+struct Hub {
+    peers: HashMap<PeerId, Weak<MemoryPeer>>,
+    no_direct_path: HashSet<PeerId>,
+}
+
+impl MemoryPeers {
+    /// An empty hub.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A new endpoint on this hub with an id no other endpoint has.
+    pub fn endpoint(&self) -> Arc<MemoryPeer> {
+        let number = NEXT_PEER.fetch_add(1, Ordering::Relaxed);
+        let mut id = [0u8; 32];
+        id[..8].copy_from_slice(&number.to_be_bytes());
+        let (incoming_tx, incoming) = mpsc::unbounded_channel();
+        let peer = Arc::new(MemoryPeer {
+            id: PeerId(id),
+            hub: self.hub.clone(),
+            state: Mutex::new(PeerState {
+                admission: None,
+                incoming: Some(incoming_tx),
+                links: Vec::new(),
+            }),
+            incoming: tokio::sync::Mutex::new(incoming),
+        });
+        locked(&self.hub)
+            .peers
+            .insert(peer.id, Arc::downgrade(&peer));
+        peer
+    }
+
+    /// With `false`, dials to `id` fail with [`PeerError::NoDirectPath`], as
+    /// when hole punching finds no path to a box; `true` lets them through
+    /// again.
+    pub fn set_reachable(&self, id: PeerId, direct: bool) {
+        let mut hub = locked(&self.hub);
+        if direct {
+            hub.no_direct_path.remove(&id);
+        } else {
+            hub.no_direct_path.insert(id);
+        }
+    }
+}
+
+/// One endpoint of a [`MemoryPeers`] hub.
+pub struct MemoryPeer {
+    id: PeerId,
+    hub: Arc<Mutex<Hub>>,
+    state: Mutex<PeerState>,
+    incoming: tokio::sync::Mutex<mpsc::UnboundedReceiver<PeerIncoming>>,
+}
+
+/// What a memory endpoint admits and the links it is part of.
+struct PeerState {
+    admission: Option<Arc<dyn Admission>>,
+    /// Where admitted connections queue for `accept`; `None` once closed.
+    incoming: Option<mpsc::UnboundedSender<PeerIncoming>>,
+    links: Vec<PeerLink>,
+}
+
+/// One link a memory endpoint is part of. Weak, so a link both ends dropped
+/// is forgotten at the next dial.
+struct PeerLink {
+    remote: PeerId,
+    /// Whether the other peer dialed this endpoint, which `close_peer` ends
+    /// for sessions.
+    incoming: bool,
+    alpn: Alpn,
+    gate: Weak<Mutex<Gate>>,
+}
+
+impl MemoryPeer {
+    /// Whether the endpoint has an admission, as after `listen(Some(..))`.
+    pub fn is_listening(&self) -> bool {
+        self.state().admission.is_some()
+    }
+
+    /// Locks the endpoint's state.
+    fn state(&self) -> MutexGuard<'_, PeerState> {
+        locked(&self.state)
+    }
+
+    /// Records a link to `remote` for `alpn`, dropping links both ends have
+    /// let go.
+    fn record(&self, remote: PeerId, incoming: bool, alpn: Alpn, gate: &Arc<Mutex<Gate>>) {
+        let mut state = self.state();
+        state.links.retain(|link| link.gate.strong_count() > 0);
+        state.links.push(PeerLink {
+            remote,
+            incoming,
+            alpn,
+            gate: Arc::downgrade(gate),
+        });
+    }
+}
+
+#[async_trait]
+impl PeerEndpoint for MemoryPeer {
+    /// The id the hub gave this endpoint.
+    async fn id(&self) -> Result<PeerId, PeerError> {
+        Ok(self.id)
+    }
+
+    /// The id alone: memory endpoints have no relay and no addresses.
+    async fn addr(&self) -> Result<PeerAddr, PeerError> {
+        if self.state().incoming.is_none() {
+            return Err(PeerError::Closed);
+        }
+        Ok(PeerAddr {
+            id: self.id,
+            relay: None,
+            direct: Vec::new(),
+        })
+    }
+
+    /// Asks the target's admission, then links the two endpoints, in the
+    /// order iroh fails: a box that is not listening refuses the handshake,
+    /// a refused key closes the connection before the direct-path wait ends,
+    /// and only an admitted dial can time out without a direct path. The
+    /// timeout takes no time here.
+    async fn connect(&self, addr: &PeerAddr, alpn: Alpn) -> Result<BoxConnection, TransportError> {
+        if self.state().incoming.is_none() {
+            return Err(PeerError::Closed.into());
+        }
+        let (target, direct) = {
+            let hub = locked(&self.hub);
+            let target = hub.peers.get(&addr.id).and_then(Weak::upgrade);
+            (target, !hub.no_direct_path.contains(&addr.id))
+        };
+        let unreachable = || PeerError::Unreachable("no endpoint with that id is listening".into());
+        let target = target.ok_or_else(unreachable)?;
+        let (admission, incoming) = {
+            let state = target.state();
+            (state.admission.clone(), state.incoming.clone())
+        };
+        let (Some(admission), Some(incoming)) = (admission, incoming) else {
+            return Err(unreachable().into());
+        };
+        if !admission.admit(&self.id, alpn) {
+            return Err(PeerError::Refused.into());
+        }
+        if !direct {
+            return Err(PeerError::NoDirectPath {
+                waited: Duration::ZERO,
+            }
+            .into());
+        }
+        let (client, server, gate) = link();
+        let arrived = PeerIncoming {
+            peer: self.id,
+            alpn,
+            connection: mux_server(Box::new(server)),
+        };
+        if incoming.send(arrived).is_err() {
+            return Err(unreachable().into());
+        }
+        self.record(target.id, false, alpn, &gate);
+        target.record(self.id, true, alpn, &gate);
+        Ok(mux_client(Box::new(client)))
+    }
+
+    /// Sets the admission new dials are checked against.
+    async fn listen(&self, admission: Option<Arc<dyn Admission>>) -> Result<(), PeerError> {
+        let mut state = self.state();
+        if state.incoming.is_none() {
+            return Err(PeerError::Closed);
+        }
+        state.admission = admission;
+        Ok(())
+    }
+
+    /// The next admitted connection, in the order they were dialed.
+    async fn accept(&self) -> Option<PeerIncoming> {
+        self.incoming.lock().await.recv().await
+    }
+
+    /// Breaks the session links `peer` dialed, with the refused-key reason.
+    fn close_peer(&self, peer: &PeerId) {
+        for link in &self.state().links {
+            if link.incoming
+                && link.alpn == Alpn::Tunnel
+                && link.remote == *peer
+                && let Some(gate) = link.gate.upgrade()
+            {
+                locked(&gate).set(Mode::Refused);
+            }
+        }
+    }
+
+    /// Ends every link cleanly, refuses new dials either way and ends
+    /// `accept` once the queued connections are taken.
+    async fn close(&self) {
+        let links = {
+            let mut state = self.state();
+            state.admission = None;
+            state.incoming = None;
+            std::mem::take(&mut state.links)
+        };
+        for gate in links.iter().filter_map(|link| link.gate.upgrade()) {
+            locked(&gate).set(Mode::Ended);
+        }
+        locked(&self.hub).peers.remove(&self.id);
     }
 }

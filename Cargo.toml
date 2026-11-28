@@ -30,6 +30,11 @@ futures-util = { version = "0.3", features = ["sink"] }
 getrandom = "0.4"
 # SCSS for the stylesheets crates/pages compiles at build time.
 grass = { version = "0.13", default-features = false }
+# Peer-to-peer connections (crates/transport-iroh). Both pinned: the path API and the
+# endpoint hooks it uses may change between minor versions.
+iroh = "=1.5.0"
+# The in-process relay of transport-iroh's tests; it adds the features it uses.
+iroh-relay = { version = "=1.5.0", default-features = false }
 # Agent detection: the CLI's actor and output mode, the agent markers lane units
 # do not inherit.
 is-ai-agent = "0.7"

@@ -10,6 +10,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `conformance`, the checks every connection type must pass; only
+# dev-dependencies enable it.
+test-support = []
+
 [dependencies]
 devlanes-loopback = { path = "../loopback" }
 async-trait.workspace = true
@@ -25,4 +30,6 @@ yamux = "0.14"
 zstd.workspace = true
 
 [dev-dependencies]
+# The integration tests run the conformance checks on the memory transport.
+devlanes-transport = { path = ".", features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }
