@@ -46,7 +46,7 @@ Any command except `devlanes daemon status`, `daemon stop`, `daemon reset-state`
 
 Everything lives under `~/.devlanes`, or `DEVLANES_HOME` when set: `state.db`, `config.yaml`, `logs/` (including `daemon.log`), `ca/` and `run/daemon.sock`. When the socket path is too long for macOS, it moves to a short temporary directory. devlanes refuses a home that other users can read or write, so create it with `mkdir -m 700 ~/.devlanes` when you add `config.yaml` before the first run.
 
-GUI services (`gui: true`) are off in every release build. A debug build turns them on when `DEVLANES_GUI_BACKEND` is set, and runs their GUI hosts with that backend (`test-pattern` is the one there is; any other name runs them without a host, as on an OS with no backend). The daemon looks for `devlanes-gui` next to the `devlanes` it runs, and `doctor` adds a `gui` group while they are on.
+GUI services (`gui: true`) are off in every release build. A debug build turns them on when `DEVLANES_GUI_BACKEND` is set, and runs their GUI hosts with that backend (`test-pattern` is the one there is; any other name runs them without a host, as on an OS with no backend). The daemon looks for `devlanes-gui` next to the `devlanes` it runs, and `doctor` adds a `gui` group while they are on. The hidden `devlanes gui` commands and the `gui_*` MCP tools follow the same switch in the CLI's own environment, and say "not supported yet" without it; they find a service through the daemon and talk to its GUI host from the CLI process.
 
 ## Daemon shutdown
 
