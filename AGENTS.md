@@ -1,8 +1,8 @@
 # Repository conventions
 
-Rust 2024, pinned stable toolchain, macOS, Linux and Windows 11 24H2 or later. Packages live in `crates/<name>` as `devlanes-<name>`; the composition root is `bins/devlanes`. Add crates when needed. Shared dependencies and lints belong in the root manifest.
+Rust 2024, pinned stable toolchain, macOS, Linux and Windows 11 24H2 or later. Packages live in `crates/<name>` as `devlanes-<name>`; the composition root is `bins/devlanes`, and `bins/devlanes-gui` is the composition root of the GUI hosts, a second binary shipped next to it so `devlanes` never links GUI libraries. Add crates when needed. Shared dependencies and lints belong in the root manifest.
 
-`core` owns domain types and traits; integrations implement them; only the binary registers concrete integrations. `testing` provides isolated homes, Git repositories and `fixture-server`, initially without a core dependency. Core unit tests must not depend on testing. Keep integration tests in one binary per crate at `tests/it/main.rs`.
+`core` owns domain types and traits; integrations implement them; only the binaries register concrete integrations (GUI backends in `devlanes-gui`, everything else in `devlanes`). `testing` provides isolated homes, Git repositories and `fixture-server`, initially without a core dependency. Core unit tests must not depend on testing. Keep integration tests in one binary per crate at `tests/it/main.rs`.
 
 Use typed library errors and propagate expected failures. Add concise rustdoc to functions and methods. Inline comments explain why, when or where. Unsafe code is denied except in the approved OS-boundary crates (`sys`, `runner-pty`, `sys-windows`), where each block needs a safety explanation. A `-windows` crate exists only when it is a backend next to sibling OS crates behind a shared trait (trust, metrics, runner), the Windows FFI boundary (`sys-windows`, the Windows counterpart of rustix and libc; `sys` is the portable process facade over both), or code several crates need that cannot depend on each other (`shell-windows`); name a crate after its mechanism when that is the point (`resolver-nrpt`). Otherwise Windows code goes in a `cfg(windows)` module next to the Unix code for the same concern. Adding support for a feature on one OS must not break or change that feature on the others. Keep blocking filesystem/process work off async executor threads.
 
@@ -72,7 +72,7 @@ metadata:
 
 ## Crate READMEs
 
-Every crate (and `bins/devlanes`) has a `README.md`. It is for a person deciding what the crate is for, not a replacement for the code or a changelog. Keep it short and in this order:
+Every crate (and each binary under `bins/`) has a `README.md`. It is for a person deciding what the crate is for, not a replacement for the code or a changelog. Keep it short and in this order:
 
 1. `# devlanes-<name>` (the package name).
 2. One or two sentences: what the crate is and where it sits in devlanes (who calls it, what it calls).

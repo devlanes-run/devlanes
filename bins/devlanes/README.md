@@ -1,6 +1,6 @@
 # devlanes
 
-`devlanes` runs a project's dev environment once per git worktree, each in its own lane with its own ports, hostnames and data. This package is the single binary: the CLI, the TUI and the daemon, wired together with every concrete integration.
+`devlanes` runs a project's dev environment once per git worktree, each in its own lane with its own ports, hostnames and data. This package is the main binary: the CLI, the TUI and the daemon, wired together with every concrete integration except the GUI hosts, which live in `devlanes-gui` next to it.
 
 ## Usage
 
