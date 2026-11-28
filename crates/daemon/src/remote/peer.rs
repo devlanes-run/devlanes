@@ -163,6 +163,10 @@ pub(crate) struct PeerState {
     pinned: Pinned,
     /// Whether the endpoint listens, which keeps the daemon from exiting idle.
     listening: AtomicBool,
+    /// Set when reading `p2p_clients` at start failed: clients may be paired
+    /// that `pinned` does not know, so the endpoint never stops listening
+    /// and its kept ports are never removed until the daemon restarts.
+    load_failed: AtomicBool,
     /// Held while the listening rule is applied and while the pinned keys
     /// change, so a change and the listening state it implies are applied
     /// in the order they happened.
@@ -188,6 +192,7 @@ impl Default for PeerState {
         Self {
             pinned: Pinned::default(),
             listening: AtomicBool::new(false),
+            load_failed: AtomicBool::new(false),
             rule: tokio::sync::Mutex::new(()),
             accept: Mutex::new(None),
             load: Mutex::new(None),
@@ -205,6 +210,13 @@ impl PeerState {
     /// Whether the endpoint listens for peers.
     pub(super) fn is_listening(&self) -> bool {
         self.listening.load(Ordering::SeqCst)
+    }
+
+    /// After `daemon reset-state` emptied `p2p_clients`: no client can be
+    /// paired that `pinned` misses, so a failed load no longer holds the
+    /// listener.
+    pub(super) fn forget_failed_load(&self) {
+        self.load_failed.store(false, Ordering::SeqCst);
     }
 }
 
@@ -343,9 +355,11 @@ impl Inner {
         Some((self.integ.peer.clone()?, self.integ.box_serving.clone()?))
     }
 
-    /// At daemon start: loads the keys of the clients paired by ticket and
-    /// listens when there are any. In the background; a request that mints
-    /// a ticket meanwhile applies the same rule.
+    /// At daemon start: loads the keys of the clients paired by ticket,
+    /// listens when there are any, and otherwise forgets the ports an
+    /// earlier listener kept ([`Inner::forget_leftover_ports`]). In the
+    /// background, so startup does not wait; a request that mints a ticket
+    /// meanwhile applies the same rule.
     pub(crate) fn start_peer_listener(self: &Arc<Self>) {
         if self.peer_wiring().is_none() {
             return;
@@ -372,15 +386,43 @@ impl Inner {
                         }
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "cannot read the clients paired by ticket");
+                        engine.remote.peer.load_failed.store(true, Ordering::SeqCst);
+                        tracing::warn!(
+                            %error,
+                            "cannot read the clients paired by ticket; until the daemon \
+                             restarts, the endpoint does not stop listening or forget its ports"
+                        );
                     }
                 }
             }
             if let Err(error) = engine.refresh_listening().await {
                 tracing::warn!(%error, "cannot listen for clients paired by ticket");
             }
+            engine.forget_leftover_ports().await;
         });
         *lock(&self.remote.peer.load) = Some(task);
+    }
+
+    /// At daemon start, once the rule decided not to listen: tells the
+    /// endpoint so, which on an endpoint that never bound only removes the
+    /// ports a listener kept (`p2p-port`). A daemon that stopped while a
+    /// ticket was out never said so, and its later binds for dials would
+    /// otherwise ask for those ports, a fixed source port only a listener
+    /// should have. Under the rule lock, so a ticket minted meanwhile
+    /// listens after it. Not after a failed load: clients may still be
+    /// paired, and their box must keep its ports.
+    async fn forget_leftover_ports(&self) {
+        let Some((endpoint, _)) = self.peer_wiring() else {
+            return;
+        };
+        let state = &self.remote.peer;
+        let _rule = state.rule.lock().await;
+        if state.is_listening() || state.load_failed.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Err(error) = endpoint.listen(None).await {
+            tracing::debug!(%error, "cannot forget the ports a listener kept");
+        }
     }
 
     /// Applies the listening rule ([`should_listen`]) to the endpoint and
@@ -409,7 +451,12 @@ impl Inner {
                 ticket = until.is_some(),
                 "listening for peer-to-peer connections"
             );
-        } else if !should_listen(pinned > 0, until) && listening {
+        } else if !should_listen(pinned > 0, until)
+            && listening
+            // After a failed load the pinned set may miss clients that are
+            // paired, so the endpoint keeps listening, and its ports.
+            && !state.load_failed.load(Ordering::SeqCst)
+        {
             endpoint.listen(None).await?;
             state.listening.store(false, Ordering::SeqCst);
             tracing::info!(
