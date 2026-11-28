@@ -114,11 +114,13 @@ pub enum PairAnswer {
         /// The box's version label, such as `devlanes 0.16.0`.
         server: String,
     },
-    /// The secret was wrong, expired or used, or pairing is paused.
+    /// The secret was wrong, expired or used, or the box could not pair the
+    /// client now.
     Refused {
         /// What the client shows its user.
         message: String,
-        /// How long the box refuses every secret, after too many wrong ones.
+        /// How long to wait before trying again, when the box says; wrong
+        /// secrets pause nothing, so today's boxes never set it.
         retry_after_ms: Option<u64>,
     },
 }
