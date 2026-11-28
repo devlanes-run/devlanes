@@ -214,14 +214,17 @@ async fn a_connection_without_a_hello_is_closed_after_the_hello_timeout() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn connections_past_the_limit_are_dropped() {
+async fn connections_past_the_limit_are_refused() {
     let host = Host::default().await;
     let mut open = Vec::new();
     for _ in 0..MAX_CONNECTIONS {
         open.push(Raw::welcomed(&host, Role::Tool).await);
     }
     let mut extra = Raw::hello(&host, Role::Tool, None).await;
-    assert!(extra.closed().await.is_empty(), "no welcome past the limit");
+    match extra.answer().await {
+        HostMessage::Refused(refusal) => assert_eq!(refusal.reason, RefusalReason::Other),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
 
     // A place frees up when a connection closes.
     drop(open.pop());
@@ -241,19 +244,27 @@ async fn connections_past_the_limit_are_dropped() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn silent_connections_take_no_place_of_welcomed_ones() {
+async fn silent_connections_cannot_keep_new_ones_out() {
     let host = Host::default().await;
-    let (daemon, _events) = host.tool("daemon").await;
+    let (welcomed, _events) = host.tool("welcomed").await;
     let mut silent = Vec::new();
     for _ in 0..MAX_PENDING_HELLOS {
-        silent.push(host.pipe().await);
+        silent.push(Raw {
+            stream: host.pipe().await,
+            buf: BytesMut::new(),
+        });
     }
+    // One more arrives, and the silent one that waited longest makes room.
     let opened = tokio::time::Instant::now();
-    let mut extra = Raw::hello(&host, Role::Tool, None).await;
-    assert!(extra.closed().await.is_empty(), "no welcome past the limit");
-    assert!(opened.elapsed() < HELLO_TIMEOUT, "dropped as it arrived");
-    // The connection that was welcomed before them goes on.
-    daemon.screenshot(None).await.expect("a screenshot");
+    let daemon = Raw::welcomed(&host, Role::Control).await;
+    assert!(silent[0].closed().await.is_empty());
+    assert!(
+        opened.elapsed() < HELLO_TIMEOUT,
+        "without waiting for the timeout"
+    );
+    drop(daemon);
+    // The connection welcomed before them goes on.
+    welcomed.screenshot(None).await.expect("a screenshot");
     host.stop().await;
 }
 

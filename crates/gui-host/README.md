@@ -76,7 +76,7 @@ impl Backend for Acme {
 
 ## Limits
 
-At most 64 welcomed connections at once, and at most 16 that have not sent their hello yet; more are dropped. A connection that does not read is closed past its write queue cap, and one with more than 4 screenshots or 16 syncs unanswered is closed too. Past 16 screenshots encoding across the host, a request is answered as failed, and clipboard text reaches the app at most every 200 ms, the newest text winning.
+At most 64 welcomed connections at once; one more is refused with "too many GUI connections". At most 16 may wait for their hello; a new connection past that closes the one that waited longest. A connection that does not read is closed past its write queue cap, and one with more than 4 screenshots or 16 syncs unanswered is closed too. Past 16 screenshots encoding across the host, a request is answered as failed, and clipboard text reaches the app at most every 200 ms, the newest text winning.
 
 ## License
 

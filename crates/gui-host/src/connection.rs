@@ -1,7 +1,9 @@
 //! One connection: the hello and its checks, then a reader that forwards
 //! allowed messages to the host task and a writer that drains the outbox.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use bytes::BytesMut;
 use devlanes_gui_codec::select;
@@ -10,7 +12,8 @@ use devlanes_gui_proto::{
     RefusalReason, Role, SessionId, Token,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use crate::HELLO_TIMEOUT;
 use crate::hub::Inbox;
@@ -41,11 +44,75 @@ enum HelloError {
     Decode(DecodeError),
 }
 
+/// The connections still saying hello, oldest first. One more past the cap
+/// closes the oldest, so peers that connect and say nothing cannot keep
+/// new connections, the daemon's included, out.
+#[derive(Debug)]
+pub(crate) struct Hellos {
+    queue: Mutex<VecDeque<(u64, CancellationToken)>>,
+    next: AtomicU64,
+    cap: usize,
+}
+
+impl Hellos {
+    /// An empty queue of at most `cap` connections.
+    pub(crate) fn new(cap: usize) -> Self {
+        Self {
+            queue: Mutex::new(VecDeque::new()),
+            next: AtomicU64::new(0),
+            cap,
+        }
+    }
+
+    /// The queue; a panic while it was held cannot leave it inconsistent.
+    fn queue(&self) -> MutexGuard<'_, VecDeque<(u64, CancellationToken)>> {
+        self.queue
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// A place for a new connection, closing the oldest one at the cap.
+    pub(crate) fn admit(self: &Arc<Self>) -> PendingHello {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let token = CancellationToken::new();
+        let mut queue = self.queue();
+        if queue.len() >= self.cap
+            && let Some((_, oldest)) = queue.pop_front()
+        {
+            tracing::debug!("closing the oldest GUI connection still without a hello");
+            oldest.cancel();
+        }
+        queue.push_back((id, token.clone()));
+        PendingHello {
+            hellos: self.clone(),
+            id,
+            token,
+        }
+    }
+}
+
+/// One connection's place among those still saying hello; dropping it
+/// gives the place up.
+#[derive(Debug)]
+pub(crate) struct PendingHello {
+    hellos: Arc<Hellos>,
+    id: u64,
+    token: CancellationToken,
+}
+
+impl Drop for PendingHello {
+    /// Leaves the queue.
+    fn drop(&mut self) {
+        self.hellos.queue().retain(|(id, _)| *id != self.id);
+    }
+}
+
 /// Runs one connection to its end. `pending` is its place among the
-/// connections still saying hello, given up once the hello is read.
+/// connections still saying hello, given up once the hello is read; a newer
+/// connection may take it first, which closes this one.
 pub(crate) async fn run<S>(
     stream: S,
-    pending: OwnedSemaphorePermit,
+    pending: PendingHello,
     inbox: mpsc::Sender<Inbox>,
     settings: Arc<Settings>,
 ) where
@@ -53,7 +120,10 @@ pub(crate) async fn run<S>(
 {
     let (mut reader, mut writer) = tokio::io::split(stream);
     let mut buf = BytesMut::with_capacity(16 * 1024);
-    let hello = tokio::time::timeout(HELLO_TIMEOUT, read_hello(&mut reader, &mut buf)).await;
+    let hello = tokio::select! {
+        hello = tokio::time::timeout(HELLO_TIMEOUT, read_hello(&mut reader, &mut buf)) => hello,
+        _ = pending.token.cancelled() => return,
+    };
     drop(pending);
     let hello = match hello {
         Ok(Ok(hello)) => hello,
@@ -80,7 +150,9 @@ pub(crate) async fn run<S>(
     };
     // Held for the rest of the connection.
     let Ok(_place) = settings.welcomed.clone().try_acquire_owned() else {
-        tracing::debug!("dropping a GUI connection past the limit");
+        tracing::debug!("refusing a GUI connection past the limit");
+        let message = "too many GUI connections".to_owned();
+        refuse(&mut writer, RefusalReason::Other, message).await;
         return;
     };
     let role = hello.role;

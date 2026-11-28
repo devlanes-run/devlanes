@@ -1256,6 +1256,8 @@ impl Hub {
             win.frame = None;
             win.resized_at = None;
             win.awaiting_frame = false;
+            // A size asked for before this instance of the app existed.
+            win.frozen_resize = None;
             // The new backend window has not been told anything yet.
             win.watched = false;
             win.lock.window_back();

@@ -160,7 +160,9 @@ pub enum Command {
         watched: bool,
     },
     /// Move the shared pointer and set the buttons it holds; a change from
-    /// the previous command's buttons is a press or release.
+    /// the previous command's buttons is a press or release. Buttons belong
+    /// to the display, not a window: a release may name another window than
+    /// the press did, such as when that window locked or closed meanwhile.
     Pointer(Pointer),
     /// The pointer left a window with no button held.
     PointerLeft {

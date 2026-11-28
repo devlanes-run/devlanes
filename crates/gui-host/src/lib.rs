@@ -14,8 +14,9 @@
 //! - Writes go through a queue capped at [`ServeOptions::write_queue_cap`];
 //!   a connection that does not read is closed past it.
 //! - A heartbeat goes out when nothing else did for [`HEARTBEAT_INTERVAL`].
-//! - At most [`MAX_CONNECTIONS`] are welcomed at once, and at most
-//!   [`MAX_PENDING_HELLOS`] wait for their hello; more are dropped.
+//! - At most [`MAX_CONNECTIONS`] are welcomed at once; a hello past it is
+//!   refused. At most [`MAX_PENDING_HELLOS`] wait for their hello; a new
+//!   connection past it closes the one that waited longest.
 //!
 //! Video: each window has one stream per codec its viewers selected, with one
 //! encoder and one [`devlanes_gui_proto::Pacer`]. Encoding runs on the
@@ -93,13 +94,14 @@ pub const MAX_PENDING_SYNCS: usize = 16;
 /// answered as failed, so no connection is closed for others' load.
 pub const MAX_SCREENSHOT_JOBS: usize = 16;
 
-/// Welcomed connections open at once; a hello past it is dropped.
+/// Welcomed connections open at once; a hello past it is refused with
+/// "too many GUI connections".
 pub const MAX_CONNECTIONS: usize = 64;
 
-/// Connections that have not finished their hello yet. Counted apart from
-/// welcomed ones, so peers that connect and say nothing for
-/// [`HELLO_TIMEOUT`] take no place of a viewer or the daemon; one past it is
-/// dropped as it arrives.
+/// Connections that have not finished their hello yet, counted apart from
+/// welcomed ones. A new connection past it closes the one that waited
+/// longest, so peers that connect and say nothing cannot keep a viewer or
+/// the daemon out.
 pub const MAX_PENDING_HELLOS: usize = 16;
 
 /// The shortest gap between two clipboard commands to the backend. Clipboard
@@ -274,8 +276,9 @@ pub async fn start_backend<B: Backend>(backend: B) -> Result<RunningBackend, Ser
 
 /// Serves the windows of `backend` on the connections `listener` accepts,
 /// until [`ServeOptions::shutdown`] is cancelled or the backend stops. A
-/// connection past [`MAX_PENDING_HELLOS`] is dropped as it arrives, and one
-/// past [`MAX_CONNECTIONS`] once its hello is read. On the
+/// connection past [`MAX_PENDING_HELLOS`] closes the oldest one still
+/// without a hello, and one past [`MAX_CONNECTIONS`] is refused once its
+/// hello is read. On the
 /// way out the connections get two seconds to send what is queued, and the
 /// backend is dropped, which stops it.
 pub async fn serve<L: Listener>(
@@ -295,7 +298,7 @@ pub async fn serve<L: Listener>(
         write_queue_cap: options.write_queue_cap,
         welcomed: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
     });
-    let hellos = Arc::new(Semaphore::new(MAX_PENDING_HELLOS));
+    let hellos = Arc::new(connection::Hellos::new(MAX_PENDING_HELLOS));
     let (inbox_tx, inbox_rx) = mpsc::channel(INBOX);
     let hub = hub::Hub::new(control, &options, real_desktop);
     // Boxed so it can be dropped before the connections drain.
@@ -313,16 +316,11 @@ pub async fn serve<L: Listener>(
         tokio::select! {
             result = &mut hub => break result,
             accepted = listener.accept(), if accepting && paused_until.is_none() => match accepted {
-                Ok(Some(stream)) => match hellos.clone().try_acquire_owned() {
-                    Ok(hello) => {
-                        let run = connection::run(stream, hello, inbox_tx.clone(), settings.clone());
-                        connections.spawn(run);
-                    }
-                    Err(_) => {
-                        tracing::debug!("dropping a GUI connection past the limit of pending hellos");
-                        drop(stream);
-                    }
-                },
+                Ok(Some(stream)) => {
+                    let pending = hellos.admit();
+                    let run = connection::run(stream, pending, inbox_tx.clone(), settings.clone());
+                    connections.spawn(run);
+                }
                 Ok(None) => accepting = false,
                 Err(error) => {
                     tracing::warn!(%error, "accepting a GUI connection failed");
