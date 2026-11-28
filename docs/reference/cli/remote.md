@@ -34,6 +34,7 @@ devlanes remote disconnect [OPTIONS] [HOST]
 ```
 
 - `[HOST]`: Box to disconnect [default: every box].
+- `--forget`: Also delete the pairing of a box paired by ticket, so connecting it again needs a new ticket.
 
 ## devlanes remote ls
 

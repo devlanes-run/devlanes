@@ -831,6 +831,9 @@ pub enum RemoteCommand {
         /// Box to disconnect [default: every box]
         #[arg(id = "disconnect_host", value_name = "HOST")]
         host: Option<String>,
+        /// Also delete the pairing of a box paired by ticket, so connecting it again needs a new ticket
+        #[arg(long, requires = "disconnect_host")]
+        forget: bool,
     },
     /// List known boxes and their connection state
     Ls,
@@ -1660,7 +1663,14 @@ impl Cli {
                         }
                     },
                 ),
-                RemoteCommand::Disconnect { host } => (Method::Disconnect, json!({"host": host})),
+                RemoteCommand::Disconnect { host, forget } => (
+                    Method::Disconnect,
+                    if *forget {
+                        json!({"host": host, "forget": true})
+                    } else {
+                        json!({"host": host})
+                    },
+                ),
                 RemoteCommand::Ls => (Method::HostList, json!({})),
                 RemoteCommand::Sync => (Method::SyncStatus, json!({})),
                 RemoteCommand::Use { host, lane, local } => (

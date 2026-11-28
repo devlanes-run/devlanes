@@ -2964,18 +2964,24 @@ fn daemon_clients_and_revoke_name_each_client() {
         {"id": format!("dl_cid_{}", "cd34".repeat(16)), "name": "desk", "paired": true,
          "pairings": 2, "paired_at_ms": now - 86_400_000, "last_seen_ms": now - 3 * 3_600_000,
          "connections": []},
+        {"id": format!("dl_cid_{}", "ef56".repeat(16)), "name": "tablet", "paired": true,
+         "pairings": 2, "transport": "p2p", "key": "1a2b3c4d", "paired_at_ms": now,
+         "last_seen_ms": null, "connections": []},
     ]});
     let text = render_text(Method::RemoteClients, &clients);
     assert!(
-        text.contains(
-            "laptop  dl_cid_ab12ab12  paired      connected for 5m from 203.0.113.4  devlanes 0.9.0  mirrors 3 of 4 ports"
-        ),
+        text.contains("connected for 5m from 203.0.113.4  devlanes 0.9.0  mirrors 3 of 4 ports"),
         "{text}"
     );
     assert!(
-        text.contains("desk    dl_cid_cd34cd34  2 pairings  last seen 3h ago"),
+        text.contains("desk    dl_cid_cd34cd34  2 pairings"),
         "{text}"
     );
+    assert!(
+        text.contains("tablet  dl_cid_ef56ef56  2 pairings by ticket, key 1a2b3c4d"),
+        "{text}"
+    );
+    assert!(text.contains("transport=p2p key=1a2b3c4d"), "{text}");
     let unseen = json!({"items": [{"id": id, "name": "laptop", "paired": true, "pairings": 1,
         "paired_at_ms": now, "last_seen_ms": null, "connections": []}]});
     assert!(

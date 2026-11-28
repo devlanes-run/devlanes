@@ -2617,10 +2617,18 @@ pub(super) fn daemon_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                 .iter()
                 .find_map(|connection| connection.get("version").and_then(Value::as_str))
                 .map(super::clean);
+            // Only clients paired by ticket have these.
+            let key = text(item, "key");
+            let by_ticket = text(item, "transport") == "p2p";
             if cx.agent() {
                 return vec![format!(
-                    "client {} id={id} paired={paired} connections={}{} {seen}{}",
+                    "client {} id={id} paired={paired}{} connections={}{} {seen}{}",
                     text(item, "name"),
+                    if by_ticket {
+                        format!(" transport=p2p key={key}")
+                    } else {
+                        String::new()
+                    },
                     connections.len(),
                     version
                         .map(|version| format!(" version={version}"))
@@ -2636,11 +2644,16 @@ pub(super) fn daemon_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                 .map(|version| format!("devlanes {version}"))
                 .unwrap_or_default();
             let pairings = item.get("pairings").and_then(Value::as_u64).unwrap_or(0);
-            let state = match (paired, pairings) {
+            // `pairings` counts codes and ticket keys alike: one machine
+            // paired twice by ticket has two.
+            let mut state = match (paired, pairings) {
                 (false, _) => "not paired".to_owned(),
                 (true, 0 | 1) => "paired".to_owned(),
                 (true, pairings) => format!("{pairings} pairings"),
             };
+            if by_ticket {
+                state.push_str(&format!(" by ticket, key {key}"));
+            }
             vec![
                 text(item, "name"),
                 short_id(&id),

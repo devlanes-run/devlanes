@@ -276,7 +276,7 @@ impl Call {
                 RemoteCommand::Connect { host, .. } => {
                     format!("Connect to {host} and mirror its lanes here?")
                 }
-                RemoteCommand::Disconnect { host } => match host {
+                RemoteCommand::Disconnect { host, .. } => match host {
                     Some(host) => format!("Disconnect from {host}?"),
                     None => "Disconnect from every box?".into(),
                 },

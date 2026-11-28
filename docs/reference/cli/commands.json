@@ -1272,6 +1272,7 @@
         "--budget",
         "--env",
         "--file",
+        "--forget",
         "--help",
         "--json",
         "--lane",

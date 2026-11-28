@@ -332,6 +332,13 @@ pub enum Method {
     /// `remote_needs_pairing` has `transport: "p2p"`.
     #[serde(rename = "connect")]
     Connect,
+    /// Client side, for `devlanes remote disconnect`: closes the link to
+    /// `{host}`, or to every box without it, and stops connecting it after
+    /// a restart. Reply `{disconnected: [host]}`. With `forget: true` and a
+    /// box paired by ticket as `host`, it also deletes that pairing, so
+    /// connecting the box again needs a new ticket, and the reply has
+    /// `forgotten: [host]`; any other `host` fails with
+    /// `box_not_paired_by_ticket` (`{host, message}`).
     #[serde(rename = "disconnect")]
     Disconnect,
     /// Client side, for `devlanes remote ls` and the TUI: every known box with

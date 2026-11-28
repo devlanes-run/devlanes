@@ -1282,9 +1282,11 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             }
         }
         // Pairing by ticket: each text says what to run, so none gets a hint.
-        "bad_ticket" | "box_name_taken" | "box_name_ambiguous" | "box_pairing_missing" => {
-            (message.unwrap_or_else(|| code.replace('_', " ")), None)
-        }
+        "bad_ticket"
+        | "box_name_taken"
+        | "box_name_ambiguous"
+        | "box_pairing_missing"
+        | "box_not_paired_by_ticket" => (message.unwrap_or_else(|| code.replace('_', " ")), None),
         "p2p_unavailable" => (
             with_message("this machine cannot make a pairing ticket now".into()),
             Some(Hint::command(["daemon", "logs"])),

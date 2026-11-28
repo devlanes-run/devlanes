@@ -26,7 +26,7 @@ use devlanes_transport::{
     PeerEndpoint, PeerError, PeerId, Ticket, Transport, TransportError, request_pairing,
 };
 use futures_util::FutureExt as _;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::{sync::OwnedMutexGuard, time::Instant};
 
 use super::feed::clean;
@@ -899,10 +899,67 @@ impl Inner {
             tracing::debug!(host = %name, "not forgetting a box paired again since its link gave up");
             return;
         }
+        if !self.forget_pairing(name, Some(serial), pairing).await {
+            return;
+        }
+        drop(connecting);
+        tracing::info!(host = %name, "forgot an ephemeral box that stayed unreachable");
+        self.forgotten(name).await;
+    }
+
+    /// `disconnect` with `forget`: closes the link of `name` whatever it
+    /// is doing and forgets the box paired by ticket under that name, as
+    /// [`Inner::forget_peer_box`] does for an ephemeral one. Fails with
+    /// `box_not_paired_by_ticket` for any other name: a box reached over
+    /// SSH or a command keeps only a token, which the box revokes.
+    pub(super) async fn forget_method(self: &Arc<Self>, name: &str) -> Result<Value, RpcError> {
+        let connecting = self.remote.connecting.lock().await;
+        let Some(row) = self
+            .store
+            .p2p_box(name.to_owned())
+            .await
+            .map_err(crate::registry::store_error)?
+        else {
+            return Err(RpcError::new(
+                "box_not_paired_by_ticket",
+                json!({
+                    "host": name,
+                    "message": format!(
+                        "this machine has no box paired by ticket called {name}, and only those \
+                         are forgotten. `devlanes remote disconnect {name}` disconnects a box \
+                         reached over SSH or remote.boxes, and `devlanes daemon revoke` on the \
+                         box ends its pairing"
+                    ),
+                }),
+                2,
+            ));
+        };
+        let pairing = super::PeerPairing {
+            key: row.peer_key,
+            paired_at: row.paired_at,
+        };
+        self.forget_pairing(name, None, &pairing).await;
+        drop(connecting);
+        tracing::info!(host = %name, "forgot a box paired by ticket, as asked");
+        self.forgotten(name).await;
+        Ok(json!({"disconnected": [name], "forgotten": [name]}))
+    }
+
+    /// Forgets the pairing `pairing` of box `name`, with the connect lock
+    /// held: closes its link, unless `serial` names a link and a newer one
+    /// replaced it (false then, and nothing is deleted), then deletes the
+    /// box's `p2p` row in `remote_hosts`, its lane choices and the pairing's
+    /// `p2p_boxes` row.
+    async fn forget_pairing(
+        self: &Arc<Self>,
+        name: &str,
+        serial: Option<u64>,
+        pairing: &super::PeerPairing,
+    ) -> bool {
         let conn = {
             let mut hosts = lock(&self.remote.hosts);
             match hosts.get(name) {
-                Some(conn) if conn.serial != serial => return,
+                Some(conn) if serial.is_some_and(|serial| conn.serial != serial) => return false,
                 Some(_) => hosts.remove(name),
                 None => None,
             }
@@ -931,8 +988,12 @@ impl Inner {
             tracing::warn!(%error, host = %name, "cannot forget the pairing with the box");
         }
         lock(&self.remote.restore_errors).remove(name);
-        drop(connecting);
-        tracing::info!(host = %name, "forgot an ephemeral box that stayed unreachable");
+        true
+    }
+
+    /// Announces that box `name` is gone and gives its ports, routes and
+    /// lane choices to what is left, after the connect lock is dropped.
+    async fn forgotten(self: &Arc<Self>, name: &str) {
         self.bus.emit(
             devlanes_proto::remote::STATE_EVENT,
             json!({"host": name, "state": "stopped"}),
