@@ -476,6 +476,8 @@ fn tui_shows_the_steps_through_restarts() -> Result<()> {
     tui.keys(b"R")?;
     tui.wait_for_text("Restart the daemon?")?;
     let before = lab.daemon_pid()?;
+    // On Windows a question takes no answer in its first third of a second.
+    thread::sleep(Duration::from_millis(500));
     tui.keys(b"y")?;
     tui.wait_for_text("devlanes is restarting")?;
     tui.wait_for_gone("devlanes is restarting")?;
