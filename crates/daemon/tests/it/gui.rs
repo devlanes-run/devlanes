@@ -20,7 +20,8 @@ use crate::fakes::{GuiHost, SpawnedHost};
 use crate::{FakeProcesses, Harness, LIMIT, Setup, cx, eventually, harness, repo, temp};
 
 /// A GUI service whose command prints the variable its host announces.
-const CONFIG: &str = "project: shop\nservices:\n  desktop: { run: printenv WAYLAND_DISPLAY; sleep, gui: true }\n  api: { run: sleep }\n";
+/// Its own `WAYLAND_DISPLAY` loses to the host's.
+const CONFIG: &str = "project: shop\nservices:\n  desktop: { run: printenv WAYLAND_DISPLAY; sleep, gui: true, env: { WAYLAND_DISPLAY: mine } }\n  api: { run: sleep }\n";
 
 /// What the fake runner journals for a GUI host spawn.
 const HOST: &str = " host --backend test-pattern ";
@@ -167,6 +168,30 @@ async fn answers(port: u16) -> bool {
     )
 }
 
+/// A viewer on `port` and, once its connection ended, whether it saw a
+/// window Closed before that.
+async fn viewer(port: u16) -> tokio::task::JoinHandle<bool> {
+    let options = ClientOptions::new(Role::Viewer, "viewer", "viewer");
+    let (client, mut events) = connect(("127.0.0.1", port), options)
+        .await
+        .expect("a viewer is welcomed");
+    tokio::spawn(async move {
+        let _client = client;
+        let mut closed = false;
+        while let Some(event) = events.next().await {
+            match event {
+                devlanes_gui_client::Event::Lock {
+                    state: devlanes_gui_proto::LockState::Closed,
+                    ..
+                } => closed = true,
+                devlanes_gui_client::Event::Closed(_) => break,
+                _ => {}
+            }
+        }
+        closed
+    })
+}
+
 /// The unit command's position in the runner's journal, after its host's.
 fn spawn_order(h: &Harness) -> (Option<usize>, Option<usize>) {
     let journal = h.runner.journal.entries();
@@ -229,6 +254,12 @@ async fn a_gui_host_starts_before_its_unit_and_stops_after_it() {
             notes.iter().any(|note| note.contains("removed DISPLAY")),
             "{notes:?}"
         );
+        assert!(
+            notes
+                .iter()
+                .any(|note| note.contains("WAYLAND_DISPLAY replaces")),
+            "{notes:?}"
+        );
         let printed = eventually(Duration::from_secs(5), || async {
             let page = h
                 .call(
@@ -252,10 +283,17 @@ async fn a_gui_host_starts_before_its_unit_and_stops_after_it() {
         .expect("exec");
         assert_eq!(h.runner.hosts().len(), 1, "exec got a GUI host");
 
+        // A restart: the viewer loses its connection without a Closed window,
+        // so it waits for the next host.
+        let watching = viewer(port).await;
         h.call(Method::Restart, json!({"units": ["desktop"]}), cx(&main))
             .await
             .expect("restart");
         assert!(first.unit.ended(), "the old host outlived its unit");
+        assert!(
+            !watching.await.expect("viewer"),
+            "a restart showed the window Closed"
+        );
         let second = host(&h, 1).await;
         let pid = unit(&h, &main, "desktop").await.pid.expect("pid");
         received(
@@ -266,10 +304,21 @@ async fn a_gui_host_starts_before_its_unit_and_stops_after_it() {
         .await;
         assert!(answers(port).await);
 
+        // A stop: the unit's exit reaches the host first, so the viewer sees
+        // the window Closed before the connection ends.
+        let watching = viewer(port).await;
         h.call(Method::Stop, json!({"units": ["desktop"]}), cx(&main))
             .await
             .expect("stop");
         assert!(second.unit.ended(), "the host outlived its stopped unit");
+        assert!(
+            watching.await.expect("viewer"),
+            "a stop did not show the window Closed"
+        );
+        received(&second, "the unit's exit", |c| {
+            matches!(c, Command::UnitExited { .. })
+        })
+        .await;
         assert!(!answers(port).await, "the GUI port still answers");
         assert_eq!(
             unit(&h, &main, "desktop").await.gui.map(|gui| gui.host),
@@ -287,10 +336,18 @@ async fn a_gui_host_starts_before_its_unit_and_stops_after_it() {
 async fn a_host_that_does_not_come_up_fails_the_unit_before_it_runs() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let main = repo(&tmp.path, "r", CONFIG);
+        let config = format!("{CONFIG}  broken: {{ run: nospawn, gui: true }}\n");
+        let main = repo(&tmp.path, "r", &config);
         let h = gui_harness(&tmp, "17050-17099", Some("test-pattern"), true).await;
         let address = "127.0.0.1:17050".parse().expect("address");
-        let mut cases = vec![
+        let mut other_protocol = Ready::new(address, "0.0.1", &[], false);
+        other_protocol.protocol += 1;
+        let unready = Unready::new(
+            devlanes_version::VERSION,
+            UnavailableReason::NoDesktopSession,
+            "no desktop session",
+        );
+        let cases = [
             (
                 GuiHost::Exit(1, "no pixman here".into()),
                 "gui_host_failed",
@@ -302,25 +359,18 @@ async fn a_host_that_does_not_come_up_fails_the_unit_before_it_runs() {
                 "bad_ready_line",
             ),
             (
-                GuiHost::Line(Ready::new(address, "0.0.1", &[], false).to_line()),
+                GuiHost::Line(other_protocol.to_line()),
                 "gui_host_failed",
                 "version_mismatch",
             ),
-        ];
-        for reason in [
-            UnavailableReason::NoDesktopSession,
-            UnavailableReason::Elevated,
-            UnavailableReason::MissingLibrary,
-            UnavailableReason::UnsupportedOs,
-            UnavailableReason::Other,
-        ] {
-            let line = Unready::new(devlanes_version::VERSION, reason, "cannot run here");
-            cases.push((
-                GuiHost::Line(line.to_line()),
+            (
+                GuiHost::Line(unready.to_line()),
                 "gui_unavailable",
-                reason.word(),
-            ));
-        }
+                "no_desktop_session",
+            ),
+            // The control role refused: a host that got no token.
+            (GuiHost::Tokenless, "gui_host_failed", "control"),
+        ];
         for (n, (mode, code, reason)) in cases.into_iter().enumerate() {
             *h.runner.gui.lock().expect("lock") = mode;
             let _ = h
@@ -345,6 +395,19 @@ async fn a_host_that_does_not_come_up_fails_the_unit_before_it_runs() {
                 "a failed host was left running"
             );
         }
+        // The host came up and the unit's own spawn failed: the unit fails
+        // as without a host, and the host goes.
+        *h.runner.gui.lock().expect("lock") = GuiHost::Serve;
+        let _ = h
+            .call(Method::Start, json!({"units": ["broken"]}), cx(&main))
+            .await;
+        let failure = unit(&h, &main, "broken").await.reason.expect("reason");
+        assert_eq!(failure.code, "spawn_failed", "{failure:?}");
+        let abandoned = h.runner.hosts().last().cloned().expect("a host");
+        assert!(
+            abandoned.unit.ended(),
+            "the host outlived its unit's failed spawn"
+        );
         h.close().await;
 
         // No devlanes-gui next to devlanes.
@@ -485,7 +548,17 @@ async fn input_in_a_frozen_lanes_window_thaws_it() {
         h.call(Method::DebugFreeze, json!({}), cx(&main))
             .await
             .expect("freeze");
+        let unit_pid = unit(&h, &main, "desktop").await.pid.expect("pid");
         received(&gui, "the freeze", |c| matches!(c, Command::Frozen)).await;
+        // The host hears of the freeze only once the unit is suspended.
+        assert!(
+            h.runner
+                .powers
+                .entries()
+                .contains(&format!("{unit_pid} Frozen")),
+            "{:?}",
+            h.runner.powers.entries()
+        );
         let host_pid = gui.unit.pid().to_string();
         assert!(
             !h.runner

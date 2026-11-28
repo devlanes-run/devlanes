@@ -126,18 +126,20 @@ fn a_missing_devlanes_gui_fails_the_service() -> Result<()> {
         "{}",
         output.stdout
     );
-    let unit = desktop_of(&lab, &program)?;
+    let unit = unit_of(&lab, &program, "desktop")?;
     assert_eq!(unit["state"], "failed", "{unit}");
     assert_eq!(unit["reason"]["code"], "gui_host_missing", "{unit}");
+    let api = unit_of(&lab, &program, "api")?;
+    assert_eq!(api["state"], "ready", "{api}");
     Ok(())
 }
 
-/// The `desktop` unit, asked through `program`; status exits 1 for a lane
-/// with a failed unit.
-fn desktop_of(lab: &Lab, program: &Path) -> Result<Value> {
+/// Unit `name` of lane 0, asked through `program`; status exits 1 for a
+/// lane with a failed unit.
+fn unit_of(lab: &Lab, program: &Path, name: &str) -> Result<Value> {
     let status = with_gui(lab.command_with(program, lab.repo(), &["status", "--json"])?);
     let status = lab.run(status, Duration::from_secs(60))?.json()?;
     let lanes = status["items"].as_array().cloned().unwrap_or_default();
-    let found = lane(&lanes, "fixture-gui@0").and_then(|lane| unit(lane, "desktop"));
-    need(found.cloned(), "the desktop unit")
+    let found = lane(&lanes, "fixture-gui@0").and_then(|lane| unit(lane, name));
+    need(found.cloned(), name)
 }

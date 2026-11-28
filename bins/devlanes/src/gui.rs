@@ -14,13 +14,18 @@ pub(crate) const BACKEND_ENV: &str = "DEVLANES_GUI_BACKEND";
 
 /// GUI services for the daemon: on only in a debug build with
 /// [`BACKEND_ENV`] set, with [`backend`] and `devlanes-gui` next to the
-/// running executable.
-pub(crate) fn options() -> GuiOptions {
-    let requested = requested();
+/// running executable. Off, nothing is looked up.
+pub(crate) async fn options() -> GuiOptions {
+    let Some(requested) = requested() else {
+        return GuiOptions::default();
+    };
+    let program = tokio::task::spawn_blocking(program)
+        .await
+        .unwrap_or_else(|_| PathBuf::from(devlanes_update::install::GUI_BINARY));
     GuiOptions {
-        enabled: requested.is_some(),
-        backend: requested.and_then(backend),
-        program: program(),
+        enabled: true,
+        backend: backend(requested),
+        program,
     }
 }
 
@@ -43,7 +48,7 @@ fn backend(requested: String) -> Option<String> {
 
 /// `devlanes-gui` next to the running `devlanes`, where every install puts
 /// it. Blocking: it resolves links.
-pub(crate) fn program() -> PathBuf {
+fn program() -> PathBuf {
     let exe = devlanes_update::running_exe().unwrap_or_else(|_| PathBuf::from("devlanes"));
     exe.with_file_name(devlanes_update::install::GUI_BINARY)
 }

@@ -49,9 +49,7 @@ use crate::lifecycle::SpawnRequest;
 use crate::model::{Kind, LaneRt, LaunchRecord, ProjectRt};
 use crate::units::UnitHost;
 
-/// The variable that carries the control token to the host. It never goes on
-/// the command line, which other accounts can read.
-pub const TOKEN_ENV: &str = "DEVLANES_GUI_TOKEN";
+use devlanes_gui_proto::ready::TOKEN_ENV;
 
 /// How long a host has to print its ready line.
 pub const READY_TIMEOUT: Duration = Duration::from_secs(20);
@@ -69,7 +67,15 @@ const HOST_STOP: StopPolicy = StopPolicy {
 const STDERR_TAIL: usize = 4 * 1024;
 
 /// The note for a GUI service on a machine without a GUI backend.
-pub(crate) const NO_BACKEND_NOTE: &str = "gui: this machine has no GUI host yet, so the service's windows open on this machine's desktop and cannot be viewed from another machine";
+pub(crate) const NO_BACKEND_NOTE: &str = "gui: this machine has no GUI host, so the service's windows open on this machine's desktop and cannot be viewed from another machine";
+
+/// How long after its control connection closed a host still counts as
+/// dying rather than as having lost its connection.
+const DEATH_GRACE: Duration = Duration::from_secs(1);
+
+/// How long a host that was told its unit exited gets to report its windows
+/// Closed and end by itself, before it is stopped.
+const EXIT_GRACE: Duration = Duration::from_secs(3);
 
 /// GUI services as the composition root sets them up.
 #[derive(Debug, Clone, Default)]
@@ -107,10 +113,11 @@ pub(crate) enum HostFailure {
     /// The first line is not text, or part of it was lost.
     #[error("devlanes-gui printed a line devlanes cannot read: {0}")]
     Unreadable(&'static str),
-    /// It is another devlanes release or speaks another protocol.
+    /// It speaks another GUI protocol. Another devlanes release that speaks
+    /// the same one is accepted, with a note.
     #[error(
-        "devlanes-gui is version {version} (GUI protocol {protocol}), not {}",
-        devlanes_version::VERSION
+        "devlanes-gui {version} speaks GUI protocol {protocol}, and this daemon {}",
+        devlanes_gui_proto::PROTOCOL_VERSION
     )]
     Mismatch { version: String, protocol: u16 },
     /// It listens somewhere else than the unit's port.
@@ -156,9 +163,11 @@ impl HostFailure {
                     data["exit_code"] = json!(outcome.code);
                     data["signal"] = json!(outcome.signal);
                 }
-                if let Self::Mismatch { version, .. } = other {
+                if let Self::Mismatch { version, protocol } = other {
                     data["version"] = json!(version);
-                    data["expected"] = json!(devlanes_version::VERSION);
+                    data["protocol"] = json!(protocol);
+                    data["daemon"] = json!(devlanes_version::VERSION);
+                    data["fix"] = json!(mismatch_fix(version));
                 }
                 "gui_host_failed"
             }
@@ -167,6 +176,19 @@ impl HostFailure {
             data["stderr"] = json!(stderr);
         }
         RpcError::new(code, data, 1)
+    }
+}
+
+/// What fixes a host of devlanes `version` that speaks another GUI protocol
+/// than this daemon: `restart` when the installed `devlanes-gui` is newer,
+/// so the `devlanes` installed with it is newer than this running daemon
+/// too (an update replaced both and the daemon still runs the old one), and
+/// `update` when `devlanes-gui` is the older one.
+fn mismatch_fix(version: &str) -> &'static str {
+    if devlanes_update::version::is_newer(version, devlanes_version::VERSION) {
+        "restart"
+    } else {
+        "update"
     }
 }
 
@@ -180,6 +202,9 @@ struct Facts {
     died: Option<ExitOutcome>,
     /// The end of the host's standard error when it died.
     stderr: String,
+    /// The unit is being restarted, so its host goes without telling viewers
+    /// the service closed.
+    restarting: bool,
 }
 
 /// A GUI service run's host as status and `debug why` read it.
@@ -205,7 +230,24 @@ impl GuiState {
             real_desktop,
             died: None,
             stderr: String::new(),
+            restarting: false,
         })))
+    }
+
+    /// Marks the run as stopped for a restart: its host is stopped without
+    /// the unit's exit, so viewers wait for the next host.
+    pub(crate) fn restarting(&self) {
+        self.facts().restarting = true;
+    }
+
+    /// Whether the run is stopped for a restart.
+    fn is_restarting(&self) -> bool {
+        self.facts().restarting
+    }
+
+    /// Whether the host runs and nothing is ending it.
+    fn runs(&self) -> bool {
+        self.facts().host == devlanes_proto::GUI_HOST_RUNNING
     }
 
     /// The facts, also when a panic poisoned the lock.
@@ -274,6 +316,8 @@ impl GuiState {
 pub(crate) struct StartedHost {
     host: Arc<dyn ManagedUnit>,
     ready: Ready,
+    /// A note for the unit's launch, such as a host of another release.
+    note: Option<String>,
     control: Client,
     events: Events,
     stderr: Arc<Mutex<String>>,
@@ -285,10 +329,11 @@ impl StartedHost {
         &self.ready
     }
 
-    /// Stops the host, for a unit that did not start after all.
+    /// Stops the host and waits for it, for a unit that did not start after
+    /// all.
     pub(crate) async fn abandon(self) {
         self.control.close();
-        let _ = self.host.stop(HOST_STOP).await;
+        stop_host(self.host.as_ref()).await;
     }
 
     /// The unit's handle: `unit` with this host attached, and the control
@@ -363,7 +408,7 @@ pub(crate) async fn start_host(
     let mut output = host.output();
     let stderr = Arc::new(Mutex::new(String::new()));
     let read = read_line(&mut output, &stderr, READY_TIMEOUT).await;
-    let ready = match read.and_then(|line| check(&line, address)) {
+    let (ready, note) = match read.and_then(|line| check(&line, address)) {
         Ok(ready) => ready,
         Err(failure) => {
             let failure = match failure {
@@ -375,7 +420,7 @@ pub(crate) async fn start_host(
                 ),
                 other => other,
             };
-            let _ = host.stop(HOST_STOP).await;
+            stop_host(host.as_ref()).await;
             return Err((failure, tail(&stderr)));
         }
     };
@@ -395,11 +440,11 @@ pub(crate) async fn start_host(
     let (control, events) = match connected {
         Ok(Ok(connected)) => connected,
         Ok(Err(error)) => {
-            let _ = host.stop(HOST_STOP).await;
+            stop_host(host.as_ref()).await;
             return Err((HostFailure::Control(error.to_string()), tail(&stderr)));
         }
         Err(_) => {
-            let _ = host.stop(HOST_STOP).await;
+            stop_host(host.as_ref()).await;
             let message = format!("no answer within {}s", CONTROL_TIMEOUT.as_secs());
             return Err((HostFailure::Control(message), tail(&stderr)));
         }
@@ -407,10 +452,22 @@ pub(crate) async fn start_host(
     Ok(StartedHost {
         host,
         ready,
+        note,
         control,
         events,
         stderr,
     })
+}
+
+/// Stops `host` and waits for it to end, within [`HOST_STOP`]'s grace, so a
+/// next host does not find the port still held. A host that already ended
+/// has nothing to stop.
+async fn stop_host(host: &dyn ManagedUnit) {
+    match host.stop(HOST_STOP).await {
+        Ok(()) | Err(devlanes_core::Error::Exited) => {}
+        Err(error) => tracing::warn!(%error, "the GUI host did not stop"),
+    }
+    let _ = tokio::time::timeout(HOST_STOP.timeout, host.wait()).await;
 }
 
 /// A random control token: 32 bytes as hex.
@@ -461,16 +518,18 @@ pub(crate) async fn read_line(
 
 /// Reads `line` as the host's first line and checks that it belongs to this
 /// devlanes and listens on `address`.
-fn check(line: &str, address: SocketAddr) -> Result<Ready, HostFailure> {
+/// The format version is checked by the reader. Compatibility is the GUI
+/// protocol's: after an update the installed `devlanes-gui` is the new
+/// release while this daemon still runs the old one, and a host of another
+/// release that speaks the same protocol works, with the note this returns.
+fn check(line: &str, address: SocketAddr) -> Result<(Ready, Option<String>), HostFailure> {
     match HostLine::parse(line)? {
         HostLine::Unready(unready) => Err(HostFailure::Unavailable {
             reason: unready.reason,
             message: unready.message,
         }),
         HostLine::Ready(ready) => {
-            if ready.devlanes != devlanes_version::VERSION
-                || ready.protocol != devlanes_gui_proto::PROTOCOL_VERSION
-            {
+            if ready.protocol != devlanes_gui_proto::PROTOCOL_VERSION {
                 return Err(HostFailure::Mismatch {
                     version: ready.devlanes,
                     protocol: ready.protocol,
@@ -479,7 +538,14 @@ fn check(line: &str, address: SocketAddr) -> Result<Ready, HostFailure> {
             if ready.address.port() != address.port() {
                 return Err(HostFailure::WrongAddress(ready.address));
             }
-            Ok(ready)
+            let note = (ready.devlanes != devlanes_version::VERSION).then(|| {
+                format!(
+                    "gui: the GUI host is devlanes-gui {}, and this daemon devlanes {}; they speak the same GUI protocol",
+                    ready.devlanes,
+                    devlanes_version::VERSION
+                )
+            });
+            Ok((ready, note))
         }
     }
 }
@@ -551,6 +617,26 @@ pub(crate) fn apply_env(
         env.sources.remove(key);
         env.names.remove(key);
     }
+    // The host's value wins, since the unit must reach its display; a value
+    // the user set is named, as removals are.
+    let replaced: Vec<&str> = ready
+        .set
+        .keys()
+        .filter(|name| {
+            matches!(
+                env.sources.get(&fold_name((*name).clone())),
+                Some(EnvLayer::Global | EnvLayer::Service | EnvLayer::Profile | EnvLayer::Override)
+            )
+        })
+        .map(String::as_str)
+        .collect();
+    let mut notes = launch.notes.clone();
+    if !replaced.is_empty() {
+        notes.push(format!(
+            "gui: the GUI host's {} replaces the value this unit's config or --env set",
+            replaced.join(", ")
+        ));
+    }
     for (name, value) in &ready.set {
         let key = fold_name(name.clone());
         if key == *name {
@@ -561,7 +647,6 @@ pub(crate) fn apply_env(
         env.sources.insert(key.clone(), EnvLayer::Gui);
         env.values.insert(key, value.clone());
     }
-    let mut notes = launch.notes.clone();
     if !ready.remove.is_empty() {
         notes.push(format!(
             "gui: the GUI host removed {} from this unit's environment",
@@ -626,21 +711,31 @@ impl GuiUnit {
         (outcome, stderr)
     }
 
-    /// Stops the host after the unit ended with `code`, once. The exit notice
-    /// has no answer to wait for; the host reports its windows Closed when it
-    /// stops either way.
+    /// Ends the host after the unit ended with `code`, once.
+    ///
+    /// For a stop, or a unit that exited by itself, the host is told the
+    /// unit exited: it reports its windows Closed and ends by itself, and is
+    /// stopped only when it has not within [`EXIT_GRACE`]. That order makes
+    /// sure viewers see Closed before the host goes. For a restart the host
+    /// is stopped without that notice, so viewers see the connection close
+    /// and reconnect to the next host.
     async fn finish(&self, code: Option<i32>) {
         self.finished
             .get_or_init(|| async {
-                let _ = self.control.unit_exited(code);
+                let restarting = self.state.is_restarting();
                 self.state.stopped();
-                match self.host.stop(HOST_STOP).await {
-                    // A host that died before has nothing left to stop.
-                    Ok(()) | Err(devlanes_core::Error::Exited) => {}
-                    Err(error) => tracing::warn!(%error, "the GUI host did not stop"),
+                if !restarting && self.control.unit_exited(code).is_ok() {
+                    // Closing writes what is queued first.
+                    self.control.close();
+                    if tokio::time::timeout(EXIT_GRACE, self.host.wait())
+                        .await
+                        .is_ok()
+                    {
+                        return;
+                    }
                 }
-                let _ = tokio::time::timeout(HOST_STOP.timeout, self.host.wait()).await;
                 self.control.close();
+                stop_host(self.host.as_ref()).await;
             })
             .await;
     }
@@ -736,22 +831,6 @@ impl ManagedUnit for GuiUnit {
     }
 }
 
-/// Forwards the activity the host reports on its control connection to the
-/// idle board as activity of `lane` until the connection closes.
-pub(crate) async fn forward_activity(
-    mut events: Events,
-    board: Arc<crate::idle::IdleBoard>,
-    lane: String,
-) {
-    while let Some(event) = events.next().await {
-        match event {
-            Event::Activity => board.activity(&lane, crate::idle::Activity::Gui),
-            Event::Closed(_) => return,
-            _ => {}
-        }
-    }
-}
-
 /// What [`Inner::start_gui`] brought up for a unit.
 pub(crate) enum GuiStart {
     /// Not a GUI service, or a command that never gets a host.
@@ -796,6 +875,15 @@ impl Inner {
                 ),
             ));
         };
+        // A missing working directory fails the unit's own spawn, which says
+        // so better than a host that could not start there.
+        let cwd = request.spec.cwd.clone();
+        if !tokio::task::spawn_blocking(move || cwd.is_dir())
+            .await
+            .unwrap_or(true)
+        {
+            return Ok(GuiStart::NotGui);
+        }
         let host = HostRequest {
             backend,
             service: format!("{reference}:{}", request.name),
@@ -825,60 +913,114 @@ impl Inner {
                 return Err(error);
             }
         };
-        let launch = apply_env(&mut request.spec, &request.launch, started.ready());
+        let mut launch = apply_env(&mut request.spec, &request.launch, started.ready());
+        launch.notes.extend(started.note.clone());
         request.launch = Arc::new(launch);
         Ok(GuiStart::Host(started))
     }
 
-    /// Watches the host of the run `host` of unit `name`: when it ends on its
-    /// own while the unit runs, the unit keeps running, its log and launch
-    /// notes say so, and `unit.changed` goes out.
+    /// Watches the host of the run `host` of unit `name` until the run ends:
+    /// forwards the activity its control connection reports as activity of
+    /// lane `reference`; when the host ends on its own while the unit runs,
+    /// or its control connection closes while both still run, the unit keeps
+    /// running, its log and launch notes say so, and `unit.changed` goes out.
     pub(crate) fn watch_gui_host(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
-        name: &str,
+        (name, reference): (&str, &str),
         host: &UnitHost,
-        unit: Arc<GuiUnit>,
+        (unit, events): (Arc<GuiUnit>, Events),
     ) {
-        let (engine, project, lane, name, host) = (
+        let (engine, project, lane, name, reference, host) = (
             self.clone(),
             project.clone(),
             lane.clone(),
             name.to_owned(),
+            reference.to_owned(),
             host.clone(),
         );
+        let board = self.opts.idle.clone();
         tokio::spawn(async move {
-            let (outcome, _) = tokio::select! {
-                died = unit.host_died() => died,
-                _ = host.wait_exit() => return,
+            let mut events = Some(events);
+            let note = loop {
+                let event = async {
+                    match events.as_mut() {
+                        Some(events) => events.next().await,
+                        None => std::future::pending().await,
+                    }
+                };
+                tokio::select! {
+                    (outcome, _) = unit.host_died() => break died_note(outcome),
+                    _ = host.wait_exit() => return,
+                    event = event => match event {
+                        Some(Event::Activity) => board.activity(&reference, crate::idle::Activity::Gui),
+                        Some(Event::Closed(_)) | None => {
+                            events = None;
+                            // A host that dies closes the connection first.
+                            let grace = tokio::time::timeout(DEATH_GRACE, unit.host_died()).await;
+                            if let Ok((outcome, _)) = grace {
+                                break died_note(outcome);
+                            }
+                            // Not when the daemon closed it to end the host.
+                            if unit.state.runs() && host.is_alive() {
+                                tracing::warn!(unit = %name, "the GUI host's control connection closed while both run");
+                                break CONTROL_LOST_NOTE.to_owned();
+                            }
+                        }
+                        Some(_) => {}
+                    },
+                }
             };
-            let note = died_note(outcome);
-            tracing::warn!(unit = %name, "GUI host exited while its unit runs");
-            engine
-                .write_note(host.info().log_dir.clone(), &name, &note)
-                .await;
-            if let Some(rec) = lane
-                .st()
-                .unit_mut(&name)
-                .filter(|rec| rec.host.same_run(&host))
-            {
-                let mut notes = rec.launch.notes.clone();
-                notes.push(
-                    note.trim_start_matches(crate::spawn_error::LOG_PREFIX)
-                        .trim()
-                        .to_owned(),
-                );
-                rec.launch = Arc::new(LaunchRecord {
-                    env: crate::lifecycle::copy_env(&rec.launch.env),
-                    notes,
-                    left_out: rec.launch.left_out.clone(),
-                });
+            engine.note_unit(&project, &lane, &name, &host, &note).await;
+            if note == CONTROL_LOST_NOTE {
+                // The host may still die later; that is said too.
+                tokio::select! {
+                    (outcome, _) = unit.host_died() => {
+                        engine.note_unit(&project, &lane, &name, &host, &died_note(outcome)).await;
+                    }
+                    _ = host.wait_exit() => {}
+                }
             }
-            engine.emit_unit(&project, &lane, &name, &host);
         });
     }
+
+    /// Adds `note` (a `[devlanes]` line) to the run `host`'s launch notes and
+    /// the daemon log, and emits `unit.changed`. The unit's own log is held
+    /// by its writer while it runs, so the note does not go there.
+    async fn note_unit(
+        &self,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+        name: &str,
+        host: &UnitHost,
+        note: &str,
+    ) {
+        tracing::warn!(unit = %name, "{note}");
+        if let Some(rec) = lane
+            .st()
+            .unit_mut(name)
+            .filter(|rec| rec.host.same_run(host))
+        {
+            let mut notes = rec.launch.notes.clone();
+            notes.push(
+                note.trim_start_matches(crate::spawn_error::LOG_PREFIX)
+                    .trim()
+                    .to_owned(),
+            );
+            rec.launch = Arc::new(LaunchRecord {
+                env: crate::lifecycle::copy_env(&rec.launch.env),
+                notes,
+                left_out: rec.launch.left_out.clone(),
+            });
+        }
+        self.emit_unit(project, lane, name, host);
+    }
 }
+
+/// The `[devlanes]` line for a host whose control connection closed while it
+/// and its unit run.
+const CONTROL_LOST_NOTE: &str = "[devlanes] the daemon lost its control connection to the GUI host; the service and its windows keep running, but freezing and viewer activity no longer reach the host until the service restarts";
 
 /// The `[devlanes]` line for a host that ended while its unit runs on.
 pub(crate) fn died_note(outcome: Option<ExitOutcome>) -> String {
@@ -954,24 +1096,37 @@ mod tests {
     }
 
     #[test]
-    fn a_ready_line_of_another_release_or_port_is_refused() {
+    fn a_host_is_judged_by_its_protocol_not_its_release() {
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, 41234));
-        let line = |version: &str, port: u16| {
-            Ready::new(
+        let line = |version: &str, port: u16, protocol: u16| {
+            let mut ready = Ready::new(
                 SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
                 version,
                 &[],
                 false,
-            )
-            .to_line()
+            );
+            ready.protocol = protocol;
+            ready.to_line()
         };
-        assert!(check(&line(devlanes_version::VERSION, 41234), address).is_ok());
-        let other = check(&line("0.0.1", 41234), address);
-        assert!(
-            matches!(other, Err(HostFailure::Mismatch { .. })),
-            "{other:?}"
-        );
-        let moved = check(&line(devlanes_version::VERSION, 41235), address);
+        let ours = devlanes_gui_proto::PROTOCOL_VERSION;
+        let (_, note) =
+            check(&line(devlanes_version::VERSION, 41234, ours), address).expect("ours");
+        assert_eq!(note, None);
+        // An update replaced devlanes-gui while this daemon runs on: it works.
+        let (_, note) = check(&line("999.0.0", 41234, ours), address).expect("same protocol");
+        assert!(note.is_some_and(|note| note.contains("999.0.0")));
+        // Another protocol fails, with the fix for which side is behind.
+        for (version, fix) in [("999.0.0", "restart"), ("0.0.1", "update")] {
+            let failure = check(&line(version, 41234, ours + 1), address).expect_err(version);
+            assert!(
+                matches!(failure, HostFailure::Mismatch { .. }),
+                "{failure:?}"
+            );
+            let error = failure.error("desktop", "acme", "");
+            assert_eq!(error.data["reason"], "version_mismatch");
+            assert_eq!(error.data["fix"], fix, "{version}");
+        }
+        let moved = check(&line(devlanes_version::VERSION, 41235, ours), address);
         assert!(
             matches!(moved, Err(HostFailure::WrongAddress(_))),
             "{moved:?}"

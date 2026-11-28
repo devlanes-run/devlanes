@@ -2381,13 +2381,8 @@ impl Inner {
         let (managed, gui) = match (spawned, gui) {
             (Ok(managed), GuiStart::Host(host)) => {
                 let (unit, events) = host.attach(managed);
-                tokio::spawn(crate::gui::forward_activity(
-                    events,
-                    self.opts.idle.clone(),
-                    reference.clone(),
-                ));
                 let managed: Arc<dyn ManagedUnit> = unit.clone();
-                (managed, Some(unit))
+                (managed, Some((unit, events)))
             }
             (Ok(managed), _) => (managed, None),
             (Err(error), gui) => {
@@ -2409,7 +2404,7 @@ impl Inner {
             }
         };
         let gui_state = match &gui {
-            Some(unit) => Some(unit.state()),
+            Some((unit, _)) => Some(unit.state()),
             None if request.gui => Some(crate::gui::GuiState::without_host(
                 devlanes_proto::GUI_HOST_NONE,
             )),
@@ -2457,7 +2452,7 @@ impl Inner {
                     .await;
                 // The host goes on record with the unit's run, so stopping an
                 // orphaned run after a crash stops its host too.
-                let recorded = match (recorded, gui.as_ref().and_then(|g| g.host_identity())) {
+                let recorded = match (recorded, gui.as_ref().and_then(|(g, _)| g.host_identity())) {
                     (Ok(run), Some(member)) => {
                         match self
                             .store
@@ -2535,11 +2530,17 @@ impl Inner {
         if first_run {
             self.publish_routes();
         }
-        if let Some(unit) = gui {
+        if let Some((unit, events)) = gui {
             // Only now: a host that hears nothing in time exits by itself, so
             // a daemon that died before the run was recorded leaves none.
             unit.tell_identity();
-            self.watch_gui_host(project, lane, &request.name, &host, unit);
+            self.watch_gui_host(
+                project,
+                lane,
+                (&request.name, &reference),
+                &host,
+                (unit, events),
+            );
         }
         if request.kind == Kind::Service {
             crate::local_sync::start(
@@ -4551,6 +4552,11 @@ impl Inner {
                         .get(unit)
                         .filter(|rec| rec.host.is_alive())
                         .map(|rec| {
+                            // The host goes with its unit and the next one comes
+                            // up, so viewers wait for it instead of closing.
+                            if let Some(gui) = &rec.gui {
+                                gui.restarting();
+                            }
                             (
                                 unit.clone(),
                                 rec.host.clone(),

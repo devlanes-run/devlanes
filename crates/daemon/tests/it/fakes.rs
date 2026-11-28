@@ -167,6 +167,9 @@ pub enum GuiHost {
     Line(String),
     /// Writes this on standard error and exits with the code, printing nothing.
     Exit(i32, String),
+    /// Serves as [`GuiHost::Serve`] but ignores the token, so it refuses the
+    /// daemon's control connection.
+    Tokenless,
 }
 
 /// A GUI host the fake runner spawned.
@@ -523,6 +526,7 @@ impl FakeUnit {
     ) {
         tokio::time::sleep(Duration::from_millis(20)).await;
         let mut stopped = self.stop.subscribe();
+        let tokenless = matches!(mode, GuiHost::Tokenless);
         let record = |pattern| {
             if let Ok(mut hosts) = hosts.lock() {
                 hosts.push(SpawnedHost {
@@ -552,7 +556,7 @@ impl FakeUnit {
                 self.write_on(OutputStream::Stdout, &format!("{line}\n"));
                 let _ = stopped.wait_for(|s| *s).await;
             }
-            GuiHost::Serve => {
+            GuiHost::Serve | GuiHost::Tokenless => {
                 let Ok(listener) = tokio::net::TcpListener::bind(arg("--listen")).await else {
                     record(None);
                     self.write_on(OutputStream::Stderr, "cannot listen\n");
@@ -585,7 +589,8 @@ impl FakeUnit {
                 self.write_on(OutputStream::Stdout, &format!("{}\n", ready.to_line()));
                 let mut options = devlanes_gui_host::ServeOptions::new(arg("--service"));
                 options.control_token = env
-                    .get("DEVLANES_GUI_TOKEN")
+                    .get(devlanes_gui_proto::ready::TOKEN_ENV)
+                    .filter(|_| !tokenless)
                     .map(|token| devlanes_gui_proto::Token::new(token.clone()));
                 let shutdown = options.shutdown.clone();
                 let serve = devlanes_gui_host::serve(listener, running, options);

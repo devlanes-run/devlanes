@@ -1219,30 +1219,36 @@ fn wsl_checks(data: &Value) -> Vec<Check> {
     checks
 }
 
-/// GUI services (`gui`: `{path, installed, version, expected, error, backend}`, added
-/// by the CLI only while GUI services are on): whether `devlanes-gui` is next
-/// to `devlanes`, runs and is the same release, and which GUI backend this
-/// machine has.
+/// GUI services (`gui`: `{path, installed, version, expected, error,
+/// backend, fix}`, added by the CLI only while GUI services are on): whether
+/// `devlanes-gui` is next to `devlanes`, runs and is the same release, and
+/// which GUI backend this machine has. `fix` is the install method's own
+/// command. Another release is a warning: GUI hosts of another release that
+/// speak the same GUI protocol still work.
 fn gui_checks(gui: &Value) -> Vec<Check> {
     if !gui.is_object() {
         return Vec::new();
     }
     let path = display_value(&gui["path"]);
     let ours = text(gui, "expected");
+    let fix = match text(gui, "fix") {
+        fix if fix.is_empty() => "devlanes update".to_owned(),
+        fix => clean(&fix),
+    };
     let binary = if gui.get("installed").and_then(Value::as_bool) != Some(true) {
         Check::new(
             "gui",
             Outcome::Fail,
             format!("devlanes-gui is not installed at {path}"),
         )
-        .fix("devlanes update")
+        .fix(fix)
     } else if let Some(error) = gui.get("error").and_then(Value::as_str) {
         Check::new(
             "gui",
             Outcome::Fail,
             format!("devlanes-gui at {path} does not run: {}", clean(error)),
         )
-        .fix("devlanes update")
+        .fix(fix)
     } else {
         match gui.get("version").and_then(Value::as_str) {
             Some(version) if version == ours => Check::new(
@@ -1252,13 +1258,13 @@ fn gui_checks(gui: &Value) -> Vec<Check> {
             ),
             found => Check::new(
                 "gui",
-                Outcome::Fail,
+                Outcome::Skip,
                 format!(
-                    "devlanes-gui at {path} is {}, not {ours}",
+                    "devlanes-gui at {path} is {}, and devlanes {ours}",
                     found.map_or_else(|| "of an unknown version".to_owned(), clean)
                 ),
             )
-            .fix("devlanes update"),
+            .fix(fix),
         }
     };
     let backend = match gui.get("backend").and_then(Value::as_str) {

@@ -91,21 +91,30 @@ pub async fn add_wsl(data: &mut Value) {
 /// How long `devlanes-gui version` may take.
 const GUI_VERSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Adds `gui` (`{path, installed, version, expected, error, backend}`) to
-/// doctor `data` while GUI services are on, by running `devlanes-gui
+/// Adds `gui` (`{path, installed, version, expected, error, backend, fix}`)
+/// to doctor `data` while GUI services are on, by running `devlanes-gui
 /// version`; otherwise `data` is left as it is, since users cannot reach the
-/// feature yet.
+/// feature yet. `fix` is the command that installs `devlanes-gui` again the
+/// way devlanes was installed.
 pub async fn add_gui(data: &mut Value) {
-    let options = crate::gui::options();
+    let options = crate::gui::options().await;
     if !options.enabled {
         return;
     }
     let path = options.program.clone();
-    let installed = {
+    let (installed, fix) = {
         let path = path.clone();
-        tokio::task::spawn_blocking(move || path.is_file())
-            .await
-            .unwrap_or(false)
+        tokio::task::spawn_blocking(move || {
+            // `devlanes update` fetches a missing devlanes-gui for a script
+            // install; a package manager reinstalls both.
+            let fix = match devlanes_update::InstallMethod::current() {
+                devlanes_update::InstallMethod::Script(_) => "devlanes update".to_owned(),
+                method => method.upgrade_command(devlanes_version::VERSION),
+            };
+            (path.is_file(), fix)
+        })
+        .await
+        .unwrap_or((false, "devlanes update".to_owned()))
     };
     let (version, error) = if installed {
         match gui_version(&path).await {
@@ -125,6 +134,7 @@ pub async fn add_gui(data: &mut Value) {
                 "expected": devlanes_version::VERSION,
                 "error": error,
                 "backend": options.backend,
+                "fix": fix,
             }),
         );
     }

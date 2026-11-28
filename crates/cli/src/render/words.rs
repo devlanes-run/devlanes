@@ -2097,14 +2097,17 @@ pub(crate) fn gui_cause(code: &str, data: &Value) -> (String, Option<Hint>) {
                 "timeout" => "its GUI host did not report ready in time".into(),
                 "bad_ready_line" => "its GUI host printed a line devlanes cannot read".into(),
                 "version_mismatch" => format!(
-                    "its GUI host is devlanes-gui {}, not {}",
+                    "its GUI host, devlanes-gui {}, speaks another GUI protocol than this daemon, devlanes {}",
                     field(data, "version"),
-                    field(data, "expected")
+                    field(data, "daemon")
                 ),
                 _ => format!("its GUI host failed: {message}"),
             };
-            let hint = match text(data, "reason").as_str() {
-                "version_mismatch" => Hint::command(["update"]),
+            // A newer devlanes-gui comes with a newer devlanes the daemon
+            // has not restarted into; an older one needs the update.
+            let hint = match (text(data, "reason").as_str(), text(data, "fix").as_str()) {
+                ("version_mismatch", "restart") => Hint::command(["daemon", "restart"]),
+                ("version_mismatch", _) => Hint::command(["update"]),
                 _ => Hint::command(["doctor"]),
             };
             (format!("{cause}{}", said(data)), Some(hint))
