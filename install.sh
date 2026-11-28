@@ -277,7 +277,9 @@ tar -xzf "$tmp/$archive" -C "$tmp"
 
 # devlanes-gui comes from an archive of its own, since released installers refuse a
 # third binary in the main one. A release from before it has none.
-bins="devlanes devlanes-hosts"
+# The helpers go in before devlanes, so a devlanes that runs finds them; `devlanes
+# update` and install.ps1 use the same order.
+bins=devlanes-hosts
 gui=devlanes-$version-$target-gui.tar.gz
 gui_line=$(awk -v name="$gui" '$2 == name || $2 == "*" name { print; exit }' "$tmp/SHA256SUMS")
 if [ -n "$gui_line" ]; then
@@ -293,6 +295,7 @@ if [ -n "$gui_line" ]; then
 	tar -xzf "$tmp/$gui" -C "$tmp"
 	bins="$bins devlanes-gui"
 fi
+bins="$bins devlanes"
 
 sudo=
 if ! mkdir -p "$dir" 2>/dev/null || [ ! -w "$dir" ]; then
@@ -304,12 +307,45 @@ if ! mkdir -p "$dir" 2>/dev/null || [ ! -w "$dir" ]; then
 	sudo=sudo
 fi
 $sudo mkdir -p "$dir"
+# All or nothing, as `devlanes update` installs: every new file is copied next to its
+# target first, then each is renamed into place (so a running devlanes keeps its open
+# executable) with the old file kept as a second link. When a rename fails, the files
+# already replaced get their old ones back.
+cleanup_new() {
+	for bin in $bins; do $sudo rm -f "$dir/.$bin.new.$$" "$dir/.$bin.old.$$"; done
+}
 for bin in $bins; do
-	# Rename into place so a running devlanes keeps its open executable.
-	$sudo cp "$tmp/$top/$bin" "$dir/.$bin.new.$$"
-	$sudo chmod 755 "$dir/.$bin.new.$$"
-	$sudo mv -f "$dir/.$bin.new.$$" "$dir/$bin"
+	if ! { $sudo cp "$tmp/$top/$bin" "$dir/.$bin.new.$$" && $sudo chmod 755 "$dir/.$bin.new.$$"; }; then
+		cleanup_new
+		fail "cannot copy $bin to $dir"
+	fi
 done
+swapped=
+fresh=
+for bin in $bins; do
+	if [ -e "$dir/$bin" ]; then
+		# A filesystem without hard links cannot keep it; the rename then replaces it
+		# for good, as `devlanes update` does there.
+		$sudo ln -f "$dir/$bin" "$dir/.$bin.old.$$" 2>/dev/null || true
+	else
+		fresh="$fresh $bin"
+	fi
+	if ! $sudo mv -f "$dir/.$bin.new.$$" "$dir/$bin"; then
+		for prev in $swapped; do
+			if [ -e "$dir/.$prev.old.$$" ]; then
+				$sudo mv -f "$dir/.$prev.old.$$" "$dir/$prev"
+			else
+				case " $fresh " in
+				*" $prev "*) $sudo rm -f "$dir/$prev" ;;
+				esac
+			fi
+		done
+		cleanup_new
+		fail "cannot install $dir/$bin; the files it replaced are back in place"
+	fi
+	swapped="$swapped $bin"
+done
+cleanup_new
 
 printf 'Installed devlanes %s to %s\n' "$version" "$dir"
 # A daemon keeps running the binary it started from until it restarts into this one.

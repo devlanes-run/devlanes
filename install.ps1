@@ -543,8 +543,10 @@
         Renames Staged to Directory\Name. An existing file is renamed to Name.old-STAMP
         first, which Windows allows even while the file runs, and deleted when nothing
         holds it. Returns the old file's path when it is still in use, else $null.
+        With Keep, the old file stays and its path (or $null without one) is
+        returned, so a later step that fails can move it back.
         #>
-        param([string]$Staged, [string]$Directory, [string]$Name)
+        param([string]$Staged, [string]$Directory, [string]$Name, [switch]$Keep)
         $target = Join-Path $Directory $Name
         $old = $null
         if (Test-Path -LiteralPath $target) {
@@ -560,7 +562,7 @@
             if ($old) { Move-Item -LiteralPath $old -Destination $target }
             throw
         }
-        if (-not $old) { return $null }
+        if ($Keep -or -not $old) { return $old }
         try {
             Remove-Item -LiteralPath $old -Force
             return $null
@@ -648,13 +650,25 @@
             }
 
             Clear-DevlanesOldCopy $dir
-            # devlanes.exe last, so a devlanes that runs finds its devlanes-gui.exe. A
-            # GUI host still running keeps its old copy, which `devlanes doctor` and
-            # this script delete later.
+            # devlanes.exe last, so a devlanes that runs finds its devlanes-gui.exe, as
+            # install.sh and `devlanes update` do. When devlanes.exe cannot take its
+            # place, devlanes-gui.exe gets its old file back. A GUI host still running
+            # keeps its old copy, which `devlanes doctor` and this script delete later.
+            $guiOld = $null
             if ($gui) {
-                $null = Install-DevlanesFile -Staged $stagedGui -Directory $dir -Name 'devlanes-gui.exe'
+                $guiOld = Install-DevlanesFile -Staged $stagedGui -Directory $dir -Name 'devlanes-gui.exe' -Keep
             }
-            $inUse = Install-DevlanesFile -Staged $staged -Directory $dir -Name 'devlanes.exe'
+            try {
+                $inUse = Install-DevlanesFile -Staged $staged -Directory $dir -Name 'devlanes.exe'
+            } catch {
+                if ($gui) {
+                    $guiTarget = Join-Path $dir 'devlanes-gui.exe'
+                    Remove-Item -LiteralPath $guiTarget -Force -ErrorAction SilentlyContinue
+                    if ($guiOld) { Move-Item -LiteralPath $guiOld -Destination $guiTarget }
+                }
+                throw
+            }
+            if ($guiOld) { Remove-Item -LiteralPath $guiOld -Force -ErrorAction SilentlyContinue }
         } finally {
             Remove-Item -LiteralPath $staged, $stagedGui -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue

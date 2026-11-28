@@ -33,8 +33,9 @@ function checkVersion(file, args, name) {
 
 /**
  * Puts `source` at bin/<name>: a hard link (else a copy) to a temporary name in
- * the same directory, checked by running it, then renamed over the target. The
- * rename never writes into an existing file, which pnpm may share with its store.
+ * the same directory, checked by running it with `args` unless they are null,
+ * then renamed over the target. The rename never writes into an existing file,
+ * which pnpm may share with its store.
  */
 function place(source, name, args) {
   const target = path.join(binDir, name);
@@ -47,7 +48,7 @@ function place(source, name, args) {
       fs.copyFileSync(source, temp);
       fs.chmodSync(temp, 0o755);
     }
-    checkVersion(temp, args, name);
+    if (args) checkVersion(temp, args, name);
     fs.renameSync(temp, target);
   } finally {
     // A rerun links the file that is already the target; rename then succeeds
@@ -63,9 +64,10 @@ function main() {
   const sourceDir = path.join(path.dirname(manifest), "bin");
   // `devlanes setup` looks for devlanes-hosts next to the resolved
   // devlanes executable, and devlanes finds devlanes-gui there too, so both
-  // move first and the binary only with them.
+  // move first and the binary only with them. devlanes-gui is not run: it may
+  // need system libraries this machine lacks, which must not keep the launcher.
   place(path.join(sourceDir, "devlanes-hosts"), "devlanes-hosts", ["version"]);
-  place(path.join(sourceDir, "devlanes-gui"), "devlanes-gui", ["version"]);
+  place(path.join(sourceDir, "devlanes-gui"), "devlanes-gui", null);
   place(path.join(sourceDir, "devlanes"), "devlanes", ["--version"]);
 }
 
