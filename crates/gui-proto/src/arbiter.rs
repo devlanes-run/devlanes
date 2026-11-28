@@ -127,7 +127,13 @@ impl InputArbiter {
                     keys: std::mem::take(&mut client.keys),
                 };
                 client.expired.buttons = client.expired.buttons | held.buttons;
-                client.expired.keys.extend(&held.keys);
+                // Bounded like held keys, so repeated silences cannot grow it.
+                for key in &held.keys {
+                    let keys = &mut client.expired.keys;
+                    if !keys.contains(key) && keys.len() < MAX_HELD_KEYS {
+                        keys.push(*key);
+                    }
+                }
                 released.push((client.session, held));
             }
         }

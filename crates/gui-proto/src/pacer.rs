@@ -175,6 +175,9 @@ impl<F: Clone> Pacer<F> {
     /// with nothing newer offered: a host that captures only on change gets no
     /// new frame from an app that keeps its size, and a joining viewer then
     /// still gets a picture.
+    ///
+    /// After this call the host must not offer frames captured before the
+    /// change: they would carry sequence numbers from the returned one on.
     pub fn resize_applied(&mut self, now: Instant) -> u64 {
         self.pending = None;
         self.last_stale_since = Some(now);

@@ -335,8 +335,7 @@ pub enum ClientMessage {
     /// The viewer needs a keyframe of `window`, such as after a decode error.
     /// The host stops waiting for acknowledgements of frames it sent before,
     /// but honors a new request only once the keyframe answering the previous
-    /// one is acknowledged. Independently of pacing, the host caps each
-    /// connection's write queue and closes a connection that goes past it.
+    /// one is acknowledged.
     KeyframeRequest {
         /// The window.
         window: WindowId,
@@ -369,7 +368,8 @@ pub enum ClientMessage {
         size: Size,
         /// Chosen by the viewer, increasing per window, and echoed in
         /// [`HostMessage::ResizeApplied`], so an answer to an older request
-        /// does not end the lock of a newer one.
+        /// does not end the lock of a newer one. Never 0: a viewer whose
+        /// counter wraps skips 0, which answers to other viewers carry.
         request: u32,
     },
     /// Ask the app to close a window.
@@ -861,7 +861,9 @@ pub enum HostMessage {
         window: WindowId,
         /// The [`ClientMessage::Resize`] request it answers, for the viewer
         /// that sent it; 0 for other viewers and for a change the app made.
-        /// Viewers number their requests from 1.
+        /// Viewers number their requests from 1. Every `Resize` gets exactly
+        /// one answer; a host that merges several requests into one change
+        /// answers with the newest one's number.
         request: u32,
         /// The first sequence number captured after the change.
         from_seq: u64,

@@ -43,6 +43,8 @@ fn on_bytes(
         Some(role) => role,
         None => match ClientMessage::decode_hello(buf).map_err(Close::Decode)? {
             Some(hello) => match hello.role {
+                // A real host also compares `hello.token` with its own for
+                // `Control` and refuses with `BadToken` when they differ.
                 Role::Viewer | Role::Tool | Role::Control => *role.insert(hello.role),
                 other => return Err(Close::Role(other)),
             },
