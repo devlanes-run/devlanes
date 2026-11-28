@@ -22,6 +22,7 @@ use devlanes_transport::{
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
+use unicode_general_category::get_general_category;
 
 use super::{ClientGuard, ClientKey};
 use crate::{
@@ -230,12 +231,18 @@ fn client_revoked() -> RpcError {
 /// Longest client id or name the box keeps, in bytes.
 const MAX_CLIENT_TEXT: usize = 256;
 
-/// `text` without control characters, cut to [`MAX_CLIENT_TEXT`] bytes. The
-/// box shows what clients send in `status`, so a client must not be able to
-/// fill it or put terminal escapes in it.
+/// `text` without control and format characters, cut to [`MAX_CLIENT_TEXT`]
+/// bytes. The box shows what clients send in `status`, and logs what peers
+/// it never paired send, so a client must not be able to fill it, put
+/// terminal escapes in it, or reorder what is shown around it with
+/// bidirectional overrides such as U+202E (category Cf).
 pub(super) fn clean(text: &str) -> String {
+    let shown = |c: &char| {
+        !c.is_control()
+            && get_general_category(*c) != unicode_general_category::GeneralCategory::Format
+    };
     let mut cleaned = String::new();
-    for c in text.chars().filter(|c| !c.is_control()) {
+    for c in text.chars().filter(shown) {
         if cleaned.len() + c.len_utf8() > MAX_CLIENT_TEXT {
             break;
         }
@@ -425,11 +432,12 @@ mod tests {
     use super::*;
     use crate::integrations::RouteStatus;
 
-    /// Client ids and names lose control characters and are cut on a
-    /// character boundary.
+    /// Client ids and names lose control and format characters, such as a
+    /// bidirectional override, and are cut on a character boundary.
     #[test]
     fn client_text_is_cleaned_and_capped() {
         assert_eq!(clean("lap\u{1b}[31mtop\n"), "lap[31mtop");
+        assert_eq!(clean("lap\u{202e}pot\u{200b}"), "lappot");
         let long = "é".repeat(MAX_CLIENT_TEXT);
         assert_eq!(
             clean(&long).len(),

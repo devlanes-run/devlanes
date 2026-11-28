@@ -1658,6 +1658,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "unicode-general-category",
  "unicode-width 0.2.3",
  "vt100",
  "zeroize",
