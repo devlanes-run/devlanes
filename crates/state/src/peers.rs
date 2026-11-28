@@ -1,5 +1,6 @@
 //! Peer-to-peer pairings: on a box, the clients paired by ticket, pinned by
-//! the key they proved in the handshake.
+//! the key they proved in the handshake; on a client, the boxes it paired
+//! with by ticket and where to dial them.
 
 use crate::{Error, Store, models::*, schema::*};
 use diesel::prelude::*;
@@ -37,7 +38,126 @@ impl From<P2pClientRow> for P2pClient {
     }
 }
 
+/// A box this client paired with by ticket, under the name `remote connect`
+/// uses for it. One row per box key: pairing with the same box again keeps
+/// the row's name and replaces where it is reached.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct P2pBox {
+    /// The box's name on this client.
+    pub name: String,
+    /// The box's peer key, 64 lowercase hex digits; every dial is pinned to it.
+    pub peer_key: String,
+    /// The box's relay from the ticket.
+    pub relay_url: Option<String>,
+    /// The socket addresses from the ticket.
+    pub direct_addrs: Vec<String>,
+    /// The client forgets the box once it stays unreachable for an hour.
+    pub ephemeral: bool,
+    /// Unix milliseconds of the pairing.
+    pub paired_at: i64,
+}
+
+impl From<P2pBoxRow> for P2pBox {
+    /// Copies the row, splitting the addresses at spaces.
+    fn from(row: P2pBoxRow) -> Self {
+        Self {
+            name: row.name,
+            peer_key: row.peer_key,
+            relay_url: row.relay_url,
+            direct_addrs: row
+                .direct_addrs
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect(),
+            ephemeral: row.ephemeral != 0,
+            paired_at: row.paired_at,
+        }
+    }
+}
+
 impl Store {
+    /// Stores `paired` and returns the name it is kept under: a row of the
+    /// same box key keeps its name and gets the rest of `paired`, so pairing
+    /// with a box again never renames it. A new key takes `paired.name`,
+    /// and a name another key holds fails with [`Error::Conflict`].
+    pub async fn add_p2p_box(&self, paired: P2pBox) -> Result<String, Error> {
+        if paired.name.is_empty() || paired.peer_key.is_empty() {
+            return Err(Error::Invalid("empty box name or peer key".into()));
+        }
+        if paired
+            .direct_addrs
+            .iter()
+            .any(|addr| addr.is_empty() || addr.chars().any(char::is_whitespace))
+        {
+            return Err(Error::Invalid(
+                "a box address is empty or has a space".into(),
+            ));
+        }
+        self.call(move |c| {
+            c.immediate_transaction(|c| {
+                let kept: Option<String> = p2p_boxes::table
+                    .filter(p2p_boxes::peer_key.eq(&paired.peer_key))
+                    .select(p2p_boxes::name)
+                    .first(c)
+                    .optional()?;
+                let row = P2pBoxRow {
+                    name: kept.unwrap_or(paired.name),
+                    peer_key: paired.peer_key,
+                    relay_url: paired.relay_url,
+                    direct_addrs: paired.direct_addrs.join(" "),
+                    ephemeral: i32::from(paired.ephemeral),
+                    paired_at: paired.paired_at,
+                };
+                diesel::insert_into(p2p_boxes::table)
+                    .values(&row)
+                    .on_conflict(p2p_boxes::peer_key)
+                    .do_update()
+                    .set((
+                        p2p_boxes::relay_url.eq(&row.relay_url),
+                        p2p_boxes::direct_addrs.eq(&row.direct_addrs),
+                        p2p_boxes::ephemeral.eq(row.ephemeral),
+                        p2p_boxes::paired_at.eq(row.paired_at),
+                    ))
+                    .execute(c)?;
+                Ok(row.name)
+            })
+        })
+        .await
+    }
+
+    /// The box paired by ticket under `name`.
+    pub async fn p2p_box(&self, name: String) -> Result<Option<P2pBox>, Error> {
+        self.call(move |c| {
+            Ok(p2p_boxes::table
+                .find(name)
+                .select(P2pBoxRow::as_select())
+                .first::<P2pBoxRow>(c)
+                .optional()?
+                .map(P2pBox::from))
+        })
+        .await
+    }
+
+    /// Every box paired by ticket, by name.
+    pub async fn p2p_boxes(&self) -> Result<Vec<P2pBox>, Error> {
+        self.call(|c| {
+            Ok(p2p_boxes::table
+                .order(p2p_boxes::name)
+                .select(P2pBoxRow::as_select())
+                .load::<P2pBoxRow>(c)?
+                .into_iter()
+                .map(P2pBox::from)
+                .collect())
+        })
+        .await
+    }
+
+    /// Deletes the box paired by ticket under `name`; false when there was none.
+    pub async fn delete_p2p_box(&self, name: String) -> Result<bool, Error> {
+        self.call(move |c| Ok(diesel::delete(p2p_boxes::table.find(name)).execute(c)? > 0))
+            .await
+    }
+
     /// Pins `client`'s key, replacing the row of the same key, and keeps at
     /// most `keep` keys of its client id, the most recently paired, in one
     /// transaction; the key just paired is always kept.

@@ -19,7 +19,7 @@ pub use lifecycle::{
     TaskRunInput,
 };
 pub use pairings::RemotePairing;
-pub use peers::P2pClient;
+pub use peers::{P2pBox, P2pClient};
 pub use records::*;
 pub use retention::*;
 
@@ -38,7 +38,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 /// Highest supported forward-only migration. Newer databases require an upgrade.
-pub const SCHEMA_VERSION: u32 = 16;
+pub const SCHEMA_VERSION: u32 = 17;
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 /// Store failures. Diesel, connection, migration and filesystem failures keep the

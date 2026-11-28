@@ -174,6 +174,78 @@ async fn migration_adds_p2p_clients_and_down_drops_them() {
 }
 
 #[tokio::test]
+/// Migration 017 adds `p2p_boxes` to a version 16 database: pairing with a
+/// box again keeps its name and takes the new addresses, a name another box
+/// key holds is refused, and a state reset deletes the rows. Its down
+/// script drops the table.
+async fn migration_adds_p2p_boxes_and_down_drops_them() {
+    use devlanes_state::{Error, P2pBox};
+    use diesel::{migration::MigrationSource, prelude::*};
+    use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+    const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+    let dir = tempfile::tempdir().expect("directory");
+    let path = dir.path().join("boxes.db");
+    let mut c = SqliteConnection::establish(path.to_str().expect("path")).expect("connection");
+    c.applied_migrations().expect("ledger");
+    let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
+        .expect("migrations");
+    c.run_migrations(&migrations[..16]).expect("v16");
+    let store = Store::open(&path).await.expect("upgrade");
+    assert_eq!(
+        store.schema_version().await.expect("version"),
+        SCHEMA_VERSION
+    );
+    let paired = |name: &str, key: &str, addrs: &[&str]| P2pBox {
+        name: name.into(),
+        peer_key: key.repeat(64),
+        relay_url: Some("https://relay1.devlanes.run".into()),
+        direct_addrs: addrs.iter().map(|addr| (*addr).to_owned()).collect(),
+        ephemeral: false,
+        paired_at: 1,
+    };
+    let first = paired("acme", "a", &["192.0.2.7:4433", "[2001:db8::1]:4433"]);
+    assert_eq!(
+        store.add_p2p_box(first.clone()).await.expect("pair"),
+        "acme"
+    );
+    assert_eq!(
+        store.p2p_box("acme".into()).await.expect("read"),
+        Some(first)
+    );
+    // A new ticket from the same box, under another name, keeps the name.
+    let again = P2pBox {
+        relay_url: None,
+        ephemeral: true,
+        ..paired("acme-2", "a", &["192.0.2.8:4433"])
+    };
+    assert_eq!(
+        store.add_p2p_box(again.clone()).await.expect("pair again"),
+        "acme"
+    );
+    assert_eq!(
+        store.p2p_boxes().await.expect("boxes"),
+        [P2pBox {
+            name: "acme".into(),
+            ..again
+        }]
+    );
+    // Another box cannot take the name.
+    let taken = store.add_p2p_box(paired("acme", "b", &[])).await;
+    assert!(matches!(taken, Err(Error::Conflict { .. })), "{taken:?}");
+    store.reset().await.expect("reset");
+    assert!(store.p2p_boxes().await.expect("boxes").is_empty());
+    store.close().await.expect("close");
+    while c.applied_migrations().expect("ledger").len() > 17 {
+        c.revert_last_migration(MIGRATIONS)
+            .expect("down a later migration");
+    }
+    c.revert_last_migration(MIGRATIONS).expect("down 017");
+    let gone = diesel::sql_query("SELECT name FROM p2p_boxes").execute(&mut c);
+    assert!(gone.is_err(), "down drops p2p_boxes");
+    c.run_pending_migrations(MIGRATIONS).expect("redo 017");
+}
+
+#[tokio::test]
 /// Migration `task_run_state` names how earlier task runs ended from their exit
 /// code: 0 `exited`, another code `failed`, none `stopped`; a run still going
 /// has none.

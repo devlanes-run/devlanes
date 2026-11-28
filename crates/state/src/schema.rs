@@ -219,6 +219,16 @@ diesel::table! {
         last_seen -> Nullable<BigInt>,
     }
 }
+diesel::table! {
+    p2p_boxes (name) {
+        name -> Text,
+        peer_key -> Text,
+        relay_url -> Nullable<Text>,
+        direct_addrs -> Text,
+        ephemeral -> Integer,
+        paired_at -> BigInt,
+    }
+}
 diesel::allow_tables_to_appear_in_same_query!(
     projects,
     worktrees,
@@ -240,4 +250,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     startup_peaks,
     data_deletes,
     p2p_clients,
+    p2p_boxes,
 );

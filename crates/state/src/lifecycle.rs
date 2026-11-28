@@ -665,6 +665,22 @@ impl Store {
         })
         .await
     }
+    /// Sets when the box `name` was last connected to `at`, keeping the rest
+    /// of its row. Returns false when no host has that name.
+    pub async fn touch_remote_host(&self, name: String, at: i64) -> Result<bool, Error> {
+        self.call(move |c| {
+            let changed = diesel::update(remote_hosts::table.find(name))
+                .set(remote_hosts::last_connected.eq(Some(at)))
+                .execute(c)?;
+            Ok(changed > 0)
+        })
+        .await
+    }
+    /// Deletes the row of remote host `name`. Returns false when there was none.
+    pub async fn delete_remote_host(&self, name: String) -> Result<bool, Error> {
+        self.call(move |c| Ok(diesel::delete(remote_hosts::table.find(name)).execute(c)? > 0))
+            .await
+    }
     /// Lists registered remote hosts by name.
     pub async fn remote_hosts(&self) -> Result<Vec<RemoteHost>, Error> {
         self.call(|c| {
@@ -706,6 +722,7 @@ impl Store {
                 diesel::delete(remote_pairings::table).execute(c)?;
                 diesel::delete(remote_tokens::table).execute(c)?;
                 diesel::delete(p2p_clients::table).execute(c)?;
+                diesel::delete(p2p_boxes::table).execute(c)?;
                 diesel::delete(remote_lane_choices::table).execute(c)?;
                 diesel::delete(lane_setup::table).execute(c)?;
                 diesel::delete(task_completions::table).execute(c)?;
