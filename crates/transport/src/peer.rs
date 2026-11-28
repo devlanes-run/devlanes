@@ -85,7 +85,7 @@ pub struct PeerIdError;
 pub struct PeerAddr {
     /// The peer's key.
     pub id: PeerId,
-    /// The relay the peer was on, such as `https://relay.devlanes.run`.
+    /// The relay the peer was on, such as `https://relay1.devlanes.run`.
     pub relay: Option<String>,
     /// IP addresses the peer reported, tried directly.
     pub direct: Vec<SocketAddr>,

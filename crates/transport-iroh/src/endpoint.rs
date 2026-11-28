@@ -81,7 +81,7 @@ const KEEP_ALIVE: Duration = Duration::from_secs(5);
 pub struct IrohOptions {
     /// The secret key, created on first use and kept private to the user.
     pub key_file: PathBuf,
-    /// Relay URLs such as `https://relay.devlanes.run`. Empty for none: then
+    /// Relay URLs such as `https://relay1.devlanes.run`. Empty for none: then
     /// peers connect only through the addresses they know of each other.
     /// The daemon's config validates them; one that does not parse here
     /// fails the bind.
