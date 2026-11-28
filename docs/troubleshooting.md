@@ -48,7 +48,7 @@ kind: reference
 |---|---|---|
 | `needs_auth` in `devlanes remote ls` | Reconnecting needs your SSH password, passphrase or host key | `devlanes remote connect BOX` in a terminal |
 | `needs_pairing` in `devlanes remote ls` | The box no longer accepts this machine | [Connect to a box](how-to/remote/connect.md) |
-| `the box is not reachable` when connecting with a ticket | The box's daemon is not running, the ticket is more than 10 minutes old, or the box's address changed | Check that the box's daemon runs, then pair again with a new ticket from `devlanes daemon pair` on the box |
+| `the box is not reachable` when connecting with a ticket | The box's daemon is not running, the ticket is more than 10 minutes old, or the box's address changed | Start the box's daemon and try again; get a new ticket from `devlanes daemon pair` on the box if this one is over 10 minutes old or the box's address changed |
 | `no direct connection to the box formed` | The networks between the two machines allow no direct path, and devlanes does not keep a connection going through a relay | Connect over SSH ([Connect to a box](how-to/remote/connect.md)) or [Tailscale](how-to/remote/tailscale.md) |
 | `the box has no pairing ticket open` | The ticket expired, was used already, or the box's daemon restarted since it was printed | A new ticket from `devlanes daemon pair` on the box |
 | `the box's relay HOST is not one this machine uses` | The box uses a relay missing from this machine's `remote.relays` | If you trust that relay, add it to `remote.relays` and run `devlanes daemon restart` ([Connect to a box with a ticket](how-to/remote/connect-by-ticket.md)) |

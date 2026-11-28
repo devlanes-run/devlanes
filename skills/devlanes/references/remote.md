@@ -43,7 +43,7 @@ sudo loginctl enable-linger "$USER"
 
 A box serves only machines it has paired with, unless its user config sets `remote.require_pairing: false`. Never set that unless the user asks.
 
-`devlanes daemon pair` on the box prints a ticket and a code, each valid once for 10 minutes; without a terminal it prints only the code, and with `--ticket` only the ticket. Both are secrets: show them to the user, never put them in files or commits.
+`devlanes daemon pair` on the box prints a ticket and a code, each valid once for 10 minutes; without a terminal it prints only the code, and with `--ticket` or `--ephemeral` only the ticket. When it prints a code with `no ticket yet` or `No ticket`, run `devlanes daemon pair --ticket` for the ticket; it waits longer. Both are secrets: show them to the user, never put them in files or commits.
 
 ### By ticket, without SSH
 
@@ -97,10 +97,11 @@ A machine that waits in `needs_pairing` needs a new code the same way.
 | `pairing is paused for N minutes after 5 wrong codes` | Too many wrong codes | Wait, then a new code. Tickets still work. |
 | `the box has no pairing ticket open` | The ticket expired, was used, or the box's daemon restarted | A new ticket from `devlanes daemon pair` on the box. |
 | `the pairing ticket is wrong, expired or already used` | The box refused the ticket's secret | A new ticket from `devlanes daemon pair` on the box. |
-| `the box is not reachable (...)` | The box's daemon is not running, the ticket is over 10 minutes old, or the box's address changed | Ask the user to check the box's daemon, then a new ticket. |
-| `the box's relay HOST is not one this machine uses` | The box uses a relay missing from this machine's `remote.relays` | Tell the user; add the relay only if they trust it and ask for it. |
+| `the box is not reachable` with `the box's relay HOST is not one this machine uses` | The box uses a relay missing from this machine's `remote.relays` | Tell the user; add the relay only if they trust it and ask for it. |
+| `the box is not reachable` without a relay named | The box's daemon is not running, the ticket is over 10 minutes old, or the box's address changed | Ask the user to start the box's daemon and try again; a new ticket only if this one is over 10 minutes old or the box's address changed. |
+| `this is not a box name or an SSH destination, and not a whole pairing ticket either` | The ticket was cut or changed when copied | Copy the whole ticket again. |
 | `NAME is already the name of ...` (`box_name_taken`) | Another box or a `remote.boxes` entry has the name | Pair with `--name OTHER`. |
-| `box_name_ambiguous` | A name is both a box paired by ticket and a `remote.boxes` entry, or differs from one only in case | Follow the message: rename the `remote.boxes` entry, or `devlanes remote disconnect NAME --forget` and pair again with `--name`. |
+| `is both a box paired by ticket and an entry of remote.boxes`, or `differs only in case from` | A name is both a box paired by ticket and a `remote.boxes` entry, or differs from one only in case | Follow the message: rename the `remote.boxes` entry, or `devlanes remote disconnect NAME --forget` and pair again with `--name`. |
 | `NAME is not a box paired by ticket here` (`box_not_paired_by_ticket`) | `--forget` was given a box reached over SSH or a command | `devlanes remote disconnect NAME` without `--forget`. |
 | `the pairing ticket is damaged` | Part of the ticket was lost when copying | Copy the whole ticket again. |
 | `no direct connection to the box formed` | No direct path between the machines | Connect over SSH or Tailscale instead. |

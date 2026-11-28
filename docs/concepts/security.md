@@ -1,6 +1,6 @@
 ---
 title: Security
-description: The daemon answers only your own account, a lane separates ports and hostnames but not processes, the CA signs only local names, pairing decides which machines see a box's lanes, and tickets bring in a relay and n0's DNS.
+description: The daemon answers only your own account, a lane separates ports and hostnames but not processes, the CA signs only local names, pairing decides which machines see a box's lanes, and what a ticket, a relay and n0's DNS see.
 kind: concept
 ---
 
@@ -62,7 +62,11 @@ Pairing pins both keys. The box serves only the keys it paired with, and your ma
 
 ## Tickets bring in a relay, n0's DNS and your router
 
-Nothing is contacted for tickets until this machine makes one or connects with one. `devlanes daemon pair` on a terminal, with `--json` or through `devlanes mcp` makes a ticket; without a terminal it makes only a code. From then until the daemon stops, the daemon keeps a connection to one relay, checks the network with both relays, by default `relay1.devlanes.run` and `relay2.devlanes.run`, and, with port mapping on, keeps a port forwarded on your router over UPnP, NAT-PMP or PCP. A box that listens for machines, because a ticket is open or a machine is paired with it, also publishes a signed record of its key and its relay to n0's DNS service, `dns.iroh.link`, and stops when it stops listening. n0 makes the iroh library devlanes connects with, and sees the key, the relay and the IP address of each lookup. devlanes sends no telemetry.
+Nothing is contacted for tickets until this machine asks for one or connects with one. `devlanes daemon pair` asks for a ticket on a terminal, with `--json`, with `--ticket` or `--ephemeral`, and through `devlanes mcp`, and starts the networking below even when it prints no ticket; without a terminal and without those flags it makes only a code and contacts nothing.
+
+The networking runs while this machine has a ticket open, a machine paired with it by ticket, or a box paired by ticket that it is connected to or trying to reach. It stops a few minutes after the last of those ends, and starts again by itself when one of them returns. While it runs, the daemon keeps a connection to one relay, checks the network with every relay in `remote.relays`, by default `relay1.devlanes.run` and `relay2.devlanes.run`, and, with port mapping on, asks your router over UPnP, NAT-PMP or PCP to forward a port to this machine. A machine that accepts pairings by ticket keeps the same UDP ports across restarts; one that only connects out does not.
+
+A box that listens for machines, because a ticket is open or a machine is paired with it, also publishes a signed record of its key and its relay to n0's DNS service, `dns.iroh.link`, and stops publishing when it stops listening. n0 makes the iroh library devlanes connects with, and sees the key, the relay, and the IP address each publish and each lookup comes from. devlanes sends no telemetry.
 
 [`remote.relays`](/docs/reference/config/user/remote/#remote-relays) set to an empty list turns off the relay and n0's DNS, and [`remote.port_mapping`](/docs/reference/config/user/remote/#remote-port_mapping) set to false turns off the router request.
 

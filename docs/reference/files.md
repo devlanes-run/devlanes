@@ -25,8 +25,8 @@ Each home has its own daemon, lanes and port pool, and is private to your accoun
 | `ca/` | The CA. |
 | `data/<project>/<lane id>/` | The lane data folders. |
 | `sync/` | Folders synced from boxes. |
-| `p2p-key` | This machine's key for boxes and machines paired by ticket, readable by your account only. Created the first time this machine makes a ticket or connects by ticket. |
-| `p2p-port` | The ports the daemon binds for connections by ticket, kept so they stay the same across restarts. |
+| `p2p-key` | This machine's key for pairing by ticket, readable by your account only. Do not share it. Deleting or replacing it gives this machine a new identity, so every box and machine paired by ticket refuses it until you pair again. Created the first time this machine asks for a ticket or connects by ticket. |
+| `p2p-port` | The UDP ports a machine that has accepted pairings by ticket keeps across restarts. Deleting it lets the ports change, and machines that reach this one without a relay then need a new ticket. |
 
 ## Logs
 

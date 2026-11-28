@@ -16,6 +16,8 @@ Print a ticket on the box, then connect with it on your machine, giving the box 
 $ devlanes daemon pair
 ```
 
+If it prints a code and no ticket, run `devlanes daemon pair --ticket`, which waits longer for the ticket.
+
 ```console title="on your machine"
 $ devlanes remote connect dlp1... --name my-vps
 ```
@@ -40,6 +42,8 @@ $ devlanes remote disconnect my-vps --forget
 
 devlanes connects only over a direct path between the two machines and does not keep a connection going through a relay. When the networks in between allow no direct path, the connect fails and says so: connect over SSH, as [Connect to a box](connect.md) shows, or over [Tailscale](tailscale.md).
 
+## If you host your own relay
+
 A box on a relay you host yourself, from the [devlanes relay](https://github.com/devlanes-run/relay) repository, is reached by machines that list the same relay in [`remote.relays`](/docs/reference/config/user/remote/#remote-relays).
 
 ## If both machines are on one network
@@ -51,7 +55,7 @@ remote:
   relays: []
 ```
 
-Your machine then finds the box only at the addresses in its ticket, so pair again with a new ticket when the box's IP address changes, as on another network or with a new address from the router, and when the box's daemon could not keep its port because another program took it. On a Windows box, allow devlanes through the firewall, or the box does not answer.
+Your machine then finds the box only at the addresses in its ticket, so pair again with a new ticket when the box's IP address changes, as on another network or with a new address from the router, and when the box's daemon could not keep its port because another program took it, which its log (`devlanes daemon logs` on the box) says. On a Windows box, allow devlanes through the firewall, or the box does not answer.
 
 ## Related
 
