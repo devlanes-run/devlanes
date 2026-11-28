@@ -1,5 +1,13 @@
 # devlanes-browser-host
 
+## 0.3.0 — 2026-11-28
+
+### Minor changes
+
+- [4c06151c](https://github.com/devlanes-run/devlanes/commit/4c06151c0396f3ffa997e1b3db3ebf37fbd1ac4b) Changed the browser extension host to allow the extension id `konofbnhgejkgkonkleipkkpkphbfgee` in place of `pggffblellmckocpflaaeligadjpkahj`.
+  
+  Builds of devlanes-run/browser with the old id stop connecting, so load the latest build. Run `devlanes setup` again after updating.
+
 ## 0.2.0 — 2026-11-23
 
 ### Patch changes

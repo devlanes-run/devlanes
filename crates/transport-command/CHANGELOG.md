@@ -1,6 +1,6 @@
 # devlanes-transport-command
 
-## 0.6.0 ... 0.6.2 — 2026-11-23
+## 0.6.0 ... 0.7.0 — 2026-11-28
 
 Version bump only, to follow other packages.
 
