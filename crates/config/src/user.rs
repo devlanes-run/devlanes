@@ -567,15 +567,18 @@ impl RemoteConfig {
             })?;
         }
         for (name, entry) in &self.boxes {
+            // At most 63, as for a box paired by ticket: a longer run of
+            // letters is taken for a pairing ticket.
             let plain = !name.is_empty()
+                && name.len() <= 63
                 && !name.starts_with('-')
                 && name
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
             if !plain {
                 return Err(ConfigError::plain(format!(
-                    "remote.boxes.{name}: a box name may only hold letters, digits, `-` and `_`, \
-                     and cannot start with `-`"
+                    "remote.boxes.{name}: a box name may only hold up to 63 letters, digits, `-` \
+                     and `_`, and cannot start with `-`"
                 )));
             }
             if entry.command.first().is_none_or(String::is_empty) {
@@ -590,8 +593,8 @@ impl RemoteConfig {
 }
 
 /// Why `relay` cannot be a `remote.relays` entry, or `None` when it can.
-/// The length is checked on the URL as parsed, the form a ticket carries,
-/// which may have gained a trailing `/`. Public so a client can check a
+/// The length is checked on the form a ticket carries: the URL as parsed,
+/// ending in `/`. Public so a client can check a
 /// relay a ticket names by the same rule.
 pub fn relay_problem(relay: &str) -> Option<String> {
     let parsed = url::Url::parse(relay).ok().filter(|url| {
@@ -612,7 +615,10 @@ pub fn relay_problem(relay: &str) -> Option<String> {
             "{relay} has a query or a fragment, which a relay URL cannot have"
         ));
     }
-    (url.as_str().len() > MAX_RELAY_URL).then(|| {
+    // iroh ends every relay URL with `/`, also one with a path, and that
+    // form is what a ticket carries.
+    let carried = url.as_str().len() + usize::from(!url.as_str().ends_with('/'));
+    (carried > MAX_RELAY_URL).then(|| {
         format!("{relay} is longer than {MAX_RELAY_URL} bytes, the most a pairing ticket can carry")
     })
 }
@@ -1490,15 +1496,22 @@ pub fn box_settings(
             let message = &problem.message;
             // A lenient load ends each per-key problem this way; any other
             // problem is about the whole file.
+            // `remote.boxes` is about the boxes this machine connects to, and
             // `remote.relays` and `remote.port_mapping` only shape
-            // peer-to-peer networking, so a typo there must not turn SSH and
-            // command clients away.
-            let peer_to_peer =
-                message.starts_with("remote.relays") || message.starts_with("remote.port_mapping");
+            // peer-to-peer networking, so a problem there must not turn SSH
+            // and command clients away. The message names what was dropped,
+            // so only a drop of that key or inside it is skipped: one that
+            // took the whole `remote` section goes to the safe side.
+            let inside = |key: &str| {
+                message
+                    .strip_prefix(key)
+                    .is_some_and(|rest| rest.starts_with([':', '[', '.']))
+            };
+            let elsewhere =
+                inside("remote.boxes") || inside("remote.relays") || inside("remote.port_mapping");
             !message.ends_with("; the default applies")
                 || ((message.starts_with("remote.") || message.starts_with("remote:"))
-                    && !message.starts_with("remote.boxes")
-                    && !peer_to_peer)
+                    && !elsewhere)
         })
         .collect();
     let settings = if remote.is_empty() {
@@ -1561,11 +1574,17 @@ pub fn parse_user_lenient(file: &str, source: &str) -> (UserConfig, Vec<ConfigEr
                 (path, message)
             }
         };
-        if path.is_empty() || path == "." || !drop_key(&mut value, &path) {
+        if path.is_empty() || path == "." {
             break;
         }
+        // Named after what was dropped, which is an ancestor of `path` when
+        // `path` itself was absent, so a reader of the problem (such as
+        // `box_settings`) knows which settings fell back to defaults.
+        let Some(dropped) = drop_key(&mut value, &path) else {
+            break;
+        };
         issues.push(crate::loader::locate(
-            ConfigError::plain(format!("{path}: {message}; the default applies")),
+            ConfigError::plain(format!("{dropped}: {message}; the default applies")),
             file,
             source,
         ));
@@ -1576,24 +1595,27 @@ pub fn parse_user_lenient(file: &str, source: &str) -> (UserConfig, Vec<ConfigEr
     (UserConfig::default(), issues)
 }
 
-/// Removes the key at the dotted `path` from `value`. When the key is absent
-/// (a validation error about a value that must exist), the nearest present
-/// ancestor goes instead, so its section falls back to defaults. False when
-/// nothing could be removed.
-fn drop_key(value: &mut serde_json::Value, path: &str) -> bool {
-    let segments: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
+/// Removes the key at `path` from `value`, a dotted path whose segments may
+/// end in list indices (`remote.relays[0]` is key `remote`, key `relays`,
+/// item 0). When the key is absent (a validation error about a value that
+/// must exist), the nearest present ancestor goes instead, so its section
+/// falls back to defaults. Returns the path of what was removed, in the
+/// same form; `None` when nothing could be removed.
+fn drop_key(value: &mut serde_json::Value, path: &str) -> Option<String> {
+    let segments = path_segments(path);
     for depth in (1..=segments.len()).rev() {
         let (parents, last) = segments[..depth].split_at(depth - 1);
         let pointer: String = parents
             .iter()
-            .map(|segment| format!("/{}", segment.replace('~', "~0").replace('/', "~1")))
+            .map(|(segment, _)| format!("/{}", segment.replace('~', "~0").replace('/', "~1")))
             .collect();
         let Some(node) = value.pointer_mut(&pointer) else {
             continue;
         };
+        let (last, _) = &last[0];
         let removed = match node {
-            serde_json::Value::Object(map) => map.remove(last[0]).is_some(),
-            serde_json::Value::Array(items) => match last[0].parse::<usize>() {
+            serde_json::Value::Object(map) => map.remove(last).is_some(),
+            serde_json::Value::Array(items) => match last.parse::<usize>() {
                 Ok(index) if index < items.len() => {
                     items.remove(index);
                     true
@@ -1603,10 +1625,37 @@ fn drop_key(value: &mut serde_json::Value, path: &str) -> bool {
             _ => false,
         };
         if removed {
-            return true;
+            let mut shown = String::new();
+            for (segment, index) in &segments[..depth] {
+                match (index, shown.is_empty()) {
+                    (true, _) => shown.push_str(&format!("[{segment}]")),
+                    (false, true) => shown.push_str(segment),
+                    (false, false) => shown.push_str(&format!(".{segment}")),
+                }
+            }
+            return Some(shown);
         }
     }
-    false
+    None
+}
+
+/// The keys and list indices of a path such as `remote.relays[0]`, each
+/// with whether it is an index.
+fn path_segments(path: &str) -> Vec<(String, bool)> {
+    let mut segments = Vec::new();
+    for part in path.split('.').filter(|part| !part.is_empty()) {
+        let (key, mut indices) = part
+            .split_once('[')
+            .map_or((part, ""), |(key, rest)| (key, rest));
+        if !key.is_empty() {
+            segments.push((key.to_owned(), false));
+        }
+        while let Some((index, rest)) = indices.split_once(']') {
+            segments.push((index.to_owned(), true));
+            indices = rest.strip_prefix('[').unwrap_or(rest);
+        }
+    }
+    segments
 }
 
 /// Parse, validate with errors located at their field, then drop deferred settings.

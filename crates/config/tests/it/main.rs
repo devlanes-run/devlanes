@@ -747,6 +747,20 @@ fn box_settings_fall_to_the_safe_side() {
     ] {
         assert_eq!(settings(source), (true, true, false, 0), "{source}");
     }
+    // A malformed entry drops that entry or the key, never the `remote`
+    // section, so connections stay off.
+    for entry in ["{a: 1}", "5", "null", "[x]"] {
+        let source = format!("remote:\n  allow_connections: false\n  relays: [{entry}]\n");
+        assert_eq!(settings(&source), (false, true, true, 0), "{source}");
+    }
+    for source in [
+        "remote:\n  allow_connections: false\n  port_mapping: {a: 1}\n",
+        "remote:\n  allow_connections: false\n  port_mapping: [true]\n",
+        "remote:\n  allow_connections: false\n  boxes: {acme: {command: [{a: 1}]}}\n",
+        "remote:\n  allow_connections: false\n  boxes: [acme]\n",
+    ] {
+        assert_eq!(settings(source), (false, true, true, 0), "{source}");
+    }
     for source in [
         "remote:\n  start_daemon: flase\n",
         "remote:\n  require_pairing: false\n  requre_pairing: false\n",
@@ -799,7 +813,8 @@ fn box_settings_fall_to_the_safe_side_when_the_whole_file_fails() {
 fn remote_boxes_need_a_name_and_a_program() {
     let relays = parse_user("remote: { relays: [] }").expect("no relays");
     assert!(relays.remote.relays.is_empty());
-    let own = format!("https://relay.example.invalid/{}", "r".repeat(170));
+    // 199 bytes, 200 with the `/` a ticket adds.
+    let own = format!("https://relay.example.invalid/{}", "r".repeat(169));
     assert!(
         parse_user(&format!(
             "remote: {{ relays: ['http://10.0.0.1:3340', '{own}'] }}"
@@ -871,6 +886,10 @@ fn remote_boxes_need_a_name_and_a_program() {
             "is longer than 200 bytes",
         ),
         (
+            &format!("remote: {{ relays: ['{own}x'] }}"),
+            "is longer than 200 bytes",
+        ),
+        (
             "remote: { relays: ['https://user:secret@relay.example.invalid'] }",
             "holds a user name or password",
         ),
@@ -883,6 +902,13 @@ fn remote_boxes_need_a_name_and_a_program() {
             "has a query or a fragment",
         ),
         (&many, "at most 8 are allowed"),
+        (
+            &format!(
+                "remote: {{ boxes: {{ {}: {{ command: [ssh] }} }} }}",
+                "a".repeat(64)
+            ),
+            "a box name may only hold up to 63",
+        ),
     ] {
         let error = parse_user(source).expect_err(source);
         assert!(
