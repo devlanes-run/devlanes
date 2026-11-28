@@ -15,9 +15,12 @@ use iroh::SecretKey;
 /// Size of the key file: `SecretKey::to_bytes`.
 const KEY_LEN: usize = 32;
 
-/// How often a step that another daemon of the same home may be in the
-/// middle of is tried before it counts as failed, and the pause between.
+/// How often a step that another daemon of the same home, or another
+/// process holding the file for a moment, may be in the middle of is tried
+/// before it counts as failed.
 const ATTEMPTS: u32 = 20;
+
+/// The pause between those tries: 20 of them wait about 1 s in all.
 const PAUSE: Duration = Duration::from_millis(50);
 
 /// What to do about a key file that cannot be used as it is.
@@ -150,8 +153,8 @@ fn write_new(path: &Path, key: &SecretKey) -> io::Result<()> {
     file.sync_all()
 }
 
-/// Fails when the group or others may read `path`, so a key other accounts
-/// could copy is never used.
+/// Fails when the group or others have any access to `path`, so a key other
+/// accounts could copy or replace is never used.
 #[cfg(unix)]
 fn check_private(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -162,7 +165,7 @@ fn check_private(path: &Path) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::PermissionDenied,
         format!(
-            "other users may read it (mode {:o}); run `chmod 600 {}`",
+            "other users have access to it (mode {:03o}); run `chmod 600 '{}'`",
             mode & 0o777,
             path.display()
         ),
@@ -186,16 +189,14 @@ fn check_private(path: &Path) -> io::Result<()> {
         Problem::Owner(owner) => format!("another account ({owner}) owns it; {MOVE_AWAY}"),
         Problem::Acl(others) => {
             let others: Vec<String> = others.iter().map(ToString::to_string).collect();
-            let user = devlanes_sys_windows::token::current_user()?;
-            // As `crates/pki`'s fix: `/reset` drops the explicit grants, then
-            // the file keeps one grant, to this user. `; ` runs in Windows
-            // PowerShell 5.1, PowerShell 7 and Git Bash alike.
-            let shown = path.display();
-            format!(
-                "other accounts can read it ({}); remove their access with \
-                 `icacls \"{shown}\" /reset; icacls \"{shown}\" /inheritance:r /grant:r \"*{user}:F\"`",
-                others.join(", "),
-            )
+            let others = others.join(", ");
+            match icacls_fix(path) {
+                Some(fix) => format!(
+                    "other accounts can read it ({others}); remove their access in \
+                     PowerShell with `{fix}`"
+                ),
+                None => format!("other accounts can read it ({others}); {MOVE_AWAY}"),
+            }
         }
         Problem::HardLinks(links) => {
             format!("it has {links} hard links; remove the other names it has")
@@ -205,6 +206,22 @@ fn check_private(path: &Path) -> io::Result<()> {
         }
     };
     Err(io::Error::new(io::ErrorKind::PermissionDenied, text))
+}
+
+/// The `icacls` commands that leave `path` with one grant, to this user, as
+/// `crates/pki`'s fix does: `/reset` drops the explicit grants, then the
+/// file keeps only this user's. The steps are joined with `; `, which Windows
+/// PowerShell 5.1 and PowerShell 7 run in order; Git Bash rewrites `/reset`
+/// into a path, so the message names PowerShell. `None` when this user's SID
+/// cannot be read, so the advice falls back to moving the key away instead
+/// of hiding the real problem behind the lookup's error.
+#[cfg(windows)]
+fn icacls_fix(path: &Path) -> Option<String> {
+    let user = devlanes_sys_windows::token::current_user().ok()?;
+    let shown = path.display();
+    Some(format!(
+        r#"icacls "{shown}" /reset; icacls "{shown}" /inheritance:r /grant:r "*{user}:F""#
+    ))
 }
 
 #[cfg(test)]
@@ -252,14 +269,16 @@ mod tests {
         Ok(())
     }
 
-    /// Exposed keys are refused with the path, instead of being used as this
-    /// machine's identity: on Unix one the group or others may read, on
-    /// Windows one other accounts can read.
+    /// Exposed keys are refused with the path and the accounts or mode that
+    /// expose them, instead of being used as this machine's identity, and
+    /// the command the message prints makes the same key load again: on Unix
+    /// for a key the group or others may read, on Windows for one Everyone
+    /// can read.
     #[test]
-    fn a_key_others_can_read_is_refused() -> TestResult {
+    fn a_key_others_can_read_is_refused_until_the_printed_fix_runs() -> TestResult {
         let home = tempfile::tempdir()?;
         let path = home.path().join("p2p-key");
-        load_or_create(&path)?;
+        let created = load_or_create(&path)?;
         expose(&path)?;
         let Err(PeerError::Key {
             path: named,
@@ -270,6 +289,20 @@ mod tests {
         };
         assert_eq!(named, path);
         assert_eq!(source.kind(), io::ErrorKind::PermissionDenied, "{source}");
+        let text = source.to_string();
+        #[cfg(unix)]
+        assert!(text.contains("644"), "the message names no mode: {text}");
+        #[cfg(windows)]
+        assert!(
+            text.contains("S-1-1-0"),
+            "the message names no account: {text}"
+        );
+        let fix = text
+            .split('`')
+            .nth(1)
+            .ok_or_else(|| format!("the message prints no command: {text}"))?;
+        run_shell(fix)?;
+        assert_eq!(load_or_create(&path)?.public(), created.public());
         Ok(())
     }
 
@@ -281,15 +314,41 @@ mod tests {
         Ok(())
     }
 
-    /// Grants Everyone read access to `path` with System32's `icacls`,
-    /// killed after 30 s so a hung tool fails the test instead of hanging it.
+    /// Grants Everyone read access to `path` with System32's `icacls`.
     #[cfg(windows)]
     fn expose(path: &Path) -> TestResult {
         let icacls = devlanes_sys_windows::file::system_directory()?.join("icacls.exe");
-        let mut child = std::process::Command::new(icacls)
-            .arg(path)
-            .args(["/grant", "*S-1-1-0:R"])
+        let mut command = std::process::Command::new(icacls);
+        command.arg(path).args(["/grant", "*S-1-1-0:R"]);
+        finish(command, "icacls")
+    }
+
+    /// Runs a command a key message prints in the shell it names: `sh` on
+    /// Unix, Windows PowerShell on Windows.
+    fn run_shell(script: &str) -> TestResult {
+        #[cfg(unix)]
+        let command = {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", script]);
+            command
+        };
+        #[cfg(windows)]
+        let command = {
+            let shell = devlanes_sys_windows::file::system_directory()?
+                .join(r"WindowsPowerShell\v1.0\powershell.exe");
+            let mut command = std::process::Command::new(shell);
+            command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+            command
+        };
+        finish(command, script)
+    }
+
+    /// Runs `command` to its end and fails unless it succeeds. It is killed
+    /// after 30 s, so a hung tool fails the test instead of hanging it.
+    fn finish(mut command: std::process::Command, name: &str) -> TestResult {
+        let mut child = command
             .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()?;
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         let status = loop {
@@ -299,11 +358,11 @@ mod tests {
             if std::time::Instant::now() > deadline {
                 child.kill()?;
                 child.wait()?;
-                return Err("icacls did not finish within 30 s".into());
+                return Err(format!("{name} did not finish within 30 s").into());
             }
             std::thread::sleep(Duration::from_millis(20));
         };
-        assert!(status.success(), "icacls {}", path.display());
+        assert!(status.success(), "{name}: {status}");
         Ok(())
     }
 }
