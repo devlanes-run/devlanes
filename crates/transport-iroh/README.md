@@ -48,14 +48,18 @@ Nothing is bound or contacted until `addr`, `connect` or `listen(Some(..))` need
 
 A dial contacts only the relays in `relays`. A ticket's relay, or one a box names in its address record, that is not in the list is dropped, and the dial tries the box's direct addresses alone, so a pasted ticket cannot make this machine send a request to an address the ticket chose. To reach a box on another relay, add that relay to the list. Text the other side controls (close reasons, a dropped relay's host) has control and format characters removed and is cut to 200 bytes before it reaches an error or a log line.
 
-The endpoint binds the same UDP ports at every start, so a client that stored the box's addresses from a ticket still reaches it after the box's daemon restarts, also without a relay. When a saved port is taken, it binds another one and logs that clients on a network without a relay must pair again.
+The first `addr` after a bind waits up to 5 seconds for the relay; later calls return at once with what is known, the home relay once one answered or else the first configured relay. The bind runs on its own, so a caller that stops waiting does not stop it.
+
+Once bound, the endpoint stays up while it listens, while any connection is open and for 5 minutes after the last call that needed it. Then it closes its sockets, its relay connection and its network checks, and the next `addr`, `connect` or `listen(Some(..))` binds again, so a machine that made one ticket does not hold a relay connection for the daemon's whole life. `close` is final; after it every call fails with `PeerError::Closed`.
+
+An endpoint that has listened binds the same UDP ports at every start, so a client that stored the box's addresses from a ticket still reaches it after the box's daemon restarts, also without a relay. When a saved port is taken, it binds another one and logs that clients on a network without a relay must pair again. An endpoint that only dials keeps no ports and binds new ones at each start, so a laptop does not use the same source port on every network it joins; a machine that is both a box and a client keeps its ports for its dials too. With `port_mapping`, a kept port also keeps the router's mapping on the same public port across restarts; handshakes that arrive through it are still refused without the right ALPN and an admitted key.
 
 ## Files
 
-The crate writes two files, both in the directory of `IrohOptions::key_file`:
+The crate writes up to two files, both in the directory of `IrohOptions::key_file`:
 
 - the key file, which holds the 32-byte secret key. It is created private to the user (mode 0600 on Unix), and a key other accounts can read is refused.
-- `p2p-port`, the UDP ports the endpoint bound last, one line per address family. It is not secret; a missing or unreadable file means any port, and ports below 1024 are ignored.
+- `p2p-port`, written by the first `listen(Some(..))` after a bind: the UDP ports the endpoint bound, one line per address family. A later bind asks for these ports only when the file exists. It is not secret; a missing or unreadable file means any port, and ports below 1024 are ignored.
 
 ## License
 

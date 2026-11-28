@@ -1,5 +1,7 @@
-//! The UDP ports the endpoint bound, kept next to the key file so the next
-//! start binds the same ones.
+//! The UDP ports a listening endpoint bound, kept next to the key file so
+//! the next start binds the same ones. An endpoint that only dials keeps
+//! none: a fixed source port would link a laptop across the networks it
+//! visits, and a client needs no stable address.
 //!
 //! A client keeps the box's socket addresses from the ticket. Without a
 //! relay those are all it can dial, so a box that came back on other ports
