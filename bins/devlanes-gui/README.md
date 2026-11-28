@@ -44,7 +44,7 @@ A backend that cannot run here prints `{"unready":1,"devlanes":"0.17.0","protoco
 
 ## Codecs
 
-`host` offers H.264 where this machine has it and `raw` always; `view` offers the same decoders. The H.264 backends come from `devlanes-gui-codec`'s `h264` feature, which only this binary enables: the system's OpenH264 on Linux, loaded at run time (versions 2.2 to 2.7 encode, 2.6 or later decode; nothing links it, so the binary starts without it and streams `raw`), Media Foundation on Windows (looked up in `mfplat.dll` at run time, so a Windows without it starts too), and the VideoToolbox decoder on macOS. The host looks for them on a blocking thread before it listens, the viewer on a thread of its own, so its window thread never joins COM's multithreaded apartment.
+`host` offers H.264 where this machine has it and `raw` always; `view` offers the same decoders. The H.264 backends come from `devlanes-gui-codec`'s `h264` feature, which only this binary enables: the system's OpenH264 on Linux, loaded at run time (versions 2.2 to 2.7 encode, 2.6 and 2.7 decode; nothing links it, so the binary starts without it and streams `raw`), Media Foundation on Windows (looked up in `mfplat.dll` at run time, so a Windows without it starts too), and the VideoToolbox decoder on macOS. The host looks for them on a blocking thread before it listens, the viewer on a thread of its own, so its window thread never joins COM's multithreaded apartment.
 
 ## Control token
 

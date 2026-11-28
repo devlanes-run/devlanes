@@ -6,6 +6,7 @@
 //!
 //! ```sh
 //! cargo run --release -p devlanes-gui-codec --features h264 --example h264_timing
+//! cargo run --release -p devlanes-gui-codec --features h264 --example h264_timing -- 2560x1440
 //! ```
 
 use std::sync::Arc;
@@ -179,7 +180,18 @@ fn main() {
         found.version, found.encode, found.decode
     );
     let ms = |value: Option<f64>| value.map_or_else(|| "n/a".to_owned(), |v| format!("{v:.2} ms"));
-    for (width, height) in [(1920, 1080), (3840, 2160)] {
+    // Sizes as `WIDTHxHEIGHT` arguments, 1080p and 4K without any.
+    let mut sizes: Vec<(u32, u32)> = std::env::args()
+        .skip(1)
+        .filter_map(|arg| {
+            let (w, h) = arg.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .collect();
+    if sizes.is_empty() {
+        sizes = vec![(1920, 1080), (3840, 2160)];
+    }
+    for (width, height) in sizes {
         for (content, draw) in [
             ("pattern", grid as fn(u32, u32, u32) -> Frame),
             ("text", text),

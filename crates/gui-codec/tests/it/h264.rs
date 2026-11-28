@@ -14,8 +14,8 @@ use devlanes_gui_codec::{
     CodecError, DecoderBackend, EncodeParams, Encoded, EncoderBackend, Frame, Packet, VideoDecoder,
     h264,
 };
-use devlanes_gui_host::pattern::{draw_grid, shows_grid_within};
-use devlanes_gui_proto::{REFINE_QUALITY_STEP, Size};
+use devlanes_gui_host::pattern::{GRID_COLUMNS, GRID_ROWS, cell_centre, draw_grid, grid_colour};
+use devlanes_gui_proto::Size;
 
 /// How long one test may take with a real codec.
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -24,9 +24,24 @@ const TIMEOUT: Duration = Duration::from_secs(120);
 /// areas come back close to exact, so more means a colour conversion bug.
 const GRID_TOLERANCE: u8 = 8;
 
-/// Whether `frame` shows the grid within [`GRID_TOLERANCE`].
+/// Whether the centre of every cell of `frame` has the grid's colour within
+/// [`GRID_TOLERANCE`].
 fn shows_grid(frame: &Frame) -> bool {
-    shows_grid_within(frame, GRID_TOLERANCE)
+    let size = Size::new(frame.width(), frame.height());
+    (0..GRID_ROWS).all(|row| {
+        (0..GRID_COLUMNS).all(|column| {
+            let centre = cell_centre(column, row, size);
+            let (x, y) = (centre.x as u32, centre.y as u32);
+            let at = x as usize * 4;
+            let Some(&[b, g, r, _]) = frame.row(y).and_then(|p| p.get(at..at + 4)) else {
+                return false;
+            };
+            let [wr, wg, wb] = grid_colour(x, y, size);
+            [(r, wr), (g, wg), (b, wb)]
+                .iter()
+                .all(|(got, want)| got.abs_diff(*want) <= GRID_TOLERANCE)
+        })
+    })
 }
 
 /// Skips for a missing `side` (`encode` or `decode`), printing why, or fails
@@ -379,6 +394,17 @@ fn every_decoder_survives_broken_input() {
             let units = fixture();
             let offer = decoders.offer();
             let fresh = || decoders.decoder().expect("a decoder");
+            // The viewer keeps its decoder after input that gave no picture,
+            // so the same decoder must decode the next good keyframe.
+            let recovers = |decoder: &mut dyn VideoDecoder, after: &str| {
+                for (index, unit) in units.iter().enumerate() {
+                    let picture = decoder.decode(&packet(unit, index == 0));
+                    let picture = picture
+                        .unwrap_or_else(|e| panic!("{offer:?} after {after}: {e}"))
+                        .unwrap_or_else(|| panic!("{offer:?} after {after}: no picture"));
+                    assert!(shows_grid(&picture), "{offer:?} after {after}");
+                }
+            };
 
             let mut decoder = fresh();
             for (n, length) in [1, 3, 17, 300, 4096].into_iter().enumerate() {
@@ -388,14 +414,17 @@ fn every_decoder_survives_broken_input() {
                 coded.extend_from_slice(&noise);
                 feed(&mut *decoder, &coded, "garbage after a start code");
             }
+            recovers(&mut *decoder, "garbage");
 
             let mut decoder = fresh();
             for cut in (0..units[0].len()).step_by(5) {
                 feed(&mut *decoder, &units[0][..cut], "a cut keyframe");
             }
+            recovers(&mut *decoder, "cut keyframes");
 
             let mut decoder = fresh();
             feed(&mut *decoder, units[1], "a predicted frame first");
+            recovers(&mut *decoder, "a predicted frame first");
 
             let nals = nal_units(units[0]);
             let mut huge = Vec::new();
@@ -406,8 +435,19 @@ fn every_decoder_survives_broken_input() {
                     _ => huge.extend_from_slice(unit),
                 }
             }
+            // Every wrapper sees the size before it copies a picture out, and
+            // refuses it as a payload that is not the announced picture;
+            // a decoder may also refuse the parameter set itself.
             let mut decoder = fresh();
-            feed(&mut *decoder, &huge, "a 16384x16384 parameter set");
+            let result = decoder.decode(&packet(&huge, true));
+            eprintln!("{offer:?}: a 16384x16384 parameter set gives {result:?}");
+            assert!(
+                matches!(
+                    result,
+                    Err(CodecError::BadPayload { .. } | CodecError::Backend { .. }) | Ok(None)
+                ),
+                "{offer:?} took a 16384x16384 parameter set: {result:?}"
+            );
 
             let mut decoder = fresh();
             assert!(
@@ -417,13 +457,6 @@ fn every_decoder_survives_broken_input() {
                 ),
                 "an empty payload from {offer:?}"
             );
-
-            let mut decoder = fresh();
-            for (index, unit) in units.iter().enumerate() {
-                let picture = decoder.decode(&packet(unit, index == 0));
-                let picture = picture.expect("decodes").expect("a picture");
-                assert!(shows_grid(&picture), "{offer:?} after broken input");
-            }
         });
     }
 }
@@ -471,10 +504,11 @@ fn distance(a: &Frame, b: &Frame) -> f64 {
     total / (a.len() / 4) as f64
 }
 
-/// After the picture stops changing, the refinement of the same picture, at
-/// the quality the pacer asks for it, is closer to it than the last frame at
-/// the low rate was, comes as a predicted frame (an IDR would make every
-/// viewer start over) and costs no more than the stream's keyframe did.
+/// After the picture stops changing, the refinement the pacer asks for on a
+/// fast link (quality 100) brings the picture at least 15% closer than the
+/// last frame at the low rate, comes as a predicted frame (an IDR would
+/// make every viewer start over) and costs at most about 1.5 times the
+/// stream's keyframe.
 #[test]
 fn a_refinement_sharpens_a_still_picture() {
     for (encoders, decoders) in codecs() {
@@ -500,7 +534,7 @@ fn a_refinement_sharpens_a_still_picture() {
             let before = distance(&picture, &last.expect("a frame at the low rate"));
             let refine = EncodeParams {
                 refine: true,
-                quality: slow.quality + REFINE_QUALITY_STEP,
+                quality: 100,
                 ..slow
             };
             let refined = encoder
@@ -512,20 +546,18 @@ fn a_refinement_sharpens_a_still_picture() {
                 !refined.keyframe,
                 "a refinement is no keyframe from {offer:?}"
             );
+            let after = distance(&picture, &decode(&mut *decoder, &refined));
+            eprintln!(
+                "{offer:?}: {before:.2} to {after:.2} in {} bytes after a {keyframe_bytes}-byte keyframe",
+                refined.payload.len()
+            );
             assert!(
-                refined.payload.len() <= keyframe_bytes,
+                refined.payload.len() * 2 <= keyframe_bytes * 3,
                 "a refinement of {} bytes after a {keyframe_bytes}-byte keyframe from {offer:?}",
                 refined.payload.len()
             );
-            let after = distance(&picture, &decode(&mut *decoder, &refined));
-            eprintln!(
-                "{offer:?}: {before:.2} to {after:.2} in {} bytes",
-                refined.payload.len()
-            );
-            // A predicted frame a few steps finer sharpens a little; a large
-            // gain would take a large frame, which the bound rules out.
             assert!(
-                after < before,
+                after <= before * 0.85,
                 "refined {after:.2} against {before:.2} from {offer:?}"
             );
         });

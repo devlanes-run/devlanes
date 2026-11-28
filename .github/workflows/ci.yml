@@ -206,7 +206,9 @@ jobs:
       # The H.264 tests again with Cisco's OpenH264 2.6.0 build, the oldest
       # whose decoder devlanes uses, so the decoder is tested on Linux too.
       # Cisco's own download is the one its patent licence covers; the hash
-      # pins the file. It goes to the runner's temporary directory only.
+      # pins the file. It goes to the runner's temporary directory only, to
+      # test the decoder: devlanes never ships, bundles or downloads OpenH264
+      # for users.
       - name: Tests with Cisco's OpenH264
         if: runner.os == 'Linux'
         env:
