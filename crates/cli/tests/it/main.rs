@@ -315,6 +315,40 @@ fn daemon_pair_asks_for_a_ticket_except_in_plain_output() {
     );
 }
 
+/// `remote connect` sends a ticket as `ticket`, never as an SSH destination,
+/// and anything else as `host`; a code with a ticket, or a name without
+/// one, is a usage error.
+#[test]
+fn remote_connect_tells_a_ticket_from_a_box_name() {
+    let ticket = format!("DLP1{}", "example".repeat(10));
+    let sent = |args: &[&str]| {
+        let mut line = vec!["devlanes", "remote", "connect"];
+        line.extend(args);
+        let cli = Cli::try_parse_from(line).expect("parses");
+        cli.action_with(
+            &runtime(&cli, OutputMode::Agent),
+            PathBuf::from("/fixture/worktree"),
+            BTreeMap::new,
+        )
+    };
+    let params = |args: &[&str]| request(sent(args).expect("action")).params;
+    let paired = params(&[&ticket, "--name", "acme"]);
+    assert_eq!(
+        (&paired["ticket"], &paired["name"]),
+        (&json!(ticket), &json!("acme"))
+    );
+    assert!(paired.get("host").is_none(), "{paired}");
+    // As long as a ticket, but not one; and the prefix alone.
+    let host = format!("user@{}.example.invalid", "a".repeat(70));
+    for name in ["acme", "dlp1abc", host.as_str()] {
+        let params = params(&[name]);
+        assert_eq!(params["host"], name);
+        assert!(params.get("ticket").is_none(), "{params}");
+    }
+    assert!(sent(&[&ticket, "--code", "K7QM-3XWD"]).is_err());
+    assert!(sent(&["acme", "--name", "other"]).is_err());
+}
+
 #[test]
 fn infra_logs_sends_the_container_tail_and_follow() {
     let params = |args: &[&str]| {

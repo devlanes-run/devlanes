@@ -807,16 +807,24 @@ pub enum SetupAction {
 #[derive(Debug, Subcommand)]
 pub enum RemoteCommand {
     /// Connect to a box and mirror its lanes, ports and hostnames here
+    ///
+    /// With a ticket from `devlanes daemon pair` on the box, this machine pairs
+    /// with the box and connects to it peer to peer, without SSH. It keeps the
+    /// box under a name, printed once paired, and `devlanes remote connect NAME`
+    /// connects to it again later without a ticket.
     Connect {
-        /// Box name from remote.boxes in the user config, or an SSH destination
+        /// A pairing ticket from devlanes daemon pair on the box, a box name paired by ticket or from remote.boxes in the user config, or an SSH destination
         #[arg(id = "connect_host", value_name = "HOST")]
         host: String,
         /// Return once connected instead of staying attached for prompts
         #[arg(long)]
         background: bool,
-        /// One-time pairing code from devlanes daemon pair on the box
+        /// One-time pairing code from devlanes daemon pair on the box, for a box reached over SSH or remote.boxes
         #[arg(long, value_name = "CODE")]
         code: Option<String>,
+        /// Name to keep the box under when pairing by ticket [default: the box's own host name]
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
     },
     /// Disconnect from a box and remove its mirrored ports and hostnames
     Disconnect {
@@ -1626,9 +1634,31 @@ impl Cli {
                     host,
                     background,
                     code,
+                    name,
                 } => (
                     Method::Connect,
-                    json!({"host": host, "background": background, "code": code}),
+                    match (is_ticket(host), code, name) {
+                        (true, Some(_), _) => {
+                            return Err(Error::Usage(
+                                "--code is for boxes reached over SSH or remote.boxes; a ticket \
+                                 pairs without one"
+                                    .into(),
+                            ));
+                        }
+                        (true, None, name) => {
+                            json!({"ticket": host, "name": name, "background": background})
+                        }
+                        (false, _, Some(_)) => {
+                            return Err(Error::Usage(
+                                "--name names a box paired by ticket; give it with a ticket from \
+                                 devlanes daemon pair on the box"
+                                    .into(),
+                            ));
+                        }
+                        (false, code, None) => {
+                            json!({"host": host, "background": background, "code": code})
+                        }
+                    },
                 ),
                 RemoteCommand::Disconnect { host } => (Method::Disconnect, json!({"host": host})),
                 RemoteCommand::Ls => (Method::HostList, json!({})),
@@ -2062,6 +2092,17 @@ impl Command {
             },
         }
     }
+}
+
+/// Whether a `remote connect` argument is a pairing ticket rather than a box
+/// name: it starts with the ticket prefix, in any case, and is longer than
+/// any SSH destination or box name in use.
+pub fn is_ticket(host: &str) -> bool {
+    let prefix = devlanes_proto::remote::TICKET_PREFIX;
+    host.len() > 64
+        && host
+            .get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
 }
 
 /// The subcommand path named by `args` (the command line without the program),

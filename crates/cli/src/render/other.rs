@@ -2380,6 +2380,43 @@ pub(super) fn remote_use(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
+/// `remote connect`: after pairing by ticket, the name the box is kept
+/// under, then the link's state.
+pub(super) fn connect(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+    let Some(paired) = data.get("paired") else {
+        return tree(data);
+    };
+    let mut lines = paired_lines(paired, cx);
+    let mut state = data.clone();
+    if let Some(fields) = state.as_object_mut() {
+        fields.remove("paired");
+    }
+    lines.extend(tree(&state));
+    lines
+}
+
+/// The name a box paired by ticket is kept under (`paired: {name, kept}`)
+/// and the command that connects it again. The box chose the name, which
+/// may equal an SSH alias of the user's, so it gets lines of its own.
+pub(super) fn paired_lines(paired: &Value, cx: &Ctx<'_>) -> Vec<String> {
+    let name = text(paired, "name");
+    let kept = paired.get("kept").and_then(Value::as_bool) == Some(true);
+    let again = format!("devlanes remote connect {}", crate::shell_quote(&name));
+    if cx.agent() {
+        return vec![format!(
+            "paired box={name} kept={kept}: `{again}` connects to it again without a ticket"
+        )];
+    }
+    vec![
+        if kept {
+            format!("this machine was paired with the box already and keeps it as {name}")
+        } else {
+            format!("paired with the box, kept here as {name}")
+        },
+        format!("to connect to it again: {again}"),
+    ]
+}
+
 /// `daemon pair`: the ticket and the code, and what to run on the other
 /// machine. Plain output is one line for scripts: the code, or the ticket
 /// when only a ticket was asked for. Agents get one line saying what to ask

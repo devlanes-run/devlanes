@@ -307,7 +307,8 @@ pub enum Method {
     /// then ignored), else under `name` or its own host name made safe
     /// (with `-2` to `-9` when that is taken), with a new link, and the
     /// answer has `host` and `paired: {name, kept}`, `kept` true when an
-    /// earlier pairing's name was kept. Pairing by ticket fails with
+    /// earlier pairing's name was kept; without `background` the first
+    /// `remote.state` event has `paired` too. Pairing by ticket fails with
     /// `bad_ticket` (`{message}`) for text that is not a usable ticket,
     /// `box_name_taken` (`{name, taken_by, message}`, `taken_by` one of
     /// `p2p`, `ssh_or_command` and `user_config`, for the name asked for)

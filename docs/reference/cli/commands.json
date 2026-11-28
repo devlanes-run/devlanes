@@ -1250,6 +1250,7 @@
         "--help",
         "--json",
         "--lane",
+        "--name",
         "--output",
         "--project",
         "--quiet",

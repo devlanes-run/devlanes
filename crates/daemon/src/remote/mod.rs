@@ -1577,10 +1577,12 @@ impl Inner {
         }
         // Later `connected` events come from `watch_link` after the record.
         conn.record_written().await;
+        // An attached CLI hears the pairing's name from the first event,
+        // since the answer comes only once it detaches.
         let first = Event {
             seq: 0,
             event: wire::STATE_EVENT.into(),
-            data: conn.state_json(),
+            data: answer(conn.state_json()),
         };
         if session.event(first).await.is_err() {
             return Ok(answer(conn.status_json(&self.remote.all())));

@@ -3084,6 +3084,96 @@ fn pairing_errors_say_what_to_run() {
     );
 }
 
+/// Connecting by ticket: a box's or the daemon's text is shown as it is,
+/// with no second name before a text that names the box, no `remote ls`
+/// hint for a box that has no name here yet, and no hint for a new ticket
+/// or a code, since some refusals leave the ticket usable and a box paired
+/// by ticket pairs again by ticket. The name a pairing kept is printed.
+#[test]
+fn ticket_connects_show_the_daemons_text_as_it_is() {
+    let error = |code: &str, data: Value| {
+        runtime(OutputMode::Human)
+            .reporter()
+            .error(&RpcError::new(code, data, 4), None)
+            .stderr
+    };
+    let refused = error(
+        "pairing_refused",
+        json!({"message": "the box took too long to answer; try again with the same ticket",
+               "retry_after_ms": null}),
+    );
+    assert_eq!(
+        refused,
+        "error: the box took too long to answer; try again with the same ticket\n"
+    );
+    let unnamed = error(
+        "remote_failed",
+        json!({"host": "p2p:1a2b3c4d",
+               "message": "the box is not reachable (timed out); check that its devlanes daemon is running"}),
+    );
+    assert_eq!(
+        unnamed,
+        "error: the box is not reachable (timed out); check that its devlanes daemon is running\n"
+    );
+    let direct = error(
+        "remote_failed",
+        json!({"host": "p2p:1a2b3c4d",
+               "message": "no direct connection to the box formed within 15 seconds, and devlanes does not relay data; connect over SSH or Tailscale instead"}),
+    );
+    assert!(direct.contains("connect over SSH or Tailscale"), "{direct}");
+    assert!(!direct.contains("remote ls"), "{direct}");
+    let gave_up = error(
+        "remote_failed",
+        json!({"host": "acme",
+               "message": "box acme has not been reachable for 24 hours, so devlanes stopped trying. Run `devlanes remote connect acme` once it is back."}),
+    );
+    assert!(
+        gave_up.starts_with("error: box acme has not been"),
+        "{gave_up}"
+    );
+    assert!(!gave_up.contains("remote ls"), "{gave_up}");
+    let fix = "devlanes daemon pair on acme, then devlanes remote connect <ticket>";
+    let needs = error(
+        "remote_needs_pairing",
+        json!({"host": "acme", "transport": "p2p", "fix": fix,
+               "message": "box acme no longer accepts this machine's pairing. Run `devlanes daemon pair` on the box, then `devlanes remote connect <ticket>` here."}),
+    );
+    assert!(
+        needs.starts_with("error: box acme no longer accepts"),
+        "{needs}"
+    );
+    assert!(needs.contains(&format!("hint: {fix}")), "{needs}");
+    assert!(!needs.contains("--code"), "{needs}");
+    let taken = error(
+        "box_name_taken",
+        json!({"name": "acme", "taken_by": "user_config",
+               "message": "the box name acme is taken by an entry of remote.boxes in the user config; choose another with `--name`"}),
+    );
+    assert!(!taken.contains("hint:"), "{taken}");
+
+    let paired = |kept: bool, mode: OutputMode| {
+        let data = json!({"host": "acme", "state": "connected",
+                          "paired": {"name": "acme", "kept": kept}});
+        runtime(mode)
+            .reporter()
+            .result(&Report::new(Method::Connect, &data))
+            .expect("render")
+            .stdout
+    };
+    let new = paired(false, OutputMode::Human);
+    assert!(
+        new.starts_with(
+            "paired with the box, kept here as acme\nto connect to it again: devlanes remote connect acme\n"
+        ),
+        "{new}"
+    );
+    assert!(
+        paired(true, OutputMode::Human)
+            .contains("paired with the box already and keeps it as acme")
+    );
+    assert!(paired(true, OutputMode::Agent).contains("paired box=acme kept=true"));
+}
+
 /// Warnings about another box name it; the proxy port and range overlap
 /// warnings say what to do.
 #[test]

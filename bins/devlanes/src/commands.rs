@@ -1206,6 +1206,36 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
             })
         }
         "confirmation_required" => confirmation_hint(error),
+        // The endpoint dials only relays from remote.relays, so a ticket
+        // whose box is on another one reaches it at its addresses alone.
+        "remote_failed"
+            if request.method == Method::Connect
+                && error
+                    .data
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message| message.contains("is not one this machine uses")) =>
+        {
+            let ticket = request.params.get("ticket").and_then(Value::as_str)?;
+            let relay = devlanes_transport::Ticket::parse(ticket).ok()?.addr.relay?;
+            Some(Hint(format!(
+                "to reach the box through its relay, add {} to remote.relays in the user config \
+                 and run devlanes daemon restart",
+                devlanes_cli::shell_quote(&relay)
+            )))
+        }
+        // A daemon from before tickets reads a ticket as a request without a host.
+        "bad_request"
+            if request.method == Method::Connect
+                && request.params.get("ticket").is_some()
+                && error.data.get("name").is_none() =>
+        {
+            Some(Hint(
+                "if this machine's devlanes daemon is older than this devlanes, devlanes daemon \
+                 restart starts this release's"
+                    .into(),
+            ))
+        }
         // A unit selector that names a lane (`stop 1`): the same command for that lane.
         "not_found"
             if let Some(lane) = error.data.get("names_lane").and_then(Value::as_str)

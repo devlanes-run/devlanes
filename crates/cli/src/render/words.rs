@@ -1491,6 +1491,15 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         ),
         "log_unavailable" => ("the unit's log cannot be read now; retry".into(), None),
         "unknown_stream" => ("the attached terminal is gone; attach again".into(), None),
+        // A `--name` the daemon read and refused; its text says what a name holds.
+        "bad_request" if data.get("name").is_some() && message.is_some() => (
+            format!(
+                "{} cannot be a box name: {}",
+                field(data, "name"),
+                message.clone().unwrap_or_default()
+            ),
+            None,
+        ),
         "bad_request" => (
             with_message("the daemon could not read the request".into()),
             Some(Hint::command(["daemon", "status"])),
