@@ -6,6 +6,11 @@
 //! probe dial ID [--home DIR] [--addr IP:PORT]... [--relay URL]... [--no-port-mapping]
 //! ```
 //!
+//! The build puts the binary at `target/debug/examples/probe` (`probe.exe` on
+//! Windows) in the checkout; a LaunchAgent needs that absolute path. From a
+//! terminal, `cargo run -p devlanes-transport-iroh --example probe -- listen`
+//! builds and runs it in one step.
+//!
 //! `listen` admits every peer, prints the `dial` command that reaches it and
 //! echoes every stream until interrupted. `dial` connects, sends one line and
 //! prints the echo and how long the direct path took, or the typed error.
@@ -65,8 +70,11 @@ const USAGE: &str = "usage:
 
 /// Reads the command line by hand, which keeps the example free of
 /// dependencies the crate does not have.
-fn parse(mut words: impl Iterator<Item = String>) -> Result<Args, String> {
+fn parse(mut words: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     let command = words.next().ok_or("no command")?;
+    if command == "--help" || command == "-h" {
+        return Ok(None);
+    }
     let mut id = None;
     let mut direct = Vec::new();
     let mut relays = Vec::new();
@@ -85,6 +93,7 @@ fn parse(mut words: impl Iterator<Item = String>) -> Result<Args, String> {
                 );
             }
             "--no-port-mapping" => port_mapping = false,
+            "--help" | "-h" => return Ok(None),
             flag if flag.starts_with("--") => return Err(format!("unknown flag {flag}")),
             text if id.is_none() => id = Some(text.to_owned()),
             text => return Err(format!("unexpected argument {text}")),
@@ -99,19 +108,23 @@ fn parse(mut words: impl Iterator<Item = String>) -> Result<Args, String> {
         }
         other => return Err(format!("unknown command {other}")),
     };
-    Ok(Args {
+    Ok(Some(Args {
         command,
         home,
         relays,
         port_mapping,
-    })
+    }))
 }
 
 /// Runs the probe and maps its outcome to the exit status.
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = match parse(std::env::args().skip(1)) {
-        Ok(args) => args,
+        Ok(Some(args)) => args,
+        Ok(None) => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
         Err(error) => {
             eprintln!("{error}\n{USAGE}");
             return ExitCode::from(2);
@@ -229,8 +242,16 @@ async fn echo(incoming: PeerIncoming, start: Instant) {
     step(start, format_args!("connection from {peer} closed"));
 }
 
-/// Dials `addr`, sends one line and prints its echo.
+/// Binds, then dials `addr`, sends one line and prints its echo. Binding is
+/// its own step, so a prompt it raises is told apart from one the dial to a
+/// LAN address raises.
 async fn dial(endpoint: &IrohEndpoint, addr: PeerAddr, start: Instant) -> Result<(), BoxError> {
+    step(start, "binding");
+    let own = endpoint.addr().await?;
+    step(
+        start,
+        format_args!("bound: relay {:?}, addresses {:?}", own.relay, own.direct),
+    );
     step(
         start,
         format_args!(

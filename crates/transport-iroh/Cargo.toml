@@ -33,4 +33,3 @@ devlanes-transport = { path = "../transport", features = ["test-support"] }
 # A relay on loopback over plain HTTP, so no test reaches a public relay.
 iroh-relay = { workspace = true, features = ["server", "tls-ring"] }
 tempfile.workspace = true
-tokio = { workspace = true, features = ["test-util"] }

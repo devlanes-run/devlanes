@@ -1,6 +1,6 @@
 # devlanes-transport-iroh
 
-The peer-to-peer transport for `devlanes remote connect`, over iroh. It implements `PeerEndpoint` from `devlanes-transport` for the daemon, which only `bins/devlanes` wires in, and runs each session over QUIC streams on a direct path between the two machines.
+The peer-to-peer transport for `devlanes remote connect`, over iroh. It implements `PeerEndpoint` from `devlanes-transport`; the daemon uses it only through that trait, and only `bins/devlanes` may construct it. Each session runs over QUIC streams on a direct path between the two machines.
 
 ## Usage
 
@@ -44,9 +44,9 @@ async fn run(box_addr: PeerAddr, client: PeerId) -> Result<(), Box<dyn std::erro
 
 ## Network use
 
-Nothing is bound or contacted until `addr`, `connect` or `listen` needs it; `id` only reads or creates the key file. Binding opens a UDP socket for IPv4 and one for IPv6 and, with relays, keeps a connection to the nearest relay open and probes every relay in the list. With `address_lookup`, a listening endpoint publishes its relay URL (never its IP addresses) to n0's DNS at `dns.iroh.link`, and a dial looks the box up there. With `port_mapping`, it asks the router for a port mapping over UPnP, NAT-PMP and PCP. A dial fails with `PeerError::NoDirectPath` unless a direct path forms within 15 seconds, and a session whose direct path is lost for 3 seconds closes, so session data never goes through a relay for longer than that.
+Nothing is bound or contacted until `addr`, `connect` or `listen(Some(..))` needs it; `id` only reads or creates the key file, and `listen(None)` on an endpoint that never bound does nothing. Binding opens a UDP socket for IPv4 and one for IPv6 and, with relays, keeps a connection to the nearest relay open and probes every relay in the list. With `address_lookup`, a listening endpoint publishes its relay URL (never its IP addresses) to n0's DNS at `dns.iroh.link`, and a dial looks the box up there. With `port_mapping`, it asks the router for a port mapping over UPnP, NAT-PMP and PCP. A dial fails with `PeerError::NoDirectPath` unless a direct path forms within 15 seconds, and a session closes once it has had no direct path for 3 seconds, so session data crosses a relay for at most those 3 seconds.
 
-The key file holds the 32-byte secret key. It is created private to the user (mode 0600 on Unix), and on Windows a key other accounts can read is refused.
+The key file holds the 32-byte secret key. It is created private to the user (mode 0600 on Unix), and a key other accounts can read is refused.
 
 ## License
 
