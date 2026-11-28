@@ -229,6 +229,12 @@ pub enum PeerError {
 
 /// The secret a ticket carries: 16 random bytes the box keeps in memory
 /// until the ticket is used or expires. `Debug` leaves it out.
+///
+/// Zeroed on drop, like the secrets the box keeps for its outstanding
+/// tickets. Not zeroed: the hex text of a pairing request, short-lived
+/// copies on the stack while a ticket is minted or checked, and the encoded
+/// ticket in the box's reply and on the client. This narrows how long a
+/// secret stays in memory; it is not a guarantee.
 #[derive(Clone, PartialEq, Eq)]
 pub struct TicketSecret(pub [u8; 16]);
 

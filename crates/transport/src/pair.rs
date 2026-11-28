@@ -33,9 +33,15 @@ pub const PAIR_FRAME_LIMIT: usize = 4 * 1024;
 /// holds a pairing slot for twice this at most.
 const REQUEST_STEP: Duration = Duration::from_secs(2);
 
-/// How long the box waits to write its answer and then for the client to
-/// close, which covers the answer's way to the client and back.
+/// How long the box waits to write a `Paired` answer and then for the
+/// client to close, which covers the answer's way to the client and back.
+/// Only a client that proved it holds the ticket gets this long.
 const ANSWER_STEP: Duration = Duration::from_secs(5);
+
+/// How long the box spends, in all, writing a refusal and waiting for the
+/// client to close. Anyone may get one, so a peer without the secret that
+/// stalls the write or never closes holds a pairing slot no longer.
+const REFUSAL_STEP: Duration = Duration::from_secs(1);
 
 /// How long the client waits for the box's answer and the end of its
 /// stream: the box's own steps, plus storing the pairing.
@@ -119,8 +125,8 @@ pub enum PairAnswer {
     Refused {
         /// What the client shows its user.
         message: String,
-        /// How long to wait before trying again, when the box says; wrong
-        /// secrets pause nothing, so today's boxes never set it.
+        /// How long to wait before trying again. No box sets it yet; it is in
+        /// the wire format so a later box can ask a client to wait.
         retry_after_ms: Option<u64>,
     },
 }
@@ -203,6 +209,18 @@ pub async fn answer_pairing(
     // Not bounded here: the desk bounds what it does before it uses the
     // ticket and must not be cut off after.
     let answer = desk.decide(&request).await;
+    if matches!(answer, PairAnswer::Refused { .. }) {
+        // Written and awaited within one short bound; a client that is too
+        // slow for it gets no answer, and its holder retries.
+        let _ = timeout(REFUSAL_STEP, async {
+            wire::send(&mut channel, &answer).await?;
+            channel.close().await?;
+            while connection.accept().await.is_some() {}
+            Ok::<(), WireError>(())
+        })
+        .await;
+        return Ok(());
+    }
     timeout(ANSWER_STEP, async {
         wire::send(&mut channel, &answer).await?;
         channel.close().await
