@@ -910,6 +910,18 @@ fn pointer(file: &Value, key: &str) -> Option<Value> {
 
 /// Typed text as the setting's type; empty restores the default.
 fn parse_typed(kind: &Kind, text: &str) -> Result<Option<Value>, String> {
+    // An empty `remote.relays` turns relays off, so only `none` writes one:
+    // a cleared field, stray commas or spaces do not, and del restores the
+    // default.
+    let free_list = matches!(kind, Kind::List(choices) if choices.is_empty());
+    let no_entries = text.split([',', ' ']).all(str::is_empty);
+    if free_list && no_entries {
+        return Err(
+            "Type the relays separated by commas, none for no relay, or press del for the \
+             default."
+                .into(),
+        );
+    }
     if text.is_empty() {
         return Ok(None);
     }
@@ -919,7 +931,7 @@ fn parse_typed(kind: &Kind, text: &str) -> Result<Option<Value>, String> {
             .map(Value::from)
             .map_err(|_| "Enter a whole number.".to_owned())?,
         // `none` is how an empty list shows, so it types as one.
-        Kind::List(_) if text == "none" => Value::Array(Vec::new()),
+        Kind::List(_) if text.trim() == "none" => Value::Array(Vec::new()),
         Kind::List(_) => Value::Array(
             text.split([',', ' '])
                 .filter(|part| !part.is_empty())
@@ -1671,7 +1683,8 @@ fn render_about(
     lines.extend(wrapped(&item.about, Style::new()));
     if item.kind == Kind::List(Vec::new()) {
         lines.extend(wrapped(
-            "Separate the entries with commas, or type none for an empty list.",
+            "Separate the relays with commas. Type none for no relay: boxes are then reached \
+             only at the addresses in their tickets.",
             theme.quiet(),
         ));
     }
@@ -2487,5 +2500,29 @@ mod tests {
         assert_eq!(humanize(&json!("5368709120B")), "5GiB");
         assert_eq!(humanize(&json!("75%")), "75%");
         assert_eq!(humanize(&json!(null)), "default");
+    }
+
+    /// `remote.relays` is listed as free text; only `none` writes the empty
+    /// list that turns relays off, and typed URLs split into entries.
+    #[test]
+    fn relays_type_as_a_list_and_empty_only_as_none() {
+        let categories = catalog();
+        let relays = categories
+            .iter()
+            .flat_map(|category| &category.items)
+            .find(|item| item.key == "remote.relays")
+            .expect("remote.relays is listed");
+        let typed = |text: &str| parse_typed(&relays.kind, text);
+        assert_eq!(typed("none"), Ok(Some(json!([]))));
+        for empty in ["", "   ", ",", " , "] {
+            assert!(typed(empty).is_err(), "{empty:?}");
+        }
+        assert_eq!(
+            typed("https://a.example.invalid, https://b.example.invalid"),
+            Ok(Some(json!([
+                "https://a.example.invalid",
+                "https://b.example.invalid"
+            ])))
+        );
     }
 }
