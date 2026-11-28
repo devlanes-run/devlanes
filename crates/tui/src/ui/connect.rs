@@ -580,6 +580,15 @@ fn offer(app: &App, dialog: &PairDialog, offer: &Offer, width: usize) -> Parts {
             ));
         }
     } else {
+        let expired = match (
+            offer.ticket.is_some(),
+            offer.code.is_some() && code.is_none(),
+        ) {
+            (true, true) => Some("This ticket and code expired."),
+            (true, false) => Some("This ticket expired."),
+            (false, true) => Some("This code expired."),
+            (false, false) => None,
+        };
         if let Some(no_ticket) = &offer.no_ticket {
             body.extend(no_ticket_lines(
                 app,
@@ -587,14 +596,13 @@ fn offer(app: &App, dialog: &PairDialog, offer: &Offer, width: usize) -> Parts {
                 dialog.may_fetch_ticket(),
                 width,
             ));
-        } else if offer.ticket.is_some() {
-            body.extend(wrapped("This ticket expired.", width, bold));
+        }
+        if let Some(expired) = expired {
+            body.extend(wrapped(expired, width, bold));
         }
         if let Some(code) = code {
             let left = offer.valid_ms.map(|valid| dialog.left(valid));
             body.extend(code_alone(theme, code, left, width));
-        } else if offer.code.is_some() {
-            body.extend(wrapped("This code expired.", width, bold));
         }
     }
     if let Some(paused) = offer.code_paused_ms {

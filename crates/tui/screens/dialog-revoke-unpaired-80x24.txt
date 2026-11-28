@@ -2,7 +2,7 @@
 ┌ boxes ───────────────────────────────────────────────────────────────────────┐
 │ no boxes yet                                                                 │
 │                                                                              │
-│   n   connect to a box by its SSH name or a command                          │
+│   n   connect to a box by a ticket, its SSH name or a command                │
 │                                                                              │
 │ A bo┌─────────────────────────────────────────────────────────────────┐e top │
 │ bar.│ Revoke laptop (dl_cid_3f2a9c1e)?                                │      │
@@ -21,14 +21,14 @@
 │ · ci-runner  dl_cid_0b9e44d1  last seen 1h ago      paired                   │
 │ · desktop    dl_cid_7c41e0a9  last seen 3d ago      paired                   │
 └──────────────────────────────────────────────────────────────────────────────┘
- x revoke   n new box   p pairing code   j k select       ? all keys   q quit
+ x revoke   n new box   p pair   j k select   esc back    ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 68 bold, 71 bold, 74 bold underlined, 75-78 bold underlined yellow
 1: 0 darkgray, 1-7 bold, 8-79 darkgray
 2: 0 darkgray, 2-13 bold, 79 darkgray
 3: 0 darkgray, 79 darkgray
-4: 0 darkgray, 4 bold, 8-52 dim, 79 darkgray
+4: 0 darkgray, 4 bold, 8-62 dim, 79 darkgray
 5: 0 darkgray, 79 darkgray
 6: 0 darkgray, 2-5 dim, 6-72 bold yellow, 73-77 dim, 79 darkgray
 7: 0 darkgray, 2-5 dim, 6 bold yellow, 8-39 bold, 72 bold yellow, 79 darkgray
@@ -47,4 +47,4 @@
 20: 0 bold yellow, 2-3 dim, 4-14 bold, 15-59 dim, 79 bold yellow
 21: 0 bold yellow, 2-3 dim, 4-14 bold, 15-59 dim, 79 bold yellow
 22: 0-79 bold yellow
-23: 1 bold, 2-11 dim, 12 bold, 13-23 dim, 24 bold, 25-40 dim, 41-43 bold, 44-53 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim
+23: 1 bold, 2-11 dim, 12 bold, 13-23 dim, 24 bold, 25-32 dim, 33-35 bold, 36-45 dim, 46-48 bold, 49-56 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

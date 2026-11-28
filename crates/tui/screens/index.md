@@ -306,6 +306,22 @@ the boxes view while hetzner waits for this machine to pair again: the box's rea
 - 120x40: [txt](boxes-pairing-120x40.txt) · [png](boxes-pairing-120x40.png) · [ansi](boxes-pairing-120x40.ansi)
 - 80x24: [txt](boxes-pairing-80x24.txt) · [png](boxes-pairing-80x24.png) · [ansi](boxes-pairing-80x24.ansi)
 
+## boxes-ticket-pairing
+
+the boxes view on studio, paired by ticket, which no longer accepts this machine's pairing: the daemon's reason, what to do on the box and here, and enter pastes a ticket
+
+- 200x60: [txt](boxes-ticket-pairing-200x60.txt) · [png](boxes-ticket-pairing-200x60.png) · [ansi](boxes-ticket-pairing-200x60.ansi)
+- 120x40: [txt](boxes-ticket-pairing-120x40.txt) · [png](boxes-ticket-pairing-120x40.png) · [ansi](boxes-ticket-pairing-120x40.ansi)
+- 80x24: [txt](boxes-ticket-pairing-80x24.txt) · [png](boxes-ticket-pairing-80x24.png) · [ansi](boxes-ticket-pairing-80x24.ansi)
+
+## dialog-forget
+
+f on studio, paired by ticket: asks before forgetting it
+
+- 200x60: [txt](dialog-forget-200x60.txt) · [png](dialog-forget-200x60.png) · [ansi](dialog-forget-200x60.ansi)
+- 120x40: [txt](dialog-forget-120x40.txt) · [png](dialog-forget-120x40.png) · [ansi](dialog-forget-120x40.ansi)
+- 80x24: [txt](dialog-forget-80x24.txt) · [png](dialog-forget-80x24.png) · [ansi](dialog-forget-80x24.ansi)
+
 ## box-pairing
 
 a service of a box that waits for pairing: the last known state, and what to run on the box and here
@@ -324,15 +340,31 @@ the boxes view before any box connected or any client paired: n connects a box, 
 
 ## dialog-connect
 
-a new connection (n): a box reached by its SSH name
+a new connection (n, then SSH name at Reach by): a box reached by its SSH name
 
 - 200x60: [txt](dialog-connect-200x60.txt) · [png](dialog-connect-200x60.png) · [ansi](dialog-connect-200x60.ansi)
 - 120x40: [txt](dialog-connect-120x40.txt) · [png](dialog-connect-120x40.png) · [ansi](dialog-connect-120x40.ansi)
 - 80x24: [txt](dialog-connect-80x24.txt) · [png](dialog-connect-80x24.png) · [ansi](dialog-connect-80x24.ansi)
 
+## dialog-connect-ticket
+
+a new connection (n) with a ticket pasted, shown by its start and length only, and a name typed
+
+- 200x60: [txt](dialog-connect-ticket-200x60.txt) · [png](dialog-connect-ticket-200x60.png) · [ansi](dialog-connect-ticket-200x60.ansi)
+- 120x40: [txt](dialog-connect-ticket-120x40.txt) · [png](dialog-connect-ticket-120x40.png) · [ansi](dialog-connect-ticket-120x40.ansi)
+- 80x24: [txt](dialog-connect-ticket-80x24.txt) · [png](dialog-connect-ticket-80x24.png) · [ansi](dialog-connect-ticket-80x24.ansi)
+
+## dialog-connect-paired
+
+enter on a pasted ticket: the box was paired before, so it keeps its name and the typed one is ignored; the ticket is gone from the screen
+
+- 200x60: [txt](dialog-connect-paired-200x60.txt) · [png](dialog-connect-paired-200x60.png) · [ansi](dialog-connect-paired-200x60.ansi)
+- 120x40: [txt](dialog-connect-paired-120x40.txt) · [png](dialog-connect-paired-120x40.png) · [ansi](dialog-connect-paired-120x40.ansi)
+- 80x24: [txt](dialog-connect-paired-80x24.txt) · [png](dialog-connect-paired-80x24.png) · [ansi](dialog-connect-paired-80x24.ansi)
+
 ## dialog-connect-empty
 
-the new connection form before anything is typed, with the keys on how the box is reached (shift+tab): the name's placeholder
+the new connection form before anything is typed, with the keys on how the box is reached (shift+tab): the ticket and name placeholders
 
 - 200x60: [txt](dialog-connect-empty-200x60.txt) · [png](dialog-connect-empty-200x60.png) · [ansi](dialog-connect-empty-200x60.ansi)
 - 120x40: [txt](dialog-connect-empty-120x40.txt) · [png](dialog-connect-empty-120x40.png) · [ansi](dialog-connect-empty-120x40.ansi)
@@ -340,7 +372,7 @@ the new connection form before anything is typed, with the keys on how the box i
 
 ## dialog-connect-command
 
-a new connection reached by a command (shift+tab, space, tab, tab): saved as remote.boxes.acme.command
+a new connection reached by a command (shift+tab, left, tab, then tab to the command): saved as remote.boxes.acme.command
 
 - 200x60: [txt](dialog-connect-command-200x60.txt) · [png](dialog-connect-command-200x60.png) · [ansi](dialog-connect-command-200x60.ansi)
 - 120x40: [txt](dialog-connect-command-120x40.txt) · [png](dialog-connect-command-120x40.png) · [ansi](dialog-connect-command-120x40.ansi)
@@ -388,15 +420,47 @@ enter on a connected box: asks before disconnecting it
 
 ## dialog-pair
 
-a pairing code for another machine (p): the code, its countdown and what to run there
+pairing another machine (p): the ticket first with its countdown and what to do there, then the code for SSH and command boxes
 
 - 200x60: [txt](dialog-pair-200x60.txt) · [png](dialog-pair-200x60.png) · [ansi](dialog-pair-200x60.ansi)
 - 120x40: [txt](dialog-pair-120x40.txt) · [png](dialog-pair-120x40.png) · [ansi](dialog-pair-120x40.ansi)
 - 80x24: [txt](dialog-pair-80x24.txt) · [png](dialog-pair-80x24.png) · [ansi](dialog-pair-80x24.ansi)
 
+## dialog-pair-not-ready
+
+p while this machine's peer-to-peer networking is still starting, as after an idle stop: the code, and t gets the ticket alone
+
+- 200x60: [txt](dialog-pair-not-ready-200x60.txt) · [png](dialog-pair-not-ready-200x60.png) · [ansi](dialog-pair-not-ready-200x60.ansi)
+- 120x40: [txt](dialog-pair-not-ready-120x40.txt) · [png](dialog-pair-not-ready-120x40.png) · [ansi](dialog-pair-not-ready-120x40.ansi)
+- 80x24: [txt](dialog-pair-not-ready-80x24.txt) · [png](dialog-pair-not-ready-80x24.png) · [ansi](dialog-pair-not-ready-80x24.ansi)
+
+## dialog-pair-fetched
+
+t after a ticket that was not ready: the ticket alone arrived next to the code
+
+- 200x60: [txt](dialog-pair-fetched-200x60.txt) · [png](dialog-pair-fetched-200x60.png) · [ansi](dialog-pair-fetched-200x60.ansi)
+- 120x40: [txt](dialog-pair-fetched-120x40.txt) · [png](dialog-pair-fetched-120x40.png) · [ansi](dialog-pair-fetched-120x40.ansi)
+- 80x24: [txt](dialog-pair-fetched-80x24.txt) · [png](dialog-pair-fetched-80x24.png) · [ansi](dialog-pair-fetched-80x24.ansi)
+
+## dialog-pair-codes-paused
+
+p while 5 wrong codes keep codes paused: the ticket alone, and how long codes stay paused
+
+- 200x60: [txt](dialog-pair-codes-paused-200x60.txt) · [png](dialog-pair-codes-paused-200x60.png) · [ansi](dialog-pair-codes-paused-200x60.ansi)
+- 120x40: [txt](dialog-pair-codes-paused-120x40.txt) · [png](dialog-pair-codes-paused-120x40.png) · [ansi](dialog-pair-codes-paused-120x40.ansi)
+- 80x24: [txt](dialog-pair-codes-paused-80x24.txt) · [png](dialog-pair-codes-paused-80x24.png) · [ansi](dialog-pair-codes-paused-80x24.ansi)
+
+## dialog-pair-old-daemon
+
+p with a daemon older than tickets: the code alone, and how to start this release's daemon
+
+- 200x60: [txt](dialog-pair-old-daemon-200x60.txt) · [png](dialog-pair-old-daemon-200x60.png) · [ansi](dialog-pair-old-daemon-200x60.ansi)
+- 120x40: [txt](dialog-pair-old-daemon-120x40.txt) · [png](dialog-pair-old-daemon-120x40.png) · [ansi](dialog-pair-old-daemon-120x40.ansi)
+- 80x24: [txt](dialog-pair-old-daemon-80x24.txt) · [png](dialog-pair-old-daemon-80x24.png) · [ansi](dialog-pair-old-daemon-80x24.ansi)
+
 ## dialog-pair-expired
 
-the pairing code modal once its code expired: p gets a new one
+the pairing modal once its ticket and code expired: p gets new ones
 
 - 200x60: [txt](dialog-pair-expired-200x60.txt) · [png](dialog-pair-expired-200x60.png) · [ansi](dialog-pair-expired-200x60.ansi)
 - 120x40: [txt](dialog-pair-expired-120x40.txt) · [png](dialog-pair-expired-120x40.png) · [ansi](dialog-pair-expired-120x40.ansi)
@@ -404,7 +468,7 @@ the pairing code modal once its code expired: p gets a new one
 
 ## dialog-pair-paused
 
-p while 5 wrong codes keep pairing paused: how long it stays paused
+p while 5 wrong codes keep pairing paused, from a daemon older than tickets: how long it stays paused
 
 - 200x60: [txt](dialog-pair-paused-200x60.txt) · [png](dialog-pair-paused-200x60.png) · [ansi](dialog-pair-paused-200x60.ansi)
 - 120x40: [txt](dialog-pair-paused-120x40.txt) · [png](dialog-pair-paused-120x40.png) · [ansi](dialog-pair-paused-120x40.ansi)
@@ -761,6 +825,14 @@ a typed value the config refuses: proxy.https_port equal to http_port
 - 200x60: [txt](options-error-200x60.txt) · [png](options-error-200x60.png) · [ansi](options-error-200x60.ansi)
 - 120x40: [txt](options-error-120x40.txt) · [png](options-error-120x40.png) · [ansi](options-error-120x40.ansi)
 - 80x24: [txt](options-error-80x24.txt) · [png](options-error-80x24.png) · [ansi](options-error-80x24.ansi)
+
+## options-relays
+
+remote.relays typed as a list the config refuses: the relay that is not an http or https URL, in the config's words
+
+- 200x60: [txt](options-relays-200x60.txt) · [png](options-relays-200x60.png) · [ansi](options-relays-200x60.ansi)
+- 120x40: [txt](options-relays-120x40.txt) · [png](options-relays-120x40.png) · [ansi](options-relays-120x40.ansi)
+- 80x24: [txt](options-relays-80x24.txt) · [png](options-relays-80x24.png) · [ansi](options-relays-80x24.ansi)
 
 ## options-preview
 

@@ -1326,11 +1326,14 @@ pub fn render(theme: &Theme, settings: &Settings, frame: &mut Frame, area: Rect)
     }
     let wide = body.width >= 70;
     let (list, about) = if wide {
-        // As wide as the longest row of any tab, so it does not jump with the tab.
+        // As wide as the longest row of any tab, so it does not jump with the
+        // tab. A free-text list such as `remote.relays` is left out: its
+        // URLs would widen every tab, and its row clips them.
         let longest = settings
             .categories
             .iter()
             .flat_map(|category| &category.items)
+            .filter(|item| item.kind != Kind::List(Vec::new()))
             .map(|item| 2 + text::width(&item.key) + 3 + text::width(&settings.shown(item)) + 6)
             .max()
             .unwrap_or(0);
@@ -1496,10 +1499,12 @@ fn render_list(
     let page = settings.index / rows;
     let width = usize::from(area.width);
     // Names give way to values only when both do not fit; the 6 is ◂ ▸ and
-    // the changed mark.
+    // the changed mark. A free-text list's value is clipped instead, so its
+    // URLs never cut the names short.
     let longest_value = category
         .items
         .iter()
+        .filter(|item| item.kind != Kind::List(Vec::new()))
         .map(|item| text::width(&settings.shown(item)) + 6)
         .max()
         .unwrap_or(0)

@@ -45,9 +45,9 @@
 │   · test-e2e                         not run │   i                 every check, or problems only                                                      │                                              │
 │   ✓ codegen                             done │                                                                                                        │                                              │
 │   · clean-cache                      not run │ boxes (B)                                                                                              │                                              │
-│                                              │   enter             connect, sign in, type a code or disconnect                                        │                                              │
-│ ▾ infra                                      │   d                 disconnect the selected box                                                        │                                              │
-│   ▾ containers                          2 up │   n  p              connect a new box, show a pairing code                                             │                                              │
+│                                              │   enter             connect, sign in, pair again or disconnect                                         │                                              │
+│ ▾ infra                                      │   d  f              disconnect the selected box, forget one paired by ticket                           │                                              │
+│   ▾ containers                          2 up │   n  p              connect a new box, show a ticket and a code                                        │                                              │
 │     ● localstack                             │   x                 revoke the selected client                                                         │                                              │
 │     ● rabbitmq                               │                                                                                                        │                                              │
 │   ▾ shared                              3 up │ everywhere                                                                                             │                                              │

@@ -1,18 +1,18 @@
- devlanes  1 acme   2 billing   3 shop   starting feat…  M  D  Boxes · 3 issues
-┌ boxes ────────────────────────────────────── 1 of 3 connected · j k for more ┐
-│ ⠋ devbox                             reconnecting · command · devlanes 1.0.0 │
-│   link      next try in 8s                                                   │
-│   error     docker exec exited 1: Error response from daemon: container      │
-│             devbox is not running                                            │
-│   box       proxy on 9443 · ports.range 30000-32767                          │
-│   proxy     this machine serves its hostnames on 8443 and on 9443, which its │
-│     ┌─────────────────────────────────────────────────────────────────┐      │
-│   mi│ Revoke laptop (dl_cid_3f2a9c1e)?                                │      │
+ devlanes  1 acme   2 billing   3 shop   starting feat…  M  D  Boxes · 4 issues
+┌ boxes ────────────────────────────────────── 1 of 4 connected · j k for more ┐
+│ ! gpu                                                  needs a sign-in · ssh │
+│   link      waiting for you to sign in again, with ports and hostnames kept  │
+│   error     ssh to gpu failed (255): Permission denied (publickey).          │
+│   fix       enter signs in again                                             │
+│                                                                              │
+│ ✕ studio                                                        failed · p2p │
+│   li┌─────────────────────────────────────────────────────────────────┐      │
+│   er│ Revoke laptop (dl_cid_3f2a9c1e)?                                │      │
+│     │                                                                 │is    │
+│     │ It deletes the client's 2 pairings and ends its connection now. │      │
+│   fi│ It needs a new pairing code to connect again.                   │hine, │
 │     │                                                                 │      │
-│ ! gp│ It deletes the client's 2 pairings and ends its connection now. │· ssh │
-│   li│ It needs a new pairing code to connect again.                   │kept  │
-│   er│                                                                 │      │
-│   fi│ y revoke   n cancel                                             │      │
+│     │ y revoke   n cancel                                             │      │
 │     └─────────────────────────────────────────────────────────────────┘      │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -21,24 +21,24 @@
 │ · ci-runner  dl_cid_0b9e44d1  last seen 1h ago      paired                   │
 │ · desktop    dl_cid_7c41e0a9  last seen 3d ago      paired                   │
 └──────────────────────────────────────────────────────────────────────────────┘
- x revoke   n new box   p pairing code   j k select       ? all keys   q quit
+ x revoke   n new box   p pair   j k select   esc back    ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 57 bold, 60 bold, 63 bold underlined, 64-67 bold underlined yellow, 68-78 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 57 bold, 60 bold, 63 bold underlined, 64-67 bold underlined yellow, 68-78 red
 1: 0 darkgray, 1-7 bold, 8-45 darkgray, 46-78 dim, 79 darkgray
-2: 0 darkgray, 4-9 bold, 51-77 dim, 79 darkgray
-3: 0 darkgray, 4-13 dim, 14-27 yellow, 79 darkgray
-4: 0 darkgray, 4-13 dim, 14-72 yellow, 79 darkgray
-5: 0 darkgray, 4-13 dim, 14-34 yellow, 79 darkgray
-6: 0 darkgray, 4-13 dim, 79 darkgray
-7: 0 darkgray, 4-13 dim, 79 darkgray
+2: 0 darkgray, 2-3 yellow, 4-6 bold, 57-71 yellow, 72-77 dim, 79 darkgray
+3: 0 darkgray, 4-13 dim, 14-76 yellow, 79 darkgray
+4: 0 darkgray, 4-13 dim, 14-68 yellow, 79 darkgray
+5: 0 darkgray, 4-13 dim, 14-33 bold, 79 darkgray
+6: 0 darkgray, 79 darkgray
+7: 0 darkgray, 2-3 red, 4-9 bold, 66-71 red, 72-77 dim, 79 darkgray
 8: 0 darkgray, 4-5 dim, 6-72 bold yellow, 79 darkgray
 9: 0 darkgray, 4-5 dim, 6 bold yellow, 8-39 bold, 72 bold yellow, 79 darkgray
-10: 0 darkgray, 6 bold yellow, 72 bold yellow, 79 darkgray
-11: 0 darkgray, 2-3 yellow, 4-5 bold, 6 bold yellow, 72 bold yellow, 73-77 dim, 79 darkgray
-12: 0 darkgray, 4-5 dim, 6 bold yellow, 72 bold yellow, 73-76 yellow, 79 darkgray
+10: 0 darkgray, 4-5 dim, 6 bold yellow, 72 bold yellow, 73-74 red, 79 darkgray
+11: 0 darkgray, 4-5 dim, 6 bold yellow, 72 bold yellow, 79 darkgray
+12: 0 darkgray, 4-5 dim, 6 bold yellow, 72 bold yellow, 73-77 bold, 79 darkgray
 13: 0 darkgray, 4-5 dim, 6 bold yellow, 72 bold yellow, 79 darkgray
-14: 0 darkgray, 4-5 dim, 6 bold yellow, 8 bold, 9-15 dim, 19 bold, 20-26 dim, 72 bold yellow, 79 darkgray
+14: 0 darkgray, 6 bold yellow, 8 bold, 9-15 dim, 19 bold, 20-26 dim, 72 bold yellow, 79 darkgray
 15: 0 darkgray, 6-72 bold yellow, 79 darkgray
 16: 0 darkgray, 79 darkgray
 17: 0-79 darkgray
@@ -47,4 +47,4 @@
 20: 0 bold yellow, 2-3 dim, 4-14 bold, 15-59 dim, 79 bold yellow
 21: 0 bold yellow, 2-3 dim, 4-14 bold, 15-59 dim, 79 bold yellow
 22: 0-79 bold yellow
-23: 1 bold, 2-11 dim, 12 bold, 13-23 dim, 24 bold, 25-40 dim, 41-43 bold, 44-53 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim
+23: 1 bold, 2-11 dim, 12 bold, 13-23 dim, 24 bold, 25-32 dim, 33-35 bold, 36-45 dim, 46-48 bold, 49-56 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim
