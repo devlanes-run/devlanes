@@ -998,30 +998,30 @@ impl Inner {
         if recorded || live {
             return Ok(Some(Holder::Reached));
         }
-        Ok(self
-            .configured_box(name)
-            .await
-            .then_some(Holder::Configured))
+        Ok(self.configured_box(name).await.map(|_| Holder::Configured))
     }
 
-    /// Whether `remote.boxes` in the user config has an entry named `name`,
-    /// in any case. Read on a blocking thread, leniently, so a problem
-    /// elsewhere in the file hides no entry.
-    pub(super) async fn configured_box(&self, name: &str) -> bool {
+    /// The key of the `remote.boxes` entry in the user config named `name`
+    /// in any case, as the config spells it. Read on a blocking thread,
+    /// leniently, so a problem elsewhere in the file hides no entry.
+    pub(super) async fn configured_box(&self, name: &str) -> Option<String> {
         let home = self.opts.home.clone();
         let name = name.to_owned();
         tokio::task::spawn_blocking(move || {
             let path = home.join("config.yaml");
-            path.exists()
-                && devlanes_config::load_user_lenient(&path)
-                    .0
-                    .remote
-                    .boxes
-                    .keys()
-                    .any(|entry| entry.eq_ignore_ascii_case(&name))
+            if !path.exists() {
+                return None;
+            }
+            devlanes_config::load_user_lenient(&path)
+                .0
+                .remote
+                .boxes
+                .into_keys()
+                .find(|entry| entry.eq_ignore_ascii_case(&name))
         })
         .await
-        .unwrap_or(false)
+        .ok()
+        .flatten()
     }
 }
 

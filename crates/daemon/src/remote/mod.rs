@@ -1251,13 +1251,18 @@ fn name_ambiguous(host: &str) -> RpcError {
 /// `box_name_ambiguous` for `host`, which differs only in case from
 /// `paired`, a box paired by ticket: on a file system that ignores case
 /// the two would share a sync directory, so `host` is not reached at all.
-/// The way to the other machine depends on whether `host` is a
-/// `remote.boxes` entry (`configured`) or an SSH destination.
-fn case_ambiguous(host: &str, paired: &str, configured: bool) -> RpcError {
-    let other = if configured {
-        format!("to reach the remote.boxes entry {host}, rename it in the user config")
-    } else {
-        format!("to reach {host} over SSH, use another alias for it, such as user@{host}")
+/// The way to the other machine depends on whether `host` names a
+/// `remote.boxes` entry, `configured` being its key as the config spells
+/// it, or an SSH destination.
+fn case_ambiguous(host: &str, paired: &str, configured: Option<&str>) -> RpcError {
+    let other = match configured {
+        Some(entry) => {
+            format!("to reach the remote.boxes entry {entry}, rename it in the user config")
+        }
+        None => format!(
+            "to reach {host} over SSH, use another name for it, such as `<your user>@{host}` or \
+             a second `Host` entry in `~/.ssh/config`"
+        ),
     };
     RpcError::new(
         "box_name_ambiguous",
@@ -1725,7 +1730,7 @@ impl Inner {
             .map_err(crate::registry::store_error)?;
         let reach = match paired {
             Some(paired) => {
-                if self.configured_box(host).await {
+                if self.configured_box(host).await.is_some() {
                     return Err(name_ambiguous(host));
                 }
                 let attempts = self
@@ -1758,7 +1763,7 @@ impl Inner {
                 // name, so the same error, whichever spelling was asked for.
                 if let Some(stored) = self.peer_box_spelled(host).await? {
                     let configured = self.configured_box(host).await;
-                    return Err(case_ambiguous(host, &stored, configured));
+                    return Err(case_ambiguous(host, &stored, configured.as_deref()));
                 }
                 let remote = self
                     .integ
