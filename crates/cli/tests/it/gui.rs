@@ -140,6 +140,14 @@ fn fixtures() -> Vec<(&'static str, GuiOutput, Value)> {
             json!({"lane": "acme@2", "box": null, "items": [], "truncated": false, "next_cursor": null}),
         ),
         (
+            "open",
+            GuiOutput::Open,
+            json!({"lane": "acme@2", "box": "hetzner", "items": [
+                {"unit": "desktop", "address": "127.0.0.1:26012", "viewer": "opened"},
+                {"unit": "settings", "address": "127.0.0.1:26014", "viewer": "already_open"},
+            ]}),
+        ),
+        (
             "screenshot",
             GuiOutput::Screenshot,
             json!({"lane": "acme@2", "unit": "desktop", "box": null,
@@ -306,6 +314,19 @@ fn gui_errors_are_worded() {
         RpcError::new(
             "gui_write_failed",
             json!({"path": "/work/out/shot.png", "message": "No such file or directory"}),
+            1,
+        ),
+        RpcError::new("gui_no_services", json!({"lane": "acme@2", "box": null}), 1),
+        RpcError::new("gui_no_display", json!({}), 1),
+        RpcError::new(
+            "gui_viewer_missing",
+            json!({"path": "/opt/devlanes/devlanes-gui"}),
+            1,
+        ),
+        RpcError::new(
+            "gui_viewer_failed",
+            json!({"lane": "acme@2", "unit": "desktop", "box": null,
+                   "message": "cannot connect to the GUI host: GUI connection failed"}),
             1,
         ),
     ];

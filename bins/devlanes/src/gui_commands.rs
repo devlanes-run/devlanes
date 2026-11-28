@@ -62,6 +62,11 @@ pub(crate) async fn run(
         let data = ls(&found, &services).await;
         return report(runtime, GuiOutput::Ls, &data);
     }
+    if let GuiCommand::Open { .. } = &command {
+        let services = select(&found, &names, true)?;
+        let data = crate::gui_open::open(&found, services, !names.is_empty()).await?;
+        return report(runtime, GuiOutput::Open, &data);
+    }
     let service = select(&found, &names, false)?
         .into_iter()
         .next()
@@ -182,7 +187,7 @@ async fn drive(
                     json!(taken.map(|taken| json!({"width": taken.width, "height": taken.height})));
                 after
             }
-            GuiCommand::Ls { .. } => After::Open,
+            GuiCommand::Ls { .. } | GuiCommand::Open { .. } => After::Open,
         };
         // Said in the result: the input reached the app, and what became of
         // the window by then.
@@ -408,7 +413,7 @@ fn replica_of(unit: &str, name: &str) -> bool {
 }
 
 /// Where `service`'s host can be reached, or why not.
-fn reachable(base: &Value, service: &Service) -> Result<SocketAddr, RpcError> {
+pub(crate) fn reachable(base: &Value, service: &Service) -> Result<SocketAddr, RpcError> {
     if let Some(address) = service.address {
         return Ok(address);
     }
@@ -427,7 +432,7 @@ fn reachable(base: &Value, service: &Service) -> Result<SocketAddr, RpcError> {
 }
 
 /// `gui_unreachable` for a host whose port did not answer the hello.
-fn unreachable_error(base: &Value, address: SocketAddr, error: &ToolError) -> RpcError {
+pub(crate) fn unreachable_error(base: &Value, address: SocketAddr, error: &ToolError) -> RpcError {
     let mut data = base.clone();
     data["address"] = json!(address.to_string());
     data["message"] = json!(chain(error));

@@ -21,6 +21,7 @@
 //! before, with a note.
 
 pub mod lookup;
+pub mod viewer;
 
 use std::{
     net::{Ipv4Addr, SocketAddr},

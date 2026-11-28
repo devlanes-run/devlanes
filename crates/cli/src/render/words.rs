@@ -2076,6 +2076,10 @@ const GUI_COMMAND_ERRORS: &[&str] = &[
     "gui_off_in_daemon",
     "gui_bad_reference",
     "gui_write_failed",
+    "gui_no_services",
+    "gui_no_display",
+    "gui_viewer_missing",
+    "gui_viewer_failed",
 ];
 
 /// Why a box's GUI port cannot be reached here, from `{port, state,
@@ -2288,6 +2292,35 @@ fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
             format!(
                 "cannot write the screenshot to {}: {}",
                 field(data, "path"),
+                field(data, "message")
+            ),
+            None,
+        ),
+        "gui_no_services" => (
+            format!(
+                "{}{on_box} has no running GUI service to open",
+                field(data, "lane")
+            ),
+            Some(ls()),
+        ),
+        "gui_no_display" => (
+            "there is no display to open windows on here: neither WAYLAND_DISPLAY nor DISPLAY is set"
+                .into(),
+            Some(Hint(
+                "run it from a terminal of the desktop session; over SSH, use devlanes gui screenshot"
+                    .into(),
+            )),
+        ),
+        "gui_viewer_missing" => (
+            format!(
+                "devlanes-gui, which shows the windows, is not installed at {}",
+                field(data, "path")
+            ),
+            Some(Hint::command(["update"])),
+        ),
+        "gui_viewer_failed" => (
+            format!(
+                "the viewer of {unit}{on_box} did not start: {}",
                 field(data, "message")
             ),
             None,

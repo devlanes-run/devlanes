@@ -11,6 +11,7 @@ use crate::GuiOutput;
 pub(crate) fn result(output: GuiOutput, data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     match output {
         GuiOutput::Ls => ls(data, cx),
+        GuiOutput::Open => open(data),
         GuiOutput::Screenshot => screenshot(data, cx),
         GuiOutput::Input => input(data),
     }
@@ -115,6 +116,26 @@ fn ls(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         }
     }
     lines
+}
+
+/// `gui open`: a line per service, opened or brought to the front.
+fn open(data: &Value) -> Vec<String> {
+    list(data, "items")
+        .iter()
+        .map(|item| {
+            let mut target = format!("{}:{}", text(data, "lane"), text(item, "unit"));
+            let host = text(data, "box");
+            if !host.is_empty() {
+                target.push_str(&format!(" on box {host}"));
+            }
+            match text(item, "viewer").as_str() {
+                "already_open" => {
+                    format!("{target} is open already; its windows come to the front")
+                }
+                _ => format!("opened the windows of {target}"),
+            }
+        })
+        .collect()
 }
 
 /// `gui screenshot`: the file, a link to it where the terminal shows links.

@@ -1377,6 +1377,7 @@ dependencies = [
  "devlanes-daemon",
  "devlanes-env-direnv",
  "devlanes-env-mise",
+ "devlanes-gui-client",
  "devlanes-gui-codec",
  "devlanes-gui-proto",
  "devlanes-gui-tool",

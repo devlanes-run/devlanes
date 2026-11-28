@@ -257,7 +257,7 @@ REQUESTS_CA_BUNDLE point at the devlanes CA unless the shell sets them, and\n\
     },
     // Hidden until GUI services are on for users; the help is written as it
     // will be published.
-    /// List, screenshot and drive the windows of GUI services: click, type, press keys, scroll and resize
+    /// Open, list, screenshot and drive the windows of GUI services: click, type, press keys, scroll and resize
     #[command(hide = true, long_about = GUI_ABOUT, after_help = GUI_AFTER)]
     Gui {
         #[command(subcommand)]
@@ -666,9 +666,10 @@ pub enum UrlCommand {
 }
 
 const GUI_ABOUT: &str = "\
-List, screenshot and drive the windows of GUI services: click, type, press keys, scroll and resize.
+Open, list, screenshot and drive the windows of GUI services: click, type, press keys, scroll and resize.
 
-Works on services with gui: true without opening their windows. Each command
+gui open shows a service's windows on this machine. The other commands work
+on services with gui: true without opening their windows. Each command
 does one thing and returns once the app has the input. A slow app may not show
 the result in a screenshot taken right after. Coordinates are window pixels
 from the window's top-left corner, and a point outside the window is refused.
@@ -680,11 +681,22 @@ machine: name its lane, such as acme@2:desktop.";
 const GUI_AFTER: &str = "\
 Examples:
   devlanes gui ls                               GUI services of this lane and their windows
+  devlanes gui open desktop                     show its windows on this machine
   devlanes gui screenshot desktop               save a PNG and print its path
   devlanes gui click desktop 120 48             click 120 pixels right and 48 down
   devlanes gui type desktop 'hello world'       type into the focused field
   devlanes gui key desktop ctrl+s enter         save, then press enter
   devlanes gui resize desktop 1280x800          resize the main window";
+
+const GUI_OPEN_ABOUT: &str = "\
+Open a GUI service's windows on this machine's desktop, or bring them to the front.
+
+Each window of the service gets a window here that shows it and takes your
+mouse and keyboard. A service has one viewer on this machine: running the
+command again brings its windows to the front and reopens the ones you closed.
+The windows stay until the service stops. Without a unit, every running GUI
+service of the lane opens. A box's GUI service opens the same way through its
+mirrored port, such as acme@2:desktop.";
 
 const GUI_SCREENSHOT_ABOUT: &str = "\
 Save a PNG of a GUI service's window and print where it went.
@@ -743,6 +755,13 @@ pub enum GuiCommand {
         /// GUI services to list ([lane:]unit, such as desktop or acme@2:desktop) [default: every GUI service of the lane]
         #[arg(value_name = "UNIT")]
         units: Vec<String>,
+    },
+    /// Open a GUI service's windows on this machine's desktop, or bring them to the front
+    #[command(long_about = GUI_OPEN_ABOUT)]
+    Open {
+        /// GUI service ([lane:]unit, such as desktop or acme@2:desktop) [default: every running GUI service of the lane]
+        #[arg(value_name = "UNIT")]
+        unit: Option<String>,
     },
     /// Save a PNG of a GUI service's window and print where it went
     #[command(long_about = GUI_SCREENSHOT_ABOUT)]
@@ -840,6 +859,7 @@ impl GuiCommand {
     pub fn units(&self) -> Vec<String> {
         match self {
             Self::Ls { units } => units.clone(),
+            Self::Open { unit } => unit.iter().cloned().collect(),
             Self::Screenshot { unit, .. }
             | Self::Click { unit, .. }
             | Self::Type { unit, .. }
@@ -852,7 +872,7 @@ impl GuiCommand {
     /// `--window`, for the commands that take it.
     pub fn window(&self) -> Option<&str> {
         match self {
-            Self::Ls { .. } => None,
+            Self::Ls { .. } | Self::Open { .. } => None,
             Self::Screenshot { window, .. }
             | Self::Click { window, .. }
             | Self::Type { window, .. }
@@ -2240,8 +2260,10 @@ impl Command {
             },
             // A screenshot to the screenshots folder changes nothing the app
             // or a later command sees; `--to` may replace any file.
+            // `gui open` shows windows on this machine and changes nothing
+            // the app or a later command sees, like `url open`.
             Self::Gui { command } => match command {
-                GuiCommand::Ls { .. } => true,
+                GuiCommand::Ls { .. } | GuiCommand::Open { .. } => true,
                 GuiCommand::Screenshot { to, .. } => to.is_none(),
                 GuiCommand::Click { .. }
                 | GuiCommand::Type { .. }
