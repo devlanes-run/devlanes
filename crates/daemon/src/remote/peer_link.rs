@@ -584,6 +584,30 @@ fn derived_name(answered: &str) -> String {
     }
 }
 
+/// The most a `host` may hold: the longest DNS name, longer than any box
+/// name or SSH destination in use.
+const MAX_HOST: usize = 253;
+
+/// `bad_ticket` for a `host` that is a ticket, or most of one: the ticket
+/// prefix in any case and 60 or more base32 characters, as a ticket cut,
+/// wrapped or changed on the way leaves it, or any text longer than
+/// [`MAX_HOST`]. Such text holds a secret, so it is never passed to `ssh`,
+/// listed as a box or logged as a host.
+pub(super) fn ticket_as_host(host: &str) -> Option<RpcError> {
+    let base32 = host.get(TICKET_PREFIX.len()..).map_or(0, |rest| {
+        rest.bytes()
+            .take_while(|b| matches!(b.to_ascii_lowercase(), b'a'..=b'z' | b'2'..=b'7'))
+            .count()
+    });
+    let ticket_like = looks_like_ticket(host) && base32 >= 60;
+    (ticket_like || host.len() > MAX_HOST).then(|| {
+        bad_ticket(
+            "this is not a box name or an SSH destination, and not a whole pairing ticket \
+             either; copy the ticket again from `devlanes daemon pair` on the box",
+        )
+    })
+}
+
 /// `bad_ticket`: text that is not a usable ticket.
 fn bad_ticket(message: impl std::fmt::Display) -> RpcError {
     RpcError::new("bad_ticket", json!({"message": message.to_string()}), 2)
@@ -624,9 +648,9 @@ impl Holder {
     /// What has the name, after "taken by".
     fn text(self) -> &'static str {
         match self {
-            Self::Paired => "another box paired by ticket",
+            Self::Paired => "another box paired by ticket here",
             Self::Reached => "a box reached over SSH or by a command",
-            Self::Configured => "an entry of remote.boxes in the user config",
+            Self::Configured => "a remote.boxes entry in the user config",
         }
     }
 }
@@ -661,15 +685,26 @@ fn pairing_dial_failed(label: &str, error: &TransportError) -> RpcError {
     match error.downcast_ref::<PeerError>() {
         Some(PeerError::InvalidId(_)) => bad_ticket(reason),
         Some(PeerError::Refused) => pairing_refused(NO_TICKET_OPEN, None),
-        Some(PeerError::Unreachable(_)) => super::remote_failed(
+        Some(PeerError::Unreachable(_)) => pairing_failed(
             label,
             format!(
                 "{reason}. Also check that the ticket was printed less than {} minutes ago.",
                 PAIRING_CODE_TTL_MS / 60_000
             ),
         ),
-        _ => super::remote_failed(label, reason),
+        _ => pairing_failed(label, reason),
     }
+}
+
+/// `remote_failed` for a pairing by ticket that failed before the box was
+/// kept, with `pairing: true`: its text is about the box in the ticket,
+/// which `remote ls` may not list, so clients show it as it is.
+fn pairing_failed(label: &str, message: impl std::fmt::Display) -> RpcError {
+    let mut error = super::remote_failed(label, message);
+    if let Some(data) = error.data.as_object_mut() {
+        data.insert("pairing".into(), Value::Bool(true));
+    }
+    error
 }
 
 /// The `bad_request` for a name a box cannot be given.
@@ -678,8 +713,8 @@ fn bad_name(name: &str) -> RpcError {
         "bad_request",
         json!({
             "message": format!(
-                "a box name has at most {MAX_NAME} letters, digits, `-` and `_`, does not start \
-                 with `-` and does not start with `{TICKET_PREFIX}`"
+                "a name has 1 to {MAX_NAME} letters, digits, `-` and `_`, and does not start with \
+                 `-` or `{TICKET_PREFIX}`"
             ),
             "name": name,
         }),
@@ -723,7 +758,7 @@ impl Inner {
                     name,
                     holder,
                     format!(
-                        "the box name {name} is taken by {}; choose another with `--name`",
+                        "{name} is already the name of {}; choose another with `--name`",
                         holder.text()
                     ),
                 ));
@@ -750,7 +785,7 @@ impl Inner {
             .await
             .map_err(|error| {
                 let reason = clean_reason(&error.to_string());
-                super::remote_failed(&label, format!("pairing with the box failed: {reason}"))
+                pairing_failed(&label, format!("pairing with the box failed: {reason}"))
             })?;
         let answered = match answer {
             PairAnswer::Paired { name, .. } => name,
@@ -899,7 +934,12 @@ impl Inner {
             tracing::debug!(host = %name, "not forgetting a box paired again since its link gave up");
             return;
         }
-        if !self.forget_pairing(name, Some(serial), pairing).await {
+        // A failed delete is logged by `forget_pairing`; the box is gone
+        // from the links either way.
+        if matches!(
+            self.forget_pairing(name, Some(serial), pairing).await,
+            Ok(false)
+        ) {
             return;
         }
         drop(connecting);
@@ -925,10 +965,9 @@ impl Inner {
                 json!({
                     "host": name,
                     "message": format!(
-                        "this machine has no box paired by ticket called {name}, and only those \
-                         are forgotten. `devlanes remote disconnect {name}` disconnects a box \
-                         reached over SSH or remote.boxes, and `devlanes daemon revoke` on the \
-                         box ends its pairing"
+                        "{name} is not a box paired by ticket here, so there is no pairing to \
+                         forget. `devlanes remote disconnect {name}` stops connecting to it, and \
+                         `devlanes daemon revoke` on the box ends its pairing."
                     ),
                 }),
                 2,
@@ -938,10 +977,13 @@ impl Inner {
             key: row.peer_key,
             paired_at: row.paired_at,
         };
-        self.forget_pairing(name, None, &pairing).await;
+        let forgot = self.forget_pairing(name, None, &pairing).await;
         drop(connecting);
-        tracing::info!(host = %name, "forgot a box paired by ticket, as asked");
+        // The link is closed even when a delete failed, so the rest of
+        // this machine learns it is gone before the error is answered.
         self.forgotten(name).await;
+        forgot?;
+        tracing::info!(host = %name, "forgot a box paired by ticket, as asked");
         Ok(json!({"disconnected": [name], "forgotten": [name]}))
     }
 
@@ -949,17 +991,20 @@ impl Inner {
     /// held: closes its link, unless `serial` names a link and a newer one
     /// replaced it (false then, and nothing is deleted), then deletes the
     /// box's `p2p` row in `remote_hosts`, its lane choices and the pairing's
-    /// `p2p_boxes` row.
+    /// `p2p_boxes` row, each tried even when one before failed; the first
+    /// store failure is the error.
     async fn forget_pairing(
         self: &Arc<Self>,
         name: &str,
         serial: Option<u64>,
         pairing: &super::PeerPairing,
-    ) -> bool {
+    ) -> Result<bool, RpcError> {
         let conn = {
             let mut hosts = lock(&self.remote.hosts);
             match hosts.get(name) {
-                Some(conn) if serial.is_some_and(|serial| conn.serial != serial) => return false,
+                Some(conn) if serial.is_some_and(|serial| conn.serial != serial) => {
+                    return Ok(false);
+                }
                 Some(_) => hosts.remove(name),
                 None => None,
             }
@@ -972,23 +1017,27 @@ impl Inner {
         // restores a box whose pairing is gone, and `p2p_boxes` last, so
         // what is left is a pairing `remote ls` lists and that can be
         // connected or forgotten again.
-        let deleted = self
+        let record = self
             .store
             .delete_remote_host(name.to_owned(), super::P2P.to_owned())
             .await;
-        if let Err(error) = deleted {
+        if let Err(error) = &record {
             tracing::warn!(%error, host = %name, "cannot forget the box's connection record");
         }
         self.forget_choices_of(name).await;
-        let deleted = self
+        let pairing = self
             .store
             .delete_p2p_pairing(name.to_owned(), pairing.key.clone(), pairing.paired_at)
             .await;
-        if let Err(error) = deleted {
+        if let Err(error) = &pairing {
             tracing::warn!(%error, host = %name, "cannot forget the pairing with the box");
         }
         lock(&self.remote.restore_errors).remove(name);
-        true
+        // Every delete was tried; the first failure is the one reported.
+        record
+            .and(pairing)
+            .map(|_| true)
+            .map_err(crate::registry::store_error)
     }
 
     /// Announces that box `name` is gone and gives its ports, routes and
@@ -1123,6 +1172,38 @@ mod tests {
         // A given name is held to the same rules.
         for given in ["dlp1desk", "Dlp1", "-acme", "acme box", ""] {
             assert!(!valid_name(given), "{given:?}");
+        }
+    }
+
+    /// A host that is a ticket, or most of one, or longer than any name,
+    /// is refused before `ssh` sees it; names that only start like one,
+    /// and SSH destinations, go through.
+    #[test]
+    fn a_ticket_is_never_taken_for_a_host() {
+        let cut = format!("DLP1{}", "a2b3".repeat(15));
+        let whole = format!("dlp1{}", "example".repeat(20));
+        let changed = format!("dlp1{}x{}", "a".repeat(60), "!".repeat(5));
+        let long = format!("user@{}.example.invalid", "a".repeat(250));
+        for host in [
+            cut.as_str(),
+            whole.as_str(),
+            changed.as_str(),
+            long.as_str(),
+        ] {
+            assert_eq!(
+                ticket_as_host(host).map(|error| error.code),
+                Some("bad_ticket".to_owned()),
+                "{host}"
+            );
+        }
+        let short = format!("dlp1{}", "a".repeat(59));
+        for host in [
+            "acme",
+            "dlp1box",
+            "user@acme.example.invalid",
+            short.as_str(),
+        ] {
+            assert!(ticket_as_host(host).is_none(), "{host}");
         }
     }
 

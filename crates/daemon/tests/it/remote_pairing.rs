@@ -1029,9 +1029,11 @@ async fn a_client_keeps_its_newest_keys_up_to_the_limit() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// `daemon pair` with a ticket fails with why when the box has no
-/// peer-to-peer endpoint or its endpoint cannot listen, and codes keep
-/// working for SSH clients.
+/// A ticket that cannot be made, because the box has no peer-to-peer
+/// endpoint or its endpoint cannot listen, never costs the SSH code: asked
+/// with a code, the code goes out with `ticket_error`; asked alone, the
+/// request fails with why; and codes keep working. A request for neither is
+/// refused.
 async fn a_ticket_that_cannot_be_made_leaves_codes_working() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -1040,7 +1042,7 @@ async fn a_ticket_that_cannot_be_made_leaves_codes_working() {
         let stopped = BoxSide::start_peer(&tmp, "stopped", "11650-11699", endpoint.clone()).await;
         endpoint.close().await;
         for (side, code) in [(&plain, "not_supported_yet"), (&stopped, "p2p_unavailable")] {
-            let failed = side
+            let both = side
                 .h
                 .call(
                     Method::RemotePair,
@@ -1048,7 +1050,20 @@ async fn a_ticket_that_cannot_be_made_leaves_codes_working() {
                     Context::default(),
                 )
                 .await
-                .expect_err("a ticket");
+                .expect("the code, whatever the ticket");
+            assert!(both["code"].as_str().is_some(), "{both}");
+            assert!(both.get("ticket").is_none(), "{both}");
+            assert_eq!(both["ticket_error"]["code"], code, "{both}");
+            assert!(both["ticket_error"]["message"].as_str().is_some(), "{both}");
+            let failed = side
+                .h
+                .call(
+                    Method::RemotePair,
+                    json!({"ticket": true, "code": false}),
+                    Context::default(),
+                )
+                .await
+                .expect_err("a ticket alone");
             assert_eq!(failed.code, code, "{failed:?}");
             let paired = side
                 .h
@@ -1057,6 +1072,16 @@ async fn a_ticket_that_cannot_be_made_leaves_codes_working() {
                 .expect("a code after the failed ticket");
             assert!(paired["code"].as_str().is_some(), "{paired}");
         }
+        let neither = plain
+            .h
+            .call(
+                Method::RemotePair,
+                json!({"ticket": false, "code": false}),
+                Context::default(),
+            )
+            .await
+            .expect_err("nothing to mint");
+        assert_eq!(neither.code, "bad_request", "{neither:?}");
         plain.stop().await;
         stopped.stop().await;
     })

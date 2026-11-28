@@ -675,15 +675,13 @@ async fn rpc_start(
                                 data["require_pairing"] = json!(require);
                                 // A box paired by ticket is reached only while its
                                 // daemon runs, and the login start is this user's.
+                                // Only a sure `false` is added: an installed unit
+                                // may still be turned off.
                                 if data.get("ticket").is_some() {
-                                    let service = crate::daemon::service_report().await;
-                                    if let Some(installed) =
-                                        service.get("installed").and_then(Value::as_bool)
+                                    if crate::daemon::starts_at_login(&paths.home).await
+                                        == Some(false)
                                     {
-                                        let enabled =
-                                            service.get("enabled").and_then(Value::as_bool);
-                                        data["starts_at_login"] =
-                                            json!(installed && enabled != Some(false));
+                                        data["starts_at_login"] = json!(false);
                                     }
                                 } else if request.params.get("code") == Some(&json!(false)) {
                                     // `--ticket` from a daemon that predates tickets.
@@ -1216,13 +1214,20 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
                     .and_then(Value::as_str)
                     .is_some_and(|message| message.contains("is not one this machine uses")) =>
         {
+            // The ticket's author chose this URL, so it is shown only when it
+            // is one the user could list, in plain printable ASCII, and the
+            // user decides whether to trust it.
             let ticket = request.params.get("ticket").and_then(Value::as_str)?;
             let relay = devlanes_transport::Ticket::parse(ticket).ok()?.addr.relay?;
-            Some(Hint(format!(
-                "to reach the box through its relay, add {} to remote.relays in the user config \
-                 and run devlanes daemon restart",
-                devlanes_cli::shell_quote(&relay)
-            )))
+            let listable = relay.chars().all(|c| c.is_ascii_graphic())
+                && devlanes_config::relay_problem(&relay).is_none();
+            listable.then(|| {
+                Hint(format!(
+                    "the ticket names the relay {relay}, which this machine does not use; if you \
+                     trust it, add it to remote.relays in the user config and run devlanes \
+                     daemon restart"
+                ))
+            })
         }
         // A daemon from before tickets reads a ticket as a request without a host.
         "bad_request"
@@ -1231,8 +1236,8 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
                 && error.data.get("name").is_none() =>
         {
             Some(Hint(
-                "a devlanes daemon older than this devlanes cannot pair by ticket; devlanes \
-                 daemon restart starts this release's daemon"
+                "if this machine's devlanes daemon is older than this devlanes, it cannot pair \
+                 by ticket; run devlanes daemon restart"
                     .into(),
             ))
         }
@@ -1625,6 +1630,50 @@ mod tests {
             std::fs::read_to_string(aside[0].join("acme/1/dump.sql")).expect("kept"),
             "rows"
         );
+    }
+
+    /// A box on a relay this machine does not use: the hint shows the
+    /// ticket's relay only when it is a URL the user could list, in plain
+    /// ASCII, and leaves the choice to the user; a relay with terminal
+    /// escapes, or that the config would refuse, is not shown.
+    #[test]
+    fn a_tickets_relay_is_shown_only_when_it_could_be_listed() {
+        let hint = |relay: &str| {
+            let ticket = devlanes_transport::Ticket {
+                addr: devlanes_transport::PeerAddr {
+                    id: devlanes_transport::PeerId([7; 32]),
+                    relay: Some(relay.to_owned()),
+                    direct: Vec::new(),
+                },
+                secret: devlanes_transport::TicketSecret([9; 16]),
+                ephemeral: false,
+            };
+            let request = Request {
+                id: 0,
+                method: Method::Connect,
+                params: json!({"ticket": ticket.encode()}),
+                context: devlanes_proto::Context::default(),
+            };
+            let error = RpcError::new(
+                "remote_failed",
+                json!({"host": "p2p:07070707", "message": "the box is not reachable (timed out; \
+                       the box's relay relay.example.invalid is not one this machine uses)"}),
+                4,
+            );
+            hint_for(&error, &request).map(|hint| hint.0)
+        };
+        let shown = hint("https://relay.example.invalid").unwrap_or_default();
+        assert!(
+            shown.contains("https://relay.example.invalid") && shown.contains("if you trust it"),
+            "{shown}"
+        );
+        for relay in [
+            "https://relay.example.invalid/\u{1b}[2J",
+            "ftp://relay.example.invalid",
+            "https://user:secret@relay.example.invalid",
+        ] {
+            assert_eq!(hint(relay), None, "{relay:?}");
+        }
     }
 
     /// Hints keep the lane and project the user chose.

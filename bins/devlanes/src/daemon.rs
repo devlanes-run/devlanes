@@ -761,6 +761,24 @@ pub async fn service_report() -> serde_json::Value {
     service_facts(manager, &path, contents.as_deref())
 }
 
+/// `Some(false)` when no login service starts a daemon for `home`: none is
+/// installed, or the installed one is for another home. `None` when one is
+/// installed for it, since the file alone does not tell whether the
+/// manager has it enabled, so callers warn only on a sure `false`.
+#[cfg(unix)]
+pub async fn starts_at_login(home: &Path) -> Option<bool> {
+    let manager = Manager::current();
+    let user = user_home().ok()?;
+    let contents = tokio::fs::read_to_string(manager.path(&user)).await.ok();
+    let Some(contents) = contents else {
+        return Some(false);
+    };
+    let started = manager
+        .home(&contents)
+        .unwrap_or_else(|| user.join(".devlanes"));
+    (!devlanes_core::paths::same_path(&started, home)).then_some(false)
+}
+
 /// [`service_report`] for a definition read from `path` (`None`: not installed).
 #[cfg(unix)]
 fn service_facts(manager: Manager, path: &Path, contents: Option<&str>) -> serde_json::Value {
@@ -859,6 +877,20 @@ pub async fn service_report() -> serde_json::Value {
         "command": status.command,
         "current": current,
     })
+}
+
+/// `Some(false)` when the logon start does not start a daemon for `home`:
+/// it passes no environment, so it starts only the default home's daemon,
+/// and then only while it is installed and on. `None` when it does, or the
+/// registry cannot be read, so callers warn only on a sure `false`.
+#[cfg(windows)]
+pub async fn starts_at_login(home: &Path) -> Option<bool> {
+    let default = devlanes_client::user_home().map(|user| user.join(".devlanes"))?;
+    if !devlanes_core::paths::same_path(home, &std::path::absolute(&default).ok()?) {
+        return Some(false);
+    }
+    let status = logon(|logon| logon.status()).await.ok()?;
+    (status.command.is_none() || !status.enabled).then_some(false)
 }
 
 /// Removes the login service (on Windows the logon start and Task Manager's

@@ -92,7 +92,7 @@ devlanes daemon pair [OPTIONS]
 ```
 
 - `--ticket`: Print only the ticket, with or without a terminal, and make no code.
-- `--ephemeral`: Make a ticket for a throwaway box: the other machine forgets it once it is unreachable for an hour. Without a terminal it prints only the ticket, as --ticket does.
+- `--ephemeral`: Make a ticket for a throwaway box, which the other machine forgets once it is unreachable for an hour. Implies --ticket.
 
 ## devlanes daemon clients
 

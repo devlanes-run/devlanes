@@ -1499,8 +1499,13 @@ impl Inner {
         // A ticket names its box, and pairing by ticket takes no code.
         let opening = match args.ticket.take() {
             Some(ticket) if args.host.is_empty() && args.code.is_none() => {
+                let asked = args.name.is_some();
                 let paired = self.pair_by_ticket(&ticket, args.name.take()).await?;
-                paired_as = Some(json!({"name": paired.name, "kept": paired.kept}));
+                paired_as = Some(json!({
+                    "name": paired.name,
+                    "kept": paired.kept,
+                    "name_ignored": paired.kept && asked,
+                }));
                 args.host = paired.name;
                 held = Some(paired.connecting);
                 Opening::Paired
@@ -1521,6 +1526,10 @@ impl Inner {
             }
             None => Opening::Asked,
         };
+        // Before anything echoes the host back or dials it.
+        if let Some(error) = peer_link::ticket_as_host(&args.host) {
+            return Err(error);
+        }
         if !valid_host(&args.host) {
             return Err(RpcError::new(
                 "bad_request",

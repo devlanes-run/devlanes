@@ -2395,23 +2395,31 @@ pub(super) fn connect(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
-/// The name a box paired by ticket is kept under (`paired: {name, kept}`)
-/// and the command that connects it again. The box chose the name, which
-/// may equal an SSH alias of the user's, so it gets lines of its own.
+/// The name a box paired by ticket is kept under (`paired: {name, kept,
+/// name_ignored}`) and the command that connects it again. The box chose
+/// the name, which may equal an SSH alias of the user's, so it gets lines
+/// of its own.
 pub(super) fn paired_lines(paired: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let name = text(paired, "name");
     let kept = paired.get("kept").and_then(Value::as_bool) == Some(true);
+    let ignored = paired.get("name_ignored").and_then(Value::as_bool) == Some(true);
     let again = format!("devlanes remote connect {}", crate::shell_quote(&name));
     if cx.agent() {
         return vec![format!(
-            "paired box={name} kept={kept}: `{again}` connects to it again without a ticket"
+            "paired box={name} kept={kept}{}: `{again}` connects to it again without a ticket",
+            if ignored { " name_ignored=true" } else { "" }
         )];
     }
     vec![
-        if kept {
-            format!("this machine was paired with the box already and keeps it as {name}")
-        } else {
-            format!("paired with the box, kept here as {name}")
+        match (kept, ignored) {
+            (true, true) => format!(
+                "this machine was already paired with the box and keeps its name {name}; --name \
+                 was ignored"
+            ),
+            (true, false) => {
+                format!("this machine was already paired with the box and keeps its name {name}")
+            }
+            (false, _) => format!("paired; this machine keeps the box as {name}"),
         },
         format!("to connect to it again: {again}"),
     ]
@@ -2459,37 +2467,41 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let with_code = code
         .as_ref()
         .map(|code| format!("devlanes remote connect <box> --code {code}"));
+    // Why a code came without a ticket: the daemon says, and one that
+    // says nothing predates tickets.
+    let no_ticket = match (&ticket, data.get("ticket_error")) {
+        (Some(_), _) => None,
+        (None, Some(error)) => Some(format!("no ticket: {}", text(error, "message"))),
+        (None, None) => Some(format!(
+            "{OLD_DAEMON_NO_TICKETS}; devlanes daemon restart starts this release's daemon"
+        )),
+    };
+    let valid_for = valid
+        .map(|valid| format!(" valid_for={valid}m"))
+        .unwrap_or_default();
     if cx.agent() {
-        let mut line = match &ticket {
-            Some(ticket) => format!(
-                "pairing ticket{} single_use: ask the user to run `devlanes remote connect {ticket}` \
-                 on their machine.",
-                valid
-                    .map(|valid| format!(" valid_for={valid}m"))
-                    .unwrap_or_default()
+        let mut line = match (&ticket, &code, &with_code) {
+            (Some(ticket), _, _) => format!(
+                "pairing ticket={ticket}{valid_for} single_use: show the user the ticket whole, \
+                 on a line of its own, and ask them to run `devlanes remote connect <ticket>` \
+                 on their other machine."
             ),
-            None => format!(
-                "pairing code{} single_use",
-                valid
-                    .map(|valid| format!(" valid_for={valid}m"))
-                    .unwrap_or_default()
+            (None, Some(code), Some(connect)) => format!(
+                "pairing code {code}{valid_for} single_use: ask the user to run `{connect}` on \
+                 their machine. <box> is this machine's SSH host or remote.boxes name."
             ),
+            _ => format!("pairing{valid_for}"),
         };
-        match (&with_code, &ticket) {
-            (Some(connect), Some(_)) => line.push_str(&format!(
-                " For a box reached over SSH or remote.boxes instead: `{connect}`, where <box> is \
-                 this machine's SSH host or remote.boxes name."
-            )),
-            (Some(connect), None) => {
-                let mut old = OLD_DAEMON_NO_TICKETS.to_owned();
-                old[..1].make_ascii_uppercase();
-                line.push_str(&format!(
-                    ": ask the user to run `{connect}` on their machine. <box> is this machine's \
-                     SSH host or remote.boxes name. {old}; `devlanes daemon restart` starts this \
-                     release's daemon."
-                ));
-            }
-            (None, _) => {}
+        if let (Some(_), Some(connect)) = (&ticket, &with_code) {
+            line.push_str(&format!(
+                " For a box reached over SSH or remote.boxes: `{connect}`, where <box> is this \
+                 machine's SSH host or remote.boxes name."
+            ));
+        }
+        if let Some(no_ticket) = &no_ticket {
+            let mut sentence = no_ticket.clone();
+            sentence[..1].make_ascii_uppercase();
+            line.push_str(&format!(" {sentence}."));
         }
         if let Some(paused) = &paused {
             line.push_str(&format!(
@@ -2498,8 +2510,8 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         }
         if not_at_login {
             line.push_str(
-                " The daemon here does not start at login, and the other machine reaches it only \
-                 while it runs: `devlanes daemon install` starts it at login.",
+                " This daemon does not start at login, and a machine paired by ticket reaches it \
+                 only while it runs: run `devlanes daemon install` here if the user agrees.",
             );
         }
         if unpaired && with_code.is_some() {
@@ -2507,17 +2519,14 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         }
         return vec![line];
     }
-    let expiry = match valid {
-        Some(valid) => format!(
-            "works once and expires in {}",
-            plural(usize::try_from(valid).unwrap_or(usize::MAX), "minute")
-        ),
-        None => "works once".into(),
-    };
+    let minutes = valid.map(|valid| plural(usize::try_from(valid).unwrap_or(usize::MAX), "minute"));
     let mut lines = Vec::new();
     if let Some(ticket) = &ticket {
         lines.extend([
-            format!("pairing ticket, which {expiry}:"),
+            match &minutes {
+                Some(minutes) => format!("pairing ticket, valid once for {minutes}:"),
+                None => "pairing ticket, valid once:".into(),
+            },
             String::new(),
             ticket.clone(),
             String::new(),
@@ -2527,21 +2536,23 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     match (&code, &with_code) {
         (Some(_), Some(connect)) if ticket.is_some() => {
             lines.push(format!(
-                "if it reaches this machine over SSH or remote.boxes, run there instead: {connect}"
+                "if that machine reaches this one over SSH or remote.boxes, run there: {connect}"
             ));
         }
         (Some(code), Some(connect)) => {
             lines.extend([
                 format!("pairing code: {code}"),
-                format!("it {expiry}"),
+                match &minutes {
+                    Some(minutes) => format!("it works once and expires in {minutes}"),
+                    None => "it works once".into(),
+                },
                 format!("on your other machine, run: {connect}"),
             ]);
-            // Asked for a ticket on a terminal, answered with a code alone.
-            lines.push(cx.warning(&format!(
-                "{OLD_DAEMON_NO_TICKETS}; devlanes daemon restart starts this release's daemon"
-            )));
         }
         _ => {}
+    }
+    if let Some(no_ticket) = &no_ticket {
+        lines.push(cx.warning(no_ticket));
     }
     if let Some(paused) = &paused {
         lines.push(cx.warning(&format!(
@@ -2550,8 +2561,8 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     }
     if not_at_login {
         lines.push(cx.warning(
-            "the daemon here does not start at login, and the other machine reaches it only while \
-             it runs; devlanes daemon install starts it at login",
+            "this daemon does not start at login, and a machine paired by ticket reaches it only \
+             while it runs; run devlanes daemon install to start it at login",
         ));
     }
     if unpaired && with_code.is_some() {
@@ -2656,7 +2667,7 @@ pub(super) fn daemon_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                 (true, pairings) => format!("{pairings} pairings"),
             };
             if by_ticket {
-                state.push_str(&format!(" by ticket, key {key}"));
+                state.push_str(&format!(", ticket key {key}"));
             }
             vec![
                 text(item, "name"),

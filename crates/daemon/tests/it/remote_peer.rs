@@ -163,7 +163,7 @@ async fn a_ticket_pairs_and_connects_until_the_box_refuses_the_key() {
         assert_eq!(repaired["host"], name.as_str(), "{repaired}");
         assert_eq!(
             repaired["paired"],
-            json!({"name": name, "kept": true}),
+            json!({"name": name, "kept": true, "name_ignored": true}),
             "{repaired}"
         );
         assert_eq!(repaired["state"], "connected", "{repaired}");
@@ -265,7 +265,7 @@ async fn a_ticket_pairs_and_connects_until_the_box_refuses_the_key() {
             .expect("pair after forgetting");
         assert_eq!(
             paired_again["paired"],
-            json!({"name": "lab2", "kept": false}),
+            json!({"name": "lab2", "kept": false, "name_ignored": false}),
             "{paired_again}"
         );
         let name = "lab2".to_owned();

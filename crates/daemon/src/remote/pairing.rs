@@ -387,6 +387,12 @@ struct PairParams {
     code: bool,
 }
 
+/// How long `remote.pair` with a code waits for its ticket. The code is for
+/// SSH and must not wait on peer-to-peer networking: binding is quick, but
+/// the address waits up to 5 s for a relay that does not answer.
+/// `daemon pair --ticket` asks without a code and waits the whole time.
+const TICKET_WAIT_WITH_CODE: Duration = Duration::from_secs(1);
+
 /// [`PairParams::code`] when the request leaves it out: a code is minted.
 fn minted_by_default() -> bool {
     true
@@ -504,13 +510,24 @@ impl Inner {
     /// `remote.pair`: a new one-time code, and with `ticket` a pairing ticket
     /// too, which starts the peer-to-peer listener until it is used or
     /// expires. `connections_off` when this machine's user config turns
-    /// clients away, `pairing_paused` while wrong codes refuse every code,
-    /// `p2p_unavailable` when the endpoint cannot listen or tell its address.
+    /// clients away, `pairing_paused` while wrong codes refuse every code.
     /// While codes are paused a ticket still goes out, without a code and
     /// with `code_paused_ms`. With a ticket and `code: false`, no code is
-    /// minted. Neither the code nor the ticket is logged.
+    /// minted, and a ticket that cannot be made fails the request
+    /// (`p2p_unavailable`, `not_supported_yet`). With a code too, the code
+    /// goes out whatever happens to the ticket: one that cannot be made, or
+    /// is not ready within [`TICKET_WAIT_WITH_CODE`], is reported as
+    /// `ticket_error: {code, message}` next to the code. Neither the code
+    /// nor the ticket is logged.
     pub(crate) async fn pair_method(self: &Arc<Self>, value: Value) -> Result<Value, RpcError> {
         let args: PairParams = params(value)?;
+        if !args.ticket && !args.code {
+            return Err(RpcError::new(
+                "bad_request",
+                json!({"message": "`code: false` needs `ticket: true`, or nothing is minted"}),
+                2,
+            ));
+        }
         let home = self.opts.home.clone();
         let (allowed, invalid) = tokio::task::spawn_blocking(move || allow_connections(&home))
             .await
@@ -519,6 +536,9 @@ impl Inner {
             return Err(connections_off(invalid));
         }
         let expires_at_ms = now_ms().saturating_add(PAIRING_CODE_TTL_MS);
+        if args.ticket && args.code {
+            return self.pair_both(args.ephemeral, expires_at_ms).await;
+        }
         if !args.ticket {
             let minted = lock(&self.remote.codes).mint(Instant::now());
             let code = match minted {
@@ -533,43 +553,79 @@ impl Inner {
                 "valid_ms": PAIRING_CODE_TTL_MS,
             }));
         }
-        // The ticket first: a code minted before a failed ticket would stay
-        // valid with nobody to type it.
-        let (ticket, secret) = self.mint_ticket(args.ephemeral).await?;
-        let mut answer = json!({
+        let (ticket, _) = self.mint_ticket(args.ephemeral, None).await?;
+        tracing::info!(expires_at_ms, "issued a pairing ticket without a code");
+        Ok(json!({
             "ticket": ticket,
             "expires_at_ms": expires_at_ms,
             "valid_ms": PAIRING_CODE_TTL_MS,
-        });
-        if !args.code {
-            tracing::info!(expires_at_ms, "issued a pairing ticket without a code");
-            return Ok(answer);
-        }
+        }))
+    }
+
+    /// [`Inner::pair_method`] for a code and a ticket. The code is minted
+    /// first and always goes out: trouble with peer-to-peer networking must
+    /// not cost a user the code for SSH. The ticket gets
+    /// [`TICKET_WAIT_WITH_CODE`] to be ready, so the code is not held up by
+    /// relays that do not answer; past that it is `ticket_error`. Only when
+    /// wrong codes paused codes and the ticket fails too does the request
+    /// fail, with the ticket's error and `code_paused_ms`.
+    async fn pair_both(
+        self: &Arc<Self>,
+        ephemeral: bool,
+        expires_at_ms: u64,
+    ) -> Result<Value, RpcError> {
+        let mut answer = json!({"expires_at_ms": expires_at_ms, "valid_ms": PAIRING_CODE_TTL_MS});
         let minted = lock(&self.remote.codes).mint(Instant::now());
         match minted {
             Ok(code) => answer["code"] = Value::from(code),
             // Wrong codes pause codes only: the ticket goes out without one.
             Err(MintError::Paused(wait)) => answer["code_paused_ms"] = Value::from(millis(wait)),
-            Err(MintError::Random(error)) => {
-                self.take_back_ticket(&secret).await;
-                return Err(random_error(error));
+            Err(MintError::Random(error)) => return Err(random_error(error)),
+        }
+        match self
+            .mint_ticket(ephemeral, Some(TICKET_WAIT_WITH_CODE))
+            .await
+        {
+            Ok((ticket, _)) => answer["ticket"] = Value::from(ticket),
+            Err(mut error) if answer.get("code").is_none() => {
+                if let Some(data) = error.data.as_object_mut() {
+                    data.insert("code_paused_ms".into(), answer["code_paused_ms"].clone());
+                }
+                return Err(error);
+            }
+            Err(error) => {
+                // `not_supported_yet` has no message of its own.
+                let message = error
+                    .data
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map_or_else(
+                        || "this devlanes daemon cannot make pairing tickets".to_owned(),
+                        str::to_owned,
+                    );
+                answer["ticket_error"] = json!({"code": error.code, "message": message});
             }
         }
         tracing::info!(
             expires_at_ms,
             code = answer.get("code").is_some(),
-            "issued a pairing ticket"
+            ticket = answer.get("ticket").is_some(),
+            "issued a pairing code and ticket"
         );
         Ok(answer)
     }
 
     /// A ticket for `remote.pair`, as text with its secret: mints the
-    /// secret, listens and reads the address to put in it. A failure takes
-    /// the secret back and applies the listening rule again, so a ticket
-    /// nobody got leaves no listener behind.
+    /// secret, listens and reads the address to put in it, waiting at most
+    /// `wait` for the address when set. A failure takes the secret back and
+    /// applies the listening rule again, so a ticket nobody got leaves no
+    /// listener behind. A ticket with a relay and no address of this
+    /// machine is not handed out: iroh reports that only without a network,
+    /// when the relay is one this machine never reached.
     async fn mint_ticket(
         self: &Arc<Self>,
         ephemeral: bool,
+        wait: Option<Duration>,
     ) -> Result<(String, [u8; 16]), RpcError> {
         let Some(endpoint) = self
             .integ
@@ -585,17 +641,44 @@ impl Inner {
         };
         let minted = lock(&self.remote.codes).mint_ticket(ephemeral, Instant::now());
         let secret = minted.map_err(random_error)?;
-        let addr = match self.refresh_listening().await {
-            Ok(()) => endpoint.addr().await.map_err(|error| error.to_string()),
-            Err(error) => Err(error.to_string()),
+        let read = async {
+            match self.refresh_listening().await {
+                Ok(()) => endpoint
+                    .addr()
+                    .await
+                    .map_err(|error| ("p2p_unavailable", error.to_string())),
+                Err(error) => Err(("p2p_unavailable", error.to_string())),
+            }
+        };
+        // Dropping the wait is safe: the bind it may leave halfway is
+        // started again by the next call that needs it.
+        let addr = match wait {
+            Some(wait) => tokio::time::timeout(wait, read).await.unwrap_or_else(|_| {
+                Err((
+                    "ticket_not_ready",
+                    "the ticket was not ready within a second; run `devlanes daemon pair \
+                     --ticket` to wait for it"
+                        .to_owned(),
+                ))
+            }),
+            None => read.await,
         };
         // A ticket without its relay works on a LAN only and fails across
         // NATs with a reason that points elsewhere, so it is not handed out.
         let addr = addr.and_then(|addr| match &addr.relay {
-            Some(relay) if relay.len() > Ticket::MAX_RELAY => Err(format!(
-                "the relay URL {relay} is longer than {} bytes, so a ticket cannot hold it; \
-                 shorten remote.relays",
-                Ticket::MAX_RELAY
+            Some(relay) if relay.len() > Ticket::MAX_RELAY => Err((
+                "p2p_unavailable",
+                format!(
+                    "the relay URL {relay} is longer than {} bytes, so a ticket cannot hold it; \
+                     shorten remote.relays",
+                    Ticket::MAX_RELAY
+                ),
+            )),
+            Some(_) if addr.direct.is_empty() => Err((
+                "p2p_unavailable",
+                "this machine has no network address to put in a ticket; check that it is \
+                 connected to a network"
+                    .to_owned(),
             )),
             _ => Ok(addr),
         });
@@ -608,14 +691,10 @@ impl Inner {
                 };
                 Ok((ticket.encode(), secret))
             }
-            Err(message) => {
+            Err((code, message)) => {
                 self.take_back_ticket(&secret).await;
                 tracing::warn!(%message, "cannot hand out a pairing ticket");
-                Err(RpcError::new(
-                    "p2p_unavailable",
-                    json!({"message": message}),
-                    1,
-                ))
+                Err(RpcError::new(code, json!({"message": message}), 1))
             }
         }
     }

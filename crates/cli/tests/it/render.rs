@@ -2767,8 +2767,9 @@ fn boxes_that_need_pairing_name_both_commands() {
 /// saying what to ask the user for an agent; the code alone when piped,
 /// which asks for no ticket, or the ticket alone after `--ticket`; and the
 /// daemon's data for `--json`. A ticket that went out while codes are
-/// paused never comes with an empty code. A daemon that answers a ticket
-/// request with a code alone predates tickets and is named. A box that
+/// paused never comes with an empty code, and a code whose ticket could
+/// not be made says why. A daemon that answers a ticket request with a code
+/// alone and no reason predates tickets and is named. A box that
 /// pairs nobody or does not start at login says so; one paused by wrong
 /// codes refuses with the wait.
 #[test]
@@ -2791,12 +2792,12 @@ fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
     assert_eq!(
         human,
         format!(
-            "pairing ticket, which works once and expires in 10 minutes:\n\
+            "pairing ticket, valid once for 10 minutes:\n\
              \n\
              {ticket}\n\
              \n\
              on your other machine, run: devlanes remote connect <ticket>\n\
-             if it reaches this machine over SSH or remote.boxes, run there instead: \
+             if that machine reaches this one over SSH or remote.boxes, run there: \
              devlanes remote connect <box> --code K7QM-3XWD\n"
         )
     );
@@ -2804,10 +2805,11 @@ fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
     assert_eq!(
         agent,
         format!(
-            "pairing ticket valid_for=10m single_use: ask the user to run \
-             `devlanes remote connect {ticket}` on their machine. For a box reached over SSH or \
-             remote.boxes instead: `devlanes remote connect <box> --code K7QM-3XWD`, where <box> \
-             is this machine's SSH host or remote.boxes name.\n"
+            "pairing ticket={ticket} valid_for=10m single_use: show the user the ticket whole, \
+             on a line of its own, and ask them to run `devlanes remote connect <ticket>` on \
+             their other machine. For a box reached over SSH or remote.boxes: `devlanes remote \
+             connect <box> --code K7QM-3XWD`, where <box> is this machine's SSH host or \
+             remote.boxes name.\n"
         )
     );
     let json: Value = serde_json::from_str(&render(OutputMode::Json, &data)).expect("json output");
@@ -2847,11 +2849,49 @@ fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
         );
         assert!(old.contains("devlanes daemon restart"), "{old}");
     }
-    let old = runtime(OutputMode::Plain)
-        .reporter()
-        .error(&RpcError::new("tickets_unsupported", json!({}), 1), None)
-        .stderr;
-    assert!(old.contains("makes no pairing tickets"), "{old}");
+    let error = |code: &str, data: Value| {
+        runtime(OutputMode::Plain)
+            .reporter()
+            .error(&RpcError::new(code, data, 1), None)
+            .stderr
+    };
+    let old = error("tickets_unsupported", json!({}));
+    assert!(
+        old.contains("makes no pairing tickets") && old.contains("expires in 10 minutes"),
+        "the unseen code is named: {old}"
+    );
+
+    // Peer-to-peer trouble never costs the code: it goes out with the reason.
+    let failed = json!({"code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000,
+        "ticket_error": {"code": "ticket_not_ready",
+                         "message": "the ticket was not ready within a second; run `devlanes daemon pair --ticket` to wait for it"}});
+    for mode in [OutputMode::Human, OutputMode::Agent] {
+        let text = render(mode, &failed);
+        assert!(
+            text.contains("devlanes remote connect <box> --code K7QM-3XWD"),
+            "{text}"
+        );
+        assert!(
+            text.contains("o ticket: the ticket was not ready within a second"),
+            "{text}"
+        );
+        assert!(!text.contains("older than"), "{text}");
+    }
+    assert_eq!(render(OutputMode::Plain, &failed), "K7QM-3XWD\n");
+    let alone_failed = error(
+        "p2p_unavailable",
+        json!({"message": "this machine has no network address to put in a ticket; check that it is connected to a network"}),
+    );
+    assert!(
+        alone_failed
+            .contains("cannot make a pairing ticket now: this machine has no network address"),
+        "{alone_failed}"
+    );
+    let unsupported = error("not_supported_yet", json!({"feature": "pairing by ticket"}));
+    assert!(
+        unsupported.contains("pairing by ticket is not supported yet"),
+        "{unsupported}"
+    );
 
     let away = json!({"ticket": ticket, "code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000,
                       "starts_at_login": false});
@@ -2969,16 +3009,24 @@ fn daemon_clients_and_revoke_name_each_client() {
          "last_seen_ms": null, "connections": []},
     ]});
     let text = render_text(Method::RemoteClients, &clients);
+    // The state column is as wide as the ticket client's.
     assert!(
-        text.contains("connected for 5m from 203.0.113.4  devlanes 0.9.0  mirrors 3 of 4 ports"),
+        text.contains(&format!(
+            "laptop  dl_cid_ab12ab12  {:<31}  connected for 5m from 203.0.113.4  devlanes 0.9.0  \
+             mirrors 3 of 4 ports",
+            "paired"
+        )),
         "{text}"
     );
     assert!(
-        text.contains("desk    dl_cid_cd34cd34  2 pairings"),
+        text.contains(&format!(
+            "desk    dl_cid_cd34cd34  {:<31}  last seen 3h ago",
+            "2 pairings"
+        )),
         "{text}"
     );
     assert!(
-        text.contains("tablet  dl_cid_ef56ef56  2 pairings by ticket, key 1a2b3c4d"),
+        text.contains("tablet  dl_cid_ef56ef56  2 pairings, ticket key 1a2b3c4d  not seen yet"),
         "{text}"
     );
     assert!(text.contains("transport=p2p key=1a2b3c4d"), "{text}");
@@ -3153,31 +3201,76 @@ fn ticket_connects_show_the_daemons_text_as_it_is() {
     let taken = error(
         "box_name_taken",
         json!({"name": "acme", "taken_by": "user_config",
-               "message": "the box name acme is taken by an entry of remote.boxes in the user config; choose another with `--name`"}),
+               "message": "acme is already the name of a remote.boxes entry in the user config; choose another with `--name`"}),
     );
     assert!(!taken.contains("hint:"), "{taken}");
 
-    let paired = |kept: bool, mode: OutputMode| {
+    // A pairing that failed for a box with a name here is shown as it is:
+    // `remote ls` may not list it.
+    let named = error(
+        "remote_failed",
+        json!({"host": "acme", "pairing": true,
+               "message": "no direct connection to the box formed within 15 seconds, and devlanes does not relay data; connect over SSH or Tailscale instead"}),
+    );
+    assert!(
+        named.starts_with("error: no direct connection to the box formed"),
+        "{named}"
+    );
+    assert!(
+        !named.contains("remote ls") && !named.contains("remote acme"),
+        "{named}"
+    );
+    let bad_name = error(
+        "bad_request",
+        json!({"name": "a.b", "message": "a name has 1 to 63 letters, digits, `-` and `_`, and does not start with `-` or `dlp1`"}),
+    );
+    assert!(
+        bad_name.starts_with("error: a.b cannot be a box name: a name has"),
+        "{bad_name}"
+    );
+
+    let paired = |kept: bool, ignored: bool, mode: OutputMode| {
         let data = json!({"host": "acme", "state": "connected",
-                          "paired": {"name": "acme", "kept": kept}});
+                          "paired": {"name": "acme", "kept": kept, "name_ignored": ignored}});
         runtime(mode)
             .reporter()
             .result(&Report::new(Method::Connect, &data))
             .expect("render")
             .stdout
     };
-    let new = paired(false, OutputMode::Human);
+    let new = paired(false, false, OutputMode::Human);
     assert!(
         new.starts_with(
-            "paired with the box, kept here as acme\nto connect to it again: devlanes remote connect acme\n"
+            "paired; this machine keeps the box as acme\nto connect to it again: devlanes remote connect acme\n"
         ),
         "{new}"
     );
     assert!(
-        paired(true, OutputMode::Human)
-            .contains("paired with the box already and keeps it as acme")
+        paired(true, true, OutputMode::Human)
+            .contains("already paired with the box and keeps its name acme; --name was ignored")
     );
-    assert!(paired(true, OutputMode::Agent).contains("paired box=acme kept=true"));
+    assert!(!paired(true, false, OutputMode::Human).contains("--name"));
+    assert!(paired(true, false, OutputMode::Agent).contains("paired box=acme kept=true"));
+    // Attached, the name comes with the first state, before the state line.
+    let attached = runtime(OutputMode::Human)
+        .reporter()
+        .event(
+            Method::Connect,
+            &Event {
+                seq: 0,
+                event: devlanes_proto::remote::STATE_EVENT.into(),
+                data: json!({"host": "acme", "state": "connecting",
+                             "paired": {"name": "acme", "kept": false, "name_ignored": false}}),
+            },
+        )
+        .expect("event")
+        .stdout;
+    assert!(
+        attached.starts_with("paired; this machine keeps the box as acme\n")
+            && attached.contains("state=connecting")
+            && !attached.contains("paired="),
+        "{attached}"
+    );
 }
 
 /// Warnings about another box name it; the proxy port and range overlap

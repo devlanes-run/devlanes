@@ -282,8 +282,8 @@ fn entire_command_inventory_builds_actions() {
 }
 
 /// `daemon pair` asks for a ticket, which opens a listener on the box, except
-/// in plain output, which scripts read as the code alone; `--ticket` asks
-/// for the ticket alone in every mode.
+/// in plain output, which scripts read as the code alone; `--ticket` and
+/// `--ephemeral` ask for the ticket alone in every mode.
 #[test]
 fn daemon_pair_asks_for_a_ticket_except_in_plain_output() {
     let params = |args: &[&str], mode: OutputMode| {
@@ -306,18 +306,20 @@ fn daemon_pair_asks_for_a_ticket_except_in_plain_output() {
             alone
         );
     }
-    assert_eq!(
-        params(
-            &["devlanes", "daemon", "pair", "--ephemeral"],
-            OutputMode::Plain
-        ),
-        json!({"ticket": true, "ephemeral": true, "code": false})
-    );
+    // A throwaway box gets a ticket alone: a code means nothing for it.
+    for mode in [OutputMode::Plain, OutputMode::Human, OutputMode::Agent] {
+        assert_eq!(
+            params(&["devlanes", "daemon", "pair", "--ephemeral"], mode),
+            json!({"ticket": true, "ephemeral": true, "code": false}),
+            "{mode:?}"
+        );
+    }
 }
 
 /// `remote connect` sends a ticket as `ticket`, never as an SSH destination,
-/// and anything else as `host`; a code with a ticket, or a name without
-/// one, is a usage error.
+/// also with quotes, backticks or whitespace around it, and anything else
+/// as `host`; a code with a ticket, or a name without one, is a usage
+/// error.
 #[test]
 fn remote_connect_tells_a_ticket_from_a_box_name() {
     let ticket = format!("DLP1{}", "example".repeat(10));
@@ -338,6 +340,14 @@ fn remote_connect_tells_a_ticket_from_a_box_name() {
         (&json!(ticket), &json!("acme"))
     );
     assert!(paired.get("host").is_none(), "{paired}");
+    // Copied from Markdown or a terminal, with what came along.
+    for wrapped in [
+        format!("`{ticket}`"),
+        format!("\"{ticket}\" "),
+        format!(" '{ticket}'\n"),
+    ] {
+        assert_eq!(params(&[&wrapped])["ticket"], ticket.as_str(), "{wrapped}");
+    }
     // As long as a ticket, but not one; and the prefix alone.
     let host = format!("user@{}.example.invalid", "a".repeat(70));
     for name in ["acme", "dlp1abc", host.as_str()] {

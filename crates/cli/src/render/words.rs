@@ -1258,10 +1258,11 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         "remote_failed" => {
             let host = text(data, "host");
             let message = message.clone();
-            // A pairing dial that failed before the box had a name here, as
-            // `p2p:` and its key's start: its text is about "the box" in the
-            // ticket, and `remote ls` does not list it.
-            if host.starts_with("p2p:")
+            // A pairing by ticket that failed (`pairing`, or before the box had
+            // a name here, as `p2p:` and its key's start): its text is about
+            // "the box" in the ticket, which `remote ls` may not list.
+            let pairing = data.get("pairing").and_then(Value::as_bool) == Some(true);
+            if (pairing || host.starts_with("p2p:"))
                 && let Some(message) = &message
             {
                 return Some((message.clone(), None));
@@ -1291,8 +1292,12 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             with_message("this machine cannot make a pairing ticket now".into()),
             Some(Hint::command(["daemon", "logs"])),
         ),
+        // An old daemon ignored the request and made a code nobody saw.
         "tickets_unsupported" => (
-            OLD_DAEMON_NO_TICKETS.to_owned(),
+            format!(
+                "{OLD_DAEMON_NO_TICKETS}; it made a pairing code instead, which nobody was shown \
+                 and which expires in 10 minutes"
+            ),
             Some(Hint::command(["daemon", "restart"])),
         ),
         "connections_off" => {

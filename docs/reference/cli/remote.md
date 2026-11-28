@@ -34,7 +34,7 @@ devlanes remote disconnect [OPTIONS] [HOST]
 ```
 
 - `[HOST]`: Box to disconnect [default: every box].
-- `--forget`: Also delete the pairing of a box paired by ticket, so connecting it again needs a new ticket.
+- `--forget`: Also delete the pairing of a box paired by ticket, so connecting it again needs a new ticket. The box keeps accepting this machine until devlanes daemon revoke there, and folders synced from it stay on disk.
 
 ## devlanes remote ls
 

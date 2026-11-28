@@ -306,8 +306,9 @@ pub enum Method {
     /// the name it already has here when it was paired before (`name` is
     /// then ignored), else under `name` or its own host name made safe
     /// (with `-2` to `-9` when that is taken), with a new link, and the
-    /// answer has `host` and `paired: {name, kept}`, `kept` true when an
-    /// earlier pairing's name was kept; without `background` the first
+    /// answer has `host` and `paired: {name, kept, name_ignored}`, `kept`
+    /// true when an earlier pairing's name was kept and `name_ignored` when
+    /// a `name` was given then; without `background` the first
     /// `remote.state` event has `paired` too. Pairing by ticket fails with
     /// `bad_ticket` (`{message}`) for text that is not a usable ticket,
     /// `box_name_taken` (`{name, taken_by, message}`, `taken_by` one of
@@ -316,7 +317,8 @@ pub enum Method {
     /// `pairing_refused` (`{message, retry_after_ms}`, the wait at most a
     /// day) with the box's own reason, `remote_failed` (`{host, message}`)
     /// when the box cannot be reached, where `host` is the name or `p2p:`
-    /// and the box key's first 8 hex digits, `not_supported_yet`
+    /// and the box key's first 8 hex digits, and `pairing: true` marks the
+    /// pairing's own failure, `not_supported_yet`
     /// (`{feature: "pairing by ticket"}`) without a peer-to-peer endpoint,
     /// and `bad_request` for a ticket with `host` or `code`, a `name`
     /// without a ticket, and a `name` that is not 1 to 63 letters, digits,
@@ -424,18 +426,25 @@ pub enum Method {
     /// the box listens for peers until it is used or expires; `ephemeral`
     /// marks the ticket for a client that forgets the box once it stays
     /// away; `code: false` with `ticket` mints the ticket alone, and the
-    /// reply has neither `code` nor `code_paused_ms`. A daemon from before
-    /// tickets ignores every param and replies with a code alone.
+    /// reply has neither `code` nor `code_paused_ms`; `code: false` without
+    /// `ticket` is a `bad_request`. With both, the code always goes out: a
+    /// ticket that cannot be made, or is not ready within about a second,
+    /// leaves the reply without `ticket` and with `ticket_error: {code,
+    /// message}`, `code` one of `p2p_unavailable`, `not_supported_yet` and
+    /// `ticket_not_ready`. A daemon from before tickets ignores every param
+    /// and replies with a code alone.
     /// Reply `{code, expires_at_ms, valid_ms, ticket?}`: `valid_ms` is
     /// how long the code is valid from the reply, for a countdown that needs
     /// no clock. Error `pairing_paused` with `retry_after_ms` while wrong
     /// codes keep every code refused, `connections_off` while
     /// `remote.allow_connections` is off. With `ticket`: wrong codes do not
     /// stop the ticket, whose reply then has no `code` and has
-    /// `code_paused_ms` instead; error `p2p_unavailable` (`{message}`) when
-    /// the box cannot listen for peers, tell its address or fit its relay
-    /// URL in a ticket, and `not_supported_yet` (`{feature}`) from a daemon
-    /// built without a peer-to-peer endpoint.
+    /// `code_paused_ms` instead. Errors, when no code goes out (`code:
+    /// false`, or codes paused, then with `code_paused_ms`):
+    /// `p2p_unavailable` (`{message}`) when the box cannot listen for peers,
+    /// tell its address, fit its relay URL in a ticket or has no network
+    /// address, and `not_supported_yet` (`{feature}`) from a daemon built
+    /// without a peer-to-peer endpoint.
     #[serde(rename = "remote.pair")]
     RemotePair,
     /// Box side, for `devlanes tunnel`: whether a client's remote token is

@@ -831,7 +831,7 @@ pub enum RemoteCommand {
         /// Box to disconnect [default: every box]
         #[arg(id = "disconnect_host", value_name = "HOST")]
         host: Option<String>,
-        /// Also delete the pairing of a box paired by ticket, so connecting it again needs a new ticket
+        /// Also delete the pairing of a box paired by ticket, so connecting it again needs a new ticket. The box keeps accepting this machine until devlanes daemon revoke there, and folders synced from it stay on disk
         #[arg(long, requires = "disconnect_host")]
         forget: bool,
     },
@@ -1042,7 +1042,7 @@ pub enum DaemonCommand {
         /// Print only the ticket, with or without a terminal, and make no code
         #[arg(long)]
         ticket: bool,
-        /// Make a ticket for a throwaway box: the other machine forgets it once it is unreachable for an hour. Without a terminal it prints only the ticket, as --ticket does
+        /// Make a ticket for a throwaway box, which the other machine forgets once it is unreachable for an hour. Implies --ticket
         #[arg(long)]
         ephemeral: bool,
     },
@@ -1603,7 +1603,8 @@ impl Cli {
                     // Plain output is one line for scripts: the code, unless a
                     // ticket was asked for. Without one no listener opens.
                     let plain = runtime.mode == OutputMode::Plain;
-                    let alone = *ticket || (plain && *ephemeral);
+                    // A code means nothing for a throwaway box.
+                    let alone = *ticket || *ephemeral;
                     (
                         Method::RemotePair,
                         if plain && !alone {
@@ -1640,7 +1641,9 @@ impl Cli {
                     name,
                 } => (
                     Method::Connect,
-                    match (is_ticket(host), code, name) {
+                    // A ticket pasted from an agent's Markdown keeps its
+                    // quotes or backticks, which would make it an SSH host.
+                    match (is_ticket(pasted(host)), code, name) {
                         (true, Some(_), _) => {
                             return Err(Error::Usage(
                                 "--code is for boxes reached over SSH or remote.boxes; a ticket \
@@ -1648,19 +1651,23 @@ impl Cli {
                                     .into(),
                             ));
                         }
-                        (true, None, name) => {
-                            json!({"ticket": host, "name": name, "background": background})
-                        }
+                        (true, None, name) => json!({
+                            "ticket": pasted(host),
+                            "name": name,
+                            "background": background,
+                        }),
                         (false, _, Some(_)) => {
                             return Err(Error::Usage(
-                                "--name names a box paired by ticket; give it with a ticket from \
-                                 devlanes daemon pair on the box"
+                                "--name applies only when pairing by ticket; pass it with the \
+                                 ticket from devlanes daemon pair on the box"
                                     .into(),
                             ));
                         }
-                        (false, code, None) => {
-                            json!({"host": host, "background": background, "code": code})
-                        }
+                        (false, code, None) => json!({
+                            "host": pasted(host),
+                            "background": background,
+                            "code": code,
+                        }),
                     },
                 ),
                 RemoteCommand::Disconnect { host, forget } => (
@@ -2113,6 +2120,12 @@ pub fn is_ticket(host: &str) -> bool {
         && host
             .get(..prefix.len())
             .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+}
+
+/// A `remote connect` argument without the whitespace, quotes and backticks
+/// a copy from a terminal or from Markdown can bring along.
+pub fn pasted(host: &str) -> &str {
+    host.trim_matches(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`'))
 }
 
 /// The subcommand path named by `args` (the command line without the program),

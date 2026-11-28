@@ -738,7 +738,7 @@ expression: tools
         },
         "ephemeral": {
           "type": "boolean",
-          "description": "Make a ticket for a throwaway box: the other machine forgets it once it is unreachable for an hour. Without a terminal it prints only the ticket, as --ticket does"
+          "description": "Make a ticket for a throwaway box, which the other machine forgets once it is unreachable for an hour. Implies --ticket"
         },
         "yes": {
           "type": "boolean",
