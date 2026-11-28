@@ -318,8 +318,8 @@ fn daemon_pair_asks_for_a_ticket_except_in_plain_output() {
 
 /// `remote connect` sends a ticket as `ticket`, never as an SSH destination,
 /// also with quotes, backticks or whitespace around it, and anything else
-/// as `host`; a code with a ticket, or a name without one, is a usage
-/// error.
+/// as `host`; a code with a ticket, a name without one, or a ticket cut
+/// short is a usage error, and a usage error never quotes ticket text.
 #[test]
 fn remote_connect_tells_a_ticket_from_a_box_name() {
     let ticket = format!("DLP1{}", "example".repeat(10));
@@ -357,6 +357,23 @@ fn remote_connect_tells_a_ticket_from_a_box_name() {
     }
     assert!(sent(&[&ticket, "--code", "K7QM-3XWD"]).is_err());
     assert!(sent(&["acme", "--name", "other"]).is_err());
+    // A ticket cut short never becomes an SSH host.
+    let cut = format!("dlp1{}", "a2b3".repeat(8));
+    assert!(sent(&[&cut]).is_err(), "{cut}");
+    // A ticket split by a paste: clap quotes the second half, shown as
+    // `<ticket>` in the error.
+    let half = "example".repeat(10);
+    let args: Vec<String> = ["remote", "connect", "dlp1abc", half.as_str()]
+        .map(str::to_owned)
+        .to_vec();
+    let usage = devlanes_cli::usage_error(
+        &format!("error: unexpected argument '{half}' found\n\n  tip: use '-- {half}'"),
+        &args,
+    );
+    assert!(
+        !usage.contains(&half) && usage.contains("<ticket>"),
+        "{usage}"
+    );
 }
 
 #[test]

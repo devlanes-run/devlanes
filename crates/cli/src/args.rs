@@ -1634,6 +1634,13 @@ impl Cli {
                 DaemonCommand::Run => return Ok(Action::DaemonRun),
             },
             Some(Command::Remote { command }) => match command {
+                RemoteCommand::Connect { host, .. } if cut_ticket(pasted(host)) => {
+                    return Err(Error::Usage(
+                        "this looks like a pairing ticket cut short; copy the whole ticket again \
+                         from devlanes daemon pair on the box"
+                            .into(),
+                    ));
+                }
                 RemoteCommand::Connect {
                     host,
                     background,
@@ -2123,6 +2130,22 @@ pub fn is_ticket(host: &str) -> bool {
         && devlanes_proto::remote::holds_ticket(host)
 }
 
+/// Whether a `remote connect` argument is the start of a ticket cut short:
+/// the prefix, only base32 after it, longer than 16 characters, and not a
+/// whole ticket. Sent as a host, it would reach `ssh` and `remote ls` with
+/// the box's key in it. Short names such as `dlp1box` stay names.
+fn cut_ticket(host: &str) -> bool {
+    let prefix = devlanes_proto::remote::TICKET_PREFIX;
+    host.len() > 16
+        && !is_ticket(host)
+        && host
+            .get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        && host[prefix.len()..]
+            .chars()
+            .all(|c| matches!(c.to_ascii_lowercase(), 'a'..='z' | '2'..='7'))
+}
+
 /// A `remote connect` argument without the whitespace, quotes and backticks
 /// a copy from a terminal or from Markdown can bring along.
 pub fn pasted(host: &str) -> &str {
@@ -2172,6 +2195,15 @@ pub fn usage_error(message: &str, args: &[String]) -> String {
     let names: Vec<&str> = path.iter().map(String::as_str).collect();
     let about = about(&names);
     let mut text = message.trim_end().to_owned();
+    // A ticket split by a paste is two arguments, and clap quotes the one it
+    // did not expect: this text reaches the terminal and, through `devlanes
+    // mcp`, the model.
+    for arg in args {
+        let arg = pasted(arg);
+        if devlanes_proto::remote::is_ticket_text(arg) {
+            text = text.replace(arg, "<ticket>");
+        }
+    }
     if !path.is_empty() && !about.is_empty() {
         text.push_str(&format!("\n\ndevlanes {}: {about}\n", names.join(" ")));
     } else {
