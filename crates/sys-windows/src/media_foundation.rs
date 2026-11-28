@@ -10,7 +10,8 @@
 //! so every thread that never initialized COM (the host's and the viewer's
 //! codec threads) uses the objects as an implicit member, and a thread that
 //! initialized COM single-threaded (the viewer's winit thread) is never
-//! changed. Nothing here runs on such a thread; debug builds assert it.
+//! changed. Nothing here may run on such a thread; the encode and decode
+//! calls check it in debug builds only, release builds do not.
 //! `MFShutdown` is never called: Media Foundation stays started until the
 //! process exits.
 //!
@@ -45,7 +46,7 @@ use std::mem::ManuallyDrop;
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HMODULE, VARIANT_TRUE};
+use windows::Win32::Foundation::{E_FAIL, HMODULE, VARIANT_TRUE};
 use windows::Win32::Media::MediaFoundation::{
     CLSID_MSH264DecoderMFT, CODECAPI_AVEncCommonMeanBitRate, CODECAPI_AVEncCommonRateControlMode,
     CODECAPI_AVEncMPVDefaultBPictureCount, CODECAPI_AVEncVideoEncodeQP,
@@ -103,6 +104,14 @@ pub enum Error {
     /// Input that does not hold the picture it is said to be.
     #[error("invalid picture: {0}")]
     Picture(&'static str),
+    /// The decoder announced a picture with a side above [`MAX_SIDE`].
+    #[error("the decoded picture is {width}x{height}, larger than {MAX_SIDE}")]
+    TooLarge {
+        /// Its width.
+        width: u32,
+        /// Its height.
+        height: u32,
+    },
 }
 
 /// Names the call a COM error came from.
@@ -501,6 +510,10 @@ pub struct EncoderConfig {
     pub bitrate_bps: u32,
     /// Frames per second the stream is declared at.
     pub frame_rate: u32,
+    /// The quantizer of the first frame, set before the stream starts:
+    /// Microsoft's software encoder codes its first frame with the quantizer
+    /// it had then, whatever [`Encoder::encode`] asks.
+    pub qp: u8,
 }
 
 /// Hardware transforms activated from two threads at once failed with
@@ -617,7 +630,10 @@ impl Encoder {
             let _ = codec_set(codec, &CODECAPI_AVLowLatencyMode, &variant_true());
             let quality = variant_u32(eAVEncCommonRateControlMode_Quality.0 as u32);
             constant_qp = codec_set(codec, &CODECAPI_AVEncCommonRateControlMode, &quality).is_ok();
-            if !constant_qp {
+            if constant_qp {
+                let qp = variant_u64(u64::from(config.qp.min(51)));
+                let _ = codec_set(codec, &CODECAPI_AVEncVideoEncodeQP, &qp);
+            } else {
                 let cbr = variant_u32(eAVEncCommonRateControlMode_CBR.0 as u32);
                 let _ = codec_set(codec, &CODECAPI_AVEncCommonRateControlMode, &cbr);
                 let rate = variant_u32(config.bitrate_bps);
@@ -893,6 +909,8 @@ fn classify(event: &IMFMediaEvent) -> Result<Event, Error> {
     let kind = kind.map_err(call("IMFMediaEvent::GetType"))?;
     let status = status.map_err(call("IMFMediaEvent::GetStatus"))?;
     if kind == MEError.0 as u32 || status.is_err() {
+        // An error event that carries a success status still is an error.
+        let status = if status.is_err() { status } else { E_FAIL };
         return Err(Error::Call {
             call: "the transform's error event",
             source: windows::core::Error::from(status),
@@ -1052,8 +1070,13 @@ impl Decoder {
             }
             set_output(&self.transform, &offered).map_err(call("IMFTransform::SetOutputType"))?;
             let size = get_u64(&offered, &MF_MT_FRAME_SIZE).unwrap_or(0);
-            self.width = (size >> 32) as u32;
-            self.height = size as u32;
+            let (width, height) = ((size >> 32) as u32, size as u32);
+            // Before the output sample is sized from it.
+            if width > MAX_SIDE || height > MAX_SIDE {
+                return Err(Error::TooLarge { width, height });
+            }
+            self.width = width;
+            self.height = height;
             let stride = get_u32(&offered, &MF_MT_DEFAULT_STRIDE).unwrap_or(0) as i32;
             self.stride = match stride {
                 s if s > 0 => s as u32,
@@ -1115,7 +1138,10 @@ impl Decoder {
                 Ok(None) => return Ok(last),
                 Ok(Some(_)) => {
                     if self.width > MAX_SIDE || self.height > MAX_SIDE {
-                        return Err(Error::Picture("the decoded picture is larger than 8192"));
+                        return Err(Error::TooLarge {
+                            width: self.width,
+                            height: self.height,
+                        });
                     }
                     let needed = self.stride as usize * self.height as usize * 3 / 2;
                     if data.len() < needed {

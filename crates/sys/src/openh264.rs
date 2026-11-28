@@ -12,7 +12,7 @@
 //! of the loaded version, and versions outside 2.2 to 2.7 are refused, since
 //! their layouts are not known.
 //!
-//! The decoder needs 2.6 or later ([`DECODER_OLDEST`]): every release before
+//! The decoder needs 2.6 or 2.7 ([`DECODER_OLDEST`]): every release before
 //! 2.6.0 has a heap overflow in its decoder (CVE-2025-27091), and a viewer
 //! decodes what a GUI host on another machine sends. The encoder only
 //! encodes the host's own pixels and accepts the whole range.
@@ -62,8 +62,9 @@ pub const DECODER_OLDEST: Version = Version {
 /// The versions the encoder takes, for messages.
 pub const SUPPORTED: &str = "2.2 to 2.7";
 
-/// The versions the decoder takes, for messages.
-pub const DECODER_SUPPORTED: &str = "2.6 or later";
+/// The versions the decoder takes, for messages: from [`DECODER_OLDEST`] to
+/// [`NEWEST`], since a later release is refused on both sides.
+pub const DECODER_SUPPORTED: &str = "2.6 to 2.7";
 
 /// The largest picture side the decoder returns, the GUI protocol's limit.
 pub const MAX_SIDE: u32 = 8192;
@@ -129,6 +130,14 @@ pub enum Error {
     /// A picture whose planes do not hold its size.
     #[error("invalid picture: {0}")]
     Picture(&'static str),
+    /// A decoded picture with a side above [`MAX_SIDE`].
+    #[error("the decoded picture is {width}x{height}, larger than {MAX_SIDE}")]
+    TooLarge {
+        /// Its width.
+        width: u32,
+        /// Its height.
+        height: u32,
+    },
     /// A decoder asked of a library older than [`DECODER_OLDEST`].
     #[error(
         "OpenH264 {0}'s decoder is not used: it needs {DECODER_SUPPORTED}, since older versions have a decoder heap overflow (CVE-2025-27091)"
@@ -582,11 +591,6 @@ impl Library {
     /// The loaded version.
     pub fn version(&self) -> Version {
         self.version
-    }
-
-    /// The name or path it was loaded from.
-    pub fn path(&self) -> &str {
-        &self.path
     }
 }
 
@@ -1105,8 +1109,12 @@ impl Decoder {
         if width <= 0 || height <= 0 || y_stride < width || uv_stride < (width + 1) / 2 {
             return Err(Error::Picture("the decoder returned a picture of no size"));
         }
-        if width as u32 > MAX_SIDE || height as u32 > MAX_SIDE {
-            return Err(Error::Picture("the decoded picture is larger than 8192"));
+        let (width_px, height_px) = (width as u32, height as u32);
+        if width_px > MAX_SIDE || height_px > MAX_SIDE {
+            return Err(Error::TooLarge {
+                width: width_px,
+                height: height_px,
+            });
         }
         if planes.iter().any(|plane| plane.is_null()) {
             return Err(Error::Picture("the decoder returned no planes"));

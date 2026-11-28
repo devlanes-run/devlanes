@@ -183,6 +183,14 @@ pub enum Error {
     /// The output is not the NV12 picture asked for.
     #[error("VideoToolbox returned an unexpected picture")]
     Picture,
+    /// The picture has a side above [`MAX_SIDE`].
+    #[error("the decoded picture is {width}x{height}, larger than {MAX_SIDE}")]
+    TooLarge {
+        /// Its width.
+        width: usize,
+        /// Its height.
+        height: usize,
+    },
 }
 
 /// `Ok` for a zero status.
@@ -540,6 +548,11 @@ fn copy_planes(image: CvImageBufferRef) -> Result<Nv12Picture, Error> {
         if CVPixelBufferGetPixelFormatType(image) != PIXEL_FORMAT_NV12_VIDEO_RANGE as u32 {
             return Err(Error::Picture);
         }
+        // Before anything is copied, so a huge picture costs no memory here.
+        let (width, height) = (CVPixelBufferGetWidth(image), CVPixelBufferGetHeight(image));
+        if width > MAX_SIDE as usize || height > MAX_SIDE as usize {
+            return Err(Error::TooLarge { width, height });
+        }
         check(
             "CVPixelBufferLockBaseAddress",
             CVPixelBufferLockBaseAddress(image, K_CV_PIXEL_BUFFER_LOCK_READ_ONLY),
@@ -557,14 +570,10 @@ fn copy_planes(image: CvImageBufferRef) -> Result<Nv12Picture, Error> {
             }
         };
         let planes = (plane(0), plane(1));
-        let (width, height) = (CVPixelBufferGetWidth(image), CVPixelBufferGetHeight(image));
         CVPixelBufferUnlockBaseAddress(image, K_CV_PIXEL_BUFFER_LOCK_READ_ONLY);
         let (Some((y, y_stride)), Some((uv, uv_stride))) = planes else {
             return Err(Error::Picture);
         };
-        if width > MAX_SIDE as usize || height > MAX_SIDE as usize {
-            return Err(Error::Picture);
-        }
         Ok(Nv12Picture {
             y,
             uv,
