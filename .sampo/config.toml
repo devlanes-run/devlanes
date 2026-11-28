@@ -13,10 +13,10 @@ show_acknowledgments = false
 automatic_entries = "collapse"
 
 [packages]
-# The two binaries users install carry the release version: devlanes and the
-# devlanes-hosts helper. Library crates report it through devlanes-version, which reads
-# it from bins/devlanes/Cargo.toml.
-fixed = [["cargo/devlanes", "cargo/devlanes-hosts-helper"]]
+# The binaries users install carry the release version: devlanes, the devlanes-hosts
+# helper and devlanes-gui. Library crates report it through devlanes-version, which
+# reads it from bins/devlanes/Cargo.toml.
+fixed = [["cargo/devlanes", "cargo/devlanes-hosts-helper", "cargo/devlanes-gui"]]
 # Every other crate keeps its own version. A crate that changes, and everything that
 # depends on it up to devlanes, takes the release's biggest bump; the rest stay put.
 # A new crate goes here.

@@ -268,10 +268,16 @@ impl InstallMethod {
             Self::Pnpm => "pnpm add -g devlanes@latest".into(),
             Self::Bun => "bun add -g devlanes@latest".into(),
             Self::Yarn => "yarn global add devlanes@latest".into(),
-            Self::CargoBinstall => format!("cargo binstall --git {REPOSITORY} devlanes"),
+            // devlanes-gui gets a command of its own, so a failed build of it
+            // leaves the update of devlanes done.
+            Self::CargoBinstall => format!(
+                "cargo binstall --git {REPOSITORY} devlanes, then cargo binstall --git {REPOSITORY} {}",
+                crate::GUI_PACKAGE
+            ),
             Self::CargoInstall => format!(
-                "cargo install --locked --git {REPOSITORY} --tag v{version} {}",
-                os::CARGO_PACKAGES
+                "cargo install --locked --git {REPOSITORY} --tag v{version} {}, then cargo install --locked --git {REPOSITORY} --tag v{version} {}",
+                os::CARGO_PACKAGES,
+                crate::GUI_PACKAGE
             ),
             Self::Uv => "uv tool upgrade devlanes".into(),
             Self::Uvx => "uvx devlanes@latest".into(),
@@ -1157,7 +1163,7 @@ entrypoints = [
         );
         assert_eq!(
             InstallMethod::CargoInstall.upgrade_command("0.3.0"),
-            "cargo install --locked --git https://github.com/devlanes-run/devlanes --tag v0.3.0 devlanes devlanes-hosts-helper"
+            "cargo install --locked --git https://github.com/devlanes-run/devlanes --tag v0.3.0 devlanes devlanes-hosts-helper, then cargo install --locked --git https://github.com/devlanes-run/devlanes --tag v0.3.0 devlanes-gui"
         );
         assert_eq!(
             InstallMethod::Script(PathBuf::from("/Users/a/.local/bin")).upgrade_command("0.3.0"),
@@ -1393,11 +1399,11 @@ entrypoints = [
         );
         assert_eq!(
             InstallMethod::CargoBinstall.upgrade_command("0.4.0"),
-            "cargo binstall --git https://github.com/devlanes-run/devlanes devlanes"
+            "cargo binstall --git https://github.com/devlanes-run/devlanes devlanes, then cargo binstall --git https://github.com/devlanes-run/devlanes devlanes-gui"
         );
         assert_eq!(
             InstallMethod::CargoInstall.upgrade_command("0.4.0"),
-            "cargo install --locked --git https://github.com/devlanes-run/devlanes --tag v0.4.0 devlanes"
+            "cargo install --locked --git https://github.com/devlanes-run/devlanes --tag v0.4.0 devlanes, then cargo install --locked --git https://github.com/devlanes-run/devlanes --tag v0.4.0 devlanes-gui"
         );
         assert_eq!(
             InstallMethod::Uv.upgrade_command("0.4.0"),

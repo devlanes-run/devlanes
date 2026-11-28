@@ -1,6 +1,7 @@
 #!/bin/sh
 # Dry run of the release scripts against fake binaries: package.sh, package.ps1 and
-# package-debug.sh for every target, manifest.sh, the Homebrew formula, the npm packages (packed,
+# package-debug.sh for every target (the main, GUI and debug archives), manifest.sh,
+# the Homebrew formula, the npm packages (packed,
 # then installed from the tarballs on macOS and Linux arm64/x64), the PyPI wheels
 # (installed into a venv) and install.sh from a local release directory. Needs tar,
 # gzip, unzip, jq, node, npm, python3 with venv, curl and pwsh, and on Linux glibc
@@ -31,6 +32,7 @@ export PATH
 version=0.0.0-rc.1
 mkdir "$work/bin"
 printf '#!/bin/sh\necho "%s %s"\n' devlanes-hosts "$version" >"$work/bin/devlanes-hosts"
+printf '#!/bin/sh\necho "%s %s build=release"\n' devlanes-gui "$version" >"$work/bin/devlanes-gui"
 # The fake devlanes prints its version. It has `update` and a running daemon only when
 # DEVLANES_CHECK_LOG is set: then it logs those calls there, answers the probes
 # (`update --help`, `daemon status`) and exits with DEVLANES_CHECK_EXIT (default 0)
@@ -50,19 +52,38 @@ update | daemon)
 esac
 echo "devlanes $version"
 EOF
-chmod 755 "$work/bin/devlanes" "$work/bin/devlanes-hosts"
+chmod 755 "$work/bin/devlanes" "$work/bin/devlanes-hosts" "$work/bin/devlanes-gui"
 
+# Each target gets the main archive, whose entries every released installer checks
+# exactly, and the GUI archive with devlanes-gui under the same directory.
 for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
 	sh "$root/packaging/scripts/package.sh" "$version" "$target" "$work/dist" "$work/bin" >/dev/null
+	top=devlanes-$version-$target
+	listed=$(tar -tzf "$work/dist/$top.tar.gz" | tr '\n' ' ')
+	[ "$listed" = "$top/ $top/LICENSE $top/devlanes $top/devlanes-hosts " ] || {
+		echo "unexpected entries in the $target archive: $listed" >&2
+		exit 1
+	}
+	listed=$(tar -tzf "$work/dist/$top-gui.tar.gz" | tr '\n' ' ')
+	[ "$listed" = "$top/ $top/LICENSE $top/devlanes-gui " ] || {
+		echo "unexpected entries in the $target GUI archive: $listed" >&2
+		exit 1
+	}
 done
 mkdir "$work/winbin"
 printf 'fake devlanes.exe %s\n' "$version" >"$work/winbin/devlanes.exe"
+printf 'fake devlanes-gui.exe %s\n' "$version" >"$work/winbin/devlanes-gui.exe"
 for target in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
 	pwsh -NoProfile -NonInteractive -File "$root/packaging/scripts/package.ps1" \
 		-Version "$version" -Target "$target" -OutDir "$work/dist" -BinDir "$work/winbin" >/dev/null
 	listed=$(unzip -Z1 "$work/dist/devlanes-$version-$target.zip" | tr '\n' ' ')
 	[ "$listed" = "devlanes-$version-$target/LICENSE devlanes-$version-$target/devlanes.exe " ] || {
 		echo "unexpected entries in the $target zip: $listed" >&2
+		exit 1
+	}
+	listed=$(unzip -Z1 "$work/dist/devlanes-$version-$target-gui.zip" | tr '\n' ' ')
+	[ "$listed" = "devlanes-$version-$target/LICENSE devlanes-$version-$target/devlanes-gui.exe " ] || {
+		echo "unexpected entries in the $target GUI zip: $listed" >&2
 		exit 1
 	}
 done
@@ -79,9 +100,12 @@ for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu
 done
 sh "$root/packaging/scripts/manifest.sh" "$version" "$work/dist" "https://example.invalid/download/v$version" >/dev/null
 jq -e '.artifacts | length == 4' "$work/dist/release-manifest.json" >/dev/null
+jq -e '[.artifacts[].url | select(test("-(gui|debug)\\."))] | length == 0' "$work/dist/release-manifest.json" >/dev/null
 [ "$(grep -c -e '-debug\.tar\.gz$' "$work/dist/SHA256SUMS")" -eq 6 ]
-[ "$(grep -v -e '-debug\.tar\.gz$' "$work/dist/SHA256SUMS" | grep -c '\.tar\.gz$')" -eq 4 ]
-[ "$(grep -c '\.zip$' "$work/dist/SHA256SUMS")" -eq 2 ]
+[ "$(grep -c -e '-gui\.tar\.gz$' "$work/dist/SHA256SUMS")" -eq 4 ]
+[ "$(grep -c -e '-gui\.zip$' "$work/dist/SHA256SUMS")" -eq 2 ]
+[ "$(grep -v -e '-debug\.tar\.gz$' -e '-gui\.' "$work/dist/SHA256SUMS" | grep -c '\.tar\.gz$')" -eq 4 ]
+[ "$(grep -v -e '-gui\.' "$work/dist/SHA256SUMS" | grep -c '\.zip$')" -eq 2 ]
 
 sh "$root/packaging/homebrew/render.sh" "$version" "$work/dist/SHA256SUMS" >"$work/devlanes.rb"
 if command -v ruby >/dev/null 2>&1; then ruby -c "$work/devlanes.rb" >/dev/null; fi
@@ -89,6 +113,7 @@ if command -v ruby >/dev/null 2>&1; then ruby -c "$work/devlanes.rb" >/dev/null;
 sh "$root/packaging/npm/build.sh" "$version" "$work/dist" "$work/npm" >/dev/null
 for cpu in x64 arm64; do
 	cmp -s "$work/npm/devlanes-win32-$cpu/bin/devlanes.exe" "$work/winbin/devlanes.exe"
+	cmp -s "$work/npm/devlanes-win32-$cpu/bin/devlanes-gui.exe" "$work/winbin/devlanes-gui.exe"
 	jq -e '.os == ["win32"] and .cpu == ["'"$cpu"'"]' "$work/npm/devlanes-win32-$cpu/package.json" >/dev/null
 done
 jq -e '.optionalDependencies | all(. == "'"$version"'")' "$work/npm/devlanes/package.json" >/dev/null
@@ -118,12 +143,14 @@ npm_install() {
 host=$(node -p 'process.platform + "-" + process.arch')
 # npm's global layout and postinstall differ on Windows; check.ps1 covers the launcher there.
 if [ -f "$work/tgz/devlanes-$host-$version.tgz" ] && [ "${host%%-*}" != win32 ]; then
-	# postinstall swaps the launcher for the binary, with devlanes-hosts next to it.
+	# postinstall swaps the launcher for the binary, with devlanes-hosts and
+	# devlanes-gui next to it.
 	npm_install "$work/prefix"
 	installed=$work/prefix/lib/node_modules/devlanes/bin
 	[ "$("$work/prefix/bin/devlanes" --version)" = "devlanes $version" ]
 	cmp -s "$installed/devlanes" "$work/bin/devlanes"
 	cmp -s "$installed/devlanes-hosts" "$work/bin/devlanes-hosts"
+	cmp -s "$installed/devlanes-gui" "$work/bin/devlanes-gui"
 	# A second install over the first replaces the files again.
 	npm_install "$work/prefix"
 	cmp -s "$installed/devlanes" "$work/bin/devlanes"
@@ -159,12 +186,12 @@ set -- "$work"/wheels/*.whl
 data=devlanes-$wheel_version.data/scripts
 info=devlanes-$wheel_version.dist-info
 listed=$(unzip -Z1 "$work/wheels/devlanes-$wheel_version-py3-none-manylinux_2_35_x86_64.whl" | tr '\n' ' ')
-[ "$listed" = "$data/devlanes $data/devlanes-hosts $info/METADATA $info/WHEEL $info/licenses/LICENSE $info/RECORD " ] || {
+[ "$listed" = "$data/devlanes $data/devlanes-gui $data/devlanes-hosts $info/METADATA $info/WHEEL $info/licenses/LICENSE $info/RECORD " ] || {
 	echo "unexpected entries in the Linux wheel: $listed" >&2
 	exit 1
 }
 listed=$(unzip -Z1 "$work/wheels/devlanes-$wheel_version-py3-none-win_arm64.whl" | tr '\n' ' ')
-[ "$listed" = "$data/devlanes.exe $info/METADATA $info/WHEEL $info/licenses/LICENSE $info/RECORD " ] || {
+[ "$listed" = "$data/devlanes-gui.exe $data/devlanes.exe $info/METADATA $info/WHEEL $info/licenses/LICENSE $info/RECORD " ] || {
 	echo "unexpected entries in the Windows wheel: $listed" >&2
 	exit 1
 }
@@ -188,13 +215,14 @@ for path in sys.argv[1:]:
             expected = base64.urlsafe_b64encode(hashlib.sha256(body).digest()).rstrip(b"=").decode()
             assert digest == "sha256=" + expected and int(size) == len(body), f"{path}: {name}"
 EOF
-# pip picks this machine's wheel and puts both binaries, executable, in the venv's bin.
+# pip picks this machine's wheel and puts the three binaries, executable, in the venv's bin.
 python3 -m venv "$work/venv"
 "$work/venv/bin/python" -m pip install --quiet --disable-pip-version-check --no-index \
 	--find-links "$work/wheels" "devlanes==$wheel_version"
 cmp -s "$work/venv/bin/devlanes" "$work/bin/devlanes"
 [ "$("$work/venv/bin/devlanes" --version)" = "devlanes $version" ]
 [ "$("$work/venv/bin/devlanes-hosts")" = "devlanes-hosts $version" ]
+[ "$("$work/venv/bin/devlanes-gui" version)" = "devlanes-gui $version build=release" ]
 
 release=$work/release
 mkdir -p "$release/download/v$version" "$release/latest/download"
@@ -204,11 +232,63 @@ DEVLANES_INSTALL_BASE_URL="file://$release" DEVLANES_INSTALL_DIR="$work/installe
 	sh "$root/install.sh" >/dev/null
 [ "$("$work/installed/devlanes")" = "devlanes $version" ]
 [ -x "$work/installed/devlanes-hosts" ]
+cmp -s "$work/installed/devlanes-gui" "$work/bin/devlanes-gui"
+
+# A release from before devlanes-gui has no GUI archive and still installs.
+old_release=$work/old-release
+mkdir -p "$old_release/download/v$version" "$old_release/latest/download"
+grep -v -e '-gui\.' "$work/dist/SHA256SUMS" >"$old_release/latest/download/SHA256SUMS"
+cp "$old_release/latest/download/SHA256SUMS" "$work/dist/devlanes-$version-x86_64-unknown-linux-gnu.tar.gz" \
+	"$work/dist/devlanes-$version-aarch64-unknown-linux-gnu.tar.gz" "$work/dist/devlanes-$version-aarch64-apple-darwin.tar.gz" \
+	"$work/dist/devlanes-$version-x86_64-apple-darwin.tar.gz" "$old_release/download/v$version/"
+DEVLANES_INSTALL_BASE_URL="file://$old_release" DEVLANES_INSTALL_DIR="$work/installed-old" \
+	sh "$root/install.sh" >/dev/null
+[ "$("$work/installed-old/devlanes")" = "devlanes $version" ]
+[ ! -e "$work/installed-old/devlanes-gui" ]
+# A GUI archive that does not check out stops the install before anything is copied.
+cp -R "$release" "$work/bad-release"
+sed 's/^[0-9a-f]*\(  devlanes-.*-gui\.tar\.gz\)$/0000000000000000000000000000000000000000000000000000000000000000\1/' \
+	"$work/dist/SHA256SUMS" >"$work/bad-release/latest/download/SHA256SUMS"
+cp "$work/bad-release/latest/download/SHA256SUMS" "$work/bad-release/download/v$version/SHA256SUMS"
+status=0
+refused=$(DEVLANES_INSTALL_BASE_URL="file://$work/bad-release" DEVLANES_INSTALL_DIR="$work/installed-bad" \
+	sh "$root/install.sh" 2>&1) || status=$?
+[ "$status" -ne 0 ]
+case $refused in
+*"checksum mismatch for devlanes-$version-"*"-gui.tar.gz"*) ;;
+*)
+	echo "install.sh with a bad GUI archive: $refused" >&2
+	exit 1
+	;;
+esac
+[ ! -e "$work/installed-bad/devlanes" ]
 
 # The same through options, as `curl | sh -s -- ...` passes them.
 install_with() {
 	DEVLANES_INSTALL_BASE_URL="file://$release" DEVLANES_INSTALL_DIR="$work/installed-opt" sh -s -- "$@" <"$root/install.sh"
 }
+
+# devlanes goes in last; when it cannot take its place (a directory there), the
+# helpers installed before it get their earlier files back and nothing of the
+# attempt stays.
+rollback=$work/installed-rollback
+mkdir -p "$rollback/devlanes"
+: >"$rollback/devlanes/keep"
+printf 'earlier hosts\n' >"$rollback/devlanes-hosts"
+printf 'earlier gui\n' >"$rollback/devlanes-gui"
+status=0
+refused=$(install_with -d "$rollback" 2>&1) || status=$?
+[ "$status" -ne 0 ]
+case $refused in
+*"cannot install $rollback/devlanes; the files it replaced are back in place"*) ;;
+*)
+	echo "install.sh with devlanes unreplaceable: $refused" >&2
+	exit 1
+	;;
+esac
+[ "$(cat "$rollback/devlanes-hosts")" = "earlier hosts" ]
+[ "$(cat "$rollback/devlanes-gui")" = "earlier gui" ]
+[ -z "$(find "$rollback" -name '.*.new.*' -o -name '.*.old.*')" ]
 install_with >/dev/null
 [ "$("$work/installed-opt/devlanes")" = "devlanes $version" ]
 install_with -d "$work/installed-short" >/dev/null
@@ -361,10 +441,11 @@ esac
 [ "$(install_with --uninstall)" = "devlanes $version" ]
 mkdir "$work/leftover"
 : >"$work/leftover/devlanes-hosts"
+: >"$work/leftover/devlanes-gui"
 left=$(DEVLANES_INSTALL_DIR="$work/leftover" DEVLANES_HOME="$work/data" sh "$root/install.sh" --uninstall)
-[ ! -e "$work/leftover/devlanes-hosts" ]
+[ ! -e "$work/leftover/devlanes-hosts" ] && [ ! -e "$work/leftover/devlanes-gui" ]
 case $left in
-*"removed: $work/leftover/devlanes-hosts"*"stays in $work/data;"*) ;;
+*"removed: $work/leftover/devlanes-hosts $work/leftover/devlanes-gui"*"stays in $work/data;"*) ;;
 *)
 	echo "install.sh --uninstall without devlanes: $left" >&2
 	exit 1

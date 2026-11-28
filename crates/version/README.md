@@ -19,7 +19,7 @@ let manifest = devlanes_version::LATEST_RELEASE_MANIFEST_URL;
 
 ## Versioning
 
-`build.rs` reads the version from `bins/devlanes/Cargo.toml`, which `.sampo/config.toml` keeps in the `fixed` group with `devlanes-hosts-helper`. This crate's own version stays put, so depending on it doesn't bump a crate on every release.
+`build.rs` reads the version from `bins/devlanes/Cargo.toml`, which `.sampo/config.toml` keeps in the `fixed` group with `devlanes-hosts-helper` and `devlanes-gui`. This crate's own version stays put, so depending on it doesn't bump a crate on every release.
 
 ## License
 

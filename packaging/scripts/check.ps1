@@ -15,6 +15,9 @@ exits with 0 for both, so install.ps1 takes it for a devlanes that updates itsel
 and whose daemon runs; fed `echo %CMDCMDLINE%` on stdin, it prints the arguments
 install.ps1 ran it with.
 
+The GUI archives hold a fake devlanes-gui.exe, which only has to be copied; the first
+version has none, like a release from before devlanes-gui.
+
 Each PowerShell installs the first version as the latest one, then the second while
 the installed devlanes.exe runs, which must be renamed to devlanes.exe.old-* and keep
 running, then once more after it ended, which deletes the old copy. install.ps1 always puts
@@ -380,6 +383,8 @@ try {
         $fake = [IO.File]::ReadAllBytes((Join-Path $env:SystemRoot "System32\$image")) +
             [Text.Encoding]::ASCII.GetBytes("devlanes-check-version $version")
         [IO.File]::WriteAllBytes((Join-Path $bin 'devlanes.exe'), $fake)
+        # install.ps1 never runs it, so any bytes do.
+        [IO.File]::WriteAllText((Join-Path $bin 'devlanes-gui.exe'), "fake devlanes-gui.exe $version")
         $name = "devlanes-$version-$target"
         # The same inputs must give the same bytes with the same PowerShell (the two
         # ship different zlib builds). The release uses pwsh's, the last one.
@@ -388,25 +393,32 @@ try {
             $package = Invoke-Process $shell @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $packageScript,
                 '-Version', $version, '-Target', $target, '-OutDir', $out, '-BinDir', $bin)
             Assert-Equal $package.Code 0 "package.ps1 exit code: $($package.Output)"
-            $zip = Join-Path $out "$name.zip"
             Add-Type -AssemblyName System.IO.Compression.FileSystem
-            $archive = [IO.Compression.ZipFile]::OpenRead($zip)
-            try {
-                $entries = @($archive.Entries | ForEach-Object { $_.FullName }) -join ' '
-            } finally {
-                $archive.Dispose()
+            foreach ($archived in @(@("$name.zip", 'devlanes.exe'), @("$name-gui.zip", 'devlanes-gui.exe'))) {
+                $archive = [IO.Compression.ZipFile]::OpenRead((Join-Path $out $archived[0]))
+                try {
+                    $entries = @($archive.Entries | ForEach-Object { $_.FullName }) -join ' '
+                } finally {
+                    $archive.Dispose()
+                }
+                Assert-Equal $entries "$name/LICENSE $name/$($archived[1])" "$($archived[0]) entries"
             }
-            Assert-Equal $entries "$name/LICENSE $name/devlanes.exe" 'archive entries'
-            (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+            $zip = Join-Path $out "$name.zip"
+            $guiZip = Join-Path $out "$name-gui.zip"
+            (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant() + (Get-FileHash -LiteralPath $guiZip -Algorithm SHA256).Hash.ToLowerInvariant()
         } }
-        Assert-Equal $hashes[1] $hashes[0] "$name.zip from a second Windows PowerShell run"
-        Assert-Equal $hashes[3] $hashes[2] "$name.zip from a second pwsh run"
-        $hashes = @($hashes[3])
+        Assert-Equal $hashes[1] $hashes[0] "$name.zip and $name-gui.zip from a second Windows PowerShell run"
+        Assert-Equal $hashes[3] $hashes[2] "$name.zip and $name-gui.zip from a second pwsh run"
         $versioned = Join-Path $release "download/v$version"
         New-Item -ItemType Directory -Force -Path $versioned | Out-Null
         Copy-Item -LiteralPath $zip -Destination $versioned
-        # A Linux archive in the same file, as in a real release.
-        $lines[$version] = "$('0' * 64)  devlanes-$version-x86_64-unknown-linux-gnu.tar.gz`n$($hashes[0])  $name.zip`n"
+        # A Linux archive in the same file, as in a real release. The first version is
+        # a release from before devlanes-gui, without a GUI archive.
+        $lines[$version] = "$('0' * 64)  devlanes-$version-x86_64-unknown-linux-gnu.tar.gz`n$($hashes[3].Substring(0, 64))  $name.zip`n"
+        if ($version -ne $versions[0]) {
+            Copy-Item -LiteralPath $guiZip -Destination $versioned
+            $lines[$version] += "$($hashes[3].Substring(64))  $name-gui.zip`n"
+        }
         [IO.File]::WriteAllText((Join-Path $versioned 'SHA256SUMS'), $lines[$version])
     }
     $sumsFile = Join-Path $latest 'SHA256SUMS'
@@ -468,6 +480,9 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         $run = Invoke-Child $shell "$before`nGet-Content -Raw -LiteralPath '$installScript' | Invoke-Expression`n$after" $environment
         Assert-Equal $run.Code 0 "$label, install.ps1 through Invoke-Expression over a running devlanes.exe: $($run.Output)"
         Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, upgraded version"
+        # The first release had no GUI archive; the upgrade brings devlanes-gui.exe.
+        $guiExe = Join-Path $installed 'devlanes-gui.exe'
+        Assert-Equal ([IO.File]::ReadAllText($guiExe)) "fake devlanes-gui.exe $($versions[1])" "$label, devlanes-gui.exe from the GUI archive"
         $old = @(Get-ChildItem -LiteralPath $installed -Filter 'devlanes.exe.old-*')
         Assert-Equal $old.Count 1 "$label, renamed running executable"
         Assert-Equal (Get-FakeVersion $old[0].FullName) $versions[0] "$label, version of the renamed executable"
@@ -498,6 +513,11 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         $run = Invoke-Child $shell "& '$installScript'" $environment
         Assert-True ($run.Code -ne 0 -and $run.Output.Contains('checksum mismatch')) "$label, a wrong checksum must fail: $($run.Output)"
         Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, a failed install keeps the installed file"
+        # A GUI archive that does not check out stops the install too.
+        [IO.File]::WriteAllText($sumsFile, $lines[$versions[2]].Replace(($lines[$versions[2]] -split '\s+')[4], 'f' * 64))
+        $run = Invoke-Child $shell "& '$installScript'" $environment
+        Assert-True ($run.Code -ne 0 -and (Test-Say $run.Output "checksum mismatch for devlanes-$($versions[2])-$target-gui.zip")) "$label, a wrong GUI checksum must fail: $($run.Output)"
+        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, a failed GUI download keeps the installed file"
         [IO.File]::WriteAllText($sumsFile, $lines[$versions[1]])
 
         # Options, as the documented `iex "& {$(irm ...)} -Uninstall"` passes them.
@@ -594,6 +614,28 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         $run = Invoke-Child $shell (& $withOptions '-Force') $shadowed
         Assert-Equal (Get-FakeVersion (Join-Path $shadowed.DEVLANES_INSTALL_DIR 'devlanes.exe')) $versions[1] "$label, -Force: $($run.Output)"
 
+        # devlanes.exe goes in last; when it cannot take its place (this process holds
+        # it without sharing delete), devlanes-gui.exe gets its earlier file back and
+        # nothing of the attempt stays.
+        $rollback = Join-Path $work "rollback by $label"
+        New-Item -ItemType Directory -Path $rollback | Out-Null
+        $heldExe = Join-Path $rollback 'devlanes.exe'
+        Copy-Item -LiteralPath (Join-Path $work "bin-$($versions[0])/devlanes.exe") -Destination $heldExe
+        [IO.File]::WriteAllText((Join-Path $rollback 'devlanes-gui.exe'), 'earlier gui')
+        $rolledBack = $environment.Clone()
+        $rolledBack.DEVLANES_INSTALL_DIR = $rollback
+        $hold = [IO.File]::Open($heldExe, 'Open', 'Read', 'Read')
+        try {
+            $run = Invoke-Child $shell "& '$installScript'" $rolledBack
+        } finally {
+            $hold.Dispose()
+        }
+        Assert-True ($run.Code -ne 0) "$label, an unreplaceable devlanes.exe fails the install: $($run.Output)"
+        Assert-Equal ([IO.File]::ReadAllText((Join-Path $rollback 'devlanes-gui.exe'))) 'earlier gui' "$label, devlanes-gui.exe is back"
+        Assert-Equal (Get-FakeVersion $heldExe) $versions[0] "$label, devlanes.exe is untouched"
+        $left = @(Get-ChildItem -LiteralPath $rollback -Force | ForEach-Object { $_.Name })
+        Assert-True ($left.Count -eq 2 -and $left -contains 'devlanes.exe' -and $left -contains 'devlanes-gui.exe') "$label, nothing of the attempt stays: $($left -join ', ')"
+
         # -Uninstall runs the devlanes.exe in the directory: the cmd.exe fake reads the
         # closed stdin and exits, leaving the file in place.
         Copy-Item -LiteralPath (Join-Path $work "bin-$($versions[2])/devlanes.exe") -Destination $exe -Force
@@ -649,13 +691,16 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
     $stage = Join-Path $work 'pypi-stage'
     foreach ($unixTarget in 'aarch64-apple-darwin', 'x86_64-apple-darwin', 'aarch64-unknown-linux-gnu', 'x86_64-unknown-linux-gnu') {
         $name = "devlanes-$wheelVersion-$unixTarget"
-        New-Item -ItemType Directory -Path (Join-Path $stage $name) | Out-Null
-        foreach ($file in 'devlanes', 'devlanes-hosts', 'LICENSE') {
-            [IO.File]::WriteAllText((Join-Path $stage "$name/$file"), "placeholder $file`n")
+        foreach ($archived in @(@($name, @('devlanes', 'devlanes-hosts', 'LICENSE')), @("$name-gui", @('devlanes-gui', 'LICENSE')))) {
+            $dir = Join-Path $stage $archived[0]
+            New-Item -ItemType Directory -Path (Join-Path $dir $name) | Out-Null
+            foreach ($file in $archived[1]) {
+                [IO.File]::WriteAllText((Join-Path $dir "$name/$file"), "placeholder $file`n")
+            }
+            # Windows' own bsdtar, not a tar from Git for Windows that may come first in PATH.
+            $tar = Invoke-Process (Join-Path $env:SystemRoot 'System32\tar.exe') @('-czf', (Join-Path $pypiDist "$($archived[0]).tar.gz"), '-C', $dir, $name)
+            Assert-Equal $tar.Code 0 "tar for $($archived[0]): $($tar.Output)"
         }
-        # Windows' own bsdtar, not a tar from Git for Windows that may come first in PATH.
-        $tar = Invoke-Process (Join-Path $env:SystemRoot 'System32\tar.exe') @('-czf', (Join-Path $pypiDist "$name.tar.gz"), '-C', $stage, $name)
-        Assert-Equal $tar.Code 0 "tar for $($name): $($tar.Output)"
     }
     $python = (Get-Command python -CommandType Application | Select-Object -First 1).Source
     $wheels = Join-Path $work 'wheels'
@@ -672,6 +717,9 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
     Assert-Equal $pip.Code 0 "pip install of the wheel: $($pip.Output)"
     $installedExe = Join-Path $venv 'Scripts/devlanes.exe'
     Assert-Equal (Get-FileHash -LiteralPath $installedExe).Hash (Get-FileHash -LiteralPath $fakeExe).Hash 'devlanes.exe from the wheel'
+    # devlanes finds devlanes-gui.exe next to itself, in the environment's Scripts.
+    $installedGui = Join-Path $venv 'Scripts/devlanes-gui.exe'
+    Assert-Equal (Get-FileHash -LiteralPath $installedGui).Hash (Get-FileHash -LiteralPath (Join-Path (Split-Path $fakeExe) 'devlanes-gui.exe')).Hash 'devlanes-gui.exe from the wheel'
     $launch = Invoke-Process $installedExe @('/d', '/c', 'exit 7')
     Assert-Equal $launch.Code 7 "devlanes.exe from the wheel runs: $($launch.Output)"
 } finally {

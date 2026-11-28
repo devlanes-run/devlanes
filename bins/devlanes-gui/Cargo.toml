@@ -1,0 +1,56 @@
+[package]
+name = "devlanes-gui"
+description = "The devlanes GUI host, a second binary next to devlanes"
+version = "0.17.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# `cargo binstall --git https://github.com/devlanes-run/devlanes devlanes-gui` takes
+# devlanes-gui from the release's GUI archive, which sits next to the main one
+# because released updaters refuse a main archive with a third binary.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/devlanes-{ version }-{ target }-gui.tar.gz"
+bin-dir = "devlanes-{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+disabled-strategies = ["quick-install"]
+
+# Windows releases are zip archives. Exact targets rather than a cfg() key, which
+# older binstall versions do not read.
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/devlanes-{ version }-{ target }-gui.zip"
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/devlanes-{ version }-{ target }-gui.zip"
+pkg-fmt = "zip"
+
+[lints]
+workspace = true
+
+[dependencies]
+devlanes-version = { path = "../../crates/version" }
+devlanes-gui-host = { path = "../../crates/gui-host" }
+devlanes-gui-proto = { path = "../../crates/gui-proto", features = ["serde"] }
+clap.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+devlanes-gui-client = { path = "../../crates/gui-client" }
+serde_json.workspace = true
+
+# The test stops the host with SIGTERM or Ctrl-Break, as the runner does.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+devlanes-sys-windows = { path = "../../crates/sys-windows" }
+
+[build-dependencies]
+embed-resource.workspace = true

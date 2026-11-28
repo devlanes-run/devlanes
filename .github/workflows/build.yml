@@ -1,6 +1,7 @@
 name: Build
-# Builds devlanes (and devlanes-hosts on macOS and Linux) for every release target and
-# uploads one `dist-TARGET` artifact with the packed archive and the debug archive
+# Builds devlanes, devlanes-gui (and devlanes-hosts on macOS and Linux) for every release
+# target and uploads one `dist-TARGET` artifact with the packed archives (the main one
+# and the GUI one) and the debug archive
 # (package-debug.sh, CONTRIBUTING.md "Symbolicating a report"). release.yml calls it for a
 # `v*` tag, next.yml for each commit on main that passes CI. Callers pass `secrets: inherit`
 # for the kache bucket: next builds run in CI's push run on main, so they upload, and a
@@ -31,7 +32,7 @@ permissions:
 env:
   # The `fixed` group in .sampo/config.toml, whose version is the release's;
   # devlanes-version reads it from the first.
-  FIXED: bins/devlanes/Cargo.toml crates/hosts-helper/Cargo.toml
+  FIXED: bins/devlanes/Cargo.toml crates/hosts-helper/Cargo.toml bins/devlanes-gui/Cargo.toml
 jobs:
   build:
     strategy:
@@ -107,9 +108,14 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
           CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ runner.os == 'macOS' && 'packed' || 'off' }}
           CARGO_PROFILE_RELEASE_STRIP: ${{ runner.os == 'macOS' && 'symbols' || 'none' }}
+        #
+        # devlanes-gui builds in a cargo invocation of its own: one invocation unifies the
+        # features of shared dependencies, so building it with devlanes could pull its
+        # GUI libraries into devlanes.
         run: |
           if [ "$RUNNER_OS" = macOS ]; then export KACHE_CACHE_EXECUTABLES=0; fi
           cargo build --release --locked --target "$TARGET" -p devlanes -p devlanes-hosts-helper
+          cargo build --release --locked --target "$TARGET" -p devlanes-gui
       # The debug files must describe the shipped binaries: the same UUID (macOS) or
       # build ID (Linux). dsymutil writes a .dSYM with the binary's UUID even when it finds
       # no debug map, so on macOS it must also hold compile units, line rows and a symbol
@@ -123,7 +129,7 @@ jobs:
             aarch64-*) arch=arm64 ;;
             *) arch=x86_64 ;;
           esac
-          for bin in devlanes devlanes-hosts; do
+          for bin in devlanes devlanes-hosts devlanes-gui; do
             exe=target/$TARGET/release/$bin
             if [ "$RUNNER_OS" = macOS ]; then
               want=$(dwarfdump --uuid "$exe" | awk '{ print $2 }')
@@ -152,7 +158,7 @@ jobs:
             fi
             echo "$bin: $want"
           done
-          ls -l "target/$TARGET/release/devlanes" "target/$TARGET/release/devlanes-hosts"
+          ls -l "target/$TARGET/release/devlanes" "target/$TARGET/release/devlanes-hosts" "target/$TARGET/release/devlanes-gui"
           du -sh "$debug"/*
       # build.rs regenerates the served schemas; a difference means they were committed stale.
       - name: Check the committed schemas
@@ -162,6 +168,7 @@ jobs:
         run: |
           "target/$TARGET/release/devlanes" --version | grep -Fx "devlanes $VERSION"
           "target/$TARGET/release/devlanes-hosts" version | grep -F "build=release"
+          "target/$TARGET/release/devlanes-gui" version | grep -Fx "devlanes-gui $VERSION build=release"
       - name: Package
         run: |
           sh packaging/scripts/package.sh "$VERSION" "$TARGET" dist
@@ -227,36 +234,45 @@ jobs:
       - name: Built commit
         run: echo "DEVLANES_BUILD_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       # devlanes-hosts is Unix-only; .cargo/config.toml links the C runtime statically.
-      # The MSVC linker writes devlanes.pdb whatever `strip` says, and the executable
-      # names it without a directory; line tables add file:line to it.
+      # The MSVC linker writes devlanes.pdb and devlanes_gui.pdb whatever `strip` says,
+      # and each executable names its own without a directory; line tables add
+      # file:line to them.
       #
-      # kache doesn't cache executables here, so the shipped devlanes.exe and
-      # devlanes.pdb are the pair this job's linker wrote, not one restored on the
-      # strength of kache's GUID and age check. Caching would gain little: devlanes.exe
-      # misses anyway, as the version and commit change on every build. Set explicitly
-      # in case kache's Windows default changes.
+      # kache doesn't cache executables here, so the shipped executables and PDBs are
+      # the pairs this job's linker wrote, not ones restored on the strength of kache's
+      # GUID and age check. Caching would gain little: both executables miss anyway, as
+      # the version and commit change on every build. Set explicitly in case kache's
+      # Windows default changes.
+      #
+      # devlanes-gui builds in a cargo invocation of its own, so feature unification
+      # never pulls its GUI libraries into devlanes.
       - name: Build
         env:
           DEVLANES_BUILD_ID: v${{ inputs.version }}
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
           KACHE_CACHE_EXECUTABLES: 0
-        run: cargo build --release --locked --target "$TARGET" -p devlanes
+        run: |
+          cargo build --release --locked --target "$TARGET" -p devlanes
+          cargo build --release --locked --target "$TARGET" -p devlanes-gui
       # .gitattributes checks the schemas out with LF on Windows too, as build.rs writes them.
       - name: Check the committed schemas
         run: git diff --exit-code crates/config/schema.json crates/config/user-schema.json
       - name: Smoke test
         run: |
           "target/$TARGET/release/devlanes.exe" --version | tr -d '\r' | grep -Fx "devlanes $VERSION"
-      # build.rs embeds it; Explorer, Task Manager and antivirus heuristics read it.
-      - name: Check the version resource
+          "target/$TARGET/release/devlanes-gui.exe" version | tr -d '\r' | grep -Fx "devlanes-gui $VERSION build=release"
+      # The build scripts embed them; Explorer, Task Manager and antivirus heuristics read them.
+      - name: Check the version resources
         shell: pwsh
         run: |
-          $info = (Get-Item "target/$env:TARGET/release/devlanes.exe").VersionInfo
-          if ($info.ProductVersion -cne $env:VERSION -or $info.ProductName -cne 'devlanes-cli' -or
-              -not ([string]$info.Comments).Contains("/tree/$env:DEVLANES_BUILD_COMMIT")) {
-            throw "unexpected version resource: $($info | Format-List | Out-String)"
+          foreach ($exe in @(@('devlanes.exe', 'devlanes-cli'), @('devlanes-gui.exe', 'devlanes-gui'))) {
+            $info = (Get-Item "target/$env:TARGET/release/$($exe[0])").VersionInfo
+            if ($info.ProductVersion -cne $env:VERSION -or $info.ProductName -cne $exe[1] -or
+                -not ([string]$info.Comments).Contains("/tree/$env:DEVLANES_BUILD_COMMIT")) {
+              throw "unexpected version resource in $($exe[0]): $($info | Format-List | Out-String)"
+            }
           }
-      # The Visual C++ Redistributable is not part of Windows, so the executable must
+      # The Visual C++ Redistributable is not part of Windows, so the executables must
       # not import its DLLs.
       - name: Check the C runtime is linked statically
         shell: pwsh
@@ -264,32 +280,38 @@ jobs:
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
           $dumpbin = @(& $vswhere -latest -products * -find 'VC\Tools\MSVC\*\bin\Host*\*\dumpbin.exe')[0]
           if (-not $dumpbin) { throw 'dumpbin.exe not found' }
-          $imports = & $dumpbin /nologo /dependents "target/$env:TARGET/release/devlanes.exe" | Out-String
-          if ($LASTEXITCODE -ne 0 -or $imports -notmatch '(?im)^\s+kernel32\.dll\s*$') { throw "unexpected dumpbin output:`n$imports" }
-          if ($imports -match '(?im)^\s+(vcruntime|msvcp)\S*\.dll\s*$') { throw "devlanes.exe imports the Visual C++ runtime:`n$imports" }
-          Write-Output $imports
+          foreach ($exe in 'devlanes.exe', 'devlanes-gui.exe') {
+            $imports = & $dumpbin /nologo /dependents "target/$env:TARGET/release/$exe" | Out-String
+            if ($LASTEXITCODE -ne 0 -or $imports -notmatch '(?im)^\s+kernel32\.dll\s*$') { throw "unexpected dumpbin output for ${exe}:`n$imports" }
+            if ($imports -match '(?im)^\s+(vcruntime|msvcp)\S*\.dll\s*$') { throw "$exe imports the Visual C++ runtime:`n$imports" }
+            Write-Output $imports
+          }
       # Next to the executable in a directory of its own, dumpbin names the PDB that
       # matches its GUID and age; a checked one that doesn't gets a reason in parentheses.
-      - name: Check the PDB matches the executable
+      - name: Check the PDBs match the executables
         shell: pwsh
         run: |
-          $dir = Join-Path $env:RUNNER_TEMP 'pdb-check'
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          Copy-Item "target/$env:TARGET/release/devlanes.exe", "target/$env:TARGET/release/devlanes.pdb" $dir
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
           $dumpbin = @(& $vswhere -latest -products * -find 'VC\Tools\MSVC\*\bin\Host*\*\dumpbin.exe')[0]
           if (-not $dumpbin) { throw 'dumpbin.exe not found' }
-          $pdb = Join-Path $dir 'devlanes.pdb'
-          $out = & $dumpbin /nologo /pdbpath:verbose (Join-Path $dir 'devlanes.exe') | Out-String
-          $found = @($out -split "`r?`n" | Where-Object { $_.Contains("'$pdb'") -and -not $_.Contains('(') })
-          if ($LASTEXITCODE -ne 0 -or $found.Count -ne 1) { throw "devlanes.pdb does not match devlanes.exe:`n$out" }
-          Write-Output $found
-          Get-Item "target/$env:TARGET/release/devlanes.exe", "target/$env:TARGET/release/devlanes.pdb" | Format-Table Name, Length
+          # Cargo names a binary's PDB after its crate, with `_` for `-`.
+          foreach ($pair in @(@('devlanes', 'devlanes'), @('devlanes-gui', 'devlanes_gui'))) {
+            $bin, $name = $pair
+            $dir = Join-Path $env:RUNNER_TEMP "pdb-check-$bin"
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            Copy-Item "target/$env:TARGET/release/$bin.exe", "target/$env:TARGET/release/$name.pdb" $dir
+            $pdb = Join-Path $dir "$name.pdb"
+            $out = & $dumpbin /nologo /pdbpath:verbose (Join-Path $dir "$bin.exe") | Out-String
+            $found = @($out -split "`r?`n" | Where-Object { $_.Contains("'$pdb'") -and -not $_.Contains('(') })
+            if ($LASTEXITCODE -ne 0 -or $found.Count -ne 1) { throw "$name.pdb does not match $bin.exe:`n$out" }
+            Write-Output $found
+            Get-Item "target/$env:TARGET/release/$bin.exe", "target/$env:TARGET/release/$name.pdb" | Format-Table Name, Length
+          }
       - name: Package
         shell: pwsh
         run: ./packaging/scripts/package.ps1 -Version $env:VERSION -Target $env:TARGET -OutDir dist
       - name: Package the debug files
-        run: sh packaging/scripts/package-debug.sh "$VERSION" "$TARGET" dist "target/$TARGET/release/devlanes.pdb"
+        run: sh packaging/scripts/package-debug.sh "$VERSION" "$TARGET" dist "target/$TARGET/release/devlanes.pdb" "target/$TARGET/release/devlanes_gui.pdb"
       - name: kache stats
         if: ${{ !cancelled() }}
         run: |

@@ -69,6 +69,7 @@ fn on_bytes(
 - `Pacer`: per window and codec, decides when to encode, which viewers get the frame and at what bitrate, frame rate and quality.
 - `InputArbiter`: per display, decides whose input reaches the app and releases what a silent client holds.
 - `HostLock` and `ViewerLock`: per window, the lock state from its causes on each end (resizing, waiting for the app, reconnecting, frozen, closed).
+- `ready::Ready` (feature `serde`, which brings serde and serde_json): the JSON line a GUI host prints once it listens, with `Ready::new`, `to_line` and the strict reader `Ready::parse`; read at most `MAX_READY_LINE` bytes of it.
 
 ## Wire format
 

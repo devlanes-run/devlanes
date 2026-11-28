@@ -32,12 +32,29 @@ const ARCHIVE_SUFFIX: &str = ".tar.gz";
 #[cfg(windows)]
 const ARCHIVE_SUFFIX: &str = ".zip";
 
-/// The executables a release archive holds next to `LICENSE`, each installed
-/// into the install's directory.
+/// The executables the main release archive holds next to `LICENSE`, each
+/// installed into the install's directory. Every released `devlanes update`
+/// refuses a main archive with any other entry, so a new binary ships in an
+/// archive of its own, as [`GUI_BINARY`] does.
 #[cfg(unix)]
 pub const BINARIES: &[&str] = &["devlanes", "devlanes-hosts"];
 #[cfg(windows)]
 pub const BINARIES: &[&str] = &["devlanes.exe"];
+
+/// The executable of the GUI archive, `devlanes-VERSION-TARGET-gui.tar.gz`
+/// (`.zip` on Windows), which holds it and `LICENSE` under the same top
+/// directory as the main archive. It is installed next to [`BINARIES`],
+/// where `devlanes` looks for it.
+#[cfg(unix)]
+pub const GUI_BINARY: &str = "devlanes-gui";
+#[cfg(windows)]
+pub const GUI_BINARY: &str = "devlanes-gui.exe";
+
+/// What the GUI archive's name adds after the target. It must not follow
+/// `devlanes-`: released checksum parsers strip `devlanes-` and would read
+/// `gui-...` as a version. After the target, they skip the line, as they
+/// skip the debug archives.
+const GUI_ARCHIVE_TAG: &str = "-gui";
 
 /// Upper bound on `SHA256SUMS`, a line per archive.
 const MAX_SUMS_BYTES: usize = 64 * 1024;
@@ -260,6 +277,12 @@ pub fn removal_commands(method: &InstallMethod, exe: &Path) -> Option<Vec<Argv>>
         InstallMethod::CargoInstall | InstallMethod::CargoBinstall => {
             let mut args = vec!["uninstall"];
             args.extend(os::CARGO_PACKAGES);
+            // Only when it is there: cargo fails an uninstall that names a
+            // package it never installed, and installs from before it or a
+            // build that failed have none.
+            if exe.with_file_name(GUI_BINARY).is_file() {
+                args.push(crate::GUI_PACKAGE);
+            }
             vec![argv(PathBuf::from(os::tool("cargo")), &args)]
         }
         // The environment's own Python, since its `pip` may not be on `PATH`;
@@ -522,9 +545,60 @@ fn release_version(text: &str) -> bool {
         })
 }
 
+/// The name of the GUI archive of `version` for `target`:
+/// `devlanes-VERSION-TARGET-gui.tar.gz`, or `.zip` on Windows.
+pub fn gui_archive_name(version: &str, target: &str) -> String {
+    format!("devlanes-{version}-{target}{GUI_ARCHIVE_TAG}{ARCHIVE_SUFFIX}")
+}
+
+/// The GUI archive's line in a `SHA256SUMS` text read from `source`, for
+/// the release whose main archive is `main` (from [`parse_sums`]); `None`
+/// when the release has none, as releases before `devlanes-gui` have not.
+pub fn parse_gui_sums(
+    sums: &str,
+    main: &SumsEntry,
+    target: &str,
+) -> Result<Option<SumsEntry>, InstallError> {
+    let wanted = gui_archive_name(&main.version, target);
+    for line in sums.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [sha256, archive] = fields[..] else {
+            continue;
+        };
+        if archive.trim_start_matches('*') != wanted {
+            continue;
+        }
+        let hex = sha256.len() == 64
+            && sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if !hex {
+            return Err(InstallError::Release(format!(
+                "malformed checksum for {wanted}"
+            )));
+        }
+        return Ok(Some(SumsEntry {
+            sha256: sha256.to_owned(),
+            archive: wanted,
+            version: main.version.clone(),
+        }));
+    }
+    Ok(None)
+}
+
 /// Whether `tar`'s listing of an archive holds exactly the entries a release
 /// archive has below `top`: `LICENSE` and [`BINARIES`].
 pub fn exact_entries(listing: &str, top: &str) -> bool {
+    holds_exactly(listing, top, BINARIES)
+}
+
+/// [`exact_entries`] for the GUI archive: `LICENSE` and [`GUI_BINARY`].
+pub fn exact_gui_entries(listing: &str, top: &str) -> bool {
+    holds_exactly(listing, top, &[GUI_BINARY])
+}
+
+/// Whether `listing` holds `LICENSE` and `binaries` below `top`, and nothing else.
+fn holds_exactly(listing: &str, top: &str, binaries: &[&str]) -> bool {
     let mut found: Vec<&str> = listing
         .lines()
         .map(|line| line.trim_end_matches('\r').trim_end_matches('/'))
@@ -532,7 +606,7 @@ pub fn exact_entries(listing: &str, top: &str) -> bool {
         .collect();
     found.sort_unstable();
     let mut expected: Vec<String> = std::iter::once("LICENSE")
-        .chain(BINARIES.iter().copied())
+        .chain(binaries.iter().copied())
         .map(|name| format!("{top}/{name}"))
         .collect();
     expected.sort_unstable();
@@ -550,18 +624,36 @@ pub struct Staged {
     pub target: PathBuf,
     /// The unpacked archive's directory, holding [`BINARIES`].
     pub files: PathBuf,
+    /// Whether `files` also holds [`GUI_BINARY`] from the release's GUI
+    /// archive. `None` in a record written before it existed, which cannot
+    /// tell a release without one from a GUI archive that was never fetched,
+    /// so [`Staged::load`] ignores such a record and the release is staged
+    /// again.
+    pub gui: Option<bool>,
 }
 
 impl Staged {
-    /// The staged release under `home`, when its record reads and its files
-    /// are all there. Blocking.
+    /// The staged release under `home`, when its record reads, says whether
+    /// it has the GUI binary, and its files are all there. Blocking.
     pub fn load(home: &Path) -> Option<Self> {
         let text = std::fs::read_to_string(update_dir(home).join("staged.json")).ok()?;
         let staged: Self = serde_json::from_str(&text).ok()?;
-        BINARIES
+        (staged.gui.is_some()
+            && staged
+                .binaries()
+                .all(|name| staged.files.join(name).is_file()))
+        .then_some(staged)
+    }
+
+    /// The binaries [`apply`] installs, in the order it swaps them: the
+    /// helpers of [`BINARIES`], [`GUI_BINARY`] when the release had it, and
+    /// `devlanes` last, as `install.sh` and `install.ps1` do.
+    pub fn binaries(&self) -> impl Iterator<Item = &'static str> + use<> {
+        BINARIES[1..]
             .iter()
-            .all(|name| staged.files.join(name).is_file())
-            .then_some(staged)
+            .copied()
+            .chain((self.gui == Some(true)).then_some(GUI_BINARY))
+            .chain(std::iter::once(BINARIES[0]))
     }
 }
 
@@ -588,7 +680,11 @@ pub async fn stage(
         Release::Version(version) => Some(version.as_str()),
         Release::Next => None,
     };
-    let entry = parse_sums(&String::from_utf8_lossy(&sums), TARGET, expect, &sums_url)?;
+    let sums = String::from_utf8_lossy(&sums);
+    let entry = parse_sums(&sums, TARGET, expect, &sums_url)?;
+    // A release from before devlanes-gui has no GUI archive; the update still
+    // installs, and the next one brings devlanes-gui.
+    let gui = parse_gui_sums(&sums, &entry, TARGET)?;
     let home = home.to_path_buf();
     let loaded = {
         let home = home.clone();
@@ -598,11 +694,11 @@ pub async fn stage(
         && staged.version == entry.version
         && staged.sha256 == entry.sha256
         && staged.target == dir
+        && staged.gui == Some(gui.is_some())
     {
         return Ok(staged);
     }
     let folder = update_dir(&home).join(&entry.version);
-    let archive = folder.join(&entry.archive);
     {
         let folder = folder.clone();
         blocking(move || {
@@ -610,72 +706,39 @@ pub async fn stage(
         })
         .await?;
     }
-    let url = format!("{base}/{}/{}", release.folder(), entry.archive);
-    check::download(
-        &url,
-        &archive,
-        ARCHIVE_TIMEOUT.max(timeout),
-        MAX_ARCHIVE_BYTES,
-    )
-    .await
-    .map_err(|source| InstallError::Fetch {
-        url: url.clone(),
-        source,
-    })?;
-    let actual = {
-        let archive = archive.clone();
-        blocking(move || sha256_file(&archive)).await?
-    };
-    if actual != entry.sha256 {
-        return Err(InstallError::Release(format!(
-            "checksum mismatch for {}: expected {}, got {actual}",
-            entry.archive, entry.sha256
-        )));
-    }
     let top = format!("devlanes-{}-{TARGET}", entry.version);
-    let listing = tar(&[os::TAR_LIST, path_arg(&archive)?]).await?;
-    if !exact_entries(&listing, &top) {
-        return Err(InstallError::Release(format!(
-            "unexpected entries in {}: {}",
-            entry.archive,
-            listing.split_whitespace().collect::<Vec<_>>().join(", ")
-        )));
-    }
-    tar(&[
-        os::TAR_EXTRACT,
-        path_arg(&archive)?,
-        "-C",
-        path_arg(&folder)?,
-    ])
-    .await?;
+    let fetched = Fetched {
+        folder: &folder,
+        top: &top,
+        url: &format!("{base}/{}", release.folder()),
+        timeout,
+    };
+    fetched.unpack(&entry, exact_entries).await?;
     let files = folder.join(&top);
     let mut probe = tokio::process::Command::new(files.join(BINARIES[0]));
     // The release reports its own version, not the one this process pretends to run.
     probe.env_remove(crate::version::RUNNING_ENV);
-    let reported = probe_version(probe).await;
-    if reported.as_deref() != Some(entry.version.as_str()) {
-        // On Windows, a new executable that reports no version at all may be
-        // one an antivirus quarantined or blocked when it was extracted or run.
-        let hint = if cfg!(windows) && reported.is_none() {
-            "; an antivirus may have quarantined it"
-        } else {
-            ""
-        };
-        return Err(InstallError::Release(format!(
-            "the {} archive's devlanes reports {}{hint}",
-            entry.version,
-            reported.as_deref().unwrap_or("no version")
-        )));
+    check_reported(
+        probe_version(probe, "--version", "devlanes").await,
+        &entry.version,
+        "devlanes",
+    )?;
+    if let Some(gui) = &gui {
+        // Unpacked into the same top directory, next to the main binaries.
+        // Never run: it may need system libraries this machine lacks, and a
+        // GUI binary that cannot start must not block an update. Its checksum
+        // comes from the same SHA256SUMS whose main archive matched.
+        fetched.unpack(gui, exact_gui_entries).await?;
     }
     let staged = Staged {
         version: entry.version,
         sha256: entry.sha256,
         target: dir.to_path_buf(),
         files,
+        gui: Some(gui.is_some()),
     };
     let record = staged.clone();
     blocking(move || {
-        let _ = std::fs::remove_file(&archive);
         write_record(&home, &record)?;
         prune(&home, &record.version);
         Ok(())
@@ -684,12 +747,285 @@ pub async fn stage(
     Ok(staged)
 }
 
+/// What [`install_gui`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuiInstall {
+    /// [`GUI_BINARY`] was put at this path.
+    Installed(PathBuf),
+    /// The release has no GUI archive, so nothing was done.
+    NotInRelease,
+}
+
+/// The directory of `method`'s install when [`install_gui`] should run for
+/// it: a script install this user can write to, with no [`GUI_BINARY`] next
+/// to `devlanes`. A `devlanes-gui` that is there counts as installed even
+/// when it cannot run, since running it is never a check. Package managers
+/// install it themselves. Blocking.
+pub fn gui_missing(method: &InstallMethod) -> Option<PathBuf> {
+    let InstallMethod::Script(dir) = method else {
+        return None;
+    };
+    (writable(dir) && gui_absent(dir)).then(|| dir.clone())
+}
+
+/// Whether `dir` has no [`GUI_BINARY`], not even a dangling link. Blocking.
+fn gui_absent(dir: &Path) -> bool {
+    dir.join(GUI_BINARY).symlink_metadata().is_err()
+}
+
+/// What [`repair_gui`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuiRepair {
+    /// Nothing to do: not a script install, `devlanes-gui` is there, the
+    /// release has none, this is no release build, or another install
+    /// changed the directory while this one waited for the lock.
+    Nothing,
+    /// `devlanes-gui` was installed at this path.
+    Installed(PathBuf),
+    /// It is missing from a script install this user cannot write to; a
+    /// person runs `command`.
+    Unwritable { command: String },
+}
+
+/// For a script install already at `version` that has no [`GUI_BINARY`]
+/// (an updater from before it installed this release, or an update that
+/// stopped between two renames), installs only that binary of `version` with
+/// [`install_gui`], under [`Lock`] taken here with up to `lock_wait`. Once it
+/// holds the lock it checks again that the binary is still missing and that
+/// the directory's `devlanes` reports exactly `version`, since another
+/// install may have run meanwhile; otherwise it does nothing. It runs
+/// `devlanes`, never `devlanes-gui`, so one that is there is never replaced,
+/// even when it cannot run. Package-manager installs bring it themselves.
+pub async fn repair_gui(
+    home: &Path,
+    urls: &Urls,
+    method: &InstallMethod,
+    version: &str,
+    lock_wait: Duration,
+    timeout: Duration,
+) -> Result<GuiRepair, InstallError> {
+    let InstallMethod::Script(dir) = method else {
+        return Ok(GuiRepair::Nothing);
+    };
+    if Version::parse_release(version).is_none() {
+        return Ok(GuiRepair::Nothing);
+    }
+    // What `Plan::new` names for a directory this user cannot write to.
+    #[cfg(unix)]
+    let command = crate::method::sudo_script_upgrade(dir);
+    #[cfg(windows)]
+    let command = method.upgrade_command(version);
+    let (home, dir) = (home.to_path_buf(), dir.clone());
+    let checked = {
+        let (home, dir) = (home.clone(), dir.clone());
+        blocking(move || {
+            if !gui_absent(&dir) {
+                return Ok(Err(GuiRepair::Nothing));
+            }
+            if !writable(&dir) {
+                return Ok(Err(GuiRepair::Unwritable { command }));
+            }
+            let lock = Lock::acquire(&home, lock_wait)?;
+            // Another install may have run while this one waited.
+            Ok(if gui_absent(&dir) {
+                Ok(lock)
+            } else {
+                Err(GuiRepair::Nothing)
+            })
+        })
+        .await?
+    };
+    let _lock = match checked {
+        Ok(lock) => lock,
+        Err(done) => return Ok(done),
+    };
+    let mut probe = tokio::process::Command::new(dir.join(BINARIES[0]));
+    // The installed devlanes reports its own version, not the one this
+    // process pretends to run.
+    probe.env_remove(crate::version::RUNNING_ENV);
+    if probe_version(probe, "--version", "devlanes")
+        .await
+        .as_deref()
+        != Some(version)
+    {
+        return Ok(GuiRepair::Nothing);
+    }
+    let release = Release::of(version);
+    Ok(
+        match install_gui(&home, urls, &release, version, &dir, timeout).await? {
+            GuiInstall::Installed(path) => GuiRepair::Installed(path),
+            GuiInstall::NotInRelease => GuiRepair::Nothing,
+        },
+    )
+}
+
+/// Puts only [`GUI_BINARY`] of `version` into the script install in `dir`,
+/// for an install that has `devlanes` at that version but lost or never got
+/// `devlanes-gui` (an update by a release from before it, or a crash between
+/// two renames of [`apply`]). Reads `release`'s `SHA256SUMS`, requires its
+/// main archive to be exactly `version`, then downloads and checks only the
+/// GUI archive. It never touches the other binaries or `staged.json`, and
+/// never runs the binary. The caller checks that `dir` is a writable script
+/// install without [`GUI_BINARY`]. Hold [`Lock`] while it runs.
+pub async fn install_gui(
+    home: &Path,
+    urls: &Urls,
+    release: &Release,
+    version: &str,
+    dir: &Path,
+    timeout: Duration,
+) -> Result<GuiInstall, InstallError> {
+    let base = urls.releases.trim_end_matches('/');
+    let sums_url = format!("{base}/{}/SHA256SUMS", release.folder());
+    let sums = check::fetch(&sums_url, timeout, MAX_SUMS_BYTES)
+        .await
+        .map_err(|source| InstallError::Fetch {
+            url: sums_url.clone(),
+            source,
+        })?;
+    let sums = String::from_utf8_lossy(&sums);
+    let entry = parse_sums(&sums, TARGET, Some(version), &sums_url)?;
+    let Some(gui) = parse_gui_sums(&sums, &entry, TARGET)? else {
+        return Ok(GuiInstall::NotInRelease);
+    };
+    // Apart from the staged release's folders, which `stage` prunes.
+    let folder = update_dir(home).join(format!(".gui-{}", std::process::id()));
+    {
+        let folder = folder.clone();
+        blocking(move || {
+            let _ = std::fs::remove_dir_all(&folder);
+            std::fs::create_dir_all(&folder).map_err(InstallError::io(folder.display().to_string()))
+        })
+        .await?;
+    }
+    let top = format!("devlanes-{version}-{TARGET}");
+    let fetched = Fetched {
+        folder: &folder,
+        top: &top,
+        url: &format!("{base}/{}", release.folder()),
+        timeout,
+    };
+    let unpacked = fetched.unpack(&gui, exact_gui_entries).await;
+    let source = folder.join(&top).join(GUI_BINARY);
+    let target = dir.join(GUI_BINARY);
+    blocking(move || {
+        let placed = unpacked.and_then(|()| place_new(&source, &target));
+        let _ = std::fs::remove_dir_all(&folder);
+        placed.map(|()| GuiInstall::Installed(target))
+    })
+    .await
+}
+
+/// Copies `source` next to `target` as `.<name>.new.<pid>`, makes it
+/// executable and renames it into place. Blocking.
+fn place_new(source: &Path, target: &Path) -> Result<(), InstallError> {
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temporary = target.with_file_name(format!(".{name}.new.{}", std::process::id()));
+    let placed = os::retry_while_held(|| std::fs::copy(source, &temporary).map(drop))
+        .and_then(|()| os::make_executable(&temporary))
+        .and_then(|()| os::retry_while_held(|| std::fs::rename(&temporary, target)));
+    if placed.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    placed.map_err(InstallError::io(format!(
+        "cannot install {}",
+        target.display()
+    )))
+}
+
+/// Where [`stage`] downloads a release's archives and unpacks them.
+struct Fetched<'a> {
+    /// `$DEVLANES_HOME/update/<version>`.
+    folder: &'a Path,
+    /// The archives' top directory, `devlanes-<version>-<target>`.
+    top: &'a str,
+    /// The release folder's URL, without a trailing `/`.
+    url: &'a str,
+    /// The caller's timeout; downloads get at least [`ARCHIVE_TIMEOUT`].
+    timeout: Duration,
+}
+
+impl Fetched<'_> {
+    /// Downloads `entry`'s archive, checks its checksum and that `holds`
+    /// accepts its listing, unpacks it into the folder and deletes it.
+    async fn unpack(
+        &self,
+        entry: &SumsEntry,
+        holds: fn(&str, &str) -> bool,
+    ) -> Result<(), InstallError> {
+        let archive = self.folder.join(&entry.archive);
+        let url = format!("{}/{}", self.url, entry.archive);
+        check::download(
+            &url,
+            &archive,
+            ARCHIVE_TIMEOUT.max(self.timeout),
+            MAX_ARCHIVE_BYTES,
+        )
+        .await
+        .map_err(|source| InstallError::Fetch {
+            url: url.clone(),
+            source,
+        })?;
+        let actual = {
+            let archive = archive.clone();
+            blocking(move || sha256_file(&archive)).await?
+        };
+        if actual != entry.sha256 {
+            return Err(InstallError::Release(format!(
+                "checksum mismatch for {}: expected {}, got {actual}",
+                entry.archive, entry.sha256
+            )));
+        }
+        let listing = tar(&[os::TAR_LIST, path_arg(&archive)?]).await?;
+        if !holds(&listing, self.top) {
+            return Err(InstallError::Release(format!(
+                "unexpected entries in {}: {}",
+                entry.archive,
+                listing.split_whitespace().collect::<Vec<_>>().join(", ")
+            )));
+        }
+        tar(&[
+            os::TAR_EXTRACT,
+            path_arg(&archive)?,
+            "-C",
+            path_arg(self.folder)?,
+        ])
+        .await?;
+        blocking(move || {
+            let _ = std::fs::remove_file(&archive);
+            Ok(())
+        })
+        .await
+    }
+}
+
+/// Fails unless the staged `name` reported `version`.
+fn check_reported(reported: Option<String>, version: &str, name: &str) -> Result<(), InstallError> {
+    if reported.as_deref() == Some(version) {
+        return Ok(());
+    }
+    // On Windows, a new executable that reports no version at all may be
+    // one an antivirus quarantined or blocked when it was extracted or run.
+    let hint = if cfg!(windows) && reported.is_none() {
+        "; an antivirus may have quarantined it"
+    } else {
+        ""
+    };
+    Err(InstallError::Release(format!(
+        "the {version} archive's {name} reports {}{hint}",
+        reported.as_deref().unwrap_or("no version")
+    )))
+}
+
 /// What [`apply`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Applied {
     /// Windows: replaced executables that still run (the daemon's, this
-    /// process's), renamed to `devlanes.exe.old-<stamp>` and deleted later
-    /// by doctor or install.ps1.
+    /// process's, a GUI host's), renamed to `<name>.old-<stamp>` and deleted
+    /// later by doctor or install.ps1.
     pub in_use: Vec<PathBuf>,
 }
 
@@ -713,7 +1049,7 @@ pub fn apply(home: &Path, staged: &Staged) -> Result<Applied, InstallError> {
             let _ = std::fs::remove_file(temporary);
         }
     };
-    for name in BINARIES {
+    for name in staged.binaries() {
         let target = staged.target.join(name);
         let temporary = staged
             .target
@@ -864,16 +1200,21 @@ impl io::Write for HashWriter {
 /// The version `<exe> --version` prints after `devlanes `, or `None` when it
 /// does not run or prints something else.
 pub async fn reported_version(exe: &Path) -> Option<String> {
-    probe_version(tokio::process::Command::new(exe)).await
+    probe_version(tokio::process::Command::new(exe), "--version", "devlanes").await
 }
 
-/// The version `command --version` prints after `devlanes `, as
-/// [`reported_version`] reads it.
-async fn probe_version(mut command: tokio::process::Command) -> Option<String> {
+/// The version `command arg` prints as its second word when the first is
+/// `name`: `devlanes --version` prints `devlanes <version>`, and
+/// `devlanes-gui version` adds a `build=` word after it.
+async fn probe_version(
+    mut command: tokio::process::Command,
+    arg: &str,
+    name: &str,
+) -> Option<String> {
     let output = tokio::time::timeout(
         TOOL_TIMEOUT,
         command
-            .arg("--version")
+            .arg(arg)
             .stdin(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true)
@@ -883,7 +1224,10 @@ async fn probe_version(mut command: tokio::process::Command) -> Option<String> {
     .ok()?
     .ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
-    let version = text.trim().strip_prefix("devlanes ")?;
+    let mut words = text.split_whitespace();
+    let version = (words.next() == Some(name))
+        .then(|| words.next())
+        .flatten()?;
     (output.status.success() && Version::parse(version).is_some()).then(|| version.to_owned())
 }
 
@@ -1256,6 +1600,81 @@ mod tests {
         );
     }
 
+    /// `parse_sums` is the parser every released `devlanes update` runs: this
+    /// test relies on it being unchanged since it shipped in v0.10.0, so any
+    /// change to it must keep released behaviour. `install.sh` and
+    /// `install.ps1` match lines the same way. Fed the
+    /// `SHA256SUMS` of a release with GUI archives, listed first here so no
+    /// order hides a match, it still finds the main archive, and the GUI
+    /// archive is found apart. A GUI name right after `devlanes-` would
+    /// break every released updater.
+    #[test]
+    fn released_parsers_skip_the_gui_archives() {
+        let version = "0.9.1";
+        let unix = [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+        ];
+        let windows = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"];
+        let line = |n: usize, name: String| format!("{}  {name}\n", format!("{n:x}").repeat(64));
+        let mut sums = String::new();
+        for (n, target) in unix.iter().chain(&windows).enumerate() {
+            let suffix = if windows.contains(target) {
+                "zip"
+            } else {
+                "tar.gz"
+            };
+            sums.push_str(&line(
+                n % 10,
+                format!("devlanes-{version}-{target}-gui.{suffix}"),
+            ));
+        }
+        for target in unix {
+            sums.push_str(&line(10, format!("devlanes-{version}-{target}.tar.gz")));
+        }
+        for target in windows {
+            sums.push_str(&line(11, format!("devlanes-{version}-{target}.zip")));
+        }
+        for target in unix.iter().chain(&windows) {
+            sums.push_str(&line(
+                12,
+                format!("devlanes-{version}-{target}-debug.tar.gz"),
+            ));
+        }
+        let own = if cfg!(windows) {
+            &windows[..]
+        } else {
+            &unix[..]
+        };
+        for target in own {
+            let main = parse_sums(&sums, target, Some(version), "SUMS").expect(target);
+            assert_eq!(
+                main.archive,
+                format!("devlanes-{version}-{target}{ARCHIVE_SUFFIX}")
+            );
+            assert_eq!(
+                main.sha256,
+                if cfg!(windows) { "b" } else { "a" }.repeat(64)
+            );
+            let gui = parse_gui_sums(&sums, &main, target).expect("parsed");
+            assert_eq!(
+                gui.map(|gui| gui.archive),
+                Some(gui_archive_name(version, target))
+            );
+        }
+        let early = format!(
+            "{}  devlanes-gui-{version}-{TARGET}{ARCHIVE_SUFFIX}\n{sums}",
+            "c".repeat(64)
+        );
+        let error = parse_sums(&early, TARGET, None, "SUMS").expect_err("a gui- version");
+        assert_eq!(
+            error.to_string(),
+            format!("unexpected version gui-{version} in SUMS")
+        );
+    }
+
     #[test]
     fn sums_refuse_what_the_scripts_refuse() {
         let sha = "a".repeat(64);
@@ -1350,9 +1769,140 @@ mod tests {
         assert!(Plan::new(&script, Path::new("devlanes"), "0.9.1-next.3", true).is_ok());
     }
 
-    /// `devlanes` and `devlanes-hosts` change together: when the second
-    /// cannot take its place, the first gets its old file back, and nothing
-    /// of the attempt stays in the directory.
+    /// A record a daemon from before devlanes-gui wrote cannot say whether
+    /// the release has a GUI archive, so it is not applied; the release is
+    /// staged again.
+    #[test]
+    fn staged_records_without_the_gui_field_are_ignored() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let (home, files) = (root.path().join("home"), root.path().join("files"));
+        std::fs::create_dir_all(update_dir(&home))?;
+        std::fs::create_dir_all(&files)?;
+        for name in BINARIES {
+            std::fs::write(files.join(name), "new")?;
+        }
+        let old = serde_json::json!({
+            "version": "0.9.1",
+            "sha256": "a".repeat(64),
+            "target": root.path().join("bin"),
+            "files": files,
+        });
+        let record = update_dir(&home).join("staged.json");
+        std::fs::write(&record, old.to_string())?;
+        assert_eq!(Staged::load(&home), None);
+        let mut new = old;
+        new["gui"] = serde_json::json!(false);
+        std::fs::write(&record, new.to_string())?;
+        assert_eq!(
+            Staged::load(&home).map(|staged| staged.gui),
+            Some(Some(false))
+        );
+        Ok(())
+    }
+
+    /// The names in `dir`, sorted.
+    fn listing(dir: &Path) -> std::io::Result<Vec<String>> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)?
+            .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+            .collect::<Result<_, _>>()?;
+        names.sort();
+        Ok(names)
+    }
+
+    /// The binaries of a release with a GUI archive change together: when
+    /// `devlanes-gui` cannot take its place, the helper swapped before it
+    /// gets its old file back, `devlanes` is untouched, and nothing of the
+    /// attempt stays in the directory. Unix only, where a directory refuses
+    /// the rename.
+    #[cfg(unix)]
+    #[test]
+    fn applying_with_the_gui_is_all_or_nothing() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let (home, files, target) = (
+            root.path().join("home"),
+            root.path().join("files"),
+            root.path().join("bin"),
+        );
+        std::fs::create_dir_all(&files)?;
+        std::fs::create_dir_all(&target)?;
+        for name in BINARIES.iter().chain([&GUI_BINARY]) {
+            std::fs::write(files.join(name), format!("new {name}"))?;
+        }
+        std::fs::write(target.join("devlanes"), "old devlanes")?;
+        std::fs::write(target.join("devlanes-hosts"), "old helper")?;
+        std::fs::create_dir_all(target.join("devlanes-gui/busy"))?;
+        let staged = Staged {
+            version: "0.9.1".into(),
+            sha256: "a".repeat(64),
+            target: target.clone(),
+            files,
+            gui: Some(true),
+        };
+        let error = apply(&home, &staged).expect_err("devlanes-gui cannot be replaced");
+        assert!(error.to_string().contains("devlanes-gui"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(target.join("devlanes"))?,
+            "old devlanes"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("devlanes-hosts"))?,
+            "old helper"
+        );
+        assert_eq!(
+            listing(&target)?,
+            ["devlanes", "devlanes-gui", "devlanes-hosts"]
+        );
+        Ok(())
+    }
+
+    /// On Windows a `devlanes-gui.exe` another process holds without sharing
+    /// delete cannot be set aside: the update fails and `devlanes.exe` keeps
+    /// its old file, with nothing of the attempt left.
+    #[cfg(windows)]
+    #[test]
+    fn applying_with_a_held_gui_keeps_the_old_devlanes() -> std::io::Result<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir()?;
+        let (home, files, target) = (
+            root.path().join("home"),
+            root.path().join("files"),
+            root.path().join("bin"),
+        );
+        std::fs::create_dir_all(&files)?;
+        std::fs::create_dir_all(&target)?;
+        for name in BINARIES.iter().chain([&GUI_BINARY]) {
+            std::fs::write(files.join(name), format!("new {name}"))?;
+        }
+        std::fs::write(target.join("devlanes.exe"), "old devlanes")?;
+        let gui = target.join(GUI_BINARY);
+        std::fs::write(&gui, "old gui")?;
+        // FILE_SHARE_READ only, for the whole update.
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&gui)?;
+        let staged = Staged {
+            version: "0.9.1".into(),
+            sha256: "a".repeat(64),
+            target: target.clone(),
+            files,
+            gui: Some(true),
+        };
+        let error = apply(&home, &staged).expect_err("devlanes-gui.exe is held");
+        drop(held);
+        assert!(error.to_string().contains("devlanes-gui"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(target.join("devlanes.exe"))?,
+            "old devlanes"
+        );
+        assert_eq!(std::fs::read_to_string(&gui)?, "old gui");
+        assert_eq!(listing(&target)?, ["devlanes-gui.exe", "devlanes.exe"]);
+        Ok(())
+    }
+
+    /// `devlanes-hosts` is swapped before `devlanes`: when it cannot take its
+    /// place, `devlanes` is untouched, and nothing of the attempt stays in the
+    /// directory.
     #[cfg(unix)]
     #[test]
     fn applying_is_all_or_nothing() -> std::io::Result<()> {
@@ -1375,13 +1925,7 @@ mod tests {
             sha256: "a".repeat(64),
             target: target.clone(),
             files: files.clone(),
-        };
-        let listing = |dir: &Path| -> std::io::Result<Vec<String>> {
-            let mut names: Vec<String> = std::fs::read_dir(dir)?
-                .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
-                .collect::<Result<_, _>>()?;
-            names.sort();
-            Ok(names)
+            gui: Some(false),
         };
         let error = apply(&home, &staged).expect_err("the helper cannot be replaced");
         assert!(error.to_string().contains("devlanes-hosts"), "{error}");
@@ -1437,6 +1981,7 @@ mod tests {
             sha256: "a".repeat(64),
             target: target.clone(),
             files,
+            gui: Some(false),
         };
         let applied = apply(&home, &staged);
         let _ = holder.join();
@@ -1717,6 +2262,32 @@ mod tests {
             removal(&InstallMethod::Script(PathBuf::from(r"C:\tools")), exe),
             None
         );
+    }
+
+    /// cargo fails an uninstall that names a package it never installed, so
+    /// devlanes-gui is named only when its binary sits next to devlanes.
+    #[test]
+    fn cargo_removes_devlanes_gui_only_when_installed() -> io::Result<()> {
+        let bin = tempfile::tempdir()?;
+        let exe = bin.path().join(if cfg!(windows) {
+            "devlanes.exe"
+        } else {
+            "devlanes"
+        });
+        let names = || -> Vec<String> {
+            removal_commands(&InstallMethod::CargoInstall, &exe)
+                .and_then(|commands| commands.into_iter().next())
+                .map(|argv| argv.args)
+                .unwrap_or_default()
+        };
+        assert!(
+            !names().contains(&"devlanes-gui".to_owned()),
+            "{:?}",
+            names()
+        );
+        std::fs::write(bin.path().join(GUI_BINARY), "gui")?;
+        assert_eq!(names().last().map(String::as_str), Some("devlanes-gui"));
+        Ok(())
     }
 
     #[test]

@@ -242,21 +242,16 @@ fn joined(paths: &[PathBuf]) -> String {
 }
 
 /// The devlanes files in a script install's `dir`: the release's binaries,
-/// and on Windows the `devlanes.exe.old-*` copies updates leave. Blocking.
+/// `devlanes-gui`, and on Windows the `devlanes.exe.old-*` and
+/// `devlanes-gui.exe.old-*` copies updates leave and the `.NAME.new.*`
+/// copies a crash leaves ([`old_copy`]). Blocking.
 fn script_files(dir: &Path) -> Vec<PathBuf> {
     let mut old: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|entries| {
             entries
                 .flatten()
                 .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-                .filter(|entry| {
-                    cfg!(windows)
-                        && entry
-                            .file_name()
-                            .to_string_lossy()
-                            .to_lowercase()
-                            .starts_with("devlanes.exe.old-")
-                })
+                .filter(|entry| old_copy(&entry.file_name().to_string_lossy()))
                 .map(|entry| entry.path())
                 .collect()
         })
@@ -264,10 +259,28 @@ fn script_files(dir: &Path) -> Vec<PathBuf> {
     old.sort();
     install::BINARIES
         .iter()
+        .chain([&install::GUI_BINARY])
         .map(|name| dir.join(name))
         .filter(|path| path.is_file())
         .chain(old)
         .collect()
+}
+
+/// Whether `name` is a file an update or `install.ps1` leaves on Windows: a
+/// copy renamed aside, or a new copy a crash left before its rename.
+#[cfg(windows)]
+fn old_copy(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    devlanes_update::is_old_copy(name)
+        || [".devlanes.exe.new.", ".devlanes-gui.exe.new."]
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+}
+
+/// Unix updates leave no such files.
+#[cfg(not(windows))]
+fn old_copy(_name: &str) -> bool {
+    false
 }
 
 /// The plan's [`Binary`] for the running executable. Blocking.

@@ -1,5 +1,5 @@
 [workspace]
-members = ["bins/devlanes", "crates/*", "e2e"]
+members = ["bins/devlanes", "bins/devlanes-gui", "crates/*", "e2e"]
 resolver = "3"
 
 [workspace.package]
@@ -26,6 +26,8 @@ diesel = { version = "2.3", default-features = false, features = ["sqlite", "ret
 # `std::fs::canonicalize` on Unix; on Windows it avoids the `\\?\` form Git and
 # most tools cannot use.
 dunce = "1"
+# Compiles the Windows version resources of the two binaries with the SDK's rc.exe.
+embed-resource = "3"
 futures-util = { version = "0.3", features = ["sink"] }
 getrandom = "0.4"
 # SCSS for the stylesheets crates/pages compiles at build time.
@@ -52,6 +54,8 @@ tokio = { version = "1", features = ["full"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tokio-util = { version = "0.7", features = ["codec", "rt"] }
 tracing = "0.1"
+# The log output of the two binaries.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
 # `std::time::Instant` and `SystemTime` natively (re-exported, so the types are
 # std's); the browser's clock in wasm32 builds, where std's clock panics.

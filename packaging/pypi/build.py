@@ -4,9 +4,9 @@
 usage: build.py VERSION DIST_DIR OUT_DIR
        build.py --pep440 VERSION
 
-Each wheel installs the release binaries into the environment's bin directory
-(Scripts on Windows) through its .data/scripts directory, so devlanes-hosts
-lands next to devlanes. --pep440 prints the PyPI version for a release version
+Each wheel installs the release binaries of the main and the GUI archive into the
+environment's bin directory (Scripts on Windows) through its .data/scripts
+directory, so devlanes-hosts and devlanes-gui land next to devlanes. --pep440 prints the PyPI version for a release version
 and fails for one PyPI can't take. Standard library only.
 """
 
@@ -169,13 +169,23 @@ def build(version, dist, out):
     for target, platform in TARGETS:
         prefix = f"{NAME}-{version}-{target}"
         windows = "windows" in target
-        archive = dist / (prefix + (".zip" if windows else ".tar.gz"))
-        if not archive.is_file():
-            sys.exit(f"missing {archive}")
-        files, mtime = read_archive(archive, prefix)
-        expected = {"devlanes.exe", "LICENSE"} if windows else {"devlanes", "devlanes-hosts", "LICENSE"}
-        if set(files) != expected:
-            sys.exit(f"{archive} holds {sorted(files)}, expected {sorted(expected)}")
+        suffix = ".zip" if windows else ".tar.gz"
+        exe = ".exe" if windows else ""
+        # The main archive and the GUI archive, which holds devlanes-gui under the
+        # same directory; the wheel puts every binary in one scripts directory.
+        main = {f"devlanes{exe}", "LICENSE"} | (set() if windows else {"devlanes-hosts"})
+        gui = {f"devlanes-gui{exe}", "LICENSE"}
+        files = {}
+        mtime = None
+        for archive, expected in ((dist / (prefix + suffix), main), (dist / (prefix + "-gui" + suffix), gui)):
+            if not archive.is_file():
+                sys.exit(f"missing {archive}")
+            found, found_mtime = read_archive(archive, prefix)
+            if set(found) != expected:
+                sys.exit(f"{archive} holds {sorted(found)}, expected {sorted(expected)}")
+            # The main archive's LICENSE and binary time go into the wheel.
+            files = {**found, **files}
+            mtime = mtime or found_mtime
         print(build_wheel(wheel_version, files, mtime, platform, out))
 
 

@@ -1,6 +1,6 @@
 # Contributing
 
-devlanes is a Cargo workspace: one binary (`bins/devlanes`) built from small crates under `crates/`. Each crate has a README saying what it does, and `AGENTS.md` has the code conventions. This file covers setting up, running the CLI from a checkout, testing each area, the design and observability.
+devlanes is a Cargo workspace: the `devlanes` binary (`bins/devlanes`) and the `devlanes-gui` binary that ships next to it (`bins/devlanes-gui`, the GUI hosts, kept apart so `devlanes` links no GUI libraries), built from small crates under `crates/`. Each crate has a README saying what it does, and `AGENTS.md` has the code conventions. This file covers setting up, running the CLI from a checkout, testing each area, the design and observability.
 
 ## Setup
 
@@ -156,10 +156,11 @@ dl remote disconnect mybox
 
 ## End-to-end tests
 
-`e2e/` runs the real `devlanes` binary against the projects in `fixtures/`. The default nextest profile skips it (`.config/nextest.toml`); the `e2e` profile runs only it. Without `DEVLANES_E2E_BIN_DIR`, each test process on macOS and Linux builds `devlanes` and `fixture-server` with cargo first; set it to skip that. On Windows tests never run cargo and take the binaries next to the test binary, so the build below is required there:
+`e2e/` runs the real `devlanes` binary against the projects in `fixtures/`. The default nextest profile skips it (`.config/nextest.toml`); the `e2e` profile runs only it. Without `DEVLANES_E2E_BIN_DIR`, each test process on macOS and Linux builds `devlanes`, `devlanes-gui` and `fixture-server` with cargo first; set it to skip that. On Windows tests never run cargo and take the binaries next to the test binary, so the build below is required there. `devlanes-gui` builds in a cargo invocation of its own, as releases build it:
 
 ```sh
 cargo build -p devlanes -p devlanes-testing
+cargo build -p devlanes-gui
 export DEVLANES_E2E_BIN_DIR="$PWD/target/debug"
 cargo nextest run --profile e2e
 cargo nextest run --profile e2e --run-ignored only -E 'test(/^docker_/)'   # needs Docker
@@ -400,7 +401,7 @@ The dialog lists at most five non-breaking highlights across all releases since 
 
 ### Versions
 
-Don't edit versions or `CHANGELOG.md` files by hand; the release pull request does. Crates have their own versions, and `devlanes` and `devlanes-hosts-helper` carry the release version (`packaging/README.md`). A new crate needs an entry in `packages.linked` of `.sampo/config.toml`, so its changes reach the `devlanes` version. Code that reports the devlanes version uses `devlanes_version::VERSION`, not its own crate's `CARGO_PKG_VERSION`.
+Don't edit versions or `CHANGELOG.md` files by hand; the release pull request does. Crates have their own versions, and `devlanes`, `devlanes-hosts-helper` and `devlanes-gui` carry the release version (`packaging/README.md`). A new crate needs an entry in `packages.linked` of `.sampo/config.toml`, so its changes reach the `devlanes` version. Code that reports the devlanes version uses `devlanes_version::VERSION`, not its own crate's `CARGO_PKG_VERSION`.
 
 ## Releases
 
@@ -424,7 +425,7 @@ iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
 
 ### Symbolicating a report
 
-Release and `next` binaries are stripped, so a stack from a user's machine (macOS `sample`, `perf`, a Windows crash dump) shows raw addresses. Each release, and the `next` prerelease, has a debug archive per target, `devlanes-VERSION-TARGET-debug.tar.gz`, built in the same job as the shipped binary, with function names and file:line tables. It holds `devlanes.dSYM` and `devlanes-hosts.dSYM` on macOS, `devlanes.debug` and `devlanes-hosts.debug` on Linux, and `devlanes.pdb` on Windows. Take the version and target from the report's `devlanes --version` and platform, then:
+Release and `next` binaries are stripped, so a stack from a user's machine (macOS `sample`, `perf`, a Windows crash dump) shows raw addresses. Each release, and the `next` prerelease, has a debug archive per target, `devlanes-VERSION-TARGET-debug.tar.gz`, built in the same job as the shipped binary, with function names and file:line tables. It holds `devlanes.dSYM`, `devlanes-hosts.dSYM` and `devlanes-gui.dSYM` on macOS, `devlanes.debug`, `devlanes-hosts.debug` and `devlanes-gui.debug` on Linux, and `devlanes.pdb` and `devlanes_gui.pdb` (Cargo writes `_` there) on Windows. Take the version and target from the report's `devlanes --version` and platform, then:
 
 ```sh
 gh release download vX.Y.Z --repo devlanes-run/devlanes -p 'devlanes-X.Y.Z-aarch64-apple-darwin-debug.tar.gz'
