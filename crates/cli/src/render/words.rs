@@ -1283,6 +1283,10 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         // A restored box whose command left the user config; the message
         // says what to do.
         "box_command_missing" => (text(data, "message"), Some(Hint::command(["remote", "ls"]))),
+        // Pairing and connecting by ticket; each message says what to run.
+        "bad_ticket" | "box_name_taken" | "box_name_ambiguous" | "box_pairing_missing" => {
+            (text(data, "message"), None)
+        }
         "remote_needs_auth" => {
             let host = text(data, "host");
             (
