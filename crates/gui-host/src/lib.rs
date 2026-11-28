@@ -43,7 +43,6 @@ mod test_pattern;
 pub mod conformance;
 
 use std::future::Future;
-use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -194,8 +193,8 @@ where
 
 /// Starts `backend` and serves its windows on the connections `listener`
 /// accepts, until [`ServeOptions::shutdown`] is cancelled or the backend
-/// stops. On the way out the connections get [`SHUTDOWN_GRACE`] to send what
-/// is queued, and the backend is dropped, which stops it.
+/// stops. On the way out the connections get two seconds to send what is
+/// queued, and the backend is dropped, which stops it.
 pub async fn serve<L: Listener, B: Backend>(
     mut listener: L,
     backend: B,
@@ -215,7 +214,8 @@ pub async fn serve<L: Listener, B: Backend>(
     });
     let (inbox_tx, inbox_rx) = mpsc::channel(INBOX);
     let hub = hub::Hub::new(control, &options, real_desktop);
-    let mut hub = pin!(hub.run(inbox_rx, events));
+    // Boxed so it can be dropped before the connections drain.
+    let mut hub = Box::pin(hub.run(inbox_rx, events));
     let mut connections = JoinSet::new();
     let mut accepting = true;
     let mut paused_until = None;
@@ -242,6 +242,9 @@ pub async fn serve<L: Listener, B: Backend>(
             Some(_) = connections.join_next(), if !connections.is_empty() => {}
         }
     };
+    // Readers waiting to hand a message over then fail at once instead of
+    // waiting on an inbox nobody reads.
+    drop(hub);
     drop(inbox_tx);
     // The host task closed every write queue; writers send what is left and end.
     let drain = async { while connections.join_next().await.is_some() {} };
