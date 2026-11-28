@@ -2036,7 +2036,7 @@ pub(crate) fn idle_summary(lane: &str, service: &ServiceInfo) -> UnitSummary {
         public_url: service.public_url.clone(),
         gui: service.gui.then(|| devlanes_proto::GuiStatus {
             host: devlanes_proto::GUI_HOST_STOPPED.into(),
-            real_desktop: None,
+            ..devlanes_proto::GuiStatus::default()
         }),
         ..UnitSummary::default()
     }

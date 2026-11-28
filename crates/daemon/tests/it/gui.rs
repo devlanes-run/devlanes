@@ -228,6 +228,7 @@ async fn a_gui_host_starts_before_its_unit_and_stops_after_it() {
             Some(GuiStatus {
                 host: "running".into(),
                 real_desktop: Some(false),
+                codecs: Vec::new(),
             })
         );
         assert!(unit(&h, &main, "api").await.gui.is_none());

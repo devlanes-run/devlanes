@@ -41,9 +41,9 @@ use devlanes_core::{
 use devlanes_gui_client::{Client, ClientOptions, Event, Events};
 use devlanes_gui_proto::{
     Role, Token,
-    ready::{HostLine, MAX_READY_LINE, Ready, ReadyError, UnavailableReason},
+    ready::{CodecProblem, HostLine, MAX_READY_LINE, Ready, ReadyError, UnavailableReason},
 };
-use devlanes_proto::{GuiStatus, RpcError};
+use devlanes_proto::{GuiCodecProblem, GuiStatus, RpcError};
 use serde_json::{Value, json};
 use tokio::sync::{OnceCell, broadcast};
 
@@ -213,6 +213,8 @@ struct Facts {
     /// A `devlanes_proto::GUI_HOST_*` word.
     host: &'static str,
     real_desktop: Option<bool>,
+    /// The codecs the host said it lacks.
+    codecs: Vec<GuiCodecProblem>,
     /// How the host ended while the unit ran.
     died: Option<ExitOutcome>,
     /// The end of the host's standard error when it died.
@@ -227,9 +229,12 @@ struct Facts {
 pub(crate) struct GuiState(Mutex<Facts>);
 
 impl GuiState {
-    /// A run whose host runs, on a display that is or is not the real desktop.
-    fn running(real_desktop: bool) -> Arc<Self> {
-        Self::with(devlanes_proto::GUI_HOST_RUNNING, Some(real_desktop))
+    /// A run whose host runs as its ready line says: on a display that is or
+    /// is not the real desktop, without the codecs it lists.
+    fn running(ready: &Ready) -> Arc<Self> {
+        let state = Self::with(devlanes_proto::GUI_HOST_RUNNING, Some(ready.real_desktop));
+        state.facts().codecs = ready.codecs.iter().map(codec_problem).collect();
+        state
     }
 
     /// A run without a host: `GUI_HOST_NONE` on a machine without a GUI
@@ -243,6 +248,7 @@ impl GuiState {
         Arc::new(Self(Mutex::new(Facts {
             host,
             real_desktop,
+            codecs: Vec::new(),
             died: None,
             stderr: String::new(),
             restarting: false,
@@ -279,11 +285,14 @@ impl GuiState {
             _ if !alive => devlanes_proto::GUI_HOST_STOPPED,
             word => word,
         };
+        let running = host == devlanes_proto::GUI_HOST_RUNNING;
         GuiStatus {
             host: host.into(),
-            real_desktop: facts
-                .real_desktop
-                .filter(|_| host == devlanes_proto::GUI_HOST_RUNNING),
+            real_desktop: facts.real_desktop.filter(|_| running),
+            codecs: match running {
+                true => facts.codecs.clone(),
+                false => Vec::new(),
+            },
         }
     }
 
@@ -358,7 +367,7 @@ impl StartedHost {
             unit,
             host: self.host,
             control: self.control,
-            state: GuiState::running(self.ready.real_desktop),
+            state: GuiState::running(&self.ready),
             stderr: self.stderr,
             finished: OnceCell::new(),
         });
@@ -578,6 +587,17 @@ fn check(line: &str, address: SocketAddr) -> Result<(Ready, Option<String>), Hos
             });
             Ok((ready, note))
         }
+    }
+}
+
+/// A codec problem of a host's ready line as status reports it.
+fn codec_problem(problem: &CodecProblem) -> GuiCodecProblem {
+    GuiCodecProblem {
+        codec: problem.codec.clone(),
+        reason: problem.reason.word().to_owned(),
+        library: problem.library.clone(),
+        found: problem.found.clone(),
+        supported: problem.supported.clone(),
     }
 }
 

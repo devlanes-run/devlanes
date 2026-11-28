@@ -134,6 +134,13 @@ fn unit_block(unit: &UnitSummary, tail: &[Value], styled: &[Value], cx: &Ctx<'_>
     if let Some(note) = unit.gui.as_ref().and_then(words::gui_note) {
         lines.push(format!("  {note}"));
     }
+    if let Some(gui) = &unit.gui {
+        lines.extend(
+            words::gui_codec_notes(gui)
+                .into_iter()
+                .map(|note| format!("  {note}")),
+        );
+    }
     lines.extend(leftover_notes("  ", &unit.left_running, &unit.escaped));
     if unit.state == "failed" {
         lines.extend(super::tail_lines_in(tail, styled, cx));
@@ -1090,6 +1097,11 @@ fn unit_table(lane: &LaneSummary, cx: &Ctx<'_>) -> Vec<String> {
         }
         if let Some(note) = unit.gui.as_ref().and_then(words::gui_note) {
             extra.push(format!("  {}: {note}", clean(&unit.name)));
+        }
+        if let Some(gui) = &unit.gui {
+            for note in words::gui_codec_notes(gui) {
+                extra.push(format!("  {}: {note}", clean(&unit.name)));
+            }
         }
         extra.extend(leftover_notes(
             &format!("  {}: ", clean(&unit.name)),

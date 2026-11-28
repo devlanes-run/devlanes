@@ -1279,7 +1279,79 @@ fn gui_checks(gui: &Value) -> Vec<Check> {
             "this machine has no GUI backend: GUI services run without a host, with their windows on this desktop",
         ),
     };
-    vec![binary, backend]
+    let mut checks = vec![binary, backend];
+    checks.extend(codec_checks(&gui["codecs"]));
+    checks
+}
+
+/// The video codecs `devlanes-gui codecs` reports (`codecs`: `{h264:
+/// {version, encoders, decoders}, problems: [{codec, reason, library, found,
+/// supported, detail}]}`): H.264 and its library, or why it is missing, in
+/// which case GUI windows stream as whole pictures (`raw`). Nothing when
+/// `devlanes-gui` did not answer.
+fn codec_checks(codecs: &Value) -> Vec<Check> {
+    if !codecs.is_object() {
+        return Vec::new();
+    }
+    let mut checks = Vec::new();
+    let h264 = &codecs["h264"];
+    if let Some(version) = h264.get("version").and_then(Value::as_str) {
+        let hardware = |key: &str| list(h264, key).iter().any(|kind| kind == "hardware");
+        let ends = match (list(h264, "encoders").is_empty(), hardware("encoders")) {
+            (true, _) => "decoding only".to_owned(),
+            (false, true) => "hardware encoder".to_owned(),
+            (false, false) => "software encoder".to_owned(),
+        };
+        let decoder = if hardware("decoders") {
+            ", hardware decoder"
+        } else {
+            ""
+        };
+        checks.push(Check::new(
+            "gui",
+            Outcome::Ok,
+            format!("H.264 through {} ({ends}{decoder})", clean(version)),
+        ));
+    }
+    for problem in list(codecs, "problems") {
+        let library = text(problem, "library");
+        let (why, fix) = match (text(problem, "reason").as_str(), library.as_str()) {
+            ("missing_library", "OpenH264") => (
+                "OpenH264 is not installed".to_owned(),
+                Some(words::OPENH264_INSTALL.to_owned()),
+            ),
+            ("missing_library", library) => (format!("{} is not installed", clean(library)), None),
+            ("unsupported_version", library) => (
+                format!(
+                    "{} {} is installed and devlanes uses {}",
+                    clean(library),
+                    clean(&text(problem, "found")),
+                    clean(&text(problem, "supported"))
+                ),
+                (library == "OpenH264").then(|| words::OPENH264_INSTALL.to_owned()),
+            ),
+            _ => (
+                "the OS has no H.264 encoder or decoder that starts".to_owned(),
+                None,
+            ),
+        };
+        let mut check = Check::new(
+            "gui",
+            Outcome::Skip,
+            format!(
+                "no H.264: {why}, so GUI windows stream as whole pictures, which is slow over a network"
+            ),
+        );
+        let detail = text(problem, "detail");
+        if !detail.is_empty() {
+            check = check.detail(clean(&detail));
+        }
+        if let Some(fix) = fix {
+            check = check.fix(fix);
+        }
+        checks.push(check);
+    }
+    checks
 }
 
 /// The embedded DNS server of the `resolver` hostname strategy (`dns`:

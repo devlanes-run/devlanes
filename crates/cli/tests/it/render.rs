@@ -966,6 +966,63 @@ fn doctor_without_a_daemon() {
     );
 }
 
+/// A GUI host without H.264 is noted on its unit in status; doctor names the
+/// H.264 library a machine has, and without OpenH264 warns (exit 0) with the
+/// install lines of the common package managers; a version devlanes does
+/// not use is named with the ones it does.
+#[test]
+fn missing_h264_is_worded_in_status_and_doctor() {
+    let page = |items: Vec<Value>| json!({"items": items, "truncated": false, "next_cursor": null});
+    let mut desktop = unit("desktop", "ready");
+    desktop["gui"] = json!({"host": "running", "real_desktop": false, "codecs": [
+        {"codec": "h264", "reason": "missing_library", "library": "OpenH264"}]});
+    let status = render_text(
+        Method::Status,
+        &page(vec![lane(Some(2), "main", "running", vec![desktop])]),
+    );
+    let gui = |codecs: Value| {
+        json!({
+            "running": false, "version": "0.3.0", "home": "/home/u/.devlanes",
+            "socket": "/home/u/.devlanes/run/daemon.sock", "db_path": "/home/u/.devlanes/state.db",
+            "home_check": {"path": "/home/u/.devlanes", "exists": true, "mode": "700", "problem": null},
+            "sandbox": {"codex_sandbox": false, "app_sandbox": false},
+            "gui": {"path": "/opt/devlanes/devlanes-gui", "installed": true, "version": "0.3.0",
+                    "expected": "0.3.0", "error": null, "backend": "test-pattern",
+                    "fix": "devlanes update", "codecs": codecs},
+        })
+    };
+    let missing = render_text(
+        Method::Doctor,
+        &gui(
+            json!({"h264": {"version": null, "encoders": [], "decoders": []}, "problems": [
+            {"codec": "h264", "reason": "missing_library", "library": "OpenH264",
+             "detail": "OpenH264 is not installed: none of libopenh264.so.8, libopenh264.so.7, libopenh264.so.6, libopenh264.so loads"}]}),
+        ),
+    );
+    assert!(missing.contains("--- plain (exit 0)"), "{missing}");
+    let refused = render_text(
+        Method::Doctor,
+        &gui(
+            json!({"h264": {"version": null, "encoders": [], "decoders": []}, "problems": [
+            {"codec": "h264", "reason": "unsupported_version", "library": "OpenH264",
+             "found": "3.0.0", "supported": "2.2.0 to 2.7", "detail": ""}]}),
+        ),
+    );
+    let windows = render_text(
+        Method::Doctor,
+        &gui(
+            json!({"h264": {"version": "Media Foundation", "encoders": ["hardware", "software"],
+                             "decoders": ["software"]}, "problems": []}),
+        ),
+    );
+    insta::assert_snapshot!(
+        "render_missing_h264",
+        format!(
+            "{status}=== doctor without OpenH264\n{missing}=== doctor with OpenH264 3.0\n{refused}=== doctor on Windows\n{windows}"
+        )
+    );
+}
+
 /// Windows facts: an elevated daemon or terminal and a terminal job that kills
 /// on close are warnings (exit 0); a home other accounts can reach is a warning
 /// while the daemon can tighten it and a failure with the `icacls` fix after.

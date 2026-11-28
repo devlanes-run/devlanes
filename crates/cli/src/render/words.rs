@@ -5,7 +5,7 @@ use devlanes_core::paths::names_a_path;
 use devlanes_proto::{LaneSummary, RpcError, UnitDrift};
 use serde_json::{Value, json};
 
-use super::{compact_fields, display_value, list, text};
+use super::{clean, compact_fields, display_value, list, text};
 use crate::Hint;
 
 /// A field as text, `unknown` when absent.
@@ -2053,6 +2053,44 @@ pub(crate) fn gui_note(gui: &devlanes_proto::GuiStatus) -> Option<String> {
         _ => None,
     }
 }
+
+/// What a running GUI host's missing codecs mean for its windows: a note per
+/// codec, such as H.264 without OpenH264, after which viewers get the whole
+/// pictures of `raw`, which every host has.
+pub(crate) fn gui_codec_notes(gui: &devlanes_proto::GuiStatus) -> Vec<String> {
+    gui.codecs
+        .iter()
+        .map(|problem| {
+            let codec = match problem.codec.as_str() {
+                "h264" => "H.264".to_owned(),
+                other => clean(other),
+            };
+            let library = problem.library.as_deref().map(clean);
+            let why = match (problem.reason.as_str(), library) {
+                (devlanes_proto::GUI_CODEC_MISSING_LIBRARY, Some(library)) => {
+                    format!("{library} is not installed")
+                }
+                (devlanes_proto::GUI_CODEC_UNSUPPORTED_VERSION, Some(library)) => format!(
+                    "{library} {} is installed and devlanes uses {}",
+                    problem.found.as_deref().map_or_else(|| "?".into(), clean),
+                    problem.supported.as_deref().map_or_else(|| "?".into(), clean),
+                ),
+                _ => "this machine has no encoder for it".to_owned(),
+            };
+            format!(
+                "its GUI host has no {codec} ({why}), so its windows stream as whole pictures, which is slow over a network; devlanes doctor on the machine that runs it says how to add it"
+            )
+        })
+        .collect()
+}
+
+/// How to install OpenH264 with the package managers of the common Linux
+/// distributions, for `doctor`. Package names are each distribution's own:
+/// Debian and Ubuntu name the library package after its soname, which
+/// changes between releases; Fedora ships Cisco's build from its
+/// `fedora-cisco-openh264` repository, which is on by default; Alpine has
+/// it in `community`.
+pub(crate) const OPENH264_INSTALL: &str = "install it with the package manager: apt install libopenh264-8 (libopenh264-7 on Debian 12 and Ubuntu 24.04, libopenh264-6 on Ubuntu 22.04), dnf install openh264, pacman -S openh264 or apk add openh264; then restart the GUI services";
 
 /// For a GUI service whose host did not start, why (the end of `couldn't
 /// start: ...`) and the command that helps, for the CLI and the TUI; `None`

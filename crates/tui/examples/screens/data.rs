@@ -409,6 +409,7 @@ pub fn gui_lanes() -> Vec<LaneSummary> {
             unit.gui = Some(devlanes_proto::GuiStatus {
                 host: devlanes_proto::GUI_HOST_RUNNING.into(),
                 real_desktop: Some(false),
+                ..devlanes_proto::GuiStatus::default()
             });
             unit.ports.insert(devlanes_proto::GUI_PORT.into(), 26412);
         }

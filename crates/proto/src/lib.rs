@@ -967,7 +967,39 @@ pub struct GuiStatus {
     /// said when it started; absent while no host runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub real_desktop: Option<bool>,
+    /// Video codecs the running host lacks on this machine, such as H.264
+    /// without OpenH264, as its ready line said; its viewers then get the
+    /// uncompressed `raw` codec. Empty while no host runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codecs: Vec<GuiCodecProblem>,
 }
+
+/// A codec a GUI host lacks, as [`GuiStatus::codecs`] reports it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GuiCodecProblem {
+    /// The codec's name, such as `h264`.
+    pub codec: String,
+    /// [`GUI_CODEC_MISSING_LIBRARY`], [`GUI_CODEC_UNSUPPORTED_VERSION`],
+    /// [`GUI_CODEC_UNAVAILABLE`] or `other`.
+    pub reason: String,
+    /// The library missing or refused, such as `OpenH264`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
+    /// The version found, for [`GUI_CODEC_UNSUPPORTED_VERSION`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub found: Option<String>,
+    /// The versions devlanes uses, for [`GUI_CODEC_UNSUPPORTED_VERSION`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported: Option<String>,
+}
+
+/// [`GuiCodecProblem::reason`]: the codec's library is not installed.
+pub const GUI_CODEC_MISSING_LIBRARY: &str = "missing_library";
+/// [`GuiCodecProblem::reason`]: the codec's library is a version devlanes
+/// cannot use.
+pub const GUI_CODEC_UNSUPPORTED_VERSION: &str = "unsupported_version";
+/// [`GuiCodecProblem::reason`]: the OS has no such codec, or it did not start.
+pub const GUI_CODEC_UNAVAILABLE: &str = "unavailable";
 
 /// [`GuiStatus::host`]: the host runs and serves the unit's windows.
 pub const GUI_HOST_RUNNING: &str = "running";

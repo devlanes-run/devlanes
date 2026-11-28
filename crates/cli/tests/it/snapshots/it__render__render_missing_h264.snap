@@ -1,0 +1,147 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: "format!(\"{status}=== doctor without OpenH264\\n{missing}=== doctor with OpenH264 3.0\\n{refused}=== doctor on Windows\\n{windows}\")"
+---
+--- human (exit 0)
+acme
+  LANE  BRANCH  STATE    SERVICES  CPU   MEM        URL
+  2     main    running  1/1       4.5%  143.1 MiB  https://acme2.localhost:8443
+
+  UNIT     STATE       PORT   CPU   MEM        URL
+  desktop  ready, gui  20107  4.5%  143.1 MiB  https://desktop.acme2.localhost:8443
+  desktop: its GUI host has no H.264 (OpenH264 is not installed), so its windows stream as whole pictures, which is slow over a network; devlanes doctor on the machine that runs it says how to add it
+--- plain (exit 0)
+acme
+  LANE  BRANCH  STATE    SERVICES  CPU   MEM        URL
+  2     main    running  1/1       4.5%  143.1 MiB  https://acme2.localhost:8443
+
+  UNIT     STATE       PORT   CPU   MEM        URL
+  desktop  ready, gui  20107  4.5%  143.1 MiB  https://desktop.acme2.localhost:8443
+  desktop: its GUI host has no H.264 (OpenH264 is not installed), so its windows stream as whole pictures, which is slow over a network; devlanes doctor on the machine that runs it says how to add it
+--- agent (exit 0)
+running acme@2 main 1/1
+ready acme@2:desktop gui=running http://127.0.0.1:20107 https://desktop.acme2.localhost:8443 default=20107
+  its GUI host has no H.264 (OpenH264 is not installed), so its windows stream as whole pictures, which is slow over a network; devlanes doctor on the machine that runs it says how to add it
+=== doctor without OpenH264
+--- human (exit 0)
+daemon
+  ! not running (socket /home/u/.devlanes/run/daemon.sock)
+    fix: devlanes daemon start
+home
+  ✓ /home/u/.devlanes is private
+sandbox
+  ✓ not sandboxed
+gui
+  ✓ devlanes-gui 0.3.0 at /opt/devlanes/devlanes-gui
+  ✓ GUI backend test-pattern
+  ! no H.264: OpenH264 is not installed, so GUI windows stream as whole pictures, which is slow over a network
+    OpenH264 is not installed: none of libopenh264.so.8, libopenh264.so.7, libopenh264.so.6, libopenh264.so loads
+    fix: install it with the package manager: apt install libopenh264-8 (libopenh264-7 on Debian 12 and Ubuntu 24.04, libopenh264-6 on Ubuntu 22.04), dnf install openh264, pacman -S openh264 or apk add openh264; then restart the GUI services
+output
+  ✓ mode human (DEVLANES_OUTPUT)
+--- plain (exit 0)
+daemon
+  warn not running (socket /home/u/.devlanes/run/daemon.sock)
+    fix: devlanes daemon start
+home
+  ok /home/u/.devlanes is private
+sandbox
+  ok not sandboxed
+gui
+  ok devlanes-gui 0.3.0 at /opt/devlanes/devlanes-gui
+  ok GUI backend test-pattern
+  warn no H.264: OpenH264 is not installed, so GUI windows stream as whole pictures, which is slow over a network
+    OpenH264 is not installed: none of libopenh264.so.8, libopenh264.so.7, libopenh264.so.6, libopenh264.so loads
+    fix: install it with the package manager: apt install libopenh264-8 (libopenh264-7 on Debian 12 and Ubuntu 24.04, libopenh264-6 on Ubuntu 22.04), dnf install openh264, pacman -S openh264 or apk add openh264; then restart the GUI services
+output
+  ok mode plain (DEVLANES_OUTPUT)
+--- agent (exit 0)
+warn daemon: not running (socket /home/u/.devlanes/run/daemon.sock)
+  fix: devlanes daemon start
+warn gui: no H.264: OpenH264 is not installed, so GUI windows stream as whole pictures, which is slow over a network
+  OpenH264 is not installed: none of libopenh264.so.8, libopenh264.so.7, libopenh264.so.6, libopenh264.so loads
+  fix: install it with the package manager: apt install libopenh264-8 (libopenh264-7 on Debian 12 and Ubuntu 24.04, libopenh264-6 on Ubuntu 22.04), dnf install openh264, pacman -S openh264 or apk add openh264; then restart the GUI services
+ok home: /home/u/.devlanes is private
+ok sandbox: not sandboxed
+ok gui: devlanes-gui 0.3.0 at /opt/devlanes/devlanes-gui
+ok gui: GUI backend test-pattern
+ok output: mode agent (DEVLANES_OUTPUT)
+=== doctor with OpenH264 3.0
+--- human (exit 0)
+daemon
+  ! not running (socket /home/u/.devlanes/run/daemon.sock)
+    fix: devlanes daemon start
+home
+  ✓ /home/u/.devlanes is private
+sandbox
+  ✓ not sandboxed
+gui
+  ✓ devlanes-gui 0.3.0 at /opt/devlanes/devlanes-gui
+  ✓ GUI backend test-pattern
+  ! no H.264: OpenH264 3.0.0 is installed and devlanes uses 2.2.0 to 2.7, so GUI windows stream as whole pictures, which is slow over a network
+    fix: install it with the package manager: apt install libopenh264-8 (libopenh264-7 on Debian 12 and Ubuntu 24.04, libopenh264-6 on Ubuntu 22.04), dnf install openh264, pacman -S openh264 or apk add openh264; then restart the GUI services
+output
+  ✓ mode human (DEVLANES_OUTPUT)
+--- plain (exit 0)
+daemon
+  warn not running (socket /home/u/.devlanes/run/daemon.sock)
+    fix: devlanes daemon start
+home
+  ok /home/u/.devlanes is private
+sandbox
+  ok not sandboxed
+gui
+  ok devlanes-gui 0.3.0 at /opt/devlanes/devlanes-gui
+  ok GUI backend test-pattern
+  warn no H.264: OpenH264 3.0.0 is installed and devlanes uses 2.2.0 to 2.7, so GUI windows stream as whole pictures, which is slow over a network
+    fix: install it with the package manager: apt install libopenh264-8 (libopenh264-7 on Debian 12 and Ubuntu 24.04, libopenh264-6 on Ubuntu 22.04), dnf install openh264, pacman -S openh264 or apk add openh264; then restart the GUI services
+output
+  ok mode plain (DEVLANES_OUTPUT)
+--- agent (exit 0)
+warn daemon: not running (socket /home/u/.devlanes/run/daemon.sock)
+  fix: devlanes daemon start
+warn gui: no H.264: OpenH264 3.0.0 is installed and devlanes uses 2.2.0 to 2.7, so GUI windows stream as whole pictures, which is slow over a network
+  fix: install it with the package manager: apt install libopenh264-8 (libopenh264-7 on Debian 12 and Ubuntu 24.04, libopenh264-6 on Ubuntu 22.04), dnf install openh264, pacman -S openh264 or apk add openh264; then restart the GUI services
+ok home: /home/u/.devlanes is private
+ok sandbox: not sandboxed
+ok gui: devlanes-gui 0.3.0 at /opt/devlanes/devlanes-gui
+ok gui: GUI backend test-pattern
+ok output: mode agent (DEVLANES_OUTPUT)
+=== doctor on Windows
+--- human (exit 0)
+daemon
+  ! not running (socket /home/u/.devlanes/run/daemon.sock)
+    fix: devlanes daemon start
+home
+  ✓ /home/u/.devlanes is private
+sandbox
+  ✓ not sandboxed
+gui
+  ✓ devlanes-gui 0.3.0 at /opt/devlanes/devlanes-gui
+  ✓ GUI backend test-pattern
+  ✓ H.264 through Media Foundation (hardware encoder)
+output
+  ✓ mode human (DEVLANES_OUTPUT)
+--- plain (exit 0)
+daemon
+  warn not running (socket /home/u/.devlanes/run/daemon.sock)
+    fix: devlanes daemon start
+home
+  ok /home/u/.devlanes is private
+sandbox
+  ok not sandboxed
+gui
+  ok devlanes-gui 0.3.0 at /opt/devlanes/devlanes-gui
+  ok GUI backend test-pattern
+  ok H.264 through Media Foundation (hardware encoder)
+output
+  ok mode plain (DEVLANES_OUTPUT)
+--- agent (exit 0)
+warn daemon: not running (socket /home/u/.devlanes/run/daemon.sock)
+  fix: devlanes daemon start
+ok home: /home/u/.devlanes is private
+ok sandbox: not sandboxed
+ok gui: devlanes-gui 0.3.0 at /opt/devlanes/devlanes-gui
+ok gui: GUI backend test-pattern
+ok gui: H.264 through Media Foundation (hardware encoder)
+ok output: mode agent (DEVLANES_OUTPUT)
