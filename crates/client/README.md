@@ -38,6 +38,7 @@ Auto-spawn is refused when sandbox markers are present or the socket-bind probe 
 ## Behaviour
 
 Do not mix `request` with outstanding `begin_request` calls on the same connection.
+On Linux a spawned daemon gets the shell's `DISPLAY`, `WAYLAND_DISPLAY` and `XAUTHORITY` only as `DEVLANES_VIEWER_DISPLAY` and the like, for the GUI viewers it starts, and none from an SSH session.
 Protocol mismatch returns the peer's version and managed-process count without stopping it.
 
 The home is `DEVLANES_HOME` or `~/.devlanes`; persistent paths stay there.

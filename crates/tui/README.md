@@ -70,6 +70,8 @@ Connecting a box from the boxes view sends `connect` on a connection of its own 
 
 A box lane joins the tab of the project with its name, and a project only boxes run gets one tab. In a tab with box lanes the chips go by number, this machine's lane first, then the boxes by name: `@0  @0 fork-a  @0 fork-b  @1`. When lanes clash on hostnames, the daemon mirrors one of them, and the others are grey: dim, with a hollow dot, or in parentheses with ascii glyphs. `m` on a grey lane sends `remote.use` to make it the one in use. While this machine's lane runs, `m` asks first, stops that lane and switches once it stopped. In the boxes view, `m` works on a box's skipped lane row too.
 
+With `Options::gui` (GUI services on in the build), `w` on a running GUI service emits `Effect::OpenViewer`, which the runtime answers by running `devlanes gui open`, and the options page lists the `gui` settings; without it neither shows.
+
 While lanes start, the terminal tab's progress bar shows ready services over the services starting, across every starting lane. A failed start shows red for three seconds. Quitting, a panic or `terminal.progress: never` clears it; see `devlanes-term` for where it is drawn.
 
 ## Screens for design review
