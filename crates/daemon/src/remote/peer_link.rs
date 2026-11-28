@@ -341,9 +341,12 @@ pub(super) struct PeerAttempts {
 }
 
 /// A gap between two attempts longer than this means the daemon was not
-/// running them, as across a sleep: twice the longest wait
-/// `Backoff::default()` (`devlanes_transport`'s `reconnect.rs`) puts
-/// between attempts, 2 minutes, which the type does not expose.
+/// running them, as across a sleep: twice the longest wait the link's
+/// backoff puts between attempts. The backoff comes from
+/// `RemoteConnector::backoff()`, which in the binary is
+/// `Backoff::default()` (`devlanes_transport`'s `reconnect.rs`), capped
+/// at 2 minutes; the type does not expose its cap, so a connector with a
+/// longer one needs this number changed.
 const ASLEEP_AFTER: Duration = Duration::from_secs(2 * 2 * 60);
 
 impl PeerAttempts {
@@ -828,15 +831,16 @@ impl Inner {
         })
     }
 
-    /// Whether `host` names a box paired by ticket, in any case.
+    /// Whether `host` is the name of a box paired by ticket. A name that
+    /// differs from one only in case is not: connecting it fails with
+    /// `box_name_ambiguous`, also when it brings a code.
     pub(super) async fn is_peer_box(&self, host: &str) -> Result<bool, RpcError> {
         Ok(self
             .store
-            .p2p_boxes()
+            .p2p_box(host.to_owned())
             .await
             .map_err(crate::registry::store_error)?
-            .iter()
-            .any(|paired| paired.name.eq_ignore_ascii_case(host)))
+            .is_some())
     }
 
     /// The stored spelling of the box paired by ticket that `host` names in
@@ -1389,7 +1393,7 @@ mod tests {
 
     /// Hours without a dial, as across a sleep, give the link the grace
     /// from the next failed dial instead of ending it there, and the
-    /// give-up after the grace still says how long the box was away.
+    /// give-up after the grace still says at least the window passed.
     #[tokio::test(start_paused = true)]
     async fn a_gap_without_attempts_grants_the_grace() {
         let (memory, _listener) = memory_transport();

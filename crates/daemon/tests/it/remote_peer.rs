@@ -415,6 +415,7 @@ async fn names_paired_by_ticket_are_never_resolved_another_way() {
             .await
             .expect_err("a name claimed twice");
         assert_eq!(ambiguous.code, "box_name_ambiguous", "{ambiguous:?}");
+        assert_eq!(ambiguous.data["paired_name"], "twice", "{ambiguous:?}");
         let solo = client.host_named("solo").await;
         assert_eq!(
             (&solo["state"], &solo["transport"], &solo["address"]),
@@ -425,19 +426,30 @@ async fn names_paired_by_ticket_are_never_resolved_another_way() {
             ),
             "{solo}"
         );
-        // In another case the name is still that box's, and never an SSH
-        // destination sharing its sync directory.
-        let spelled = connect_unattended(&client, json!({"host": "SOLO"}))
-            .await
-            .expect_err("a paired box's name in another case");
-        assert_eq!(spelled.code, "bad_request", "{spelled:?}");
-        assert!(
-            spelled.data["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("as `solo`")),
-            "{spelled:?}"
-        );
-        let coded = connect_unattended(&client, json!({"host": "Solo", "code": "ABCD-EFGH"}))
+        // A name that differs from a paired box's only in case is the same
+        // conflict, with or without a code, and never an SSH destination
+        // sharing the box's sync directory.
+        for params in [
+            json!({"host": "SOLO"}),
+            json!({"host": "SOLO", "code": "ABCD-EFGH"}),
+        ] {
+            let spelled = connect_unattended(&client, params)
+                .await
+                .expect_err("a paired box's name in another case");
+            assert_eq!(spelled.code, "box_name_ambiguous", "{spelled:?}");
+            assert_eq!(
+                (&spelled.data["name"], &spelled.data["paired_name"]),
+                (&json!("SOLO"), &json!("solo")),
+                "{spelled:?}"
+            );
+            assert!(
+                spelled.data["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("over SSH")),
+                "{spelled:?}"
+            );
+        }
+        let coded = connect_unattended(&client, json!({"host": "solo", "code": "ABCD-EFGH"}))
             .await
             .expect_err("a code for a box paired by ticket");
         assert_eq!(coded.code, "bad_request", "{coded:?}");

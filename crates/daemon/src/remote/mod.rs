@@ -1230,16 +1230,44 @@ pub(super) fn pairing_missing(host: &str) -> RpcError {
 }
 
 /// `box_name_ambiguous`: `host` is both a box paired by ticket and an entry
-/// of `remote.boxes`, and neither may win without a word.
+/// of `remote.boxes`, and neither may win without a word. `paired_name`
+/// is the paired box's name, the same as `name` here.
 fn name_ambiguous(host: &str) -> RpcError {
     RpcError::new(
         "box_name_ambiguous",
         json!({
             "name": host,
+            "paired_name": host,
             "message": format!(
                 "{host} is both a box paired by ticket and an entry of remote.boxes in the user \
                  config. Rename the remote.boxes entry, or forget the paired box and pair with it \
                  again from a new ticket with `--name`"
+            ),
+        }),
+        1,
+    )
+}
+
+/// `box_name_ambiguous` for `host`, which differs only in case from
+/// `paired`, a box paired by ticket: on a file system that ignores case
+/// the two would share a sync directory, so `host` is not reached at all.
+/// The way to the other machine depends on whether `host` is a
+/// `remote.boxes` entry (`configured`) or an SSH destination.
+fn case_ambiguous(host: &str, paired: &str, configured: bool) -> RpcError {
+    let other = if configured {
+        format!("to reach the remote.boxes entry {host}, rename it in the user config")
+    } else {
+        format!("to reach {host} over SSH, use another alias for it, such as user@{host}")
+    };
+    RpcError::new(
+        "box_name_ambiguous",
+        json!({
+            "name": host,
+            "paired_name": paired,
+            "message": format!(
+                "{host} differs only in case from {paired}, a box paired by ticket here, and the \
+                 two would share one sync directory. `devlanes remote connect {paired}` reaches \
+                 the paired box; {other}"
             ),
         }),
         1,
@@ -1726,18 +1754,11 @@ impl Inner {
                 if recorded == Some(P2P) || opening == Opening::Paired {
                     return Err(pairing_missing(host));
                 }
+                // The same conflict as a remote.boxes entry of the paired
+                // name, so the same error, whichever spelling was asked for.
                 if let Some(stored) = self.peer_box_spelled(host).await? {
-                    return Err(RpcError::new(
-                        "bad_request",
-                        json!({
-                            "host": host,
-                            "name": stored,
-                            "message": format!(
-                                "this machine has that box as `{stored}`; use that name"
-                            ),
-                        }),
-                        2,
-                    ));
+                    let configured = self.configured_box(host).await;
+                    return Err(case_ambiguous(host, &stored, configured));
                 }
                 let remote = self
                     .integ

@@ -320,8 +320,11 @@ pub enum Method {
     /// and `bad_request` for a ticket with `host` or `code`, a `name`
     /// without a ticket, and a `name` that is not 1 to 63 letters, digits,
     /// `-` and `_` or starts with `-` or the ticket prefix. Connecting a box
-    /// paired by ticket fails with `box_name_ambiguous` (`{name, message}`)
-    /// when `remote.boxes` has an entry of that name too,
+    /// paired by ticket fails with `box_name_ambiguous` (`{name,
+    /// paired_name, message}`, `name` the name asked for and `paired_name`
+    /// the paired box's) when `remote.boxes` has an entry of that name too,
+    /// and also for a `host` that differs from a paired box's name only in
+    /// case, with or without a `code`, which is never dialed over SSH;
     /// `box_pairing_missing` (`{host, message}`) when its pairing is gone,
     /// `not_supported_yet` (`{feature: "boxes paired by ticket"}`) without
     /// an endpoint, and `bad_request` with a `code`; its
