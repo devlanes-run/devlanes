@@ -227,11 +227,7 @@ fn split_units(units: &[String]) -> Result<(Option<String>, Vec<String>), RpcErr
     let mut names = Vec::new();
     for unit in units {
         let parsed: UnitRef = unit.parse().map_err(|_| {
-            RpcError::new(
-                "invalid_reference",
-                json!({"reference": unit}),
-                exit::USAGE,
-            )
+            RpcError::new("invalid_reference", json!({"reference": unit}), exit::USAGE)
         })?;
         if parsed.selector.starts_with('+') || parsed.selector.contains(['*', '?', '[']) {
             return Err(RpcError::new(
@@ -296,18 +292,18 @@ async fn find(mut context: Context, lane: Option<String>) -> Result<Found, RpcEr
 /// The lane of a `status` answer: the one lane a named reference gives, or
 /// the request's own (`here`) among the project's.
 fn local_lane(data: &Value, named: bool) -> Result<Found, RpcError> {
-    let lanes: Vec<LaneSummary> =
-        serde_json::from_value(data["items"].clone()).unwrap_or_default();
+    let lanes: Vec<LaneSummary> = serde_json::from_value(data["items"].clone()).unwrap_or_default();
     let here = data["here"].as_str();
     let lane = if named {
         lanes.into_iter().next()
     } else {
         if let Some(error) = data.get("here_error").filter(|error| !error.is_null()) {
-            return Err(serde_json::from_value(error.clone()).unwrap_or_else(|_| {
-                RpcError::new("not_found", json!({}), exit::NOT_FOUND)
-            }));
+            return Err(serde_json::from_value(error.clone())
+                .unwrap_or_else(|_| RpcError::new("not_found", json!({}), exit::NOT_FOUND)));
         }
-        lanes.into_iter().find(|lane| Some(lane.reference.as_str()) == here)
+        lanes
+            .into_iter()
+            .find(|lane| Some(lane.reference.as_str()) == here)
     };
     let lane = lane.ok_or_else(|| {
         RpcError::new(
@@ -399,7 +395,14 @@ fn box_service(host: &Value, lane: &str, unit: &Value) -> Option<Service> {
     });
     let address = mirror
         .filter(|entry| entry["state"] == "bound")
-        .and_then(|entry| entry["addresses"].as_array()?.first()?.as_str()?.parse::<IpAddr>().ok())
+        .and_then(|entry| {
+            entry["addresses"]
+                .as_array()?
+                .first()?
+                .as_str()?
+                .parse::<IpAddr>()
+                .ok()
+        })
         .zip(u16::try_from(port).ok())
         .map(SocketAddr::from);
     let unmirrored = (serving && address.is_none()).then(|| match mirror {
@@ -408,7 +411,12 @@ fn box_service(host: &Value, lane: &str, unit: &Value) -> Option<Service> {
             .and_then(|conflicts| conflicts.first())
             .and_then(|conflict| conflict["message"].as_str())
             .map_or_else(
-                || format!("port {port} is {}", entry["state"].as_str().unwrap_or("not bound")),
+                || {
+                    format!(
+                        "port {port} is {}",
+                        entry["state"].as_str().unwrap_or("not bound")
+                    )
+                },
                 str::to_owned,
             ),
         None => format!("port {port} is not mirrored"),
@@ -512,10 +520,12 @@ fn unreachable_error(base: &Value, address: SocketAddr, error: &ToolError) -> Rp
 fn tool_error(base: &Value, error: ToolError) -> RpcError {
     let mut data = base.clone();
     let listed = |windows: &[WindowInfo]| {
-        json!(windows
-            .iter()
-            .map(|window| json!({"id": window.id.0, "title": window.title}))
-            .collect::<Vec<_>>())
+        json!(
+            windows
+                .iter()
+                .map(|window| json!({"id": window.id.0, "title": window.title}))
+                .collect::<Vec<_>>()
+        )
     };
     let (code, exit_code) = match &error {
         ToolError::UnknownWindow { wanted, windows } => {
@@ -569,7 +579,13 @@ async fn ls(found: &Found, services: &[Service]) -> Value {
             match devlanes_gui_tool::connect(address, CLIENT_NAME).await {
                 Ok(session) => {
                     item["real_desktop"] = json!(session.real_desktop());
-                    item["windows"] = json!(session.windows().iter().map(window_json).collect::<Vec<_>>());
+                    item["windows"] = json!(
+                        session
+                            .windows()
+                            .iter()
+                            .map(window_json)
+                            .collect::<Vec<_>>()
+                    );
                     session.close();
                 }
                 Err(error) => {
@@ -623,7 +639,13 @@ fn lock_word(lock: LockState) -> &'static str {
 
 /// `--to` taken from `cwd`, or `devlanes-screenshots/LANE-UNIT-WINDOW.png` in
 /// the temporary directory, a name the next screenshot of the window reuses.
-fn screenshot_path(cwd: &Path, command: &GuiCommand, lane: &str, unit: &str, window: u64) -> PathBuf {
+fn screenshot_path(
+    cwd: &Path,
+    command: &GuiCommand,
+    lane: &str,
+    unit: &str,
+    window: u64,
+) -> PathBuf {
     if let GuiCommand::Screenshot { to: Some(to), .. } = command {
         return cwd.join(to);
     }
@@ -647,7 +669,11 @@ fn screenshot_path(cwd: &Path, command: &GuiCommand, lane: &str, unit: &str, win
 /// absolute path.
 async fn save(frame: Frame, path: PathBuf) -> Result<PathBuf, RpcError> {
     let io = |error: &dyn std::fmt::Display| {
-        RpcError::new("io", json!({"message": format!("{}: {error}", path.display())}), 1)
+        RpcError::new(
+            "io",
+            json!({"message": format!("{}: {error}", path.display())}),
+            1,
+        )
     };
     let target = path.clone();
     let write = move || -> Result<PathBuf, String> {
@@ -707,16 +733,26 @@ mod tests {
         let [desktop] = found.services.as_slice() else {
             panic!("one GUI service: {found:?}");
         };
-        assert_eq!(desktop.address, Some("127.0.0.1:26012".parse().expect("address")));
+        assert_eq!(
+            desktop.address,
+            Some("127.0.0.1:26012".parse().expect("address"))
+        );
 
         let held = box_lane(&boxes("ready", false), "acme@2").expect("the box lane");
         let error = reachable(&json!({}), &held.services[0]).expect_err("not mirrored");
         assert_eq!(error.code, "gui_not_mirrored");
-        assert!(error.data["message"].as_str().unwrap_or_default().contains("node (pid 7)"));
+        assert!(
+            error.data["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("node (pid 7)")
+        );
 
         let stopped = box_lane(&boxes("stopped", false), "acme@2").expect("the box lane");
         assert_eq!(
-            reachable(&json!({}), &stopped.services[0]).expect_err("stopped").code,
+            reachable(&json!({}), &stopped.services[0])
+                .expect_err("stopped")
+                .code,
             "gui_not_running"
         );
         assert!(box_lane(&boxes("ready", true), "acme@3").is_none());

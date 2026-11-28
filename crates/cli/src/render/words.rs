@@ -2126,10 +2126,7 @@ fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
             (message, Some(ls()))
         }
         "gui_not_running" => (
-            format!(
-                "{unit}{on_box} is not running ({})",
-                field(data, "state")
-            ),
+            format!("{unit}{on_box} is not running ({})", field(data, "state")),
             Some(if host.is_empty() {
                 Hint::command(["start", &unit])
             } else {
@@ -2146,7 +2143,9 @@ fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
             Some(Hint::command(["doctor"])),
         ),
         "gui_host_down" => (
-            format!("the GUI host of {unit} exited, so its windows cannot be reached until it restarts"),
+            format!(
+                "the GUI host of {unit} exited, so its windows cannot be reached until it restarts"
+            ),
             Some(Hint::command(["restart", &unit])),
         ),
         "gui_not_mirrored" => (
@@ -2222,7 +2221,10 @@ fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
             )
         }
         _ => (
-            format!("the GUI host of {unit}{on_box} failed: {}", field(data, "message")),
+            format!(
+                "the GUI host of {unit}{on_box} failed: {}",
+                field(data, "message")
+            ),
             None,
         ),
     }

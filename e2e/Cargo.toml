@@ -36,7 +36,10 @@ devlanes-sys-windows = { path = "../crates/sys-windows" }
 async-trait.workspace = true
 # The GUI test talks to a GUI host's port as a tool does.
 devlanes-gui-client = { path = "../crates/gui-client" }
+# The test pattern's grid, which the gui command tests find in screenshots.
+devlanes-gui-host = { path = "../crates/gui-host" }
 devlanes-gui-proto = { path = "../crates/gui-proto" }
+png.workspace = true
 # The remote tests open a session to a real `devlanes tunnel --stdio` themselves.
 devlanes-transport = { path = "../crates/transport" }
 devlanes-transport-command = { path = "../crates/transport-command" }

@@ -189,7 +189,11 @@ impl Session {
     /// frame came, and returns the size the window took, which an app that
     /// clamps its size may make another one; `None` when the host did not
     /// say.
-    pub async fn resize(&mut self, window: WindowId, size: Size) -> Result<Option<Size>, ToolError> {
+    pub async fn resize(
+        &mut self,
+        window: WindowId,
+        size: Size,
+    ) -> Result<Option<Size>, ToolError> {
         let request = self.client.resize(window, size)?;
         let mut taken = None;
         let events = &mut self.events;
@@ -214,8 +218,7 @@ impl Session {
         // A backend may describe the new size after it answered the resize.
         // Both reached the event queue before the sync's answer, so what is
         // queued now is read without waiting (a zero timeout polls once).
-        while let Ok(Some(event)) = tokio::time::timeout(Duration::ZERO, self.events.next()).await
-        {
+        while let Ok(Some(event)) = tokio::time::timeout(Duration::ZERO, self.events.next()).await {
             if let Event::WindowChanged(info) = event
                 && info.id == window
             {

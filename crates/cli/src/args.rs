@@ -870,9 +870,7 @@ impl GuiCommand {
 /// `WIDTHxHEIGHT`, each side from 1 to 8192 (the GUI protocol's largest).
 fn parse_size(value: &str) -> Result<GuiSize, String> {
     let error = || "expected WIDTHxHEIGHT in pixels, such as 1280x800".to_owned();
-    let (width, height) = value
-        .split_once(['x', 'X'])
-        .ok_or_else(error)?;
+    let (width, height) = value.split_once(['x', 'X']).ok_or_else(error)?;
     let side = |side: &str| {
         side.parse::<u32>()
             .ok()

@@ -158,7 +158,11 @@ fn gui_results_in_every_output_mode() {
                 .gui(output, &data)
                 .expect("text");
             assert_eq!(rendered.exit_code, 0, "{name}");
-            text.push_str(&format!("--- {name} {}\n{}", mode.as_str(), rendered.stdout));
+            text.push_str(&format!(
+                "--- {name} {}\n{}",
+                mode.as_str(),
+                rendered.stdout
+            ));
         }
     }
     insta::assert_snapshot!("gui_results", text);

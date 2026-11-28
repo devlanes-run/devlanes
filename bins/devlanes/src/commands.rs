@@ -350,7 +350,9 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             args,
             context,
         } => crate::bundle::run(runtime, to, log_lines, args, context).await,
-        Action::Gui { command, context } => crate::gui_commands::run(runtime, command, context).await,
+        Action::Gui { command, context } => {
+            crate::gui_commands::run(runtime, command, context).await
+        }
         Action::Setup(action) => crate::setup::run(runtime, action).await,
         Action::Update(action) => crate::update::run(runtime, &paths()?, action).await,
         Action::Uninstall(action) => crate::uninstall::run(runtime, action).await,

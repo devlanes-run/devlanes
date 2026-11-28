@@ -7,6 +7,7 @@ mod diagnostics;
 mod docker_full;
 mod docker_pg_redis;
 mod gui;
+mod gui_commands;
 mod idle;
 mod lanes;
 mod lifecycle;

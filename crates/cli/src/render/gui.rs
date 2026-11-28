@@ -154,7 +154,11 @@ fn input(data: &Value) -> Vec<String> {
         }
         "type" => {
             let count = int(data, "characters").unwrap_or_default();
-            let noun = if count == 1 { "character" } else { "characters" };
+            let noun = if count == 1 {
+                "character"
+            } else {
+                "characters"
+            };
             format!("typed {count} {noun} into {place}")
         }
         "key" => {
