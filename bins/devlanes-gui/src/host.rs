@@ -221,7 +221,7 @@ fn unready_reason(reason: Unavailable) -> UnavailableReason {
 }
 
 /// Logs to standard error, filtered by `DEVLANES_LOG` (default `info`).
-fn init_logging() {
+pub(crate) fn init_logging() {
     let filter = tracing_subscriber::EnvFilter::try_from_env(LOG_ENV)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     let _ = tracing_subscriber::fmt()

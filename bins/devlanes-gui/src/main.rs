@@ -3,6 +3,7 @@
 //! libraries.
 
 mod host;
+mod view;
 
 use std::process::ExitCode;
 
@@ -15,7 +16,7 @@ const FAILED: u8 = 1;
 #[derive(Debug, Parser)]
 #[command(
     name = "devlanes-gui",
-    about = "The devlanes GUI host, which serves a GUI service's windows over the GUI protocol",
+    about = "The devlanes GUI host, which serves a GUI service's windows over the GUI protocol, and its native viewer",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -31,7 +32,13 @@ enum Command {
     /// Run a GUI host: start the backend, listen on loopback, print the ready
     /// line and serve until stopped.
     Host(host::HostArgs),
+    /// Open a native window for each window of a GUI service and drive them,
+    /// until the service is gone.
+    View(view::ViewArgs),
 }
+
+/// Exit code of `view` on a machine without a display to open windows on.
+const NO_DISPLAY: u8 = 3;
 
 /// Parses the command line and runs it. Logs go to standard error; only the
 /// `version` output and the host's ready line use standard output.
@@ -52,6 +59,17 @@ fn main() -> ExitCode {
                     }
                     _ => ExitCode::from(FAILED),
                 }
+            }
+        },
+        Command::View(args) => match view::run(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("devlanes-gui: {}", chain(&error));
+                ExitCode::from(if error.no_display() {
+                    NO_DISPLAY
+                } else {
+                    FAILED
+                })
             }
         },
     }

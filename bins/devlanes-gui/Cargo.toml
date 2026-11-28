@@ -35,8 +35,11 @@ devlanes-version = { path = "../../crates/version" }
 # Whether the unit still runs, once the daemon that started this host is gone.
 devlanes-core = { path = "../../crates/core" }
 devlanes-sys = { path = "../../crates/sys" }
+devlanes-gui-client = { path = "../../crates/gui-client" }
+devlanes-gui-codec = { path = "../../crates/gui-codec" }
 devlanes-gui-host = { path = "../../crates/gui-host" }
 devlanes-gui-proto = { path = "../../crates/gui-proto", features = ["serde"] }
+devlanes-gui-viewer = { path = "../../crates/gui-viewer" }
 clap.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -45,8 +48,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-devlanes-gui-client = { path = "../../crates/gui-client" }
 serde_json.workspace = true
+tempfile.workspace = true
 
 # The test stops the host with SIGTERM or Ctrl-Break, as the runner does.
 [target.'cfg(unix)'.dev-dependencies]

@@ -157,6 +157,93 @@ async fn the_host_refuses_other_addresses_and_unknown_backends() {
     }
 }
 
+/// A Linux box without a desktop, or an SSH session: `view` fails with a
+/// line that says why and exit code 3, before touching the lock directory,
+/// instead of panicking in the windowing library.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn view_without_a_display_says_so() {
+    let dir = tempfile::tempdir().expect("dir");
+    let locks = dir.path().join("viewers");
+    let run = Command::new(EXE)
+        .args([
+            "view",
+            "--address",
+            "127.0.0.1:9",
+            "--service",
+            "acme@1:desktop",
+        ])
+        .arg("--instance-dir")
+        .arg(&locks)
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = timeout(TIMEOUT, run)
+        .await
+        .expect("exits in time")
+        .expect("runs");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("no display"), "{stderr}");
+    assert!(!locks.exists(), "no lock taken");
+}
+
+/// The viewer on a real desktop: it shows the test pattern for a second and
+/// is closed. Its windows open without taking focus. Never run it through
+/// WSLg.
+#[tokio::test]
+#[ignore = "needs a desktop session"]
+async fn the_viewer_shows_the_test_pattern() {
+    let mut host = Command::new(EXE)
+        .args([
+            "host",
+            "--backend",
+            "test-pattern",
+            "--listen",
+            "127.0.0.1:0",
+        ])
+        .args(["--service", "acme@1:desktop"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("host starts");
+    let mut lines = BufReader::new(host.stdout.take().expect("stdout")).lines();
+    let line = timeout(TIMEOUT, lines.next_line())
+        .await
+        .expect("ready line in time")
+        .expect("stdout reads")
+        .expect("a ready line");
+    let address = Ready::parse(&line).expect("ready").address;
+
+    let mut viewer = Command::new(EXE)
+        .args(["view", "--auto", "--service", "acme@1:desktop", "--address"])
+        .arg(address.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("viewer starts");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let early = viewer.try_wait().expect("viewer state");
+    viewer.kill().await.expect("viewer closes");
+    let _ = host.kill().await;
+    let mut stderr = String::new();
+    if let Some(mut pipe) = viewer.stderr.take() {
+        use tokio::io::AsyncReadExt;
+        let _ = timeout(TIMEOUT, pipe.read_to_string(&mut stderr)).await;
+    }
+    assert!(
+        early.is_none(),
+        "the viewer ended by itself: {early:?}: {stderr}"
+    );
+}
+
 /// Stops the host as the runner does on Unix, with SIGTERM, and waits.
 /// Returns the status and that the stop was a signal.
 #[cfg(unix)]
