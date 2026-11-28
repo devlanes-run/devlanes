@@ -240,6 +240,89 @@ fn update_check_reads_the_registry_when_the_daemons_checks_are_off() -> Result<(
     Ok(())
 }
 
+/// An up-to-date script install without `devlanes-gui`, as an updater from
+/// before it leaves one, gets only `devlanes-gui` of its own release from
+/// `devlanes update`; `devlanes` keeps its bytes, and the next run finds
+/// nothing to do.
+#[test]
+fn update_installs_a_missing_devlanes_gui_of_the_running_release() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let lab = Lab::with_config(CONFIG, BUDGET)?;
+    let install = root.path().join("bin");
+    std::fs::create_dir_all(&install)?;
+    let entry = install.join(format!("devlanes{EXE_SUFFIX}"));
+    let built = bin_dir()?.join(format!("devlanes{EXE_SUFFIX}"));
+    std::fs::copy(&built, &entry)?;
+    let version = reported_version(&entry)?;
+    let site = root.path().join("site");
+    publish(&site, &built, &version)?;
+    let gui = bin_dir()?.join(format!("devlanes-gui{EXE_SUFFIX}"));
+    publish_gui(&site, &gui, &version)?;
+    let latest = site.join("releases/latest/download");
+    std::fs::create_dir_all(&latest)?;
+    std::fs::write(
+        latest.join("release-manifest.json"),
+        json!({"version": version}).to_string(),
+    )?;
+    let update = || -> Result<serde_json::Value> {
+        let mut command = lab.command_with(&entry, lab.repo(), &["update", "--yes"])?;
+        command.env(BASE_URL_ENV, file_url(&site));
+        lab.run(command, UPDATE_TIMEOUT)?.expect_code(0)?.json()
+    };
+    let before = std::fs::read(&entry)?;
+
+    let first = update()?;
+    assert_eq!(first["updated"], false, "{first}");
+    let installed = install.join(format!("devlanes-gui{EXE_SUFFIX}"));
+    assert_eq!(
+        first["gui"]["installed"].as_str().map(PathBuf::from),
+        Some(installed.clone()),
+        "{first}"
+    );
+    assert_eq!(std::fs::read(&installed)?, std::fs::read(&gui)?);
+    assert_eq!(std::fs::read(&entry)?, before, "devlanes was not touched");
+    assert!(!lab.home().join("update/staged.json").exists());
+
+    let second = update()?;
+    assert!(second.get("gui").is_none(), "{second}");
+    assert!(lab.daemon_pid()?.is_none(), "no daemon was started");
+    Ok(())
+}
+
+/// Adds `binary` as the GUI archive of the release `publish` wrote for
+/// `version`, listed in its `SHA256SUMS`.
+fn publish_gui(site: &Path, binary: &Path, version: &str) -> Result<()> {
+    let top = format!("devlanes-{version}-{TARGET}");
+    let work = site.join("work-gui");
+    let package = work.join(&top);
+    std::fs::create_dir_all(&package)?;
+    std::fs::write(package.join("LICENSE"), "Apache-2.0")?;
+    std::fs::copy(binary, package.join(format!("devlanes-gui{EXE_SUFFIX}")))?;
+    let folder = site.join("releases/download").join(format!("v{version}"));
+    #[cfg(unix)]
+    let (tar, flags) = (PathBuf::from("tar"), &["-czf"][..]);
+    #[cfg(windows)]
+    let (tar, flags) = (devlanes_e2e::system32("tar.exe"), &["-a", "-cf"][..]);
+    let name = devlanes_update::install::gui_archive_name(version, TARGET);
+    let archive = folder.join(&name);
+    let status = Command::new(tar)
+        .args(flags)
+        .arg(&archive)
+        .arg("-C")
+        .arg(&work)
+        .arg(&top)
+        .status()?;
+    if !status.success() {
+        return Err(Error::Setup(format!("tar could not pack {name}")));
+    }
+    let sha = sha256_file(&archive).map_err(|error| Error::Setup(error.to_string()))?;
+    let sums = folder.join("SHA256SUMS");
+    let mut text = std::fs::read_to_string(&sums)?;
+    text.push_str(&format!("{sha}  {name}\n"));
+    std::fs::write(&sums, text)?;
+    Ok(())
+}
+
 /// The PID of the lane's `api` service.
 fn api_pid(lab: &Lab) -> Result<i32> {
     let lanes = lab.lanes(lab.repo())?;

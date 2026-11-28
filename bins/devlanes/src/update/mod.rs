@@ -276,13 +276,25 @@ async fn install(
         .as_ref()
         .map_or_else(|| own().to_owned(), |client| client.peer.version.clone());
     let Some(info) = latest(client.as_mut(), &method, &from, false).await? else {
-        return up_to_date(runtime, &from).map(Installed::Nothing);
+        // Nothing newer than `from`; this build is the latest unless the
+        // daemon runs a newer one.
+        let gui = if is_newer(&from, own()) {
+            GuiRepair::Nothing
+        } else {
+            repair_gui(paths, &method, own()).await
+        };
+        return up_to_date(runtime, &from, &gui).map(Installed::Nothing);
     };
     match install::target(own(), &info.latest) {
         Target::Install { .. } => {}
         Target::Current if is_newer(&info.latest, &from) => {}
-        Target::Current => return up_to_date(runtime, &from).map(Installed::Nothing),
-        Target::Older => return up_to_date(runtime, own()).map(Installed::Nothing),
+        Target::Current => {
+            let gui = repair_gui(paths, &method, own()).await;
+            return up_to_date(runtime, &from, &gui).map(Installed::Nothing);
+        }
+        Target::Older => {
+            return up_to_date(runtime, own(), &GuiRepair::Nothing).map(Installed::Nothing);
+        }
     }
     let delivery = Delivery {
         method,
@@ -371,11 +383,30 @@ async fn deliver(
             to: to.clone(),
         },
     );
-    if let Some(plan) = plan
-        && let Err(error) = run_plan(&mut view, paths, &plan, &to, &entry).await
-    {
-        view.fail(&error);
-        return Err(error);
+    match plan {
+        Some(plan) => {
+            if let Err(error) = run_plan(&mut view, paths, &plan, &to, &entry).await {
+                view.fail(&error);
+                return Err(error);
+            }
+        }
+        // The install already holds `to`; only devlanes-gui may be missing.
+        // Its failure is shown and leaves the restart to go on.
+        None => match repair_gui(paths, &method, &to).await {
+            GuiRepair::Nothing => {}
+            GuiRepair::Installed(path) => view.set(
+                "gui",
+                format!("installed devlanes-gui {to} at {}", path.display()),
+                RowState::Done,
+                None,
+            ),
+            GuiRepair::Failed(error) => view.set(
+                "gui",
+                format!("devlanes-gui is missing and was not installed: {error}"),
+                RowState::Failed,
+                None,
+            ),
+        },
     }
     let mut envs: Vec<(&str, String)> = Vec::new();
     if let Some(handoff) = view.handoff() {
@@ -826,20 +857,93 @@ async fn ask(runtime: &Runtime, question: &str, default: bool) -> Result<bool, R
 }
 
 /// Says that nothing newer than `running` exists.
-fn up_to_date(runtime: &Runtime, running: &str) -> Result<u8, RpcError> {
+fn up_to_date(runtime: &Runtime, running: &str, gui: &GuiRepair) -> Result<u8, RpcError> {
+    // A devlanes-gui that could not be installed is said on stderr in every
+    // mode, and never fails the command: devlanes itself is up to date.
+    let warning = match gui {
+        GuiRepair::Failed(error) if !matches!(runtime.mode, OutputMode::Json) => {
+            format!("devlanes update: devlanes-gui is missing and was not installed: {error}\n")
+        }
+        _ => String::new(),
+    };
     let rendered = match runtime.mode {
-        OutputMode::Json => Rendered {
-            stdout: format!("{}\n", json!({"updated": false, "running": running})),
+        OutputMode::Json => {
+            let mut data = json!({"updated": false, "running": running});
+            match gui {
+                GuiRepair::Installed(path) => data["gui"] = json!({"installed": path}),
+                GuiRepair::Failed(error) => data["gui"] = json!({"error": error}),
+                GuiRepair::Nothing => {}
+            }
+            Rendered {
+                stdout: format!("{data}\n"),
+                ..Rendered::default()
+            }
+        }
+        _ if runtime.quiet => Rendered {
+            stderr: warning,
             ..Rendered::default()
         },
-        _ if runtime.quiet => Rendered::default(),
-        _ => Rendered {
-            stdout: format!("devlanes {running} is the latest release\n"),
-            ..Rendered::default()
-        },
+        _ => {
+            let mut stdout = format!("devlanes {running} is the latest release\n");
+            if let GuiRepair::Installed(path) = gui {
+                stdout.push_str(&format!(
+                    "installed devlanes-gui {running} at {}\n",
+                    path.display()
+                ));
+            }
+            Rendered {
+                stdout,
+                stderr: warning,
+                ..Rendered::default()
+            }
+        }
     };
     emit(&rendered);
     Ok(0)
+}
+
+/// What [`repair_gui`] did.
+enum GuiRepair {
+    /// Nothing to do: not a script install, devlanes-gui is there, the
+    /// release has none, or this is no release build.
+    Nothing,
+    /// devlanes-gui was installed at this path.
+    Installed(PathBuf),
+    /// It is missing and could not be installed, and why.
+    Failed(String),
+}
+
+/// How long the GUI-only install waits for another install's lock.
+const GUI_LOCK_WAIT: Duration = Duration::from_secs(30);
+
+/// For a script install already at `version` that has no `devlanes-gui`
+/// (an updater from before it installed this release, or an update that
+/// stopped between two renames), installs only `devlanes-gui` of `version`
+/// from that release ([`install::install_gui`]). Package-manager installs
+/// bring it themselves, and one that is there is never replaced, even when
+/// it cannot run.
+async fn repair_gui(paths: &Paths, method: &InstallMethod, version: &str) -> GuiRepair {
+    if devlanes_update::version::Version::parse_release(version).is_none() {
+        return GuiRepair::Nothing;
+    }
+    let (home, method) = (paths.home.clone(), method.clone());
+    let checked = tokio::task::spawn_blocking(move || {
+        let dir = install::gui_missing(&method)?;
+        Some(Lock::acquire(&home, GUI_LOCK_WAIT).map(|lock| (dir, lock)))
+    })
+    .await;
+    let (dir, _lock) = match checked {
+        Ok(None) => return GuiRepair::Nothing,
+        Ok(Some(Ok(found))) => found,
+        Ok(Some(Err(error))) => return GuiRepair::Failed(error.to_string()),
+        Err(error) => return GuiRepair::Failed(error.to_string()),
+    };
+    let (urls, release) = (Urls::from_env(), Release::of(version));
+    match install::install_gui(&paths.home, &urls, &release, version, &dir, FETCH_TIMEOUT).await {
+        Ok(install::GuiInstall::Installed(path)) => GuiRepair::Installed(path),
+        Ok(install::GuiInstall::NotInRelease) => GuiRepair::Nothing,
+        Err(error) => GuiRepair::Failed(error.to_string()),
+    }
 }
 
 /// The arguments that run `update --finish` in this output mode.
