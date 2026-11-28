@@ -17,7 +17,7 @@ use devlanes_gui_proto::Size;
 fn main() {
     let found = h264();
     let Some(backend) = found.encoders.iter().find(|e| !e.offer().hardware) else {
-        eprintln!("no software H.264 encoder here: {:?}", found.unavailable);
+        eprintln!("no software H.264 encoder here: {:?}", found.encode);
         std::process::exit(1);
     };
     let mut encoder = backend.encoder().expect("an encoder");

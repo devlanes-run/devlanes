@@ -36,3 +36,15 @@ devlanes-sys-windows = { path = "../sys-windows", optional = true }
 
 [dev-dependencies]
 devlanes-gui-host = { path = "../gui-host" }
+
+[target.'cfg(windows)'.dev-dependencies]
+# The timing example reads the process's CPU time.
+devlanes-sys-windows = { path = "../sys-windows" }
+
+[[example]]
+name = "h264_fixture"
+required-features = ["h264"]
+
+[[example]]
+name = "h264_timing"
+required-features = ["h264"]
