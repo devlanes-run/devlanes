@@ -673,6 +673,25 @@ async fn rpc_start(
                                 .await
                                 .unwrap_or(true);
                                 data["require_pairing"] = json!(require);
+                                // A box paired by ticket is reached only while its
+                                // daemon runs, and the login start is this user's.
+                                if data.get("ticket").is_some() {
+                                    let service = crate::daemon::service_report().await;
+                                    if let Some(installed) =
+                                        service.get("installed").and_then(Value::as_bool)
+                                    {
+                                        let enabled =
+                                            service.get("enabled").and_then(Value::as_bool);
+                                        data["starts_at_login"] =
+                                            json!(installed && enabled != Some(false));
+                                    }
+                                } else if request.params.get("code") == Some(&json!(false)) {
+                                    // `--ticket` from a daemon that predates tickets.
+                                    let error = old_daemon_pairs_by_code();
+                                    let rendered = reporter.error(&error, None);
+                                    emit(&rendered);
+                                    return Ok(rendered.exit_code);
+                                }
                             }
                             // The counterpart of the not-running answer's `false`.
                             if method == Method::DaemonStatus && data.is_object() {
@@ -1237,6 +1256,12 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
             .map(|unit| scoped_logs(request, &[unit, "--tail", "200"])),
         _ => None,
     }
+}
+
+/// The error of `daemon pair --ticket` answered by a daemon from before
+/// tickets, which ignores the request's params and mints a code alone.
+fn old_daemon_pairs_by_code() -> RpcError {
+    RpcError::new("tickets_unsupported", json!({}), devlanes_cli::exit::FAILED)
 }
 
 /// Asks on a TTY; agents and CI must pass `--yes` instead.

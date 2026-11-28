@@ -281,6 +281,40 @@ fn entire_command_inventory_builds_actions() {
     }
 }
 
+/// `daemon pair` asks for a ticket, which opens a listener on the box, except
+/// in plain output, which scripts read as the code alone; `--ticket` asks
+/// for the ticket alone in every mode.
+#[test]
+fn daemon_pair_asks_for_a_ticket_except_in_plain_output() {
+    let params = |args: &[&str], mode: OutputMode| {
+        let cli = Cli::try_parse_from(args).expect("parses");
+        request(action(&cli, &runtime(&cli, mode))).params
+    };
+    let pair = ["devlanes", "daemon", "pair"];
+    assert_eq!(params(&pair, OutputMode::Plain), json!({}));
+    for mode in [OutputMode::Human, OutputMode::Agent, OutputMode::Json] {
+        assert_eq!(
+            params(&pair, mode),
+            json!({"ticket": true, "ephemeral": false, "code": true}),
+            "{mode:?}"
+        );
+    }
+    let alone = json!({"ticket": true, "ephemeral": false, "code": false});
+    for mode in [OutputMode::Plain, OutputMode::Human] {
+        assert_eq!(
+            params(&["devlanes", "daemon", "pair", "--ticket"], mode),
+            alone
+        );
+    }
+    assert_eq!(
+        params(
+            &["devlanes", "daemon", "pair", "--ephemeral"],
+            OutputMode::Plain
+        ),
+        json!({"ticket": true, "ephemeral": true, "code": false})
+    );
+}
+
 #[test]
 fn infra_logs_sends_the_container_tail_and_follow() {
     let params = |args: &[&str]| {

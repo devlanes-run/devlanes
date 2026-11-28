@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::{
     Ctx, Outcome, age, bytes, cap_line, clean, compact_fields, display_value, duration,
     endpoint_label, int, leftover_notes_of, list, percent, plural, table, tail_lines, text, tree,
-    words,
+    words, words::OLD_DAEMON_NO_TICKETS,
 };
 use crate::Hint;
 
@@ -2380,12 +2380,30 @@ pub(super) fn remote_use(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
-/// `daemon pair`: the code and what to run on the client. Plain output is the
-/// code alone, for scripts; agents get one line saying what to ask the user.
+/// `daemon pair`: the ticket and the code, and what to run on the other
+/// machine. Plain output is one line for scripts: the code, or the ticket
+/// when only a ticket was asked for. Agents get one line saying what to ask
+/// the user. The ticket stands on a line of its own, so it copies whole.
 pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
-    let code = text(data, "code");
+    let code = data.get("code").and_then(Value::as_str).map(clean);
+    let ticket = data.get("ticket").and_then(Value::as_str).map(clean);
+    // Wrong codes paused codes, and the ticket went out alone.
+    let paused = data
+        .get("code_paused_ms")
+        .and_then(Value::as_u64)
+        .map(|ms| {
+            plural(
+                usize::try_from(ms.div_ceil(60_000).max(1)).unwrap_or(usize::MAX),
+                "minute",
+            )
+        });
     if cx.mode == crate::OutputMode::Plain {
-        return vec![code];
+        // A ticket without a code was asked for alone, or went out while
+        // codes are paused: never an empty line.
+        return match (code, ticket) {
+            (None, Some(ticket)) => vec![ticket],
+            (code, _) => vec![code.unwrap_or_default()],
+        };
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2396,34 +2414,106 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .get("expires_at_ms")
         .and_then(Value::as_u64)
         .map(|expires| expires.saturating_sub(now).div_ceil(60_000).max(1));
-    // `devlanes` adds this from the user config: the tunnel reads it.
+    // `devlanes` adds these: the tunnel reads the user config, and the
+    // login start is this user's.
     let unpaired = data.get("require_pairing").and_then(Value::as_bool) == Some(false);
-    let connect = format!("devlanes remote connect <box> --code {code}");
+    let not_at_login =
+        ticket.is_some() && data.get("starts_at_login").and_then(Value::as_bool) == Some(false);
+    let with_code = code
+        .as_ref()
+        .map(|code| format!("devlanes remote connect <box> --code {code}"));
     if cx.agent() {
-        let mut line = format!(
-            "pairing code {code}{} single_use: ask the user to run `{connect}` on their machine. \
-             <box> is this machine's SSH host or remote.boxes name.",
-            valid
-                .map(|valid| format!(" valid_for={valid}m"))
-                .unwrap_or_default()
-        );
-        if unpaired {
+        let mut line = match &ticket {
+            Some(ticket) => format!(
+                "pairing ticket{} single_use: ask the user to run `devlanes remote connect {ticket}` \
+                 on their machine.",
+                valid
+                    .map(|valid| format!(" valid_for={valid}m"))
+                    .unwrap_or_default()
+            ),
+            None => format!(
+                "pairing code{} single_use",
+                valid
+                    .map(|valid| format!(" valid_for={valid}m"))
+                    .unwrap_or_default()
+            ),
+        };
+        match (&with_code, &ticket) {
+            (Some(connect), Some(_)) => line.push_str(&format!(
+                " For a box reached over SSH or remote.boxes instead: `{connect}`, where <box> is \
+                 this machine's SSH host or remote.boxes name."
+            )),
+            (Some(connect), None) => line.push_str(&format!(
+                ": ask the user to run `{connect}` on their machine. <box> is this machine's SSH \
+                 host or remote.boxes name. {OLD_DAEMON_NO_TICKETS}; `devlanes daemon restart` \
+                 starts this release's daemon."
+            )),
+            (None, _) => {}
+        }
+        if let Some(paused) = &paused {
+            line.push_str(&format!(
+                " Pairing codes are paused for {paused} after 5 wrong codes."
+            ));
+        }
+        if not_at_login {
+            line.push_str(
+                " The daemon here does not start at login, and the other machine reaches it only \
+                 while it runs: `devlanes daemon install` starts it at login.",
+            );
+        }
+        if unpaired && with_code.is_some() {
             line.push_str(" remote.require_pairing is false here, so --code is optional.");
         }
         return vec![line];
     }
-    let mut lines = vec![
-        format!("pairing code: {code}"),
-        match valid {
-            Some(valid) => format!(
-                "it works once and expires in {}",
-                plural(usize::try_from(valid).unwrap_or(usize::MAX), "minute")
-            ),
-            None => "it works once".into(),
-        },
-        format!("on your other machine, run: {connect}"),
-    ];
-    if unpaired {
+    let expiry = match valid {
+        Some(valid) => format!(
+            "works once and expires in {}",
+            plural(usize::try_from(valid).unwrap_or(usize::MAX), "minute")
+        ),
+        None => "works once".into(),
+    };
+    let mut lines = Vec::new();
+    if let Some(ticket) = &ticket {
+        lines.extend([
+            format!("pairing ticket, which {expiry}:"),
+            String::new(),
+            ticket.clone(),
+            String::new(),
+            "on your other machine, run: devlanes remote connect <ticket>".into(),
+        ]);
+    }
+    match (&code, &with_code) {
+        (Some(_), Some(connect)) if ticket.is_some() => {
+            lines.push(format!(
+                "if it reaches this machine over SSH or remote.boxes, run there instead: {connect}"
+            ));
+        }
+        (Some(code), Some(connect)) => {
+            lines.extend([
+                format!("pairing code: {code}"),
+                format!("it {expiry}"),
+                format!("on your other machine, run: {connect}"),
+            ]);
+            // Asked for a ticket on a terminal, answered with a code alone.
+            lines.push(cx.warning(&format!(
+                "{OLD_DAEMON_NO_TICKETS}; devlanes daemon restart starts this release's daemon"
+            )));
+        }
+        _ => {}
+    }
+    if let Some(paused) = &paused {
+        lines.push(cx.warning(&format!(
+            "pairing codes for boxes reached over SSH or remote.boxes are paused for {paused} after 5 wrong codes"
+        )));
+    }
+    if not_at_login {
+        lines.push(cx.warning(
+            "the daemon here does not start at login, and the other machine reaches it only while \
+             it runs; devlanes daemon install starts it at login",
+        ));
+    }
+    if unpaired && with_code.is_some() {
         lines.push(
             cx.warning("remote.require_pairing is false here, so clients connect without a code"),
         );

@@ -2762,17 +2762,24 @@ fn boxes_that_need_pairing_name_both_commands() {
     assert!(!later.contains("pairing_paused"), "{later}");
 }
 
-/// `daemon pair` in each mode: the code with what to run on the client for a
-/// person, one line saying what to ask the user for an agent, the code alone
-/// when piped, and the daemon's data for `--json`. A box that pairs nobody
-/// says so; one paused by wrong codes refuses with the wait.
+/// `daemon pair` in each mode: the ticket on a line of its own and then the
+/// code, with what to run on the other machine, for a person; one line
+/// saying what to ask the user for an agent; the code alone when piped,
+/// which asks for no ticket, or the ticket alone after `--ticket`; and the
+/// daemon's data for `--json`. A ticket that went out while codes are
+/// paused never comes with an empty code. A daemon that answers a ticket
+/// request with a code alone predates tickets and is named. A box that
+/// pairs nobody or does not start at login says so; one paused by wrong
+/// codes refuses with the wait.
 #[test]
-fn daemon_pair_prints_the_code_in_every_mode() {
+fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .expect("clock");
-    let data = json!({"code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000});
+    // Made up: right prefix and letters, nothing a box would accept.
+    let ticket = format!("dlp1{}", "example".repeat(20));
+    let data = json!({"ticket": ticket, "code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000});
     let render = |mode: OutputMode, data: &Value| {
         runtime(mode)
             .reporter()
@@ -2783,20 +2790,76 @@ fn daemon_pair_prints_the_code_in_every_mode() {
     let human = render(OutputMode::Human, &data);
     assert_eq!(
         human,
-        "pairing code: K7QM-3XWD\n\
-         it works once and expires in 10 minutes\n\
-         on your other machine, run: devlanes remote connect <box> --code K7QM-3XWD\n"
+        format!(
+            "pairing ticket, which works once and expires in 10 minutes:\n\
+             \n\
+             {ticket}\n\
+             \n\
+             on your other machine, run: devlanes remote connect <ticket>\n\
+             if it reaches this machine over SSH or remote.boxes, run there instead: \
+             devlanes remote connect <box> --code K7QM-3XWD\n"
+        )
     );
     let agent = render(OutputMode::Agent, &data);
     assert_eq!(
         agent,
-        "pairing code K7QM-3XWD valid_for=10m single_use: ask the user to run \
-         `devlanes remote connect <box> --code K7QM-3XWD` on their machine. <box> is this \
-         machine's SSH host or remote.boxes name.\n"
+        format!(
+            "pairing ticket valid_for=10m single_use: ask the user to run \
+             `devlanes remote connect {ticket}` on their machine. For a box reached over SSH or \
+             remote.boxes instead: `devlanes remote connect <box> --code K7QM-3XWD`, where <box> \
+             is this machine's SSH host or remote.boxes name.\n"
+        )
     );
-    assert_eq!(render(OutputMode::Plain, &data), "K7QM-3XWD\n");
     let json: Value = serde_json::from_str(&render(OutputMode::Json, &data)).expect("json output");
-    assert_eq!(json["code"], "K7QM-3XWD");
+    assert_eq!(
+        (&json["ticket"], &json["code"]),
+        (&json!(ticket), &json!("K7QM-3XWD"))
+    );
+
+    let code = json!({"code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000});
+    assert_eq!(render(OutputMode::Plain, &code), "K7QM-3XWD\n");
+    let alone = json!({"ticket": ticket, "expires_at_ms": now + 10 * 60_000});
+    assert_eq!(render(OutputMode::Plain, &alone), format!("{ticket}\n"));
+    assert!(!render(OutputMode::Human, &alone).contains("--code"));
+
+    let paused = json!({"ticket": ticket, "expires_at_ms": now + 10 * 60_000,
+                        "code_paused_ms": 4 * 60_000 - 5});
+    for mode in [OutputMode::Human, OutputMode::Agent] {
+        let text = render(mode, &paused);
+        assert!(text.contains(&ticket), "{text}");
+        assert!(
+            text.contains("paused for 4 minutes after 5 wrong codes"),
+            "{text}"
+        );
+        assert!(!text.contains("--code"), "no empty code: {text}");
+    }
+    assert_eq!(render(OutputMode::Plain, &paused), format!("{ticket}\n"));
+
+    for mode in [OutputMode::Human, OutputMode::Agent] {
+        let old = render(mode, &code);
+        assert!(
+            old.contains("devlanes remote connect <box> --code K7QM-3XWD"),
+            "{old}"
+        );
+        assert!(
+            old.contains("older than this devlanes and makes no pairing tickets"),
+            "{old}"
+        );
+        assert!(old.contains("devlanes daemon restart"), "{old}");
+    }
+    let old = runtime(OutputMode::Plain)
+        .reporter()
+        .error(&RpcError::new("tickets_unsupported", json!({}), 1), None)
+        .stderr;
+    assert!(old.contains("makes no pairing tickets"), "{old}");
+
+    let away = json!({"ticket": ticket, "code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000,
+                      "starts_at_login": false});
+    for mode in [OutputMode::Human, OutputMode::Agent] {
+        let text = render(mode, &away);
+        assert!(text.contains("devlanes daemon install"), "{text}");
+    }
+    assert!(!render(OutputMode::Human, &data).contains("daemon install"));
 
     let open = json!({"code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000,
                       "require_pairing": false});

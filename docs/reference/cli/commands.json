@@ -1585,6 +1585,7 @@
       "flags": [
         "--budget",
         "--env",
+        "--ephemeral",
         "--file",
         "--help",
         "--json",
@@ -1592,6 +1593,7 @@
         "--output",
         "--project",
         "--quiet",
+        "--ticket",
         "--timeout",
         "--verbose",
         "--yes",

@@ -381,6 +381,15 @@ struct PairParams {
     /// The client forgets the box once it stays unreachable for an hour.
     #[serde(default)]
     ephemeral: bool,
+    /// Mint a code next to the ticket; false for `daemon pair --ticket`,
+    /// which prints the ticket alone, so no code stays valid unseen.
+    #[serde(default = "minted_by_default")]
+    code: bool,
+}
+
+/// [`PairParams::code`] when the request leaves it out: a code is minted.
+fn minted_by_default() -> bool {
+    true
 }
 
 /// `revoke` parameters.
@@ -498,7 +507,8 @@ impl Inner {
     /// clients away, `pairing_paused` while wrong codes refuse every code,
     /// `p2p_unavailable` when the endpoint cannot listen or tell its address.
     /// While codes are paused a ticket still goes out, without a code and
-    /// with `code_paused_ms`. Neither the code nor the ticket is logged.
+    /// with `code_paused_ms`. With a ticket and `code: false`, no code is
+    /// minted. Neither the code nor the ticket is logged.
     pub(crate) async fn pair_method(self: &Arc<Self>, value: Value) -> Result<Value, RpcError> {
         let args: PairParams = params(value)?;
         let home = self.opts.home.clone();
@@ -531,6 +541,10 @@ impl Inner {
             "expires_at_ms": expires_at_ms,
             "valid_ms": PAIRING_CODE_TTL_MS,
         });
+        if !args.code {
+            tracing::info!(expires_at_ms, "issued a pairing ticket without a code");
+            return Ok(answer);
+        }
         let minted = lock(&self.remote.codes).mint(Instant::now());
         match minted {
             Ok(code) => answer["code"] = Value::from(code),

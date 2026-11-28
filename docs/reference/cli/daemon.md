@@ -79,13 +79,20 @@ devlanes daemon reset-state [OPTIONS]
 
 ## devlanes daemon pair
 
-Print a one-time code that pairs another machine with this one.
+Print a one-time ticket and code that pair another machine with this one.
 
-On a terminal it also prints how long the code is valid and the command to run on the other machine. Without a terminal, as in `ssh box devlanes daemon pair`, it prints only the code, for scripts.
+The other machine runs `devlanes remote connect <ticket>` to reach this one peer to peer, without SSH. The code is for a machine that reaches this one over SSH or by a command from remote.boxes: it runs `devlanes remote connect <box> --code CODE`. Both work once, for 10 minutes.
+
+While a ticket is open, this machine's daemon listens for the other machine. Afterwards it listens only for the machines it paired with, and only while it runs, so install it with `devlanes daemon install`.
+
+Without a terminal, as in `ssh box devlanes daemon pair`, it prints only the code, for scripts, and makes no ticket.
 
 ```text
 devlanes daemon pair [OPTIONS]
 ```
+
+- `--ticket`: Print only the ticket, with or without a terminal, and make no code.
+- `--ephemeral`: Make a ticket for a throwaway box: the other machine forgets it once it is unreachable for an hour. Without a terminal it prints only the ticket, as --ticket does.
 
 ## devlanes daemon clients
 

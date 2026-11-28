@@ -409,12 +409,16 @@ pub enum Method {
     RemoteReport,
     /// Box side, for `devlanes daemon pair`: a one-time pairing code, valid
     /// once for [`remote::PAIRING_CODE_TTL_MS`] and kept in memory. Params
-    /// `{ticket?, ephemeral?}`, both false by default: with `ticket` the
+    /// `{ticket?, ephemeral?, code?}`, `ticket` and `ephemeral` false and
+    /// `code` true by default: with `ticket` the
     /// reply also has `ticket`, a peer-to-peer pairing ticket
     /// ([`remote::TICKET_PREFIX`]) valid once for as long as the code, and
     /// the box listens for peers until it is used or expires; `ephemeral`
     /// marks the ticket for a client that forgets the box once it stays
-    /// away. Reply `{code, expires_at_ms, valid_ms, ticket?}`: `valid_ms` is
+    /// away; `code: false` with `ticket` mints the ticket alone, and the
+    /// reply has neither `code` nor `code_paused_ms`. A daemon from before
+    /// tickets ignores every param and replies with a code alone.
+    /// Reply `{code, expires_at_ms, valid_ms, ticket?}`: `valid_ms` is
     /// how long the code is valid from the reply, for a countdown that needs
     /// no clock. Error `pairing_paused` with `retry_after_ms` while wrong
     /// codes keep every code refused, `connections_off` while

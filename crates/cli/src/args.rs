@@ -1014,12 +1014,27 @@ pub enum DaemonCommand {
     Uninstall,
     /// Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
     ResetState,
-    /// Print a one-time code that pairs another machine with this one
+    /// Print a one-time ticket and code that pair another machine with this one
     ///
-    /// On a terminal it also prints how long the code is valid and the command
-    /// to run on the other machine. Without a terminal, as in
-    /// `ssh box devlanes daemon pair`, it prints only the code, for scripts.
-    Pair,
+    /// The other machine runs `devlanes remote connect <ticket>` to reach this one
+    /// peer to peer, without SSH. The code is for a machine that reaches this one
+    /// over SSH or by a command from remote.boxes: it runs
+    /// `devlanes remote connect <box> --code CODE`. Both work once, for 10 minutes.
+    ///
+    /// While a ticket is open, this machine's daemon listens for the other
+    /// machine. Afterwards it listens only for the machines it paired with, and
+    /// only while it runs, so install it with `devlanes daemon install`.
+    ///
+    /// Without a terminal, as in `ssh box devlanes daemon pair`, it prints only
+    /// the code, for scripts, and makes no ticket.
+    Pair {
+        /// Print only the ticket, with or without a terminal, and make no code
+        #[arg(long)]
+        ticket: bool,
+        /// Make a ticket for a throwaway box: the other machine forgets it once it is unreachable for an hour. Without a terminal it prints only the ticket, as --ticket does
+        #[arg(long)]
+        ephemeral: bool,
+    },
     /// List the machines paired or connected to this one
     Clients,
     /// Disconnect a client and delete its pairing
@@ -1573,7 +1588,20 @@ impl Cli {
                 DaemonCommand::Status => (Method::DaemonStatus, json!({})),
                 DaemonCommand::Stop => (Method::DaemonShutdown, json!({})),
                 DaemonCommand::ResetState => (Method::DaemonResetState, json!({})),
-                DaemonCommand::Pair => (Method::RemotePair, json!({})),
+                DaemonCommand::Pair { ticket, ephemeral } => {
+                    // Plain output is one line for scripts: the code, unless a
+                    // ticket was asked for. Without one no listener opens.
+                    let plain = runtime.mode == OutputMode::Plain;
+                    let alone = *ticket || (plain && *ephemeral);
+                    (
+                        Method::RemotePair,
+                        if plain && !alone {
+                            json!({})
+                        } else {
+                            json!({"ticket": true, "ephemeral": ephemeral, "code": !alone})
+                        },
+                    )
+                }
                 DaemonCommand::Clients => (Method::RemoteClients, json!({})),
                 DaemonCommand::Revoke { client } => {
                     (Method::RemoteRevoke, json!({"client": client}))
@@ -1924,7 +1952,7 @@ impl Cli {
                 | DaemonCommand::Install
                 | DaemonCommand::Uninstall
                 | DaemonCommand::ResetState
-                | DaemonCommand::Pair
+                | DaemonCommand::Pair { .. }
                 | DaemonCommand::Clients
                 | DaemonCommand::Revoke { .. } => None,
             },
@@ -2028,7 +2056,7 @@ impl Command {
                 | DaemonCommand::Install
                 | DaemonCommand::Uninstall
                 | DaemonCommand::ResetState
-                | DaemonCommand::Pair
+                | DaemonCommand::Pair { .. }
                 | DaemonCommand::Revoke { .. }
                 | DaemonCommand::Run => false,
             },

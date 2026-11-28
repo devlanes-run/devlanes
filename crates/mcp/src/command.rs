@@ -257,7 +257,7 @@ impl Call {
                 command: LaneCommand::Gc,
             } => "Clean every lane whose worktree or project file is gone, with its data?".into(),
             Command::Daemon { command } => match command {
-                DaemonCommand::Pair => {
+                DaemonCommand::Pair { .. } => {
                     "Print a one-time code that lets another machine pair with this one?".into()
                 }
                 DaemonCommand::Stop => "Stop the daemon and every process it manages?".into(),
