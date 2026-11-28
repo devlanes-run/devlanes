@@ -494,14 +494,13 @@ fn no_ticket_lines(
     let mut lines = match no_ticket {
         NoTicket::OldDaemon => wrapped(
             "No ticket: the devlanes daemon running here is older than this devlanes and makes \
-             no tickets. Run devlanes daemon restart to start this release's daemon.",
+             no tickets. Close this, then press D, then R to restart it.",
             width,
             attention,
         ),
         // The daemon's own text names CLI commands; here `t` waits instead.
         NoTicket::NotReady => wrapped(
-            "No ticket yet: this machine is still reaching the network for peer-to-peer \
-             connections.",
+            "No ticket yet: this machine is still reaching its relay.",
             width,
             attention,
         ),
@@ -521,7 +520,7 @@ fn no_ticket_lines(
     };
     if can_fetch {
         lines.extend(wrapped(
-            "Press t to get the ticket alone.",
+            "Press t to wait for the ticket.",
             width,
             theme.quiet(),
         ));
@@ -539,8 +538,11 @@ fn offer(app: &App, dialog: &PairDialog, offer: &Offer, width: usize) -> Parts {
     let code = dialog.code();
     let mut body = Vec::new();
     if let Some(ticket) = ticket {
+        // A mouse copy of the wrapped ticket brings the modal's borders and
+        // line breaks, which the connect form drops; `y` copies it whole.
         body.extend(wrapped(
-            "On the other machine, press n in its Boxes view and paste this ticket:",
+            "Press y to copy this ticket, then on the other machine press n in its Boxes view \
+             and paste it:",
             width,
             Style::new(),
         ));
@@ -553,15 +555,14 @@ fn offer(app: &App, dialog: &PairDialog, offer: &Offer, width: usize) -> Parts {
         body.push(Line::from(""));
         body.extend(wrapped(
             &format!(
-                "It works once and expires in {}. It lets that machine pair with this one \
-                 without SSH.",
+                "It works once, within {}, and pairs that machine with this one without SSH.",
                 countdown(dialog.ticket_left(ticket))
             ),
             width,
             theme.quiet(),
         ));
         body.extend(wrapped(
-            "Or run devlanes remote connect <ticket> there.",
+            "If your terminal does not copy, run devlanes daemon pair --ticket in a shell here.",
             width,
             theme.quiet(),
         ));

@@ -4563,7 +4563,7 @@ impl App {
         self.dialog = Some(Dialog::Confirm {
             prompt: format!("Forget {name}?"),
             detail: vec![
-                "Connecting to it again needs a new ticket from it.".into(),
+                "To connect to it again, you need a new ticket from the box.".into(),
                 "Its lanes keep running on the box, and folders synced from it stay here.".into(),
             ],
             action: "forget",
@@ -4645,7 +4645,17 @@ impl App {
                 self.set_notice(notice);
             }
             Err(error) => {
-                dialog.step = crate::connect::Step::Failed(words::api(&error));
+                let mut worded = words::api(&error);
+                // The connection broke before the answer: the box may have
+                // paired and used up the ticket, so the list says first.
+                if dialog.pastes_again() && !matches!(error, ApiError::Rpc(_)) {
+                    worded.detail.push(
+                        "The pairing may have gone through. Look for the box in the Boxes list \
+                         before you paste the ticket again."
+                            .into(),
+                    );
+                }
+                dialog.step = crate::connect::Step::Failed(worded);
                 if error.is_disconnect() {
                     self.lost_connection(Some(&error), effects);
                 }

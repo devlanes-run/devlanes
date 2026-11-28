@@ -1375,8 +1375,8 @@ fn host_lines(
         "connected" | "connecting" | "reconnecting" => None,
         "needs_auth" => Some("enter signs in again".to_owned()),
         "needs_pairing" if host.by_ticket() => Some(format!(
-            "press p on {name} or run devlanes daemon pair there, then enter here and paste the \
-             ticket"
+            "on {name}, press p in its Boxes view or run devlanes daemon pair; then press enter \
+             here and paste the ticket"
         )),
         "needs_pairing" => Some(format!(
             "run devlanes daemon pair on {name}, then press enter here"
