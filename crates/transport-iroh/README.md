@@ -59,7 +59,7 @@ An endpoint that listens binds the same UDP ports at every start, so a client th
 The crate writes up to two files, both in the directory of `IrohOptions::key_file`:
 
 - the key file, which holds the 32-byte secret key. It is created private to the user (mode 0600 on Unix), and a key other accounts can read is refused.
-- `p2p-port`, written by `listen(Some(..))` and removed by `listen(None)`: the UDP ports the endpoint bound, one line per address family. A bind asks for these ports only when the file exists. It is not secret; a missing or unreadable file means any port, and ports below 1024 are ignored.
+- `p2p-port`, written by `listen(Some(..))` and removed by `listen(None)`: the UDP ports the endpoint bound, one line per address family. A bind asks for these ports only when the file exists. It is not secret; a missing file means any port, and ports below 1024 are ignored. A file that cannot be read also means any port, logged as a warning, and is not written over, so a later start that can read it binds the old ports again.
 
 ## License
 
