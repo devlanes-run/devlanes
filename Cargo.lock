@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1274,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-browser-host"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "devlanes-client",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-daemon"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1499,7 +1499,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-hosts-helper"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "sha2 0.11.1",
  "tempfile",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-resolver-hosts"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "devlanes-hosts-helper",
@@ -2234,7 +2234,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-transport"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2252,7 +2252,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-transport-command"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "devlanes-sys",
@@ -2268,7 +2268,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-transport-ssh"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2348,7 +2348,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tui"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "ab_glyph",
  "async-trait",
@@ -2385,7 +2385,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tui-web"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "console_error_panic_hook",
  "devlanes-client",
@@ -2404,7 +2404,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tunnel"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "async-trait",
  "bytes",

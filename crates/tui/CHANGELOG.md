@@ -1,5 +1,13 @@
 # devlanes-tui
 
+## 0.17.0 — 2026-11-28
+
+### Patch changes
+
+- [e66f222c](https://github.com/devlanes-run/devlanes/commit/e66f222cbe02dffb5379d23348eb5e605aff5ed7) Changed a box that stays unreachable to be retried every 2 minutes instead of every 30 seconds.
+  
+  `devlanes remote connect BOX`, or Enter on the box in the TUI's Boxes view, tries again at once.
+
 ## 0.16.0 — 2026-11-23
 
 ### Minor changes
