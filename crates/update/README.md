@@ -36,11 +36,12 @@ let due = log.due(&update_key(latest), devlanes_update::now_ms());
 - `install::Plan::new` says how a release gets installed over an install: the release archive, a package manager (argv, never a shell), or a command for a person. `install::stage` downloads, checks and unpacks the archive under `$DEVLANES_HOME/update/`, with the release's GUI archive (`devlanes-VERSION-TARGET-gui.tar.gz`, `.zip` on Windows) when `SHA256SUMS` lists one, `install::apply` renames the binaries into place, and `install::run_package_manager` runs the package manager. `install::Lock` keeps it to one install at a time. `install::removal_commands` are the package manager's remove commands for `devlanes uninstall`, run with `install::run_commands`.
 - `NoticeLog` records when each notice was shown or dismissed (`notices.json`); `update_line`, `ready_line` and `skew_line` are the notices.
 - `remove_old_copies` (Windows) deletes the `devlanes.exe.old-*` and `devlanes-gui.exe.old-*` files `install.ps1` and updates leave; `is_old_copy` tells them apart.
+- `retain_own_exe` (Windows) keeps a hard link to the running executable in `$DEVLANES_HOME/run/exe/`, so a package manager can replace `devlanes.exe` while it runs.
+- `install::gui_missing` and `install::install_gui` put only `devlanes-gui` of the running release into a script install that lacks it.
 
 ## GUI archive
 
-`devlanes-gui` ships in an archive of its own next to the main one, because every released `devlanes update` refuses a main archive with entries other than `LICENSE` and the known binaries. Released updaters skip the GUI archive's `SHA256SUMS` line, since its name does not end in `-TARGET.tar.gz` or `-TARGET.zip`. A release without one still installs; `devlanes-gui` then arrives with the next update.
-- `retain_own_exe` (Windows) keeps a hard link to the running executable in `$DEVLANES_HOME/run/exe/`, so a package manager can replace `devlanes.exe` while it runs.
+`devlanes-gui` ships in an archive of its own next to the main one, because every released `devlanes update` refuses a main archive with entries other than `LICENSE` and the known binaries. Released updaters skip the GUI archive's `SHA256SUMS` line, since its name does not end in `-TARGET.tar.gz` or `-TARGET.zip`. Staging checks the GUI archive's checksum and entries but never runs `devlanes-gui`, which may need system libraries the machine lacks. A release without one still installs. A script install at the latest release without `devlanes-gui` (an updater from before it installed that release) gets it from that release with the next `devlanes update`, which touches no other binary.
 
 ## Test releases
 
