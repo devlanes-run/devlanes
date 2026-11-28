@@ -1660,6 +1660,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-width 0.2.3",
  "vt100",
+ "zeroize",
 ]
 
 [[package]]
@@ -2477,6 +2478,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "yamux",
+ "zeroize",
  "zstd",
 ]
 

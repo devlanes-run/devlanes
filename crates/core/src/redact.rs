@@ -243,7 +243,8 @@ fn hide_url_passwords(text: &str) -> String {
 /// How a peer-to-peer pairing ticket starts (`devlanes_proto::remote::TICKET_PREFIX`).
 const TICKET_PREFIX: &[u8] = b"dlp1";
 /// Base32 characters after the prefix from which a run is taken for a
-/// ticket; the shortest real ticket has 130.
+/// ticket; the shortest real ticket, with no relay and no address, is 55
+/// bytes, which is 88 characters.
 const TICKET_MIN_BODY: usize = 60;
 
 /// `text` with every pairing ticket replaced by [`REDACTED`]: `dlp1` and at

@@ -30,6 +30,7 @@ tokio.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 tracing.workspace = true
 yamux = "0.14"
+zeroize.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]

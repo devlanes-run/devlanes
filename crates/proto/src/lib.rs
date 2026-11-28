@@ -384,10 +384,14 @@ pub enum Method {
     /// marks the ticket for a client that forgets the box once it stays
     /// away. Reply `{code, expires_at_ms, valid_ms, ticket?}`: `valid_ms` is
     /// how long the code is valid from the reply, for a countdown that needs
-    /// no clock. Error `pairing_paused` with `retry_after_ms` while failed
-    /// attempts keep every code and ticket refused, `connections_off` while
-    /// `remote.allow_connections` is off, `p2p_unavailable` (`{message}`)
-    /// when the box cannot listen for peers or tell its address.
+    /// no clock. Error `pairing_paused` with `retry_after_ms` while wrong
+    /// codes keep every code refused, `connections_off` while
+    /// `remote.allow_connections` is off. With `ticket`: wrong codes do not
+    /// stop the ticket, whose reply then has no `code` and has
+    /// `code_paused_ms` instead; error `p2p_unavailable` (`{message}`) when
+    /// the box cannot listen for peers, tell its address or fit its relay
+    /// URL in a ticket, and `not_supported_yet` (`{feature}`) from a daemon
+    /// built without a peer-to-peer endpoint.
     #[serde(rename = "remote.pair")]
     RemotePair,
     /// Box side, for `devlanes tunnel`: whether a client's remote token is

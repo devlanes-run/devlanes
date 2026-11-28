@@ -21,9 +21,9 @@ anyhow = "1"
 askama = { version = "0.16", default-features = false }
 base64 = "0.23"
 bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
 # Base32 of the pairing tickets (crates/transport).
 data-encoding = "2.11"
-clap = { version = "4", features = ["derive", "env"] }
 diesel = { version = "2.3", default-features = false, features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
 # `std::fs::canonicalize` on Unix; on Windows it avoids the `\\?\` form Git and
 # most tools cannot use.
@@ -64,6 +64,8 @@ tempfile = "3"
 # std's); the browser's clock in wasm32 builds, where std's clock panics.
 web-time = "1"
 windows-sys = { version = "0.61", default-features = false }
+# Zeroes pairing ticket secrets when they are dropped.
+zeroize = "1"
 zstd = { version = "0.14", default-features = false }
 
 [workspace.lints.rust]

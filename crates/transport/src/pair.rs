@@ -27,9 +27,15 @@ use crate::wire::{self, FrameCodec, Secret, WireError};
 /// nobody vouched for yet.
 pub const PAIR_FRAME_LIMIT: usize = 4 * 1024;
 
-/// How long the box waits for each step of a pairing connection: the first
-/// stream, the request on it, writing the answer and the client's close.
-const BOX_STEP: Duration = Duration::from_secs(5);
+/// How long the box waits for the first stream and then for the request on
+/// it. Any key may open a pairing connection while a ticket is out, and a
+/// client sends its request as soon as the connection is up, so an idle one
+/// holds a pairing slot for twice this at most.
+const REQUEST_STEP: Duration = Duration::from_secs(2);
+
+/// How long the box waits to write its answer and then for the client to
+/// close, which covers the answer's way to the client and back.
+const ANSWER_STEP: Duration = Duration::from_secs(5);
 
 /// How long the client waits for the box's answer and the end of its
 /// stream: the box's own steps, plus storing the pairing.
@@ -122,6 +128,8 @@ pub enum PairAnswer {
 #[async_trait]
 pub trait PairDesk: Send + Sync {
     /// The answer to `request`; pins the client's key when it pairs.
+    /// [`answer_pairing`] does not bound it, so the implementation bounds
+    /// what it waits for before it uses the ticket.
     async fn decide(&self, request: &PairRequest) -> PairAnswer;
 }
 
@@ -181,17 +189,19 @@ pub async fn answer_pairing(
     mut connection: BoxServerConnection,
     desk: &dyn PairDesk,
 ) -> Result<(), PairError> {
-    let stream = timeout(BOX_STEP, connection.accept())
+    let stream = timeout(REQUEST_STEP, connection.accept())
         .await
         .map_err(|_| PairError::Timeout)?
         .ok_or(PairError::Closed)?;
     let mut channel = Framed::new(stream, FrameCodec::with_max(PAIR_FRAME_LIMIT));
-    let (request, _) = timeout(BOX_STEP, wire::recv::<_, PairRequest>(&mut channel))
+    let (request, _) = timeout(REQUEST_STEP, wire::recv::<_, PairRequest>(&mut channel))
         .await
         .map_err(|_| PairError::Timeout)??
         .ok_or(PairError::Closed)?;
+    // Not bounded here: the desk bounds what it does before it uses the
+    // ticket and must not be cut off after.
     let answer = desk.decide(&request).await;
-    timeout(BOX_STEP, async {
+    timeout(ANSWER_STEP, async {
         wire::send(&mut channel, &answer).await?;
         channel.close().await
     })
@@ -199,7 +209,7 @@ pub async fn answer_pairing(
     .map_err(|_| PairError::Timeout)??;
     // Dropping the connection before the client closed could discard the
     // answer, so the client closes first; one that never does is dropped.
-    let _ = timeout(BOX_STEP, async {
+    let _ = timeout(ANSWER_STEP, async {
         while connection.accept().await.is_some() {}
     })
     .await;

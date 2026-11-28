@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
+use zeroize::Zeroize;
 
 use crate::transport::{BoxConnection, BoxServerConnection, TransportError};
 
@@ -238,6 +239,13 @@ impl fmt::Debug for TicketSecret {
     }
 }
 
+impl Drop for TicketSecret {
+    /// Zeroes the secret, so it does not stay in freed memory.
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 /// What a client needs to pair with a box once: where the box is and the
 /// secret it hands out with `devlanes daemon pair`. The expiry is not in it;
 /// the box keeps that with the secret.
@@ -283,11 +291,22 @@ const MAX_TICKET_RELAY: usize = 200;
 const MAX_TICKET_ADDRS: usize = 8;
 /// Bytes of the SHA-256 checksum at the end.
 const CHECKSUM_LEN: usize = 4;
+/// Bytes of the largest ticket: flags, id, secret, the longest relay URL
+/// with its length, and the most IPv6 addresses with their count and the
+/// checksum.
+const MAX_TICKET_BYTES: usize =
+    1 + 32 + 16 + 1 + MAX_TICKET_RELAY + 1 + MAX_TICKET_ADDRS * (1 + 16 + 2) + CHECKSUM_LEN;
+/// Characters of the largest ticket's text with its prefix: unpadded base32
+/// takes 8 characters per 5 bytes, rounded up.
+const MAX_TICKET_TEXT: usize = TICKET_PREFIX.len() + (MAX_TICKET_BYTES * 8).div_ceil(5);
 
 impl Ticket {
+    /// Longest relay URL a ticket holds, in bytes.
+    pub const MAX_RELAY: usize = MAX_TICKET_RELAY;
+
     /// The ticket as text: the prefix, then its bytes in lowercase base32.
     /// Keeps the first 8 addresses, and leaves out a relay URL longer than
-    /// 200 bytes, which no relay list a user can set produces.
+    /// [`Ticket::MAX_RELAY`], which the box checks before it mints one.
     pub fn encode(&self) -> String {
         let mut bytes = Vec::with_capacity(128);
         bytes.push(if self.ephemeral { EPHEMERAL } else { 0 });
@@ -327,9 +346,13 @@ impl Ticket {
 
     /// Reads a ticket in either case, with whitespace around it. The
     /// checksum is checked before the fields, so a mistyped ticket fails
-    /// here instead of reaching the box as a wrong secret.
+    /// here instead of reaching the box as a wrong secret. Text longer than
+    /// the largest ticket is refused before it is decoded.
     pub fn parse(text: &str) -> Result<Self, TicketError> {
         let text = text.trim();
+        if text.len() > MAX_TICKET_TEXT {
+            return Err(TicketError::Layout);
+        }
         let body = text
             .get(..TICKET_PREFIX.len())
             .filter(|prefix| prefix.eq_ignore_ascii_case(TICKET_PREFIX))
@@ -535,6 +558,11 @@ mod tests {
             (with_checksum(&flagged), TicketError::Flags),
             (with_checksum(&truncated), TicketError::Layout),
             ("dlp1".to_owned(), TicketError::Layout),
+            // Longer than any ticket: refused before it is decoded.
+            (
+                format!("dlp1{}", "a".repeat(MAX_TICKET_TEXT)),
+                TicketError::Layout,
+            ),
         ];
         for (text, error) in cases {
             assert_eq!(Ticket::parse(&text), Err(error), "{text}");
