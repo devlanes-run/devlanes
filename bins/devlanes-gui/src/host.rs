@@ -189,6 +189,7 @@ async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Res
 /// Whether the unit's process still runs, by pid and start time, for a host
 /// whose daemon is gone. A process table that cannot be read counts as
 /// running, so a passing error never stops a host under a live unit.
+/// Blocking: the host calls it on the blocking pool.
 fn unit_alive(pid: u32, start_time: u64) -> bool {
     let unit = devlanes_core::ProcessIdentity {
         pid,

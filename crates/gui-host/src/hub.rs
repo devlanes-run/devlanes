@@ -192,6 +192,10 @@ enum Done {
         session: SessionId,
         message: Bytes,
     },
+    /// Whether the unit still ran, after its control connection closed.
+    UnitChecked {
+        alive: bool,
+    },
 }
 
 /// The host task's state.
@@ -319,23 +323,35 @@ impl Hub {
         }
     }
 
-    /// Checks the unit once its control connection is gone, and ends
-    /// serving when the unit is gone too.
+    /// Starts a check of the unit once its control connection is gone, on the
+    /// blocking pool since reading the process table blocks; the answer
+    /// comes back as [`Done::UnitChecked`]. The next check is due only then.
     fn poll_unit(&mut self, now: Instant) {
         let (Some(at), Some((pid, start_time)), Some(alive)) =
-            (self.unit_poll, self.identity, self.unit_alive.as_ref())
+            (self.unit_poll, self.identity, self.unit_alive.clone())
         else {
             return;
         };
         if now < at {
             return;
         }
-        if alive(pid, start_time) {
-            self.unit_poll = Some(now + UNIT_POLL);
+        self.unit_poll = None;
+        self.tasks.spawn_blocking(move || {
+            // A check that panicked proves nothing, so the unit counts as running.
+            let alive = std::panic::catch_unwind(AssertUnwindSafe(|| alive(pid, start_time)))
+                .unwrap_or(true);
+            Done::UnitChecked { alive }
+        });
+    }
+
+    /// The answer of a check [`Hub::poll_unit`] started: check again later,
+    /// or end serving once the unit is gone.
+    fn unit_checked(&mut self, alive: bool) {
+        if alive {
+            self.unit_poll = Some(now() + UNIT_POLL);
         } else {
-            tracing::info!(pid, "the unit is gone and so is its daemon; stopping");
-            self.unit_poll = None;
-            self.ending = Some(Ok(()));
+            tracing::info!("the unit is gone and so is its daemon; stopping");
+            self.ending.get_or_insert(Ok(()));
         }
     }
 
@@ -1614,6 +1630,7 @@ impl Hub {
     /// Handles finished blocking work.
     fn on_done(&mut self, done: Done) {
         match done {
+            Done::UnitChecked { alive } => self.unit_checked(alive),
             Done::Encoded {
                 key,
                 generation,

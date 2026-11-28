@@ -1260,7 +1260,7 @@ fn gui_checks(gui: &Value) -> Vec<Check> {
                 "gui",
                 Outcome::Skip,
                 format!(
-                    "devlanes-gui at {path} is {}, and devlanes {ours}",
+                    "devlanes-gui at {path} is {}, devlanes is {ours}",
                     found.map_or_else(|| "of an unknown version".to_owned(), clean)
                 ),
             )

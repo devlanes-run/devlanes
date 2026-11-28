@@ -2097,7 +2097,7 @@ pub(crate) fn gui_cause(code: &str, data: &Value) -> (String, Option<Hint>) {
                 "timeout" => "its GUI host did not report ready in time".into(),
                 "bad_ready_line" => "its GUI host printed a line devlanes cannot read".into(),
                 "version_mismatch" => format!(
-                    "its GUI host, devlanes-gui {}, speaks another GUI protocol than this daemon, devlanes {}",
+                    "its GUI host, devlanes-gui {}, does not work with this daemon, devlanes {}",
                     field(data, "version"),
                     field(data, "daemon")
                 ),

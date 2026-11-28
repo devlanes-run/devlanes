@@ -2378,6 +2378,7 @@ impl Inner {
         } else {
             runner.spawn(spec).await
         };
+        let no_backend = matches!(gui, GuiStart::NoBackend);
         let (managed, gui) = match (spawned, gui) {
             (Ok(managed), GuiStart::Host(host)) => {
                 let (unit, events) = host.attach(managed);
@@ -2405,8 +2406,13 @@ impl Inner {
         };
         let gui_state = match &gui {
             Some((unit, _)) => Some(unit.state()),
-            None if request.gui => Some(crate::gui::GuiState::without_host(
+            None if no_backend => Some(crate::gui::GuiState::without_host(
                 devlanes_proto::GUI_HOST_NONE,
+            )),
+            // A GUI service whose host was skipped, as for a missing working
+            // directory, which its own spawn reports.
+            None if request.gui => Some(crate::gui::GuiState::without_host(
+                devlanes_proto::GUI_HOST_STOPPED,
             )),
             None => None,
         };
@@ -4552,9 +4558,16 @@ impl Inner {
                         .get(unit)
                         .filter(|rec| rec.host.is_alive())
                         .map(|rec| {
-                            // The host goes with its unit and the next one comes
-                            // up, so viewers wait for it instead of closing.
-                            if let Some(gui) = &rec.gui {
+                            // When the plan has the unit as a GUI service again,
+                            // its next host comes up, so viewers wait for it.
+                            // Otherwise they are told the service closed.
+                            let again = resolved.services.get(unit).is_some_and(|s| {
+                                s.gui
+                                    && !resolved
+                                        .errors
+                                        .contains_key(&format!("services.{}", s.name))
+                            });
+                            if let Some(gui) = rec.gui.as_ref().filter(|_| again) {
                                 gui.restarting();
                             }
                             (

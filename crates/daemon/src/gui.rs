@@ -16,7 +16,7 @@
 //!
 //! A host that fails to start fails the unit before its command runs. A host
 //! that dies later fails nothing: the unit keeps running, and `status`,
-//! `debug why`, the unit's log and its launch notes say so. A machine whose
+//! `debug why`, the daemon log and the unit's launch notes say so. A machine whose
 //! composition root names no backend runs GUI services without a host, as
 //! before, with a note.
 
@@ -120,6 +120,11 @@ pub(crate) enum HostFailure {
         devlanes_gui_proto::PROTOCOL_VERSION
     )]
     Mismatch { version: String, protocol: u16 },
+    /// Its ready line has a format this daemon does not read.
+    #[error(
+        "devlanes-gui {version} prints ready line format {format}, which this daemon does not read"
+    )]
+    Format { version: String, format: u64 },
     /// It listens somewhere else than the unit's port.
     #[error("devlanes-gui listens on {0}, not on the unit's devlanes_gui port")]
     WrongAddress(SocketAddr),
@@ -155,7 +160,7 @@ impl HostFailure {
                     Self::Exited(_) => "exited",
                     Self::Timeout => "timeout",
                     Self::BadLine(_) | Self::Unreadable(_) => "bad_ready_line",
-                    Self::Mismatch { .. } => "version_mismatch",
+                    Self::Mismatch { .. } | Self::Format { .. } => "version_mismatch",
                     Self::WrongAddress(_) => "wrong_address",
                     _ => "control",
                 });
@@ -166,6 +171,12 @@ impl HostFailure {
                 if let Self::Mismatch { version, protocol } = other {
                     data["version"] = json!(version);
                     data["protocol"] = json!(protocol);
+                    data["daemon"] = json!(devlanes_version::VERSION);
+                    data["fix"] = json!(mismatch_fix(version));
+                }
+                if let Self::Format { version, format } = other {
+                    data["version"] = json!(version);
+                    data["format"] = json!(format);
                     data["daemon"] = json!(devlanes_version::VERSION);
                     data["fix"] = json!(mismatch_fix(version));
                 }
@@ -523,7 +534,23 @@ pub(crate) async fn read_line(
 /// release while this daemon still runs the old one, and a host of another
 /// release that speaks the same protocol works, with the note this returns.
 fn check(line: &str, address: SocketAddr) -> Result<(Ready, Option<String>), HostFailure> {
-    match HostLine::parse(line)? {
+    let parsed = match HostLine::parse(line) {
+        // A later format: when the line still names the host's release, it
+        // is a mismatch whose fix that release tells.
+        Err(ReadyError::Format(format)) => {
+            let version = serde_json::from_str::<Value>(line).ok().and_then(|line| {
+                line.get("devlanes")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            });
+            return Err(match version {
+                Some(version) => HostFailure::Format { version, format },
+                None => ReadyError::Format(format).into(),
+            });
+        }
+        parsed => parsed?,
+    };
+    match parsed {
         HostLine::Unready(unready) => Err(HostFailure::Unavailable {
             reason: unready.reason,
             message: unready.message,
@@ -833,7 +860,9 @@ impl ManagedUnit for GuiUnit {
 
 /// What [`Inner::start_gui`] brought up for a unit.
 pub(crate) enum GuiStart {
-    /// Not a GUI service, or a command that never gets a host.
+    /// No host: not a GUI service, a command that never gets one, or a GUI
+    /// service whose own spawn will fail first (its working directory is
+    /// missing), which status shows as a stopped host.
     NotGui,
     /// A GUI service on a machine without a GUI backend: it runs as before.
     NoBackend,
@@ -923,7 +952,8 @@ impl Inner {
     /// forwards the activity its control connection reports as activity of
     /// lane `reference`; when the host ends on its own while the unit runs,
     /// or its control connection closes while both still run, the unit keeps
-    /// running, its log and launch notes say so, and `unit.changed` goes out.
+    /// running, its launch notes and the daemon log say so, and
+    /// `unit.changed` goes out.
     pub(crate) fn watch_gui_host(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -1126,6 +1156,16 @@ mod tests {
             assert_eq!(error.data["reason"], "version_mismatch");
             assert_eq!(error.data["fix"], fix, "{version}");
         }
+        // A ready line format this daemon does not know: the same fix when
+        // the line names the release, else a line that does not read.
+        let later = line("999.0.0", 41234, ours).replace(r#""ready":1"#, r#""ready":2"#);
+        let error = check(&later, address)
+            .expect_err("later format")
+            .error("desktop", "acme", "");
+        assert_eq!(error.data["reason"], "version_mismatch");
+        assert_eq!(error.data["fix"], "restart");
+        let nameless = check(r#"{"ready":2}"#, address).expect_err("no release");
+        assert!(matches!(nameless, HostFailure::BadLine(_)), "{nameless:?}");
         let moved = check(&line(devlanes_version::VERSION, 41235, ours), address);
         assert!(
             matches!(moved, Err(HostFailure::WrongAddress(_))),

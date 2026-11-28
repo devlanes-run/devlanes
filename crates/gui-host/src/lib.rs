@@ -146,8 +146,9 @@ pub struct ServeOptions {
     pub shutdown: CancellationToken,
 }
 
-/// Whether the unit with a process id and start time still runs. Called on
-/// the host task, so it must return at once.
+/// Whether the unit with a process id and start time still runs. The host
+/// calls it on the blocking pool, so it may block, such as on reading the
+/// process table. A check that panics counts as running.
 pub type UnitAlive = Arc<dyn Fn(u32, u64) -> bool + Send + Sync>;
 
 /// How a host the daemon started notices that its daemon is gone, so it
@@ -161,7 +162,7 @@ pub type UnitAlive = Arc<dyn Fn(u32, u64) -> bool + Send + Sync>;
 /// - A control connection that closes before the identity came:
 ///   [`ServeError::NoUnitIdentity`] at once.
 /// - Once the identity came and every control connection closed, the host
-///   checks the unit with `unit_alive` every [`UNIT_POLL`] and ends without
+///   checks the unit with `unit_alive` [`UNIT_POLL`] after each answer and ends without
 ///   an error when it is gone.
 #[derive(Clone)]
 pub struct DaemonWatch {

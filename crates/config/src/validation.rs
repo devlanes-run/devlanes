@@ -408,7 +408,6 @@ fn validate_inner<E: Extensions>(
             ));
         }
         hosts(&format!("{path}.hosts"), service.hosts.iter().flatten())?;
-
         if let Some(stop) = &service.stop
             && let Some(signal) = &stop.signal
             && ![
