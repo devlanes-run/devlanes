@@ -88,6 +88,7 @@ fn client_messages() -> Vec<ClientMessage> {
         ClientMessage::Resize {
             window: W,
             size: Size::new(1200, 700),
+            request: 3,
         },
         ClientMessage::Close { window: W },
         ClientMessage::Focus {
@@ -227,6 +228,7 @@ fn host_messages() -> Vec<HostMessage> {
         HostMessage::Heartbeat,
         HostMessage::ResizeApplied {
             window: W,
+            request: 3,
             from_seq: 12,
         },
         HostMessage::Synced { request: 4 },
@@ -594,6 +596,7 @@ fn a_malformed_value_in_a_complete_body_names_its_field() {
             Message::Client(ClientMessage::Resize {
                 window: W,
                 size: Size::new(10, 10),
+                request: 1,
             }),
             4,
             9000u32.to_be_bytes().to_vec(),
@@ -986,6 +989,7 @@ fn encoding_refuses_what_the_peer_would_reject_and_writes_nothing() {
     let huge = ClientMessage::Resize {
         window: W,
         size: Size::new(100_000, 10),
+        request: 1,
     };
     assert_eq!(
         huge.encode(&mut out),

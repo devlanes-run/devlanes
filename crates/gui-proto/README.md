@@ -20,25 +20,40 @@ fn send_hello(out: &mut BytesMut) -> Result<(), EncodeError> {
     .encode(out)
 }
 
+// Why the host ends a connection.
+#[derive(Debug)]
+enum Close {
+    Decode(DecodeError),
+    // Answered with a refusal (RoleNotSupported) before closing.
+    Role(Role),
+    NotAllowed,
+}
+
 // On the host: append what the socket delivered, then take whole messages.
-// The first one must be the hello; the role decides what may follow.
+// The first one must be the hello; the role decides what may follow, and the
+// first message it may not send ends the connection.
 fn on_bytes(
     buf: &mut BytesMut,
     read: &[u8],
     role: &mut Option<Role>,
-) -> Result<Vec<ClientMessage>, DecodeError> {
+) -> Result<Vec<ClientMessage>, Close> {
     buf.extend_from_slice(read);
     let mut messages = Vec::new();
-    if role.is_none() {
-        match ClientMessage::decode_hello(buf)? {
-            Some(hello) => *role = Some(hello.role),
+    let role = match *role {
+        Some(role) => role,
+        None => match ClientMessage::decode_hello(buf).map_err(Close::Decode)? {
+            Some(hello) => match hello.role {
+                Role::Viewer | Role::Tool | Role::Control => *role.insert(hello.role),
+                other => return Err(Close::Role(other)),
+            },
             None => return Ok(messages),
+        },
+    };
+    while let Some(message) = ClientMessage::decode(buf).map_err(Close::Decode)? {
+        if !message.allowed_for(role) {
+            return Err(Close::NotAllowed);
         }
-    }
-    while let Some(message) = ClientMessage::decode(buf)? {
-        if role.is_some_and(|role| message.allowed_for(role)) {
-            messages.push(message);
-        }
+        messages.push(message);
     }
     Ok(messages)
 }

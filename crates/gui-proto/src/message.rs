@@ -49,9 +49,6 @@ const SMALL: u32 = 64 + SLACK;
 
 /// Type bytes of messages to the host. Values are never reused.
 mod to_host {
-    pub const KEEP_ALIVE: u8 = 0x0d;
-    pub const POINTER_LEFT: u8 = 0x0e;
-    pub const SYNC: u8 = 0x0f;
     pub const HELLO: u8 = 0x01;
     pub const FRAME_ACK: u8 = 0x02;
     pub const KEYFRAME_REQUEST: u8 = 0x03;
@@ -64,6 +61,9 @@ mod to_host {
     pub const FOCUS: u8 = 0x0a;
     pub const CLIPBOARD: u8 = 0x0b;
     pub const SCREENSHOT: u8 = 0x0c;
+    pub const KEEP_ALIVE: u8 = 0x0d;
+    pub const POINTER_LEFT: u8 = 0x0e;
+    pub const SYNC: u8 = 0x0f;
     pub const UNIT_PROCESS: u8 = 0x20;
     pub const UNIT_EXITED: u8 = 0x21;
     pub const LANE_FROZEN: u8 = 0x22;
@@ -333,7 +333,10 @@ pub enum ClientMessage {
         seq: u64,
     },
     /// The viewer needs a keyframe of `window`, such as after a decode error.
-    /// The host stops waiting for acknowledgements of frames it sent before.
+    /// The host stops waiting for acknowledgements of frames it sent before,
+    /// but honors a new request only once the keyframe answering the previous
+    /// one is acknowledged. Independently of pacing, the host caps each
+    /// connection's write queue and closes a connection that goes past it.
     KeyframeRequest {
         /// The window.
         window: WindowId,
@@ -364,6 +367,10 @@ pub enum ClientMessage {
         window: WindowId,
         /// The size wanted; the app may pick another.
         size: Size,
+        /// Chosen by the viewer, increasing per window, and echoed in
+        /// [`HostMessage::ResizeApplied`], so an answer to an older request
+        /// does not end the lock of a newer one.
+        request: u32,
     },
     /// Ask the app to close a window.
     Close {
@@ -402,8 +409,8 @@ pub enum ClientMessage {
         /// Echoed in the answer.
         request: u32,
     },
-    /// Control: the unit's process, so the host can find its windows. A PID
-    /// alone can be reused, so the start time comes with it.
+    /// Control: the identity of the unit's process. A PID alone can be
+    /// reused, so the start time comes with it.
     UnitProcess {
         /// The process id.
         pid: u32,
@@ -412,12 +419,7 @@ pub enum ClientMessage {
         /// microseconds since the epoch on macOS, the creation `FILETIME` on
         /// Windows. Compared for equality only.
         start_time: u64,
-        /// The name of the unit's job object on Windows, when the runner has
-        /// one. On Windows the host finds windows through the job when it is
-        /// set and through the process tree otherwise; on Linux the unit's
-        /// clients connect to the host's own display, so the identity only
-        /// names them; on macOS the host matches window owners against the
-        /// process tree.
+        /// The name of the unit's job object on Windows, when the runner has one.
         job: Option<String>,
     },
     /// Control: the unit's process exited.
@@ -480,9 +482,14 @@ impl ClientMessage {
                     w.u32(window.0);
                     w.string("text", text, MAX_TEXT)?;
                 }
-                Self::Resize { window, size } => {
+                Self::Resize {
+                    window,
+                    size,
+                    request,
+                } => {
                     w.u32(window.0);
                     size.write(w, "size")?;
+                    w.u32(*request);
                 }
                 Self::Focus { window, focused } => {
                     w.u32(window.0);
@@ -670,6 +677,7 @@ impl ClientMessage {
             RESIZE => Self::Resize {
                 window: read_window(r)?,
                 size: Size::read(r, "size")?,
+                request: r.u32("request")?,
             },
             CLOSE => Self::Close {
                 window: read_window(r)?,
@@ -818,7 +826,9 @@ pub enum HostMessage {
     Cursor(Cursor),
     /// The app started a move or resize.
     MoveResizeStarted(MoveResize),
-    /// A window's lock state changed.
+    /// A window's lock state changed. The host sends the end of Resizing only
+    /// once the first frame captured after the change is encoded and queued to
+    /// every viewer of the window, so no viewer unlocks before that frame.
     LockChanged {
         /// The window.
         window: WindowId,
@@ -849,6 +859,10 @@ pub enum HostMessage {
     ResizeApplied {
         /// The window.
         window: WindowId,
+        /// The [`ClientMessage::Resize`] request it answers, for the viewer
+        /// that sent it; 0 for other viewers and for a change the app made.
+        /// Viewers number their requests from 1.
+        request: u32,
         /// The first sequence number captured after the change.
         from_seq: u64,
     },
@@ -954,8 +968,13 @@ impl HostMessage {
                         }
                     }
                 }
-                Self::ResizeApplied { window, from_seq } => {
+                Self::ResizeApplied {
+                    window,
+                    request,
+                    from_seq,
+                } => {
                     w.u32(window.0);
+                    w.u32(*request);
                     w.u64(*from_seq);
                 }
                 Self::Synced { request } => w.u32(*request),
@@ -1120,6 +1139,7 @@ impl HostMessage {
             HEARTBEAT => Self::Heartbeat,
             RESIZE_APPLIED => Self::ResizeApplied {
                 window: read_window(r)?,
+                request: r.u32("request")?,
                 from_seq: r.u64("sequence number")?,
             },
             SYNCED => Self::Synced {

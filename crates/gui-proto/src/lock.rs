@@ -47,9 +47,12 @@ impl HostLock {
         self.resizing_since = Some(now);
     }
 
-    /// The host captured a frame after applying the change. It ends Resizing
-    /// whatever its size, because apps clamp to sizes of their own.
-    pub fn frame_captured(&mut self) {
+    /// The first frame captured after applying the change is encoded and
+    /// queued to every viewer of the window. It ends Resizing whatever its
+    /// size, because apps clamp to sizes of their own. Called after queueing,
+    /// not at capture, so the [`crate::HostMessage::LockChanged`] that follows
+    /// never reaches a viewer ahead of that frame.
+    pub fn frame_queued(&mut self) {
         self.resizing_since = None;
     }
 
@@ -115,6 +118,8 @@ impl HostLock {
 #[derive(Debug, Clone, Copy)]
 struct LocalResize {
     since: Instant,
+    /// The request number sent in [`crate::ClientMessage::Resize`].
+    request: u32,
     /// From [`crate::HostMessage::ResizeApplied`]; frames before it show the old size.
     from_seq: Option<u64>,
 }
@@ -144,17 +149,21 @@ impl ViewerLock {
         self.host = state;
     }
 
-    /// The viewer sent a resize request for the window.
-    pub fn resize_requested(&mut self, now: Instant) {
+    /// The viewer sent resize request number `request` for the window. It
+    /// replaces one still under way.
+    pub fn resize_requested(&mut self, request: u32, now: Instant) {
         self.resize = Some(LocalResize {
             since: now,
+            request,
             from_seq: None,
         });
     }
 
-    /// The host applied it; frames from `from_seq` on were captured after.
-    pub fn resize_applied(&mut self, from_seq: u64) {
-        if let Some(resize) = &mut self.resize {
+    /// The host applied request number `request`; frames from `from_seq` on
+    /// were captured after it. Answers to an older request are ignored, so
+    /// frames at that request's size do not end a newer one.
+    pub fn resize_applied(&mut self, request: u32, from_seq: u64) {
+        if let Some(resize) = self.resize.as_mut().filter(|r| r.request == request) {
             resize.from_seq = Some(from_seq);
         }
     }
@@ -237,12 +246,12 @@ mod tests {
     }
 
     #[test]
-    fn the_host_ends_resizing_on_the_first_capture_or_the_timeout() {
+    fn the_host_ends_resizing_on_the_first_queued_frame_or_the_timeout() {
         let t0 = Instant::now();
         let mut lock = HostLock::new();
         lock.resize_applied(t0);
         assert_eq!(lock.state(t0), LockState::Resizing);
-        lock.frame_captured();
+        lock.frame_queued();
         assert_eq!(lock.state(t0), LockState::Unlocked);
 
         lock.resize_applied(t0);
@@ -272,9 +281,9 @@ mod tests {
     fn frames_sent_before_the_resize_do_not_end_it_on_the_viewer() {
         let t0 = Instant::now();
         let mut lock = ViewerLock::new(t0);
-        lock.resize_requested(t0);
+        lock.resize_requested(1, t0);
         lock.frame(10, t0 + ms(10));
-        lock.resize_applied(12);
+        lock.resize_applied(1, 12);
         lock.frame(11, t0 + ms(20));
         assert_eq!(lock.state(t0 + ms(20)), LockState::Resizing);
         lock.frame(12, t0 + ms(30));
@@ -282,11 +291,28 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_to_an_older_resize_does_not_end_a_newer_one() {
+        let t0 = Instant::now();
+        let mut lock = ViewerLock::new(t0);
+        lock.resize_requested(1, t0);
+        lock.resize_requested(2, t0 + ms(50));
+        lock.resize_applied(1, 12);
+        lock.frame(12, t0 + ms(60));
+        assert_eq!(lock.state(t0 + ms(60)), LockState::Resizing);
+        lock.resize_applied(0, 13);
+        lock.frame(13, t0 + ms(70));
+        assert_eq!(lock.state(t0 + ms(70)), LockState::Resizing, "not ours");
+        lock.resize_applied(2, 14);
+        lock.frame(14, t0 + ms(80));
+        assert_eq!(lock.state(t0 + ms(80)), LockState::Unlocked);
+    }
+
+    #[test]
     fn a_resize_without_a_new_frame_ends_on_the_timeout() {
         let t0 = Instant::now();
         let mut lock = ViewerLock::new(t0);
-        lock.resize_requested(t0);
-        lock.resize_applied(5);
+        lock.resize_requested(1, t0);
+        lock.resize_applied(1, 5);
         lock.data(t0 + ms(2000));
         assert_eq!(lock.state(t0 + ms(2000)), LockState::Resizing);
         assert_eq!(lock.next_change(t0 + ms(2000)), Some(t0 + RESIZE_TIMEOUT));
@@ -308,7 +334,7 @@ mod tests {
         let t0 = Instant::now();
         let mut lock = ViewerLock::new(t0);
         lock.host_state(LockState::Frozen);
-        lock.resize_requested(t0);
+        lock.resize_requested(1, t0);
         assert_eq!(lock.state(t0), LockState::Frozen);
         lock.link_closed();
         lock.data(t0);

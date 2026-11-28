@@ -25,9 +25,7 @@ pub struct SessionId(pub u64);
 /// The secret the daemon gives a host for its control connection.
 ///
 /// `Debug` prints no secret and comparison takes the same time wherever the
-/// bytes differ. The daemon passes it in the host's environment; the host
-/// removes that variable from its own environment before it starts a child
-/// of its own, such as Xwayland, so no other process can read it.
+/// bytes differ.
 #[derive(Clone)]
 pub struct Token(String);
 
