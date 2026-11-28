@@ -410,17 +410,19 @@ pub enum Method {
     /// connected clients, connected ones first, then by name, `{items: [{id, name, paired, pairings,
     /// paired_at_ms, last_seen_ms, connections: [{address, since_ms, version,
     /// mirror}]}], now_ms}`; a client connected without pairing
-    /// (`remote.require_pairing: false`) has `paired: false` and no times. A
-    /// client paired by ticket also has `transport: "p2p"` and `key`, the
-    /// first 8 hex digits of its peer key.
+    /// (`remote.require_pairing: false`) has `paired: false` and no times.
+    /// `pairings` counts each token pairing and each key paired by ticket. A
+    /// client with a key also has `transport: "p2p"` and `key`, the first 8
+    /// hex digits of the key it used last.
     /// `now_ms` is the daemon's clock, which the times are measured against.
     /// [`remote::CLIENTS_EVENT`] announces changes.
     #[serde(rename = "remote.clients")]
     RemoteClients,
-    /// Box side, for `devlanes daemon revoke`: deletes the pairing of the
+    /// Box side, for `devlanes daemon revoke`: deletes the pairings of the
     /// client named by `{client}` (its name, its id or a unique start of the
-    /// id) and ends its sessions; a client paired by ticket loses its pinned
-    /// key, so the box no longer lets it connect. Reply `{revoked: [{id, name}], ended}`.
+    /// id) and ends its sessions; a client paired by ticket loses every
+    /// pinned key, so the box no longer lets it connect. Reply
+    /// `{revoked: [{id, name}], ended}`.
     /// Errors `client_not_found` (`{client, candidates}`) and
     /// `client_ambiguous` (`{client, candidates}`).
     #[serde(rename = "remote.revoke")]

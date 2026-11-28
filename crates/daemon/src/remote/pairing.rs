@@ -402,7 +402,7 @@ struct Paired {
     paired_at: i64,
     last_seen: Option<i64>,
     pairings: usize,
-    /// The short form of the key it last used of those it paired by ticket.
+    /// The short form of the most recently used of its ticket keys.
     p2p_key: Option<String>,
 }
 
@@ -410,14 +410,12 @@ struct Paired {
 /// client id, in the order of each client's first appearance there.
 fn by_client(pairings: &[RemotePairing], p2p: &[P2pClient]) -> Vec<Paired> {
     let mut clients: Vec<Paired> = Vec::new();
-    // A token pairing has no key.
     let tokens = pairings.iter().map(|pairing| {
         (
             &pairing.client_id,
             &pairing.name,
             pairing.paired_at,
             pairing.last_seen,
-            None,
         )
     });
     let tickets = p2p.iter().map(|client| {
@@ -426,20 +424,14 @@ fn by_client(pairings: &[RemotePairing], p2p: &[P2pClient]) -> Vec<Paired> {
             &client.name,
             client.paired_at,
             client.last_seen,
-            client.peer_key.get(..8).map(str::to_owned),
         )
     });
-    for (id, name, paired_at, last_seen, key) in tokens.chain(tickets) {
+    for (id, name, paired_at, last_seen) in tokens.chain(tickets) {
         let recent = last_seen.unwrap_or(paired_at);
         match clients.iter_mut().find(|c| c.id == *id) {
             Some(client) => {
-                let newer = recent > client.last_seen.unwrap_or(client.paired_at);
-                if newer {
+                if recent > client.last_seen.unwrap_or(client.paired_at) {
                     client.name.clone_from(name);
-                }
-                // The key it used last, when it has several.
-                if key.is_some() && (newer || client.p2p_key.is_none()) {
-                    client.p2p_key = key;
                 }
                 client.paired_at = client.paired_at.min(paired_at);
                 client.last_seen = client.last_seen.max(last_seen);
@@ -451,9 +443,19 @@ fn by_client(pairings: &[RemotePairing], p2p: &[P2pClient]) -> Vec<Paired> {
                 paired_at,
                 last_seen,
                 pairings: 1,
-                p2p_key: key,
+                p2p_key: None,
             }),
         }
+    }
+    // Compared among the client's keys only: a newer token pairing says
+    // nothing about which key it used last.
+    for client in &mut clients {
+        client.p2p_key = p2p
+            .iter()
+            .filter(|key| key.client_id == client.id)
+            .max_by_key(|key| key.last_seen.unwrap_or(key.paired_at))
+            .and_then(|key| key.peer_key.get(..8))
+            .map(str::to_owned);
     }
     clients
 }
@@ -1197,12 +1199,16 @@ mod tests {
                 pairing("dl_cid_a", "laptop", 5, Some(9)),
                 pairing("dl_cid_a", "old-laptop", 2, Some(3)),
                 pairing("dl_cid_b", "desk", 4, None),
+                pairing("dl_cid_d", "nas", 1, Some(30)),
             ],
             // The desk paired by ticket since, under a new name; another
-            // client only by ticket.
+            // client only by ticket; the NAS has two keys, the older listed
+            // first, and a token pairing used after both.
             &[
                 ticket("dl_cid_b", "desk-2", 'b', 6),
                 ticket("dl_cid_c", "tower", 'c', 7),
+                ticket("dl_cid_d", "nas", 'f', 10),
+                ticket("dl_cid_d", "nas", 'e', 20),
             ],
         );
         assert_eq!(
@@ -1223,6 +1229,14 @@ mod tests {
                     last_seen: Some(6),
                     pairings: 2,
                     p2p_key: Some("bbbbbbbb".into()),
+                },
+                Paired {
+                    id: "dl_cid_d".into(),
+                    name: "nas".into(),
+                    paired_at: 1,
+                    last_seen: Some(30),
+                    pairings: 3,
+                    p2p_key: Some("eeeeeeee".into()),
                 },
                 Paired {
                     id: "dl_cid_c".into(),

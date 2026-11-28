@@ -77,6 +77,36 @@ const BUSY: &str = "the box took too long to answer; try again with the same tic
 const STORE_FAILED: &str = "the box could not store the pairing; get a new ticket with `devlanes \
                             daemon pair` on the box and try again";
 
+/// Least time between two lines about pairing connections dropped for
+/// lack of a free slot.
+const BUSY_LOG_EVERY: Duration = Duration::from_secs(60);
+
+/// Counts pairing connections dropped for lack of a free slot between two
+/// log lines.
+#[derive(Default)]
+struct BusyLog {
+    /// When the last line was written.
+    logged: Option<Instant>,
+    /// Connections dropped since then.
+    dropped: u32,
+}
+
+impl BusyLog {
+    /// Counts one dropped connection at `now`; how many to report when a
+    /// line is due.
+    fn note(&mut self, now: Instant) -> Option<u32> {
+        self.dropped = self.dropped.saturating_add(1);
+        let due = self
+            .logged
+            .is_none_or(|at| now.saturating_duration_since(at) >= BUSY_LOG_EVERY);
+        if !due {
+            return None;
+        }
+        self.logged = Some(now);
+        Some(std::mem::take(&mut self.dropped))
+    }
+}
+
 /// How [`Inner::note_wrong_secret`] logs one wrong secret.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Logged {
@@ -147,6 +177,7 @@ pub(crate) struct PeerState {
     next_task: AtomicU64,
     pairing_slots: Arc<Semaphore>,
     wrong_secrets: Mutex<WrongSecrets>,
+    busy: Mutex<BusyLog>,
 }
 
 impl Default for PeerState {
@@ -163,6 +194,7 @@ impl Default for PeerState {
             next_task: AtomicU64::new(0),
             pairing_slots: Arc::new(Semaphore::new(PAIRING_SLOTS)),
             wrong_secrets: Mutex::default(),
+            busy: Mutex::default(),
         }
     }
 }
@@ -239,8 +271,8 @@ impl PairingGate for PeerGate {
     /// never with a code over its session.
     async fn claim(&self, _: &ClientInfo, _: &str) -> Result<PairingClaim, BoxError> {
         Ok(PairingClaim::Refused {
-            message: "this machine pairs with the box by ticket. Get a new ticket with `devlanes \
-                      daemon pair` on the box."
+            message: "this machine pairs with the box by ticket; get a new ticket with `devlanes \
+                      daemon pair` on the box"
                 .into(),
             retry_after: None,
         })
@@ -446,10 +478,16 @@ impl Inner {
         match alpn {
             Alpn::Pair => {
                 let Ok(slot) = self.remote.peer.pairing_slots.clone().try_acquire_owned() else {
-                    tracing::debug!(
-                        peer = %peer.short(),
-                        "dropped a pairing connection: {PAIRING_SLOTS} are being answered"
-                    );
+                    // At info, so the owner sees why their pairing failed;
+                    // one line a minute, since any key can cause it.
+                    let dropped = lock(&self.remote.peer.busy).note(Instant::now());
+                    if let Some(dropped) = dropped {
+                        tracing::info!(
+                            peer = %peer.short(), dropped,
+                            "dropped pairing connections because all {PAIRING_SLOTS} pairing \
+                             slots were busy; `dropped` counts them since the last such line"
+                        );
+                    }
                     return;
                 };
                 let desk = Desk {
@@ -710,13 +748,15 @@ impl Inner {
 
     /// Logs a wrong secret from `peer`, one line each for the first few of
     /// a window and then a count, since anyone who knows the box's id can
-    /// send them.
+    /// send them. The count of a window is written when the next wrong
+    /// secret opens a new one, so it is never written if none arrives.
     fn note_wrong_secret(&self, peer: PeerId, id: &str, name: &str) {
         let (each, quiet) = lock(&self.remote.peer.wrong_secrets).note(Instant::now());
         if quiet > 0 {
             tracing::warn!(
                 quiet,
-                "refused {quiet} more pairing tickets in the last 10 minutes"
+                "refused {quiet} more pairing tickets in the previous 10-minute window without \
+                 logging them"
             );
         }
         match each {
@@ -725,7 +765,8 @@ impl Inner {
             }
             Logged::Last => tracing::warn!(
                 peer = %peer.short(), client_id = %id, %name,
-                "refused a pairing ticket; more in the next 10 minutes are counted, not logged"
+                "refused a pairing ticket; more until this 10-minute window ends are counted, not \
+                 logged"
             ),
             Logged::Counted => {}
         }
@@ -762,6 +803,28 @@ mod tests {
     use devlanes_transport::{PeerAddr, Ticket, TicketSecret};
 
     use super::*;
+
+    /// Wrong secrets get a line each up to the third, which says the rest
+    /// of its window is only counted; the next window starts with the
+    /// count of the one before.
+    #[test]
+    fn wrong_secrets_are_logged_then_counted() {
+        let start = Instant::now();
+        let second = Duration::from_secs(1);
+        let rows = [
+            (Duration::ZERO, Logged::Each, 0),
+            (second, Logged::Each, 0),
+            (second * 2, Logged::Last, 0),
+            (second * 3, Logged::Counted, 0),
+            (WRONG_SECRET_WINDOW - second, Logged::Counted, 0),
+            (WRONG_SECRET_WINDOW, Logged::Each, 2),
+            (WRONG_SECRET_WINDOW + second, Logged::Each, 0),
+        ];
+        let mut secrets = WrongSecrets::default();
+        for (after, logged, quiet) in rows {
+            assert_eq!(secrets.note(start + after), (logged, quiet), "{after:?}");
+        }
+    }
 
     /// The smallest ticket the box mints, with no relay and no address, is
     /// hidden from output: redaction keeps its own copy of the prefix and

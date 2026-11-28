@@ -809,9 +809,10 @@ fn refused_key(error: &devlanes_transport::TransportError) -> bool {
 /// the box's services, and its wrong secrets pause nothing. A key that
 /// paired reaches the box's services under its own client id only. While
 /// connections are off a pairing is refused without using the ticket up,
-/// and a paired key's session is turned away with the reason. A restarted box listens for its pinned clients at
-/// once. `daemon revoke` ends a client's session and refuses its next dial,
-/// and once no client and no ticket is left the box stops listening.
+/// and a paired key's session is turned away with the reason. A restarted
+/// box listens for its pinned clients at once. `daemon revoke` ends a
+/// client's session and refuses its next dial, and once no client and no
+/// ticket is left the box stops listening.
 async fn a_ticket_pins_the_only_key_that_reaches_the_box_until_revoked() {
     tokio::time::timeout(LIMIT * 2, async {
         let tmp = temp();
@@ -993,11 +994,13 @@ async fn a_client_keeps_its_newest_keys_up_to_the_limit() {
             if index == 1 {
                 let entry = listed(&side, &id).await.expect("listed");
                 assert_eq!(entry["pairings"], 2, "{entry}");
+                // Pins change before `Paired` is sent, so this reads the
+                // admission as the second pairing left it.
+                let still = keys[0].connect(&ticket.addr, Alpn::Tunnel).await;
                 assert!(
-                    first
-                        .as_ref()
-                        .is_some_and(|session| session.end().is_none()),
-                    "a second key leaves the first one's session"
+                    still.is_ok(),
+                    "a second key unpinned the first: {:?}",
+                    still.err()
                 );
             }
             addr = Some(ticket.addr);
