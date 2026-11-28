@@ -86,6 +86,7 @@ linked = [[
   "cargo/devlanes-testing",
   "cargo/devlanes-transport",
   "cargo/devlanes-transport-command",
+  "cargo/devlanes-transport-iroh",
   "cargo/devlanes-transport-ssh",
   "cargo/devlanes-trust",
   "cargo/devlanes-trust-linux",
