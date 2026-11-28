@@ -69,7 +69,10 @@ impl Store {
                     .execute(c)?;
                 // Insertion order is pairing order. `paired_at` is the wall
                 // clock, which may step back, and ordering by it could drop
-                // the key just paired, which the caller pins anyway.
+                // the key just paired, which the caller pins anyway. This
+                // relies on SQLite giving a new row the highest rowid in a
+                // table without AUTOINCREMENT; the daemon only runs
+                // `incremental_vacuum`, which keeps rowids.
                 let dropped: Vec<String> = p2p_clients::table
                     .filter(p2p_clients::client_id.eq(&client_id))
                     .order(diesel::dsl::sql::<diesel::sql_types::BigInt>("rowid DESC"))

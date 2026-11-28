@@ -93,7 +93,9 @@ struct BusyLog {
 
 impl BusyLog {
     /// Counts one dropped connection at `now`; how many to report when a
-    /// line is due.
+    /// line is due. Drops counted since the last line are reported by the
+    /// next drop after the minute, so a pending count is never written if
+    /// no further drop arrives.
     fn note(&mut self, now: Instant) -> Option<u32> {
         self.dropped = self.dropped.saturating_add(1);
         let due = self
@@ -823,6 +825,26 @@ mod tests {
         let mut secrets = WrongSecrets::default();
         for (after, logged, quiet) in rows {
             assert_eq!(secrets.note(start + after), (logged, quiet), "{after:?}");
+        }
+    }
+
+    /// The first dropped pairing connection is logged at once, drops within
+    /// the next minute are only counted, and the first drop after it
+    /// reports them with itself.
+    #[test]
+    fn dropped_pairings_are_logged_once_a_minute() {
+        let start = Instant::now();
+        let second = Duration::from_secs(1);
+        let rows = [
+            (Duration::ZERO, Some(1)),
+            (second, None),
+            (BUSY_LOG_EVERY - second, None),
+            (BUSY_LOG_EVERY, Some(3)),
+            (BUSY_LOG_EVERY + second, None),
+        ];
+        let mut busy = BusyLog::default();
+        for (after, reported) in rows {
+            assert_eq!(busy.note(start + after), reported, "{after:?}");
         }
     }
 
