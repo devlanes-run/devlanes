@@ -1239,7 +1239,12 @@ fn load_and_check_files() {
         project.services["api"].autostart,
         Some(Templated::Literal(false))
     );
-    assert_eq!(check(dir.path()).expect("check").project, "demo");
+    assert_eq!(
+        check(dir.path(), ProjectOptions::default())
+            .expect("check")
+            .project,
+        "demo"
+    );
 }
 
 #[derive(Debug, Clone, Default, schemars::JsonSchema)]

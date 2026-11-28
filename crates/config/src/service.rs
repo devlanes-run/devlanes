@@ -57,9 +57,15 @@ macro_rules! service_fields {
             #[schemars(skip)]
             /// Options under the selected preset's name, validated by that integration.
             pub preset_options: IndexMap<String, E::Options>,
-            /// `gui: true`: the service gets a `devlanes_gui` port and a GUI host per
-            /// replica. Accepted only when the loader's [`crate::ProjectOptions`] enable
-            /// GUI services, and left out of the published schema until then.
+            /// Set true for a service that opens windows, such as a desktop app, an
+            /// emulator or a simulator: devlanes gives each replica a display of its own
+            /// and serves its windows on a `devlanes_gui` port, so they can be seen and
+            /// driven from this machine or a connected one. A plain `true` or `false`,
+            /// the same in every lane, because the port is reserved in every lane's
+            /// block; `${{ ... }}` expressions are not allowed. Defaults to false.
+            // Loads only when the composition root's `ProjectOptions` enable GUI
+            // services, and stays out of the published schema until they ship; the
+            // skip and a missing example are the only differences then.
             #[schemars(skip)]
             pub gui: Option<bool>,
         }

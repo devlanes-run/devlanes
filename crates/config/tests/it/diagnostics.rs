@@ -336,10 +336,11 @@ fn gui_needs_the_option_and_a_plain_boolean() {
     assert_eq!(config.services["desktop"].gui, Some(true));
 }
 
-/// Port names starting with `devlanes_` belong to devlanes, wherever a project
-/// would name one and whether or not GUI services are enabled.
+/// With GUI services on, port names starting with `devlanes_` belong to
+/// devlanes, wherever a project would name one; with them off such a name
+/// stays the project's, as it was.
 #[test]
-fn devlanes_port_names_are_reserved() {
+fn devlanes_port_names_are_reserved_with_gui_services() {
     for (service, key) in [
         (
             "env: { GUI: '${{ self.ports.devlanes_gui }}' }",
@@ -356,19 +357,20 @@ fn devlanes_port_names_are_reserved() {
         ("ready: { tcp: devlanes_gui }", "services.api.ready.tcp"),
     ] {
         let source = format!("project: demo\nservices:\n  api:\n    run: server\n    {service}\n");
-        for options in [
-            ProjectOptions::default(),
+        let message = parse_project_with_options::<OpaqueExtensions>(
+            &source,
+            None,
             ProjectOptions { gui_services: true },
-        ] {
-            let message = parse_project_with_options::<OpaqueExtensions>(&source, None, options)
-                .expect_err(service)
-                .message;
-            assert!(
-                message.starts_with(&format!("{key}: port `devlanes_")),
-                "{service}: {message}"
-            );
-            assert!(message.contains("reserved for devlanes"), "{message}");
-        }
+        )
+        .expect_err(service)
+        .message;
+        assert!(
+            message.starts_with(&format!("{key}: port `devlanes_")),
+            "{service}: {message}"
+        );
+        assert!(message.contains("reserved for devlanes"), "{message}");
+        parse_project_with_options::<OpaqueExtensions>(&source, None, ProjectOptions::default())
+            .unwrap_or_else(|error| panic!("{service}: {}", error.message));
     }
     // A name that only looks alike stays the project's.
     parse_project(
@@ -647,7 +649,7 @@ fn missing_compose_file_is_an_error() {
     )
     .expect("config");
     std::fs::write(dir.path().join("compose.yaml"), "services: {}\n").expect("compose");
-    let error = check(dir.path()).expect_err("second file missing");
+    let error = check(dir.path(), ProjectOptions::default()).expect_err("second file missing");
     assert!(
         error
             .message
@@ -662,7 +664,12 @@ fn missing_compose_file_is_an_error() {
     );
     assert_eq!(error.location.line, 3);
     std::fs::write(dir.path().join("compose.dev.yaml"), "services: {}\n").expect("compose");
-    assert!(check(dir.path()).expect("both present").warnings.is_empty());
+    assert!(
+        check(dir.path(), ProjectOptions::default())
+            .expect("both present")
+            .warnings
+            .is_empty()
+    );
 }
 
 /// A script runs in its file's directory, so `cwd` next to `run_script` is refused, also

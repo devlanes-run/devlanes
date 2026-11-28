@@ -408,20 +408,7 @@ fn validate_inner<E: Extensions>(
             ));
         }
         hosts(&format!("{path}.hosts"), service.hosts.iter().flatten())?;
-        for host in service.hosts.iter().flatten() {
-            if let crate::HostConfig::Route(route) = host
-                && let Some(port) = &route.port
-                && is_reserved_port(port)
-            {
-                return Err(fail(&format!("{path}.hosts"), reserved_port(port)));
-            }
-        }
-        if let Some(ReadyConfig::Check(ready)) = &service.ready
-            && let Some(crate::TcpReady::Port(port)) = &ready.tcp
-            && is_reserved_port(port)
-        {
-            return Err(fail(&format!("{path}.ready.tcp"), reserved_port(port)));
-        }
+
         if let Some(stop) = &service.stop
             && let Some(signal) = &stop.signal
             && ![
@@ -815,6 +802,59 @@ fn is_reserved_port(name: &str) -> bool {
     name.starts_with(devlanes_core::ports::RESERVED_PORT_PREFIX)
 }
 
+/// Fails, naming the key, for a port name starting with `devlanes_` in a
+/// service's `hosts[].port`, `ready.tcp` or an expression's
+/// `self.ports.<name>`, `services.<alias>.ports.<name>` or
+/// `lanes.main.services.<alias>.ports.<name>`. The loader applies it with GUI
+/// services, whose `devlanes_gui` port it keeps apart; without them such a
+/// name stays a project's own.
+pub(crate) fn reserved_port_names<E: Extensions>(
+    config: &ProjectConfig<E>,
+) -> Result<(), ConfigError> {
+    for (name, service) in &config.services {
+        let path = format!("services.{name}");
+        for host in service.hosts.iter().flatten() {
+            if let crate::HostConfig::Route(route) = host
+                && let Some(port) = &route.port
+                && is_reserved_port(port)
+            {
+                return Err(fail(&format!("{path}.hosts"), reserved_port(port)));
+            }
+        }
+        if let Some(ReadyConfig::Check(ready)) = &service.ready
+            && let Some(crate::TcpReady::Port(port)) = &ready.tcp
+            && is_reserved_port(port)
+        {
+            return Err(fail(&format!("{path}.ready.tcp"), reserved_port(port)));
+        }
+    }
+    let value = serde_json::to_value(config).map_err(|e| ConfigError::plain(e.to_string()))?;
+    let mut texts = Vec::new();
+    if let Some(map) = value.as_object() {
+        for (key, value) in map {
+            expressions(value, key, &mut texts);
+        }
+    }
+    for (path, text) in texts {
+        for reference in crate::references(&text).map_err(|e| fail(&path, e.message))? {
+            let components: Vec<&str> = reference.split('.').collect();
+            // Where `ports` sits in each form.
+            let ports = match components[0] {
+                "self" => 1,
+                "services" => 2,
+                "lanes" => 4,
+                _ => continue,
+            };
+            if components.get(ports) == Some(&"ports")
+                && let Some(port) = components.get(ports + 1).filter(|p| is_reserved_port(p))
+            {
+                return Err(fail(&path, reserved_port(port)));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The error for a project naming a port devlanes keeps for itself.
 fn reserved_port(name: &str) -> String {
     format!(
@@ -1066,20 +1106,6 @@ fn check_reference<E: Extensions>(
             )
         })
     };
-    // Where the port name sits in `self.ports.<name>`,
-    // `services.<alias>.ports.<name>` and `lanes.main.services.<alias>.ports.<name>`.
-    let ports = match components[0] {
-        "self" => Some(1),
-        "services" => Some(2),
-        "lanes" => Some(4),
-        _ => None,
-    };
-    if let Some(ports) = ports
-        && at(ports) == Some("ports")
-        && let Some(name) = at(ports + 1).filter(|name| is_reserved_port(name))
-    {
-        return Err(fail(path, reserved_port(name)));
-    }
     match components[0] {
         "lane" => attribute(path, "lane", at(1), lane_keys.iter().map(String::as_str)),
         "project" => attribute(path, "project", at(1), PROJECT_ATTRS.iter().copied()),

@@ -723,7 +723,7 @@ pub fn parse_project_with_options<E: Extensions>(
     if let Some(local) = local {
         documents.push(parse_document("devlanes.local.yaml", local, true, options)?);
     }
-    merge_documents(documents, 0).map(|(config, _)| config)
+    merge_documents(documents, 0, options).map(|(config, _)| config)
 }
 
 /// A parsed document waiting to be merged, with the source it came from.
@@ -804,10 +804,11 @@ fn short_name(file: &str) -> &str {
 
 /// Merge documents in order into one validated project. `entry` is the document the
 /// project was loaded from: it names the project, local overlays must not, and the
-/// names in extended files are ignored.
+/// names in extended files are ignored. `options` add their own checks.
 fn merge_documents<E: Extensions>(
     documents: Vec<Document<E>>,
     entry: usize,
+    options: ProjectOptions,
 ) -> Result<(ProjectConfig<E>, CheckReport), ConfigError> {
     let sources: Vec<Source> = documents.iter().map(|doc| doc.source.clone()).collect();
     let entry_source = &sources[entry];
@@ -892,6 +893,10 @@ fn merge_documents<E: Extensions>(
         }
     }
     let report = crate::validate(&config).map_err(|error| config.sources.locate(error))?;
+    if options.gui_services {
+        crate::validation::reserved_port_names(&config)
+            .map_err(|error| config.sources.locate(error))?;
+    }
     Ok((config, report))
 }
 
@@ -962,7 +967,7 @@ pub fn load_project_files<E: Extensions>(
             &mut files,
             None,
         )
-        .and_then(|index| merge_documents(documents, index))
+        .and_then(|index| merge_documents(documents, index, options))
     };
     ProjectLoad { result, files }
 }
@@ -1158,10 +1163,10 @@ pub fn check_compose_files<E: Extensions>(
     Ok(())
 }
 
-/// Load and return warnings for `config check`; validation failures are errors.
-pub fn check(path: impl AsRef<Path>) -> Result<CheckReport, ConfigError> {
-    load_named::<OpaqueExtensions>(path.as_ref(), None, ProjectOptions::default())
-        .map(|(_, report)| report)
+/// Load and return warnings for `config check`, with the keys `options`
+/// accept; validation failures are errors.
+pub fn check(path: impl AsRef<Path>, options: ProjectOptions) -> Result<CheckReport, ConfigError> {
+    load_named::<OpaqueExtensions>(path.as_ref(), None, options).map(|(_, report)| report)
 }
 
 /// Determine all transitively referenced templates for unused-template warnings.
