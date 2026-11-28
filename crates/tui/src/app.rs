@@ -883,6 +883,11 @@ pub enum Msg {
         host: String,
         result: Result<Value, ApiError>,
     },
+    /// [`Effect::Forget`] is done.
+    Forgotten {
+        host: String,
+        result: Result<Value, ApiError>,
+    },
     /// [`Effect::Pair`] is done.
     Paired(Result<Value, ApiError>),
     /// [`Effect::UseLane`] is done.
@@ -988,6 +993,13 @@ pub enum Effect {
         generation: u64,
         host: String,
     },
+    /// `connect` with `ticket` and `name`, attached and answered as
+    /// [`Effect::Connect`] is; the box's name comes with its first state.
+    ConnectTicket {
+        generation: u64,
+        ticket: crate::connect::TicketText,
+        name: Option<String>,
+    },
     /// The answer to the prompt on `stream_id` of the attached `connect`.
     ConnectAnswer {
         stream_id: u64,
@@ -1008,6 +1020,11 @@ pub enum Effect {
     /// `disconnect` for `host`, answered with [`Msg::Disconnected`]; only
     /// produced by a confirmed dialog.
     Disconnect {
+        host: String,
+    },
+    /// `disconnect` with `forget` for `host`, answered with
+    /// [`Msg::Forgotten`]; only produced by a confirmed dialog.
+    Forget {
         host: String,
     },
     /// `remote.pair`, answered with [`Msg::Paired`].
@@ -2400,6 +2417,18 @@ impl App {
                     Ok(_) => self.set_notice(format!("disconnected {host}")),
                     Err(error) => {
                         self.api_error(&format!("disconnect {host}"), None, error, &mut effects);
+                    }
+                }
+                self.fetch_boxes(&mut effects);
+            }
+            Msg::Forgotten { host, result } => {
+                let host = text::clean(&host);
+                match result {
+                    Ok(_) => self.set_notice(format!(
+                        "forgot {host}; connecting to it again needs a new ticket"
+                    )),
+                    Err(error) => {
+                        self.api_error(&format!("forget {host}"), None, error, &mut effects);
                     }
                 }
                 self.fetch_boxes(&mut effects);
@@ -4324,6 +4353,7 @@ impl App {
             KeyCode::Char('p') if plain => self.pair(effects),
             KeyCode::Char('o') if plain => self.open_options("remote.allow_connections", effects),
             KeyCode::Char('d') if plain => self.disconnect_prompt(),
+            KeyCode::Char('f') if plain => self.forget_prompt(),
             KeyCode::Char('x') if plain => {
                 if self.boxes.part == BoxPart::Clients {
                     self.revoke_prompt();
@@ -4473,6 +4503,33 @@ impl App {
         });
     }
 
+    /// The confirm dialog for forgetting the selected box paired by ticket,
+    /// or why it cannot be forgotten. A box that is not connected can be
+    /// forgotten too: that is the usual state of a pairing nobody wants.
+    fn forget_prompt(&mut self) {
+        let Some(host) = self.boxes.selected_host() else {
+            self.set_notice("select a box paired by ticket to forget it".into());
+            return;
+        };
+        let name = text::clean(&host.host);
+        if !host.by_ticket() {
+            self.set_notice(format!("{name} is not paired by ticket; d disconnects it"));
+            return;
+        }
+        self.dialog = Some(Dialog::Confirm {
+            prompt: format!("Forget {name}?"),
+            detail: vec![
+                "Connecting to it again needs a new ticket from it.".into(),
+                "Its lanes keep running on the box, and folders synced from it stay here.".into(),
+            ],
+            action: "forget",
+            strict: true,
+            effect: Box::new(Effect::Forget {
+                host: host.host.clone(),
+            }),
+        });
+    }
+
     /// Opens the pairing code modal and asks for a code.
     fn pair(&mut self, effects: &mut Vec<Effect>) {
         self.dialog = Some(Dialog::Pair(crate::connect::PairDialog::loading()));
@@ -4488,7 +4545,6 @@ impl App {
         if dialog.generation != generation {
             return;
         }
-        let host = event.data.get("host").and_then(Value::as_str);
         match event.event.as_str() {
             devlanes_proto::remote::PROMPT_EVENT => {
                 // A notice needs no answer, but ssh waits for one.
@@ -4499,13 +4555,13 @@ impl App {
                     });
                 }
             }
-            devlanes_proto::remote::STATE_EVENT if host == Some(dialog.host.as_str()) => {
+            devlanes_proto::remote::STATE_EVENT if dialog.follows(&event.data) => {
                 dialog.state(&event.data);
                 if dialog.link.state == "connected" {
-                    let name = text::clean(&dialog.host);
+                    let notice = connected_notice(dialog);
                     self.dialog = None;
                     effects.push(Effect::ConnectDetach);
-                    self.set_notice(format!("connected to {name}"));
+                    self.set_notice(notice);
                     self.fetch_boxes(effects);
                 }
             }
@@ -4527,16 +4583,18 @@ impl App {
         if dialog.generation != generation {
             return;
         }
-        let name = text::clean(&dialog.host);
         match result {
             Ok(status) => {
+                // A pairing that ends before its first state names the box here.
+                dialog.follows(&status);
                 let state = status.get("state").and_then(Value::as_str).unwrap_or("");
-                self.dialog = None;
-                self.set_notice(if state == "connected" {
-                    format!("connected to {name}")
+                let notice = if state == "connected" {
+                    connected_notice(dialog)
                 } else {
-                    format!("{name} is not connected")
-                });
+                    format!("{} is not connected", text::clean(&dialog.host))
+                };
+                self.dialog = None;
+                self.set_notice(notice);
             }
             Err(error) => {
                 dialog.step = crate::connect::Step::Failed(words::api(&error));
@@ -5417,6 +5475,9 @@ impl App {
             Effect::Disconnect { host } => {
                 self.set_notice(format!("disconnecting {}…", text::clean(host)));
             }
+            Effect::Forget { host } => {
+                self.set_notice(format!("forgetting {}…", text::clean(host)));
+            }
             _ => {}
         }
     }
@@ -6205,14 +6266,32 @@ impl App {
             Action::Close => {
                 if dialog.attached() {
                     effects.push(Effect::ConnectDetach);
-                    self.set_notice(format!(
-                        "{} keeps connecting in the daemon",
-                        text::clean(&dialog.host)
-                    ));
+                    // Before the box is named, the daemon may still be
+                    // pairing; it goes on without this modal.
+                    self.set_notice(if dialog.host.is_empty() {
+                        "the daemon keeps pairing with the box in the ticket".to_owned()
+                    } else {
+                        format!(
+                            "{} keeps connecting in the daemon",
+                            text::clean(&dialog.host)
+                        )
+                    });
                     self.fetch_boxes(effects);
                 }
             }
             Action::Connect => self.connect_box(dialog, effects),
+            Action::Pair { ticket, name } => {
+                self.boxes.connects += 1;
+                dialog.generation = self.boxes.connects;
+                dialog.link = crate::connect::Link::default();
+                dialog.step = Step::Waiting;
+                effects.push(Effect::ConnectTicket {
+                    generation: dialog.generation,
+                    ticket,
+                    name,
+                });
+                self.dialog = Some(Dialog::Connect(dialog));
+            }
             Action::Save(command) => {
                 self.boxes.connects += 1;
                 dialog.generation = self.boxes.connects;
@@ -8281,6 +8360,23 @@ fn done_notice(label: &str, value: &Value) -> String {
         other => return format!("{other} {rest}: done"),
     };
     format!("{done} {rest}")
+}
+
+/// The notice once the connect modal's box connected: `connected to acme`,
+/// or for a pairing by ticket the name the box is kept under, since the box
+/// chose it and it may differ from what was typed.
+fn connected_notice(dialog: &crate::connect::ConnectDialog) -> String {
+    let name = text::clean(&dialog.host);
+    match &dialog.paired {
+        Some(paired) if paired.name_ignored => format!(
+            "connected to {name}, its name from an earlier pairing; the name you typed was ignored"
+        ),
+        Some(paired) if paired.kept => {
+            format!("connected to {name}, its name from an earlier pairing")
+        }
+        Some(_) => format!("paired and connected to {name}"),
+        None => format!("connected to {name}"),
+    }
 }
 
 /// Plain verb for notices.

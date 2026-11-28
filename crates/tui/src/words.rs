@@ -513,6 +513,46 @@ pub fn rpc(error: &RpcError) -> Worded {
                 Some("devlanes daemon logs".into()),
             )
         }
+        // A pairing by ticket that failed, before the box had a name here
+        // (`p2p:` and its key's start) or marked `pairing`: its text is
+        // about the box in the ticket and says what to do.
+        "remote_failed"
+            if data.get("pairing").and_then(Value::as_bool) == Some(true)
+                || field(data, "host").starts_with("p2p:") =>
+        {
+            (message.replace('`', ""), rest, None)
+        }
+        // Pairing by ticket and boxes paired by ticket: each text says what
+        // to run, so none gets a hint.
+        "bad_ticket"
+        | "box_name_taken"
+        | "box_name_ambiguous"
+        | "box_pairing_missing"
+        | "box_not_paired_by_ticket"
+            if !message.is_empty() =>
+        {
+            (message.replace('`', ""), rest, None)
+        }
+        // Some refusals of a ticket leave it usable, and each says so.
+        "pairing_refused" if !message.is_empty() => (message.replace('`', ""), rest, None),
+        "not_supported_yet" => (
+            match field(data, "feature") {
+                feature if feature.is_empty() => "this is not supported yet".to_owned(),
+                feature => format!("{feature} is not supported yet"),
+            },
+            Vec::new(),
+            None,
+        ),
+        // A box name the daemon refused, in its words.
+        "bad_request" if !field(data, "name").is_empty() => (
+            format!(
+                "{} cannot be a box name: {}",
+                field(data, "name"),
+                message.replace('`', "")
+            ),
+            rest,
+            None,
+        ),
         // A box's reasons mostly start with "the box", which the TUI names.
         "remote_failed" | "remote_needs_pairing" | "remote_needs_auth" => {
             let host = field(data, "host");

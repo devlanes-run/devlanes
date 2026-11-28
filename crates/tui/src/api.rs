@@ -600,9 +600,35 @@ pub trait DaemonApi: Send + Sync {
             2,
         )))
     }
+    /// `connect` with `{ticket, name}`, attached: pairs with the box in the
+    /// ticket under `name` or its own name, then follows its link as
+    /// [`DaemonApi::connect`] does. The first `remote.state` event names the
+    /// box in `host` and `paired`.
+    async fn pair_ticket(
+        &self,
+        _ticket: crate::connect::TicketText,
+        _name: Option<String>,
+    ) -> Result<ConnectSession, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "connect"}),
+            2,
+        )))
+    }
     /// `disconnect` for `host`: unmirrors it and forgets to connect it again.
     /// Call it only after the user confirmed.
     async fn disconnect(&self, _host: String) -> Result<Value, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "disconnect"}),
+            2,
+        )))
+    }
+    /// `disconnect` with `forget` for `host`, a box paired by ticket: also
+    /// deletes the pairing, so connecting it again needs a new ticket.
+    /// Answers `{disconnected, forgotten}`; other boxes fail with
+    /// `box_not_paired_by_ticket`. Call it only after the user confirmed.
+    async fn forget(&self, _host: String) -> Result<Value, ApiError> {
         Err(ApiError::Rpc(RpcError::new(
             "unknown_method",
             json!({"method": "disconnect"}),
@@ -963,6 +989,52 @@ impl ClientApi {
     /// Reconnects without spawning: a daemon stopped on purpose stays stopped.
     async fn fresh(&self) -> Result<Client, ApiError> {
         Ok(Client::connect(&self.paths).await?)
+    }
+
+    /// `connect` with `params` on its own connection, pumping its events;
+    /// prompt answers go back on that connection, whose stream ids they name.
+    async fn attach_connect(&self, params: Value) -> Result<ConnectSession, ApiError> {
+        let mut client = self.fresh().await?;
+        let id = client
+            .begin_request(Method::Connect, params, self.context(None, false))
+            .await?;
+        let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
+        let (answers, mut answers_rx) = mpsc::channel::<(u64, Bytes)>(INPUT_QUEUE);
+        tokio::spawn(async move {
+            let done = loop {
+                // Both receives are cancel-safe, so losing the race drops nothing.
+                tokio::select! {
+                    answer = answers_rx.recv() => match answer {
+                        Some((stream_id, data)) => {
+                            if let Err(error) = client.send_bytes(stream_id, data).await {
+                                break Err(ApiError::from(error));
+                            }
+                        }
+                        // The TUI detached; dropping the connection is the detach.
+                        None => return,
+                    },
+                    frame = client.next_frame() => match frame {
+                        Ok(Frame::Control(Control::Event(event))) => {
+                            if events_tx.send(ConnectEvent::Event(event)).await.is_err() {
+                                return;
+                            }
+                        }
+                        Ok(Frame::Control(Control::Response(response))) if response.id == id => {
+                            break match response.result {
+                                Outcome::Ok { data } => Ok(data),
+                                Outcome::Error { error } => Err(ApiError::Rpc(error)),
+                            };
+                        }
+                        Ok(_) => {}
+                        Err(error) => break Err(ApiError::from(error)),
+                    },
+                }
+            };
+            if events_tx.send(ConnectEvent::Done(done)).await.is_err() {
+                // The TUI detached first; there is nobody left to tell.
+            }
+        });
+        Ok(ConnectSession { events, answers })
     }
 
     /// Sends a request on the shared connection, dropping it after transport errors.
@@ -1410,51 +1482,18 @@ impl DaemonApi for ClientApi {
     /// Calls `connect` on its own connection and pumps its events; prompt
     /// answers go back on that connection, whose stream ids they name.
     async fn connect(&self, host: String) -> Result<ConnectSession, ApiError> {
-        let mut client = self.fresh().await?;
-        let id = client
-            .begin_request(
-                Method::Connect,
-                json!({"host": host}),
-                self.context(None, false),
-            )
-            .await?;
-        let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
-        let (answers, mut answers_rx) = mpsc::channel::<(u64, Bytes)>(INPUT_QUEUE);
-        tokio::spawn(async move {
-            let done = loop {
-                // Both receives are cancel-safe, so losing the race drops nothing.
-                tokio::select! {
-                    answer = answers_rx.recv() => match answer {
-                        Some((stream_id, data)) => {
-                            if let Err(error) = client.send_bytes(stream_id, data).await {
-                                break Err(ApiError::from(error));
-                            }
-                        }
-                        // The TUI detached; dropping the connection is the detach.
-                        None => return,
-                    },
-                    frame = client.next_frame() => match frame {
-                        Ok(Frame::Control(Control::Event(event))) => {
-                            if events_tx.send(ConnectEvent::Event(event)).await.is_err() {
-                                return;
-                            }
-                        }
-                        Ok(Frame::Control(Control::Response(response))) if response.id == id => {
-                            break match response.result {
-                                Outcome::Ok { data } => Ok(data),
-                                Outcome::Error { error } => Err(ApiError::Rpc(error)),
-                            };
-                        }
-                        Ok(_) => {}
-                        Err(error) => break Err(ApiError::from(error)),
-                    },
-                }
-            };
-            if events_tx.send(ConnectEvent::Done(done)).await.is_err() {
-                // The TUI detached first; there is nobody left to tell.
-            }
-        });
-        Ok(ConnectSession { events, answers })
+        self.attach_connect(json!({"host": host})).await
+    }
+
+    /// Calls `connect` with the ticket on its own connection, as
+    /// [`ClientApi::connect`] does with a host.
+    async fn pair_ticket(
+        &self,
+        ticket: crate::connect::TicketText,
+        name: Option<String>,
+    ) -> Result<ConnectSession, ApiError> {
+        self.attach_connect(json!({"ticket": ticket.expose(), "name": name}))
+            .await
     }
 
     /// Calls `disconnect` on its own connection; it waits for the box's
@@ -1463,6 +1502,17 @@ impl DaemonApi for ClientApi {
         self.oneshot(
             Method::Disconnect,
             json!({"host": host}),
+            self.context(None, false),
+        )
+        .await
+    }
+
+    /// Calls `disconnect` with `forget` on its own connection, as
+    /// [`ClientApi::disconnect`] does.
+    async fn forget(&self, host: String) -> Result<Value, ApiError> {
+        self.oneshot(
+            Method::Disconnect,
+            json!({"host": host, "forget": true}),
             self.context(None, false),
         )
         .await

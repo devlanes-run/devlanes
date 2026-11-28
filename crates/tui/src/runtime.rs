@@ -766,7 +766,19 @@ impl Executor {
             Effect::Connect { generation, host } => {
                 self.detach_connect();
                 let (answers, answers_rx) = mpsc::channel(ATTACH_INPUT_QUEUE);
-                let task = tokio::spawn(pump_connect(api, sender, generation, host, answers_rx));
+                let opening = Opening::Host(host);
+                let task = tokio::spawn(pump_connect(api, sender, generation, opening, answers_rx));
+                self.connect = Some((task, answers));
+            }
+            Effect::ConnectTicket {
+                generation,
+                ticket,
+                name,
+            } => {
+                self.detach_connect();
+                let (answers, answers_rx) = mpsc::channel(ATTACH_INPUT_QUEUE);
+                let opening = Opening::Ticket(ticket, name);
+                let task = tokio::spawn(pump_connect(api, sender, generation, opening, answers_rx));
                 self.connect = Some((task, answers));
             }
             Effect::ConnectAnswer { stream_id, answer } => {
@@ -824,6 +836,12 @@ impl Executor {
                 tokio::spawn(async move {
                     let result = api.disconnect(host.clone()).await;
                     deliver(&sender, Msg::Disconnected { host, result }).await;
+                });
+            }
+            Effect::Forget { host } => {
+                tokio::spawn(async move {
+                    let result = api.forget(host.clone()).await;
+                    deliver(&sender, Msg::Forgotten { host, result }).await;
                 });
             }
             Effect::Pair => {
@@ -1105,16 +1123,28 @@ async fn pump_attach(
     deliver(&sender, Msg::AttachClosed { generation }).await;
 }
 
-/// Opens `connect` for `host`, then forwards its events to the app and the
-/// app's prompt answers to the daemon until it ends or is aborted.
+/// What a `connect` is opened with.
+enum Opening {
+    /// A box by its name.
+    Host(String),
+    /// A pairing ticket and the name to keep the box under.
+    Ticket(crate::connect::TicketText, Option<String>),
+}
+
+/// Opens `connect` for `opening`, then forwards its events to the app and
+/// the app's prompt answers to the daemon until it ends or is aborted.
 async fn pump_connect(
     api: Arc<dyn DaemonApi>,
     sender: mpsc::Sender<Msg>,
     generation: u64,
-    host: String,
+    opening: Opening,
     mut answers: mpsc::Receiver<(u64, Bytes)>,
 ) {
-    let mut session = match api.connect(host).await {
+    let opened = match opening {
+        Opening::Host(host) => api.connect(host).await,
+        Opening::Ticket(ticket, name) => api.pair_ticket(ticket, name).await,
+    };
+    let mut session = match opened {
         Ok(session) => session,
         Err(error) => {
             let msg = Msg::ConnectDone {

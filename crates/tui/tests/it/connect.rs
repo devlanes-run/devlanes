@@ -51,6 +51,25 @@ pub fn pair_reply(code: &str) -> Value {
     })
 }
 
+/// The keys from a new form, which opens on the ticket row, to the name row
+/// of SSH name.
+fn ssh_keys() -> Vec<Msg> {
+    vec![
+        Msg::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
+        key(KeyCode::Char(' ')),
+        key(KeyCode::Tab),
+    ]
+}
+
+/// `n`, then SSH name at "Reach by", with the name row taking keys.
+fn new_ssh_box(app: &mut App) -> Vec<Effect> {
+    let effects = app.update(key(KeyCode::Char('n')));
+    for msg in ssh_keys() {
+        app.update(msg);
+    }
+    effects
+}
+
 /// Types `text` one key at a time.
 fn type_text(app: &mut App, text: &str) {
     for c in text.chars() {
@@ -127,12 +146,161 @@ async fn the_header_always_shows_boxes() -> TestResult {
     Ok(())
 }
 
+/// A ticket-shaped test string, `dlp1` and 98 base32 letters and digits.
+fn test_ticket() -> String {
+    format!("dlp1{}", "abcdefgh234567".repeat(7))
+}
+
+/// The ticket the connect form sends, with the name: `None` when nothing
+/// was sent.
+fn sent_ticket(effects: &[Effect]) -> Option<(String, Option<String>)> {
+    effects.iter().find_map(|effect| match effect {
+        Effect::ConnectTicket { ticket, name, .. } => {
+            Some((ticket.expose().to_owned(), name.clone()))
+        }
+        _ => None,
+    })
+}
+
+/// The form opens on the ticket row. A ticket copied from a wrapped
+/// terminal or from Markdown is sent whole, without the line breaks,
+/// spaces, quotes and backticks around and inside it, with the name when
+/// one was typed; once sent it is no longer on screen. One cut short or
+/// that is not a ticket is refused without being repeated.
+#[tokio::test]
+async fn the_form_sends_a_pasted_ticket() -> TestResult {
+    let ticket = test_ticket();
+    let (head, tail) = ticket.split_at(50);
+    let pasted = format!(" `{head}\n  {tail}`\n");
+    for (name, sent_name) in [("", None), ("acme", Some("acme"))] {
+        let mut app = boxes_app(100, 30, json!([])).await;
+        app.update(key(KeyCode::Char('n')));
+        app.update(Msg::Paste(pasted.clone()));
+        let text = screen(&render(&app)?);
+        assert!(text.contains("dlp1… "), "{text}");
+        assert!(!text.contains(&ticket[..20]), "{text}");
+        app.update(key(KeyCode::Tab));
+        type_text(&mut app, name);
+        let effects = app.update(key(KeyCode::Enter));
+        assert_eq!(
+            sent_ticket(&effects),
+            Some((ticket.clone(), sent_name.map(str::to_owned))),
+            "{effects:?}"
+        );
+        assert!(opened(&effects).is_none(), "{effects:?}");
+        let text = screen(&render(&app)?);
+        assert!(
+            text.contains("pairing with the box in the ticket"),
+            "{text}"
+        );
+        assert!(!text.contains("dlp1"), "{text}");
+    }
+    let cut = &ticket[..50];
+    for (typed, refusal) in [
+        (cut, "cut short"),
+        ("hetzner", "This is not a pairing ticket."),
+    ] {
+        let mut app = boxes_app(100, 30, json!([])).await;
+        app.update(key(KeyCode::Char('n')));
+        type_text(&mut app, typed);
+        let effects = app.update(key(KeyCode::Enter));
+        assert_eq!(sent_ticket(&effects), None, "{effects:?}");
+        let text = screen(&render(&app)?);
+        assert!(text.contains(refusal), "{text}");
+        assert!(!text.contains(&typed[4..]), "{text}");
+    }
+    // A name the daemon would refuse is refused here, before the ticket goes.
+    let mut app = boxes_app(100, 30, json!([])).await;
+    app.update(key(KeyCode::Char('n')));
+    app.update(Msg::Paste(ticket.clone()));
+    app.update(key(KeyCode::Tab));
+    type_text(&mut app, "my box");
+    let effects = app.update(key(KeyCode::Enter));
+    assert_eq!(sent_ticket(&effects), None, "{effects:?}");
+    assert!(screen(&render(&app)?).contains("A box name is 1 to 63 letters"));
+    Ok(())
+}
+
+/// A ticket pasted on the SSH name row goes to the ticket row, so it is
+/// never shown or sent as a host; the first state names the box, and the
+/// notice says which name this machine keeps it under.
+#[tokio::test]
+async fn a_pairing_names_the_box_from_its_first_state() -> TestResult {
+    let mut app = boxes_app(100, 30, json!([])).await;
+    new_ssh_box(&mut app);
+    app.update(Msg::Paste(test_ticket()));
+    match &app.dialog {
+        Some(Dialog::Connect(dialog)) => assert!(dialog.form.name.is_empty()),
+        other => return Err(format!("no form: {other:?}").into()),
+    }
+    let effects = app.update(key(KeyCode::Enter));
+    let generation = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::ConnectTicket { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .ok_or("no pairing")?;
+    let paired = json!({"name": "acme", "kept": true, "name_ignored": false});
+    app.update(connect_event(
+        generation,
+        STATE_EVENT,
+        json!({"host": "acme", "state": "connecting", "attempt": 1, "paired": paired}),
+    ));
+    let text = screen(&render(&app)?);
+    assert!(text.contains("connect acme"), "{text}");
+    assert!(
+        text.contains("paired with the box before and keeps its name"),
+        "{text}"
+    );
+    app.update(connect_event(
+        generation,
+        STATE_EVENT,
+        json!({"host": "acme", "state": "connected"}),
+    ));
+    assert!(app.dialog.is_none());
+    assert_eq!(
+        notice(&app),
+        "connected to acme, its name from an earlier pairing"
+    );
+
+    // A pairing that fails goes back to the form for the ticket again.
+    app.update(key(KeyCode::Char('n')));
+    app.update(Msg::Paste(test_ticket()));
+    let effects = app.update(key(KeyCode::Enter));
+    let generation = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::ConnectTicket { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .ok_or("no pairing")?;
+    app.update(Msg::ConnectDone {
+        generation,
+        result: Err(ApiError::Rpc(RpcError::new(
+            "remote_failed",
+            json!({"host": "p2p:1a2b3c4d", "pairing": true,
+                   "message": "the box in the ticket did not answer. Check that its devlanes daemon is running"}),
+            4,
+        ))),
+    });
+    let text = screen(&render(&app)?);
+    assert!(
+        text.contains("the box in the ticket did not answer."),
+        "{text}"
+    );
+    assert!(text.contains("paste again"), "{text}");
+    app.update(key(KeyCode::Enter));
+    assert!(matches!(step(&app), Some(Step::Form)));
+    Ok(())
+}
+
 /// `n` opens the form; a name is an SSH destination, so Enter connects at
 /// once, writes nothing and follows the link.
 #[tokio::test]
 async fn a_new_ssh_box_connects_by_its_name() -> TestResult {
     let mut app = boxes_app(100, 30, json!([])).await;
-    app.update(key(KeyCode::Char('n')));
+    new_ssh_box(&mut app);
     assert!(matches!(step(&app), Some(Step::Form)));
     let effects = app.update(key(KeyCode::Enter));
     assert!(opened(&effects).is_none(), "{effects:?}");
@@ -189,7 +357,7 @@ async fn a_new_ssh_box_connects_by_its_name() -> TestResult {
 #[tokio::test]
 async fn prompts_are_answered_in_the_modal() -> TestResult {
     let mut app = boxes_app(100, 30, json!([])).await;
-    app.update(key(KeyCode::Char('n')));
+    new_ssh_box(&mut app);
     type_text(&mut app, "hetzner");
     let (generation, _) = opened(&app.update(key(KeyCode::Enter))).ok_or("no connect")?;
     app.update(connect_event(
@@ -271,7 +439,7 @@ async fn prompts_are_answered_in_the_modal() -> TestResult {
 #[tokio::test]
 async fn esc_detaches_and_leaves_the_connection_to_the_daemon() -> TestResult {
     let mut app = boxes_app(100, 30, json!([])).await;
-    app.update(key(KeyCode::Char('n')));
+    new_ssh_box(&mut app);
     type_text(&mut app, "hetzner");
     let (generation, _) = opened(&app.update(key(KeyCode::Enter))).ok_or("no connect")?;
     app.update(connect_event(
@@ -368,7 +536,7 @@ async fn enter_acts_on_the_box_by_its_state() -> TestResult {
 #[tokio::test]
 async fn a_refusal_shows_in_the_modal() -> TestResult {
     let mut app = boxes_app(100, 30, json!([])).await;
-    app.update(key(KeyCode::Char('n')));
+    new_ssh_box(&mut app);
     type_text(&mut app, "hetzner");
     let (generation, _) = opened(&app.update(key(KeyCode::Enter))).ok_or("no connect")?;
     app.update(Msg::ConnectDone {
@@ -577,7 +745,7 @@ async fn o_opens_the_options_on_allow_connections() -> TestResult {
 #[tokio::test]
 async fn saving_a_command_holds_the_modal_and_reports_a_failure() -> TestResult {
     let mut app = boxes_app(100, 30, json!([])).await;
-    app.update(key(KeyCode::Char('n')));
+    new_ssh_box(&mut app);
     type_text(&mut app, "acme");
     app.update(Msg::Key(KeyEvent::new(
         KeyCode::BackTab,
@@ -631,7 +799,7 @@ async fn saving_a_command_holds_the_modal_and_reports_a_failure() -> TestResult 
 async fn the_form_knows_the_configured_boxes() -> TestResult {
     let hosts = json!([{"host": "live", "state": "connected", "transport": "command"}]);
     let mut app = boxes_app(100, 30, hosts).await;
-    let effects = app.update(key(KeyCode::Char('n')));
+    let effects = new_ssh_box(&mut app);
     assert!(
         effects.iter().any(|e| matches!(e, Effect::LoadBoxCommands)),
         "{effects:?}"
@@ -674,7 +842,7 @@ async fn the_form_knows_the_configured_boxes() -> TestResult {
 
     let hosts = json!([{"host": "live", "state": "connected", "transport": "command"}]);
     let mut app = boxes_app(100, 30, hosts).await;
-    app.update(key(KeyCode::Char('n')));
+    new_ssh_box(&mut app);
     app.update(Msg::BoxCommands([docker("live")].into()));
     type_text(&mut app, "live");
     app.update(Msg::Key(KeyEvent::new(
@@ -700,7 +868,7 @@ async fn the_form_knows_the_configured_boxes() -> TestResult {
 #[tokio::test]
 async fn a_click_outside_keeps_the_question() -> TestResult {
     let mut app = boxes_app(100, 30, json!([])).await;
-    app.update(key(KeyCode::Char('n')));
+    new_ssh_box(&mut app);
     type_text(&mut app, "hetzner");
     let (generation, _) = opened(&app.update(key(KeyCode::Enter))).ok_or("no connect")?;
     app.update(connect_event(
@@ -730,6 +898,7 @@ async fn drive_saves_a_command_box_to_the_user_config() -> TestResult {
     fake.home = Some(home.path().to_path_buf());
     let api = Arc::new(fake);
     let mut keys = vec![shifted('B'), key(KeyCode::Char('n'))];
+    keys.extend(ssh_keys());
     keys.extend("acme".chars().map(|c| key(KeyCode::Char(c))));
     keys.push(Msg::Key(KeyEvent::new(
         KeyCode::BackTab,
@@ -778,6 +947,7 @@ async fn drive_answers_the_code_and_the_passphrase() -> TestResult {
     let api = Arc::new(fake);
     let typed = |text: &str| -> Vec<Msg> { text.chars().map(|c| key(KeyCode::Char(c))).collect() };
     let mut steps = presses(vec![shifted('B'), key(KeyCode::Char('n'))]);
+    steps.extend(presses(ssh_keys()));
     steps.extend(presses(typed("hetzner")));
     steps.extend(presses(vec![key(KeyCode::Enter)]));
     steps.push(Script::Screen("needs a pairing code"));

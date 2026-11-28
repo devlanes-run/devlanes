@@ -383,9 +383,48 @@ impl DaemonApi for FakeApi {
         Ok(ConnectSession { events, answers })
     }
 
+    /// Records `pair <ticket> <name>` (`-` without a name), then pairs the
+    /// box as `acme`, or under the name given, and connects it.
+    async fn pair_ticket(
+        &self,
+        ticket: devlanes_tui::connect::TicketText,
+        name: Option<String>,
+    ) -> Result<ConnectSession, ApiError> {
+        self.record(format!(
+            "pair {} {}",
+            ticket.expose(),
+            name.as_deref().unwrap_or("-")
+        ));
+        let host = name.unwrap_or_else(|| "acme".into());
+        let (events_tx, events) = mpsc::channel(16);
+        let (answers, _answers_rx) = mpsc::channel::<(u64, Bytes)>(16);
+        tokio::spawn(async move {
+            let paired = json!({"name": host, "kept": false, "name_ignored": false});
+            let state = |state: &str| {
+                ConnectEvent::Event(Event {
+                    seq: 0,
+                    event: devlanes_proto::remote::STATE_EVENT.into(),
+                    data: json!({"host": host, "state": state, "paired": paired}),
+                })
+            };
+            if events_tx.send(state("connecting")).await.is_err() {
+                return;
+            }
+            let _ = events_tx.send(state("connected")).await;
+            let done = json!({"host": host, "state": "connected", "paired": paired});
+            let _ = events_tx.send(ConnectEvent::Done(Ok(done))).await;
+        });
+        Ok(ConnectSession { events, answers })
+    }
+
     async fn disconnect(&self, host: String) -> Result<Value, ApiError> {
         self.record(format!("disconnect {host}"));
         Ok(json!({"disconnected": [host]}))
+    }
+
+    async fn forget(&self, host: String) -> Result<Value, ApiError> {
+        self.record(format!("forget {host}"));
+        Ok(json!({"disconnected": [host], "forgotten": [host]}))
     }
 
     /// Records `remote.use <lane> <host>`, with `null` for this machine, and

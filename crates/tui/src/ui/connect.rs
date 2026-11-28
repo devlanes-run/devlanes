@@ -11,7 +11,9 @@ use ratatui::{
 use super::dialog::keys;
 use super::fit;
 use crate::app::App;
-use crate::connect::{ConnectDialog, Field, PairDialog, PairState, Prompt, Reach, Step, countdown};
+use crate::connect::{
+    ConnectDialog, Field, PairDialog, PairState, Prompt, Reach, Step, countdown, ticket_shown,
+};
 use crate::text::{self, clean};
 use crate::theme::{Glyph, Glyphs, Theme, Tone};
 
@@ -122,8 +124,8 @@ fn input_row(
     fit(spans, width)
 }
 
-/// `▌ Reach by    (•) SSH name    ( ) command`: how the box is reached, the
-/// choice in bold. While the row has the keys it is selected and the choice
+/// `▌ Reach by    (•) ticket  ( ) SSH name  ( ) command`: how the box is
+/// reached, the choice in bold. While the row has the keys it is selected and the choice
 /// is cut out of the selection like a field.
 fn reach_row(theme: &Theme, reach: Reach, focused: bool, width: usize) -> Line<'static> {
     let ascii = theme.glyphs == Glyphs::Ascii;
@@ -141,9 +143,13 @@ fn reach_row(theme: &Theme, reach: Reach, focused: bool, width: usize) -> Line<'
     } else {
         theme.quiet()
     };
-    for (index, (option, label)) in [(Reach::Ssh, "SSH name"), (Reach::Command, "command")]
-        .into_iter()
-        .enumerate()
+    for (index, (option, label)) in [
+        (Reach::Ticket, "ticket"),
+        (Reach::Ssh, "SSH name"),
+        (Reach::Command, "command"),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let on = option == reach;
         let mark = match (on, ascii) {
@@ -209,6 +215,11 @@ fn pad(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
 pub(super) fn connect(app: &App, dialog: &ConnectDialog, width: usize) -> Parts {
     let theme = &app.theme;
     let host = clean(&dialog.host);
+    let title = if host.is_empty() {
+        "pair with a box".to_owned()
+    } else {
+        format!("connect {host}")
+    };
     match &dialog.step {
         Step::Form => form(theme, dialog, width),
         Step::Saving => {
@@ -241,8 +252,14 @@ pub(super) fn connect(app: &App, dialog: &ConnectDialog, width: usize) -> Parts 
             if let Some(hint) = &worded.hint {
                 body.extend(wrapped(&format!("run: {hint}"), width, theme.quiet()));
             }
-            let tail = vec![keys(theme, &[("enter", "try again"), ("esc", "close")])];
-            (format!("connect {host}"), body, tail)
+            // A ticket is not kept once sent, so trying again means pasting it.
+            let again = if dialog.pastes_again() {
+                "paste again"
+            } else {
+                "try again"
+            };
+            let tail = vec![keys(theme, &[("enter", again), ("esc", "close")])];
+            (title, body, tail)
         }
     }
 }
@@ -253,7 +270,19 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
     let form = &dialog.form;
     let focused = form.field == Field::Reach;
     let mut body = vec![reach_row(theme, form.reach, focused, width)];
+    if form.reach == Reach::Ticket {
+        // The ticket is a secret, so the row shows its start and length.
+        body.push(input_row(
+            theme,
+            "Ticket",
+            &ticket_shown(form.ticket.expose()),
+            "paste it here",
+            form.field == Field::Ticket,
+            width,
+        ));
+    }
     let name_hint = match form.reach {
+        Reach::Ticket => "optional, the box's own name if empty",
         Reach::Ssh => "hetzner or me@203.0.113.4",
         Reach::Command => "a name for it, like acme",
     };
@@ -281,6 +310,12 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
         name => name,
     };
     let about = match form.reach {
+        Reach::Ticket => vec![
+            "Get a ticket on the box: press p in its Boxes view, or run devlanes daemon pair \
+             there."
+                .to_owned(),
+            "devlanes pairs with the box and reaches it peer to peer, without SSH.".to_owned(),
+        ],
         Reach::Ssh => vec![format!(
             "devlanes runs ssh {name}, so your SSH config applies."
         )],
@@ -311,7 +346,12 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
     if focused {
         pairs.push(("space", "switch"));
     }
-    pairs.extend([("enter", "connect"), ("esc", "cancel")]);
+    let enter = if form.reach == Reach::Ticket {
+        "pair"
+    } else {
+        "connect"
+    };
+    pairs.extend([("enter", enter), ("esc", "cancel")]);
     ("connect a box".to_owned(), body, vec![keys(theme, &pairs)])
 }
 
@@ -320,13 +360,22 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
 fn waiting(app: &App, dialog: &ConnectDialog, width: usize) -> Parts {
     let theme = &app.theme;
     let link = &dialog.link;
+    // Until the box is named, the daemon is pairing with it.
+    let words = if dialog.by_ticket && dialog.paired.is_none() {
+        "pairing with the box in the ticket…".to_owned()
+    } else {
+        link.words()
+    };
     let mut body = vec![Line::from(vec![
         Span::styled(
             format!("{} ", theme.spinner(app.spin)),
             theme.tone(Tone::Busy),
         ),
-        Span::raw(link.words()),
+        Span::raw(words),
     ])];
+    if let Some(paired) = &dialog.paired {
+        body.extend(wrapped(&paired.words(), width, Style::new()));
+    }
     if let Some(error) = &link.error {
         body.extend(wrapped(error, width, theme.tone(Tone::Attention)));
     }
@@ -339,7 +388,10 @@ fn waiting(app: &App, dialog: &ConnectDialog, width: usize) -> Parts {
         width,
         theme.quiet(),
     ));
-    let title = format!("connect {}", clean(&dialog.host));
+    let title = match clean(&dialog.host) {
+        host if host.is_empty() => "pair with a box".to_owned(),
+        host => format!("connect {host}"),
+    };
     (title, body, vec![keys(theme, &[("esc", "close")])])
 }
 

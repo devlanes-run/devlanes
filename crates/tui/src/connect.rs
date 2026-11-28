@@ -1,4 +1,5 @@
-//! The boxes view's modals: connecting to a box, with each question its link
+//! The boxes view's modals: connecting to a box by a pairing ticket, its SSH
+//! name or a command, with each question its link
 //! asks on the way (an ssh passphrase, a host key, a pairing code), and the
 //! pairing code another machine needs to connect to this one. They hold what
 //! the modal shows and turn keys into [`Action`]s; the app runs the effects.
@@ -14,22 +15,90 @@ use crate::words::Worded;
 /// How a new box is reached.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Reach {
-    /// The name is an SSH destination, as `ssh <name>` takes it.
+    /// A pairing ticket from `devlanes daemon pair` on the box: this
+    /// machine pairs with the box and reaches it peer to peer.
     #[default]
+    Ticket,
+    /// The name is an SSH destination, as `ssh <name>` takes it.
     Ssh,
     /// A command runs `devlanes tunnel --stdio` in the box, saved as
     /// `remote.boxes.<name>.command`.
     Command,
 }
 
+impl Reach {
+    /// The next way in the reach row, `-1` for the one before, wrapping.
+    fn step(self, delta: i8) -> Self {
+        const ALL: [Reach; 3] = [Reach::Ticket, Reach::Ssh, Reach::Command];
+        let at = ALL.iter().position(|reach| *reach == self).unwrap_or(0);
+        let next = if delta < 0 {
+            at + ALL.len() - 1
+        } else {
+            at + 1
+        };
+        ALL[next % ALL.len()]
+    }
+}
+
 /// The row of the form that takes keys.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Field {
-    /// SSH name or command.
+    /// Ticket, SSH name or command.
     Reach,
+    /// Where the ticket is pasted, the first row a new form types into.
     #[default]
+    Ticket,
     Name,
     Command,
+}
+
+/// A pairing ticket as pasted or sent. A ticket is a secret until it is
+/// used or expires, so debug output shows its length only.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct TicketText(String);
+
+impl TicketText {
+    /// `text`, as sent to the daemon.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self(text.into())
+    }
+
+    /// The ticket itself, for the request that sends it and the clipboard.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for TicketText {
+    /// The length only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TicketText({} chars)", self.0.chars().count())
+    }
+}
+
+/// The ticket field as the form shows it: the prefix and the length, never
+/// the rest, so the secret is not left on screen. `dlp1… 177 characters`,
+/// counted as it will be sent.
+pub fn ticket_shown(typed: &str) -> String {
+    let typed = pasted_ticket(typed);
+    let count = typed.chars().count();
+    if count <= devlanes_proto::remote::TICKET_PREFIX.len() {
+        return text::clean(&typed);
+    }
+    let start: String = typed
+        .chars()
+        .take(devlanes_proto::remote::TICKET_PREFIX.len())
+        .collect();
+    format!("{}… {count} characters", text::clean(&start))
+}
+
+/// A ticket as pasted: no whitespace anywhere, since a terminal that wraps
+/// a long line may add line breaks or spaces inside it and no ticket holds
+/// any, and without the quotes or backticks a copy from Markdown brings at
+/// its ends, as the CLI trims them.
+fn pasted_ticket(typed: &str) -> String {
+    let joined: String = typed.chars().filter(|c| !c.is_whitespace()).collect();
+    devlanes_cli::pasted(&joined).to_owned()
 }
 
 /// The new connection form.
@@ -37,6 +106,8 @@ pub enum Field {
 pub struct Form {
     pub reach: Reach,
     pub field: Field,
+    /// The pasted ticket, sent once and then dropped from the form.
+    pub ticket: TicketText,
     pub name: String,
     /// The command as typed, split like a shell line when sent.
     pub command: String,
@@ -59,12 +130,15 @@ pub(crate) enum Submit {
     Connect(String),
     /// Save the box's new command to the user config, then connect.
     Save(String, Vec<String>),
+    /// Pair with the box in the ticket, under `name` or the box's own name.
+    Pair(TicketText, Option<String>),
 }
 
 impl Form {
     /// The rows Tab moves through, top to bottom.
     fn fields(&self) -> Vec<Field> {
         match self.reach {
+            Reach::Ticket => vec![Field::Reach, Field::Ticket, Field::Name],
             Reach::Ssh => vec![Field::Reach, Field::Name],
             Reach::Command => vec![Field::Reach, Field::Name, Field::Command],
         }
@@ -76,6 +150,7 @@ impl Form {
         self.replace = None;
         match self.field {
             Field::Reach => None,
+            Field::Ticket => Some(&mut self.ticket.0),
             Field::Name => Some(&mut self.name),
             Field::Command => Some(&mut self.command),
         }
@@ -86,14 +161,59 @@ impl Form {
     pub fn configured(&self) -> Option<&Vec<String>> {
         match self.reach {
             Reach::Ssh => self.known.get(self.name.trim()),
-            Reach::Command => None,
+            Reach::Ticket | Reach::Command => None,
         }
+    }
+
+    /// What Enter sends for a ticket, or what is wrong in words. Nothing
+    /// here repeats what was pasted, which may be most of a ticket. The name
+    /// follows the daemon's rule for names of boxes paired by ticket; the
+    /// daemon words what it refuses beyond that.
+    fn submit_ticket(&mut self) -> Result<Submit, String> {
+        let ticket = pasted_ticket(&self.ticket.0);
+        if ticket.is_empty() {
+            return Err("Paste the ticket from devlanes daemon pair on the box.".into());
+        }
+        if devlanes_cli::cut_ticket(&ticket) {
+            return Err(
+                "This looks like a pairing ticket cut short. Copy the whole ticket again from \
+                 devlanes daemon pair on the box."
+                    .into(),
+            );
+        }
+        if !devlanes_cli::is_ticket(&ticket) {
+            return Err(
+                "This is not a pairing ticket. A ticket starts with dlp1; to reach the box over \
+                 SSH or a command, choose that at Reach by."
+                    .into(),
+            );
+        }
+        let name = self.name.trim();
+        if !name.is_empty()
+            && (name.len() > 63
+                || name.starts_with('-')
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        {
+            return Err(
+                "A box name is 1 to 63 letters, digits, - and _, and cannot start with -. Leave \
+                 it empty for the box's own name."
+                    .into(),
+            );
+        }
+        let name = (!name.is_empty()).then(|| name.to_owned());
+        self.ticket = TicketText::default();
+        Ok(Submit::Pair(TicketText(ticket), name))
     }
 
     /// What Enter sends, or what is wrong in words. A command that would
     /// replace the configured one is asked about first, and a box with a link
     /// keeps its command until it is disconnected, so it is not saved then.
     pub(crate) fn submit(&mut self) -> Result<Submit, String> {
+        if self.reach == Reach::Ticket {
+            return self.submit_ticket();
+        }
         let name = self.name.trim().to_owned();
         if name.is_empty() {
             return Err("Type the box's name.".into());
@@ -270,6 +390,50 @@ pub struct ConnectDialog {
     pub form: Form,
     pub link: Link,
     pub step: Step,
+    /// The `connect` pairs by ticket; [`ConnectDialog::host`] stays empty
+    /// until its first state names the box.
+    pub by_ticket: bool,
+    /// What the pairing answered, once the box has a name here.
+    pub paired: Option<Paired>,
+}
+
+/// `paired` of a `connect` by ticket: the name the box is kept under here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Paired {
+    pub name: String,
+    /// This machine was paired with the box before and kept that name.
+    pub kept: bool,
+    /// A typed name was ignored for the kept one.
+    pub name_ignored: bool,
+}
+
+impl Paired {
+    /// `paired` of a `remote.state` event or a `connect` answer.
+    pub fn of(data: &Value) -> Option<Self> {
+        let paired = data.get("paired")?;
+        let flag = |key: &str| paired.get(key).and_then(Value::as_bool) == Some(true);
+        Some(Self {
+            name: text::clean(paired.get("name")?.as_str()?),
+            kept: flag("kept"),
+            name_ignored: flag("name_ignored"),
+        })
+    }
+
+    /// The name the box is kept under, in a sentence: `This machine keeps
+    /// the box as acme.`, and when an earlier pairing's name was kept, so.
+    pub fn words(&self) -> String {
+        let name = &self.name;
+        match (self.kept, self.name_ignored) {
+            (true, true) => format!(
+                "This machine was paired with the box before and keeps its name {name}, so the \
+                 name you typed was ignored."
+            ),
+            (true, false) => {
+                format!("This machine was paired with the box before and keeps its name {name}.")
+            }
+            (false, _) => format!("Paired. This machine keeps the box as {name}."),
+        }
+    }
 }
 
 /// What a key in the connect modal asks the app for.
@@ -282,6 +446,11 @@ pub enum Action {
     Connect,
     /// Save the command for [`ConnectDialog::host`], then connect.
     Save(Vec<String>),
+    /// Pair with the box in `ticket` under `name`, then connect it.
+    Pair {
+        ticket: TicketText,
+        name: Option<String>,
+    },
     /// Send `answer` for the prompt on `stream_id`.
     Answer {
         stream_id: u64,
@@ -298,7 +467,15 @@ impl ConnectDialog {
             form: Form::default(),
             link: Link::default(),
             step: Step::Form,
+            by_ticket: false,
+            paired: None,
         }
+    }
+
+    /// Whether Enter on a failed pairing goes back to the form for the
+    /// ticket again: the box has no name here to connect to yet.
+    pub fn pastes_again(&self) -> bool {
+        self.by_ticket && self.paired.is_none()
     }
 
     /// Following a `connect` to `host` from the start, for a box the view
@@ -361,6 +538,12 @@ impl ConnectDialog {
                 _ => Action::Stay,
             },
             Step::Failed(_) => match key.code {
+                KeyCode::Enter if self.pastes_again() => {
+                    self.step = Step::Form;
+                    self.form.field = Field::Ticket;
+                    self.form.error = None;
+                    Action::Stay
+                }
                 KeyCode::Enter => Action::Connect,
                 KeyCode::Char('q') => Action::Close,
                 _ => Action::Stay,
@@ -381,10 +564,9 @@ impl ConnectDialog {
                 form.field = fields[(at + fields.len() - 1) % fields.len()];
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if form.field == Field::Reach => {
-                form.reach = match form.reach {
-                    Reach::Ssh => Reach::Command,
-                    Reach::Command => Reach::Ssh,
-                };
+                form.reach = form
+                    .reach
+                    .step(if key.code == KeyCode::Left { -1 } else { 1 });
                 form.error = None;
                 form.replace = None;
             }
@@ -394,11 +576,19 @@ impl ConnectDialog {
                     return match submit {
                         Submit::Connect(host) => {
                             self.host = host;
+                            self.by_ticket = false;
                             Action::Connect
                         }
                         Submit::Save(host, command) => {
                             self.host = host;
+                            self.by_ticket = false;
                             Action::Save(command)
+                        }
+                        Submit::Pair(ticket, name) => {
+                            self.host = String::new();
+                            self.by_ticket = true;
+                            self.paired = None;
+                            Action::Pair { ticket, name }
                         }
                     };
                 }
@@ -425,10 +615,18 @@ impl ConnectDialog {
     }
 
     /// Pasted text, into the field or answer that takes typing; line breaks
-    /// are left out so a paste never sends.
+    /// are left out so a paste never sends. A ticket pasted anywhere on the
+    /// form goes to the ticket row, so it is never shown in the name.
     pub fn paste(&mut self, pasted: &str) {
         let pasted: String = pasted.chars().filter(|c| !c.is_control()).collect();
         match &mut self.step {
+            Step::Form if devlanes_proto::remote::holds_ticket(&pasted_ticket(&pasted)) => {
+                let form = &mut self.form;
+                form.reach = Reach::Ticket;
+                form.field = Field::Ticket;
+                form.error = None;
+                form.ticket = TicketText(pasted_ticket(&pasted));
+            }
             Step::Form => {
                 if let Some(text) = self.form.text() {
                     text.push_str(&pasted);
@@ -462,6 +660,25 @@ impl ConnectDialog {
             attempt: self.link.attempt,
         });
         None
+    }
+
+    /// Whether a `remote.state` event's data is about this modal's box. A
+    /// pairing by ticket learns the box's name from its first state, which
+    /// carries `paired`.
+    pub fn follows(&mut self, data: &Value) -> bool {
+        if self.by_ticket
+            && self.paired.is_none()
+            && let Some(paired) = Paired::of(data)
+        {
+            // The event's own `host` is the name the link goes by.
+            self.host = data
+                .get("host")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            self.paired = Some(paired);
+        }
+        !self.host.is_empty() && data.get("host").and_then(Value::as_str) == Some(&self.host)
     }
 
     /// Takes a `remote.state` event's data. A question stays open while the
@@ -779,14 +996,15 @@ mod tests {
     fn form_keys() {
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         let mut dialog = ConnectDialog::new();
+        assert_eq!(dialog.form.field, Field::Ticket);
+        dialog.key(key(KeyCode::BackTab));
+        assert_eq!(dialog.form.field, Field::Reach);
+        dialog.key(key(KeyCode::Left));
+        assert_eq!(dialog.form.reach, Reach::Command);
+        dialog.key(key(KeyCode::Tab));
         for c in "acme".chars() {
             dialog.key(key(KeyCode::Char(c)));
         }
-        dialog.key(key(KeyCode::BackTab));
-        assert_eq!(dialog.form.field, Field::Reach);
-        dialog.key(key(KeyCode::Char(' ')));
-        assert_eq!(dialog.form.reach, Reach::Command);
-        dialog.key(key(KeyCode::Tab));
         dialog.key(key(KeyCode::Tab));
         assert_eq!(dialog.form.field, Field::Command);
         dialog.paste("wsl.exe -d Ubuntu\n");
