@@ -6,4 +6,6 @@
 //! other and is never used for session data.
 
 #[allow(dead_code)]
+mod connection;
+#[allow(dead_code)]
 mod key;
