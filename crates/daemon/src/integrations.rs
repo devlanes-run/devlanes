@@ -1026,6 +1026,11 @@ pub struct Integrations {
     pub launch_checks: Vec<Arc<dyn LaunchCheck>>,
     /// Transports to boxes for `connect`.
     pub remote: Arc<dyn RemoteConnector>,
+    /// This machine's peer-to-peer endpoint; `None` turns pairing by ticket
+    /// and serving clients paired that way off.
+    pub peer: Option<Arc<dyn devlanes_transport::PeerEndpoint>>,
+    /// What the box serves clients paired by ticket with; needed with `peer`.
+    pub box_serving: Option<Arc<dyn BoxServing>>,
     /// The `/etc/hosts` fallback; `None` leaves the hosts file alone.
     pub hosts: Option<Arc<crate::hosts::HostsFile>>,
     /// What Windows reports instead of the fallback, which it never needs:
@@ -1112,6 +1117,21 @@ pub trait RemoteConnector: Send + Sync {
     }
 }
 
+/// The protocol services the daemon serves a client paired by ticket with:
+/// the tunnel's, answered by this daemon over its own socket. The
+/// composition root wires it.
+pub trait BoxServing: Send + Sync {
+    /// Services for one session with `client`; the daemon replaces
+    /// `pairing` with its own check of the client's key.
+    fn services(
+        &self,
+        client: devlanes_proto::remote::RemoteClient,
+    ) -> devlanes_transport::BoxServices;
+
+    /// The handshake label, such as `devlanes 0.16.0 (linger off)`.
+    fn label(&self) -> String;
+}
+
 /// Connector used when no transport is registered: `connect` is unsupported.
 pub struct NoRemote;
 
@@ -1150,6 +1170,8 @@ impl Integrations {
             presets: Vec::new(),
             launch_checks: Vec::new(),
             remote: Arc::new(NoRemote),
+            peer: None,
+            box_serving: None,
             hosts: None,
             #[cfg(windows)]
             native_hosts: None,
