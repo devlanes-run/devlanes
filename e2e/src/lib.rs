@@ -403,11 +403,12 @@ impl Lab {
         let home = TestHome::new()?;
         let base = slot.base;
         // The proxy gets its own ports so parallel labs and a developer's daemon never
-        // compete for 443/8443; the lane pool stays below them.
+        // compete for 443/8443; the lane pool stays below them. GUI services must
+        // not open real viewer windows on the test machine, so auto-open is off.
         fs::write(
             home.path().join("config.yaml"),
             format!(
-                "ports:\n  range: {base}-{}\nproxy:\n  https_port: {}\n  http_port: {}\n",
+                "ports:\n  range: {base}-{}\nproxy:\n  https_port: {}\n  http_port: {}\ngui:\n  auto_open: false\n",
                 base + 79,
                 base + HTTPS_OFFSET,
                 base + HTTP_OFFSET

@@ -20,6 +20,7 @@
 //! composition root names no backend runs GUI services without a host, as
 //! before, with a note.
 
+pub(crate) mod auto_open;
 pub mod lookup;
 pub mod viewer;
 
