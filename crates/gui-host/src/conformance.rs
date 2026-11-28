@@ -163,7 +163,10 @@ pub async fn run(
 }
 
 /// Runs `future` for at most [`STEP_TIMEOUT`].
-async fn step<T>(what: &'static str, future: impl Future<Output = T>) -> Result<T, ConformanceError> {
+async fn step<T>(
+    what: &'static str,
+    future: impl Future<Output = T>,
+) -> Result<T, ConformanceError> {
     tokio::time::timeout(STEP_TIMEOUT, future)
         .await
         .map_err(|_| ConformanceError::Timeout(what))

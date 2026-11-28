@@ -15,7 +15,9 @@ use devlanes_gui_proto::{
     Buttons, KeyCode, LockState, MAX_DIMENSION, Point, Size, WindowId, WindowInfo, WindowKind,
 };
 
-use crate::backend::{Backend, BackendControl, BackendError, CapturedFrame, Command, Event, EventSink};
+use crate::backend::{
+    Backend, BackendControl, BackendError, CapturedFrame, Command, Event, EventSink,
+};
 use crate::pattern::draw_grid;
 
 /// The app id of every test-pattern window.
@@ -130,7 +132,13 @@ impl Pattern {
     }
 
     /// Adds a window and announces it with a first frame once started.
-    fn add(&mut self, size: Size, kind: WindowKind, parent: Option<WindowId>, offset: Point) -> WindowId {
+    fn add(
+        &mut self,
+        size: Size,
+        kind: WindowKind,
+        parent: Option<WindowId>,
+        offset: Point,
+    ) -> WindowId {
         let id = WindowId(self.next_id);
         self.next_id += 1;
         let info = WindowInfo {
@@ -301,7 +309,11 @@ fn draw(win: &PatternWindow, epoch: Instant) -> Option<Frame> {
     if let Some(marker) = win.marker {
         for dy in -1..=1 {
             for dx in -1..=1 {
-                set(i64::from(marker.x) + dx, i64::from(marker.y) + dy, [0, 0, 0, 0xff]);
+                set(
+                    i64::from(marker.x) + dx,
+                    i64::from(marker.y) + dy,
+                    [0, 0, 0, 0xff],
+                );
             }
         }
     }

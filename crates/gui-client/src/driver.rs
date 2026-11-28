@@ -187,7 +187,10 @@ impl Reader {
                 self.decode(frame);
                 return;
             }
-            HostMessage::LockChanged { window, state: host } => {
+            HostMessage::LockChanged {
+                window,
+                state: host,
+            } => {
                 if let Some(win) = state.windows.get_mut(&window) {
                     win.lock.host_state(host);
                     self.shared.refresh_lock(window, win, at);

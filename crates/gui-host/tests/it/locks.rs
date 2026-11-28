@@ -3,7 +3,9 @@
 //! backend that disappears.
 
 use devlanes_gui_host::Echo;
-use devlanes_gui_proto::{Buttons, LockState, Point, RESIZE_TIMEOUT, Size, WAITING_GRACE, WindowId};
+use devlanes_gui_proto::{
+    Buttons, LockState, Point, RESIZE_TIMEOUT, Size, WAITING_GRACE, WindowId,
+};
 
 use super::*;
 
@@ -54,7 +56,9 @@ async fn until_unlocked(events: &mut Events, window: WindowId) -> Vec<Seen> {
             }
         }
     };
-    tokio::time::timeout(PATIENCE, wait).await.expect("unlocked");
+    tokio::time::timeout(PATIENCE, wait)
+        .await
+        .expect("unlocked");
     seen
 }
 
@@ -72,11 +76,18 @@ async fn a_resize_locks_the_window_until_the_first_frame_after_it_whatever_its_s
 
     let request = ada.resize(window, Size::new(200, 100)).expect("sends");
     let seen = until_unlocked(&mut events, window).await;
-    assert_eq!(seen.first(), Some(&Seen::Lock(LockState::Resizing)), "{seen:?}");
+    assert_eq!(
+        seen.first(),
+        Some(&Seen::Lock(LockState::Resizing)),
+        "{seen:?}"
+    );
     let from = seen
         .iter()
         .find_map(|s| match s {
-            Seen::Applied { request: r, from_seq } if *r == request => Some(*from_seq),
+            Seen::Applied {
+                request: r,
+                from_seq,
+            } if *r == request => Some(*from_seq),
             _ => None,
         })
         .expect("the resize was answered");
@@ -107,8 +118,14 @@ async fn a_resize_of_a_static_window_that_keeps_its_size_unlocks_on_the_timeout(
     let request = ada.resize(window, Size::new(200, 100)).expect("sends");
     let seen = until_unlocked(&mut events, window).await;
     assert!(asked.elapsed() >= RESIZE_TIMEOUT);
-    assert!(seen.iter().any(|s| matches!(s, Seen::Applied { request: r, .. } if *r == request)));
-    assert!(!seen.iter().any(|s| matches!(s, Seen::Frame { .. })), "{seen:?}");
+    assert!(
+        seen.iter()
+            .any(|s| matches!(s, Seen::Applied { request: r, .. } if *r == request))
+    );
+    assert!(
+        !seen.iter().any(|s| matches!(s, Seen::Frame { .. })),
+        "{seen:?}"
+    );
     host.stop().await;
 }
 
@@ -124,7 +141,9 @@ async fn the_lane_and_the_app_lock_the_window_end_to_end() {
             .echoes()
             .into_iter()
             .filter_map(|echo| match echo {
-                Echo::Pressed { window, position, .. } => Some((window, position)),
+                Echo::Pressed {
+                    window, position, ..
+                } => Some((window, position)),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -168,13 +187,17 @@ async fn the_lane_and_the_app_lock_the_window_end_to_end() {
     let gone = tokio::time::Instant::now();
     locked(&mut events, window, LockState::Closed).await;
     assert!(gone.elapsed() >= WAITING_GRACE);
-    until(&mut events, |e| matches!(e, Event::WindowRemoved(w) if *w == window).then_some(()))
-        .await;
+    until(&mut events, |e| {
+        matches!(e, Event::WindowRemoved(w) if *w == window).then_some(())
+    })
+    .await;
 
     // A new window after that is a window of its own, closed for good when the unit exits.
     let next = host.pattern.open_window(Size::new(320, 200));
-    until(&mut events, |e| matches!(e, Event::WindowAdded(info) if info.id == next).then_some(()))
-        .await;
+    until(&mut events, |e| {
+        matches!(e, Event::WindowAdded(info) if info.id == next).then_some(())
+    })
+    .await;
     daemon.unit_exited(Some(0)).expect("sends");
     locked(&mut events, next, LockState::Closed).await;
     host.stop().await;
@@ -192,5 +215,8 @@ async fn a_backend_that_disappears_closes_the_windows_and_the_host() {
         .await
         .expect("the host stops")
         .expect("no panic");
-    assert!(matches!(result, Err(ServeError::BackendStopped)), "{result:?}");
+    assert!(
+        matches!(result, Err(ServeError::BackendStopped)),
+        "{result:?}"
+    );
 }

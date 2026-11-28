@@ -37,7 +37,9 @@ impl Outbox {
 
     /// The state; a panic while it was held cannot leave it inconsistent.
     fn state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|poison| poison.into_inner())
+        self.state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     /// Queues `message`. A message larger than the cap still goes into an

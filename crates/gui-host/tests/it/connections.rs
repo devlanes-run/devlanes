@@ -51,7 +51,11 @@ async fn the_control_role_needs_the_token_and_unserved_roles_are_refused() {
         (Role::Control, Some("wrong"), Some(RefusalReason::BadToken)),
         (Role::Control, Some(TOKEN), None),
         (Role::Input, None, Some(RefusalReason::RoleNotSupported)),
-        (Role::Unknown(9), None, Some(RefusalReason::RoleNotSupported)),
+        (
+            Role::Unknown(9),
+            None,
+            Some(RefusalReason::RoleNotSupported),
+        ),
     ];
     for (role, token, refused) in cases {
         let mut raw = Raw::hello(&host, role, token).await;

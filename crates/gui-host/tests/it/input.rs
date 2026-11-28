@@ -35,7 +35,8 @@ async fn a_viewer_holding_a_button_keeps_input_and_the_other_is_told_who_has_it(
     let (bob, mut bob_events) = host.viewer("bob").await;
     let (ours, theirs) = (Point::new(10, 10), Point::new(200, 150));
 
-    ada.pointer(pointer(window, ours, Buttons::LEFT)).expect("sends");
+    ada.pointer(pointer(window, ours, Buttons::LEFT))
+        .expect("sends");
     ada.sync().await.expect("synced");
     bob.click(window, theirs, Buttons::LEFT).expect("sends");
     let holder = until(&mut bob_events, |event| match event {
@@ -43,11 +44,15 @@ async fn a_viewer_holding_a_button_keeps_input_and_the_other_is_told_who_has_it(
         _ => None,
     })
     .await;
-    assert_eq!((holder.session, holder.name.as_str()), (ada.session(), "ada"));
+    assert_eq!(
+        (holder.session, holder.name.as_str()),
+        (ada.session(), "ada")
+    );
     bob.sync().await.expect("synced");
     assert_eq!(presses(&host), vec![ours], "bob's click was dropped");
 
-    ada.pointer(pointer(window, ours, Buttons::NONE)).expect("sends");
+    ada.pointer(pointer(window, ours, Buttons::NONE))
+        .expect("sends");
     ada.sync().await.expect("synced");
     bob.click(window, theirs, Buttons::LEFT).expect("sends");
     bob.sync().await.expect("synced");
@@ -64,8 +69,12 @@ async fn a_holder_that_goes_silent_is_released_and_one_that_leaves_at_once() {
 
     // A raw client sends no keep-alives, so it goes silent while it holds the button.
     let mut ada = Raw::welcomed(&host, Role::Tool).await;
-    ada.send(&ClientMessage::Pointer(pointer(window, held, Buttons::LEFT)))
-        .await;
+    ada.send(&ClientMessage::Pointer(pointer(
+        window,
+        held,
+        Buttons::LEFT,
+    )))
+    .await;
     ada.round_trip().await;
     assert_eq!(presses(&host), vec![held]);
     bob.click(window, theirs, Buttons::LEFT).expect("sends");
@@ -90,8 +99,12 @@ async fn a_holder_that_goes_silent_is_released_and_one_that_leaves_at_once() {
     assert_eq!(buttons, vec![left, none, none, left, none]);
 
     // Back from silence, ada's stale "still held" does not press again.
-    ada.send(&ClientMessage::Pointer(pointer(window, held, Buttons::LEFT)))
-        .await;
+    ada.send(&ClientMessage::Pointer(pointer(
+        window,
+        held,
+        Buttons::LEFT,
+    )))
+    .await;
     ada.round_trip().await;
     assert_eq!(presses(&host), vec![held, theirs]);
 

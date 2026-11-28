@@ -5,12 +5,12 @@
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
-use devlanes_gui_client::{ClientError, ClientOptions, Client, Event, Events, connect_stream};
+use devlanes_gui_client::{Client, ClientError, ClientOptions, Event, Events, connect_stream};
 use devlanes_gui_codec::{EncodeParams, Frame, RawEncoder, VideoEncoder};
 use devlanes_gui_proto::{
     Buttons, ClientMessage, CodecId, DecodeError, HEADER_LEN, HEARTBEAT_INTERVAL, Hello,
-    HostMessage, LockState, MAGIC, Point, Pointer, Role, SYNC_FEATURE, SessionId, Size,
-    VideoFrame, Welcome, WindowId, WindowInfo, WindowKind,
+    HostMessage, LockState, MAGIC, Point, Pointer, Role, SYNC_FEATURE, SessionId, Size, VideoFrame,
+    Welcome, WindowId, WindowInfo, WindowKind,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
@@ -37,7 +37,9 @@ impl Script {
                 assert!(read > 0, "the client closed the connection");
             }
         };
-        tokio::time::timeout(PATIENCE, wait).await.expect("the client sent something")
+        tokio::time::timeout(PATIENCE, wait)
+            .await
+            .expect("the client sent something")
     }
 
     /// Writes `message`.
@@ -86,10 +88,16 @@ async fn connect(role: Role, answer: Bytes) -> (Result<(Client, Events), ClientE
             if let Some(hello) = ClientMessage::decode_hello(&mut script.buf).expect("a hello") {
                 return hello;
             }
-            script.stream.read_buf(&mut script.buf).await.expect("reads");
+            script
+                .stream
+                .read_buf(&mut script.buf)
+                .await
+                .expect("reads");
         }
     };
-    let _: Hello = tokio::time::timeout(PATIENCE, hello).await.expect("a hello");
+    let _: Hello = tokio::time::timeout(PATIENCE, hello)
+        .await
+        .expect("a hello");
     script.stream.write_all(&answer).await.expect("writes");
     let client = client.await.expect("no panic");
     (client, script)
@@ -131,10 +139,17 @@ async fn a_frame_that_fails_to_decode_is_acknowledged_and_a_keyframe_requested()
         .expect("encodes")
         .expect("a keyframe");
 
-    host.send(&raw_frame(1, Bytes::from_static(b"not zstd"))).await;
+    host.send(&raw_frame(1, Bytes::from_static(b"not zstd")))
+        .await;
     host.send(&raw_frame(2, good.payload)).await;
-    assert_eq!(host.read().await, ClientMessage::FrameAck { window: W, seq: 1 });
-    assert_eq!(host.read().await, ClientMessage::KeyframeRequest { window: W });
+    assert_eq!(
+        host.read().await,
+        ClientMessage::FrameAck { window: W, seq: 1 }
+    );
+    assert_eq!(
+        host.read().await,
+        ClientMessage::KeyframeRequest { window: W }
+    );
 
     // The broken frame never reaches the caller; the next one does, and is
     // acknowledged as it is read.
@@ -144,8 +159,14 @@ async fn a_frame_that_fails_to_decode_is_acknowledged_and_a_keyframe_requested()
     let Some(Event::Frame(frame)) = frame else {
         panic!("expected a frame, got {frame:?}");
     };
-    assert_eq!((frame.seq, frame.frame.to_packed()), (2, picture.to_packed()));
-    assert_eq!(host.read().await, ClientMessage::FrameAck { window: W, seq: 2 });
+    assert_eq!(
+        (frame.seq, frame.frame.to_packed()),
+        (2, picture.to_packed())
+    );
+    assert_eq!(
+        host.read().await,
+        ClientMessage::FrameAck { window: W, seq: 2 }
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -184,7 +205,10 @@ async fn a_host_of_another_version_or_protocol_is_a_typed_error() {
     assert!(
         matches!(
             client,
-            Err(ClientError::Decode(DecodeError::VersionMismatch { theirs: 9, .. }))
+            Err(ClientError::Decode(DecodeError::VersionMismatch {
+                theirs: 9,
+                ..
+            }))
         ),
         "{:?}",
         client.err()

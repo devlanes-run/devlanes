@@ -43,8 +43,7 @@ where
 {
     let (mut reader, mut writer) = tokio::io::split(stream);
     let mut buf = BytesMut::with_capacity(16 * 1024);
-    let hello = match tokio::time::timeout(HELLO_TIMEOUT, read_hello(&mut reader, &mut buf)).await
-    {
+    let hello = match tokio::time::timeout(HELLO_TIMEOUT, read_hello(&mut reader, &mut buf)).await {
         Ok(Ok(hello)) => hello,
         Ok(Err(HelloError::Decode(DecodeError::VersionMismatch { theirs, .. }))) => {
             let message = format!(
@@ -164,13 +163,20 @@ async fn read_loop<R: AsyncRead + Unpin>(
         loop {
             match ClientMessage::decode(&mut buf) {
                 Ok(Some(message)) if message.allowed_for(role) => {
-                    if inbox.send(Inbox::Message { session, message }).await.is_err() {
+                    if inbox
+                        .send(Inbox::Message { session, message })
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 }
                 // The message itself is not logged: it may carry clipboard text.
                 Ok(Some(_)) => {
-                    tracing::debug!(?role, "closing a GUI connection that sent a message its role may not");
+                    tracing::debug!(
+                        ?role,
+                        "closing a GUI connection that sent a message its role may not"
+                    );
                     return;
                 }
                 Ok(None) => break,

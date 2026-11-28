@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::BytesMut;
-use devlanes_gui_client::{ClientOptions, Client, Event, Events, connect_stream};
+use devlanes_gui_client::{Client, ClientOptions, Event, Events, connect_stream};
 use devlanes_gui_host::{
     ServeError, ServeOptions, TestPattern, TestPatternHandle, TestPatternOptions, serve,
 };
@@ -88,12 +88,14 @@ impl Host {
 
     /// A viewer named `name` decoding `raw`.
     async fn viewer(&self, name: &str) -> (Client, Events) {
-        self.connect(ClientOptions::new(Role::Viewer, name, name)).await
+        self.connect(ClientOptions::new(Role::Viewer, name, name))
+            .await
     }
 
     /// A tool named `name`.
     async fn tool(&self, name: &str) -> (Client, Events) {
-        self.connect(ClientOptions::new(Role::Tool, name, name)).await
+        self.connect(ClientOptions::new(Role::Tool, name, name))
+            .await
     }
 
     /// The daemon's control connection.
@@ -202,14 +204,17 @@ impl Raw {
     async fn answer(&mut self) -> HostMessage {
         let wait = async {
             loop {
-                if let Some(answer) = HostMessage::decode_answer(&mut self.buf).expect("an answer") {
+                if let Some(answer) = HostMessage::decode_answer(&mut self.buf).expect("an answer")
+                {
                     return answer;
                 }
                 let read = self.stream.read_buf(&mut self.buf).await.expect("reads");
                 assert!(read > 0, "the host closed without answering");
             }
         };
-        tokio::time::timeout(PATIENCE, wait).await.expect("answered")
+        tokio::time::timeout(PATIENCE, wait)
+            .await
+            .expect("answered")
     }
 
     /// The next message, or `None` once the host closed the connection.
@@ -243,7 +248,9 @@ impl Raw {
                 }
             }
         };
-        tokio::time::timeout(PATIENCE, wait).await.expect("answered");
+        tokio::time::timeout(PATIENCE, wait)
+            .await
+            .expect("answered");
     }
 
     /// Reads until the host closes the connection, and returns what came.
@@ -255,6 +262,8 @@ impl Raw {
             }
             got
         };
-        tokio::time::timeout(PATIENCE, wait).await.expect("the host closed the connection")
+        tokio::time::timeout(PATIENCE, wait)
+            .await
+            .expect("the host closed the connection")
     }
 }

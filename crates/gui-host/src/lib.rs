@@ -56,8 +56,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 pub use backend::{
-    Backend, BackendControl, BackendError, CapturedFrame, Command, Event, EventSink, HostGone,
-    Rect,
+    Backend, BackendControl, BackendError, CapturedFrame, Command, Event, EventSink, HostGone, Rect,
 };
 pub use test_pattern::{APP_ID, Echo, TestPattern, TestPatternHandle, TestPatternOptions};
 

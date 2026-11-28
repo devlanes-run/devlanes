@@ -285,7 +285,9 @@ impl Shared {
     /// The shared state. A panic while it was held leaves nothing half
     /// updated that matters, so a poisoned lock is used as is.
     fn state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|poison| poison.into_inner())
+        self.state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     /// Encodes `message` and queues it for the writer.
@@ -447,8 +449,7 @@ impl Client {
 
     /// Tells the host the local window of `window` gained or lost focus.
     pub fn focus(&self, window: WindowId, focused: bool) -> Result<(), ClientError> {
-        self.shared
-            .send(&ClientMessage::Focus { window, focused })
+        self.shared.send(&ClientMessage::Focus { window, focused })
     }
 
     /// Sends the local clipboard text.
@@ -459,8 +460,7 @@ impl Client {
 
     /// Asks for a keyframe of `window`.
     pub fn request_keyframe(&self, window: WindowId) -> Result<(), ClientError> {
-        self.shared
-            .send(&ClientMessage::KeyframeRequest { window })
+        self.shared.send(&ClientMessage::KeyframeRequest { window })
     }
 
     /// Takes one window's picture, or the host's first top-level window's
@@ -479,7 +479,9 @@ impl Client {
             ScreenshotResult::Image(shot) => shot,
             ScreenshotResult::NoSuchWindow => return Err(ClientError::NoSuchWindow),
             ScreenshotResult::NoFrame => return Err(ClientError::NoFrame),
-            ScreenshotResult::Failed(message) => return Err(ClientError::ScreenshotFailed(message)),
+            ScreenshotResult::Failed(message) => {
+                return Err(ClientError::ScreenshotFailed(message));
+            }
         };
         if shot.codec != CodecId::RAW {
             return Err(ClientError::UnsupportedCodec(shot.codec));

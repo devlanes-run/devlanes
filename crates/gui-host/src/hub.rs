@@ -12,7 +12,7 @@ use devlanes_gui_codec::{
     CodecError, EncodeParams, EncoderBackend, Frame, RawEncoder, VideoEncoder,
 };
 use devlanes_gui_proto::{
-    Buttons, ClientMessage, CodecId, CodecOffer, EncodeError, Encode, HEARTBEAT_INTERVAL, Hello,
+    Buttons, ClientMessage, CodecId, CodecOffer, Encode, EncodeError, HEARTBEAT_INTERVAL, Hello,
     Holder, HostLock, HostMessage, InputArbiter, Key, LockState, MAX_APP_ID, MAX_CLIPBOARD,
     MAX_DIMENSION, MAX_TITLE, MAX_WINDOWS, Pacer, Point, Pointer, RESIZE_TIMEOUT, Released, Role,
     SYNC_FEATURE, Screenshot, ScreenshotResult, SessionId, Size, Verdict, VideoFrame, Welcome,
@@ -317,9 +317,12 @@ impl Hub {
             .partition(|s| s.deadline <= now);
         self.syncs = waiting;
         for sync in due {
-            self.send(sync.session, &HostMessage::Synced {
-                request: sync.request,
-            });
+            self.send(
+                sync.session,
+                &HostMessage::Synced {
+                    request: sync.request,
+                },
+            );
         }
         for ((window, _), stream) in &mut self.streams {
             if stream.seed_at.is_some_and(|at| at <= now) {
@@ -354,7 +357,10 @@ impl Hub {
         match s.outbox.push(message) {
             Ok(()) => s.last_sent = now(),
             Err(_) => {
-                tracing::debug!(session = session.0, "closing a GUI connection whose write queue is full");
+                tracing::debug!(
+                    session = session.0,
+                    "closing a GUI connection whose write queue is full"
+                );
                 self.closing.push(session);
             }
         }
@@ -672,12 +678,12 @@ impl Hub {
             ClientMessage::PointerLeft { .. } => (self.arbiter.wheel(session, now)
                 == Verdict::Accept)
                 .then_some(Command::PointerLeft { window: target }),
-            ClientMessage::Focus { focused, .. } => (self.arbiter.wheel(session, now)
-                == Verdict::Accept)
-                .then_some(Command::Focus {
+            ClientMessage::Focus { focused, .. } => {
+                (self.arbiter.wheel(session, now) == Verdict::Accept).then_some(Command::Focus {
                     window: target,
                     focused,
-                }),
+                })
+            }
             _ => None,
         };
         if let Some(command) = command {
@@ -782,7 +788,10 @@ impl Hub {
             return;
         };
         if s.screenshots >= MAX_SCREENSHOTS_IN_FLIGHT {
-            tracing::debug!(session = session.0, "closing a GUI connection with too many screenshots in progress");
+            tracing::debug!(
+                session = session.0,
+                "closing a GUI connection with too many screenshots in progress"
+            );
             self.closing.push(session);
             return;
         }
@@ -815,8 +824,7 @@ impl Hub {
         self.tasks.spawn_blocking(move || {
             let result = std::panic::catch_unwind(|| screenshot_result(window, &frame))
                 .unwrap_or_else(|_| ScreenshotResult::Failed("the encoder panicked".to_owned()));
-            let message = encode(&HostMessage::Screenshot { request, result })
-                .unwrap_or_default();
+            let message = encode(&HostMessage::Screenshot { request, result }).unwrap_or_default();
             Done::Screenshot { session, message }
         });
     }
@@ -858,9 +866,12 @@ impl Hub {
             .partition(|s| s.window == window && id.is_none_or(|id| s.id <= id));
         self.syncs = waiting;
         for sync in done {
-            self.send(sync.session, &HostMessage::Synced {
-                request: sync.request,
-            });
+            self.send(
+                sync.session,
+                &HostMessage::Synced {
+                    request: sync.request,
+                },
+            );
         }
     }
 
@@ -910,7 +921,10 @@ impl Hub {
     fn window_added(&mut self, info: WindowInfo) {
         let backend_id = info.id;
         if self.by_backend.contains_key(&backend_id) {
-            tracing::debug!(window = backend_id.0, "the GUI backend added a window twice");
+            tracing::debug!(
+                window = backend_id.0,
+                "the GUI backend added a window twice"
+            );
             return;
         }
         let now = now();
@@ -937,7 +951,9 @@ impl Hub {
             return self.broadcast(sees_windows, &HostMessage::WindowChanged(info));
         }
         if self.windows.len() >= MAX_WINDOWS {
-            tracing::warn!("the GUI backend has more windows than the protocol lists; ignoring one");
+            tracing::warn!(
+                "the GUI backend has more windows than the protocol lists; ignoring one"
+            );
             return;
         }
         let mut lock = HostLock::new();
@@ -1092,11 +1108,7 @@ impl Hub {
             }
         }
         self.refresh_locks(now);
-        let targets: Vec<_> = self
-            .sessions
-            .iter()
-            .map(|(id, s)| (*id, s.role))
-            .collect();
+        let targets: Vec<_> = self.sessions.iter().map(|(id, s)| (*id, s.role)).collect();
         for (session, role) in targets {
             let request = answered.get(&session).copied();
             let from_seq = match role {
@@ -1104,11 +1116,14 @@ impl Hub {
                 Role::Tool if request.is_some() => 0,
                 _ => continue,
             };
-            self.send(session, &HostMessage::ResizeApplied {
-                window: shown,
-                request: request.unwrap_or(0),
-                from_seq,
-            });
+            self.send(
+                session,
+                &HostMessage::ResizeApplied {
+                    window: shown,
+                    request: request.unwrap_or(0),
+                    from_seq,
+                },
+            );
         }
     }
 
@@ -1282,7 +1297,10 @@ fn encode(message: &HostMessage) -> Option<Bytes> {
 
 /// `size` with each side cut to [`MAX_DIMENSION`].
 fn fit(size: Size) -> Size {
-    Size::new(size.width.min(MAX_DIMENSION), size.height.min(MAX_DIMENSION))
+    Size::new(
+        size.width.min(MAX_DIMENSION),
+        size.height.min(MAX_DIMENSION),
+    )
 }
 
 /// Cuts `text` to at most `max` bytes on a character boundary.
@@ -1335,7 +1353,10 @@ fn encode_frame(
                 payload: encoded.payload,
             });
             let mut out = BytesMut::new();
-            message.encode(&mut out).map(|()| Some(out.freeze())).map_err(Into::into)
+            message
+                .encode(&mut out)
+                .map(|()| Some(out.freeze()))
+                .map_err(Into::into)
         }
         Ok(None) => Ok(None),
         Err(error) => Err(error.into()),

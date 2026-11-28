@@ -211,7 +211,10 @@ async fn viewers_of_another_codec_get_an_encoder_of_their_own() {
     }
     assert_eq!(raw_made.load(Ordering::SeqCst), 1, "ada and cy share one");
     assert_eq!(plain_made.load(Ordering::SeqCst), 1);
-    assert!(decoded.load(Ordering::SeqCst) >= 1, "bob's frames were plain");
+    assert!(
+        decoded.load(Ordering::SeqCst) >= 1,
+        "bob's frames were plain"
+    );
     host.stop().await;
 }
 
@@ -233,6 +236,9 @@ async fn a_screenshot_shows_one_window_and_names_a_missing_one() {
     let shot = tool.screenshot(Some(popup)).await.expect("a screenshot");
     assert_eq!((shot.frame.width(), shot.frame.height()), (80, 40));
     let missing = tool.screenshot(Some(WindowId(99))).await;
-    assert!(matches!(missing, Err(ClientError::NoSuchWindow)), "{missing:?}");
+    assert!(
+        matches!(missing, Err(ClientError::NoSuchWindow)),
+        "{missing:?}"
+    );
     host.stop().await;
 }
