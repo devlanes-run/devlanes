@@ -1240,8 +1240,8 @@ fn name_ambiguous(host: &str) -> RpcError {
             "paired_name": host,
             "message": format!(
                 "{host} is both a box paired by ticket and an entry of remote.boxes in the user \
-                 config. Rename the remote.boxes entry, or forget the paired box and pair with it \
-                 again from a new ticket with `--name`"
+                 config. Rename the remote.boxes entry, or run `devlanes remote disconnect {host} \
+                 --forget` and pair with the box again from a new ticket with `--name`"
             ),
         }),
         1,
@@ -1375,6 +1375,9 @@ struct ConnectParams {
 struct DisconnectParams {
     #[serde(default)]
     host: Option<String>,
+    /// Also forget the pairing of `host`, a box paired by ticket.
+    #[serde(default)]
+    forget: bool,
 }
 
 /// Where the box lists a client: under its id, so a reconnect replaces the
@@ -1496,8 +1499,13 @@ impl Inner {
         // A ticket names its box, and pairing by ticket takes no code.
         let opening = match args.ticket.take() {
             Some(ticket) if args.host.is_empty() && args.code.is_none() => {
+                let asked = args.name.is_some();
                 let paired = self.pair_by_ticket(&ticket, args.name.take()).await?;
-                paired_as = Some(json!({"name": paired.name, "kept": paired.kept}));
+                paired_as = Some(json!({
+                    "name": paired.name,
+                    "kept": paired.kept,
+                    "name_ignored": paired.kept && asked,
+                }));
                 args.host = paired.name;
                 held = Some(paired.connecting);
                 Opening::Paired
@@ -1518,6 +1526,10 @@ impl Inner {
             }
             None => Opening::Asked,
         };
+        // Before anything echoes the host back or dials it.
+        if let Some(error) = peer_link::ticket_as_host(&args.host) {
+            return Err(error);
+        }
         if !valid_host(&args.host) {
             return Err(RpcError::new(
                 "bad_request",
@@ -1577,10 +1589,12 @@ impl Inner {
         }
         // Later `connected` events come from `watch_link` after the record.
         conn.record_written().await;
+        // An attached CLI hears the pairing's name from the first event,
+        // since the answer comes only once it detaches.
         let first = Event {
             seq: 0,
             event: wire::STATE_EVENT.into(),
-            data: conn.state_json(),
+            data: answer(conn.state_json()),
         };
         if session.event(first).await.is_err() {
             return Ok(answer(conn.status_json(&self.remote.all())));
@@ -1849,6 +1863,20 @@ impl Inner {
         value: Value,
     ) -> Result<Value, RpcError> {
         let args: DisconnectParams = crate::engine::params(value)?;
+        // A ticket given as the box is never echoed in `not_connected`.
+        if let Some(error) = args.host.as_deref().and_then(peer_link::ticket_as_host) {
+            return Err(error);
+        }
+        if args.forget {
+            let Some(host) = &args.host else {
+                return Err(RpcError::new(
+                    "bad_request",
+                    json!({"message": "`forget` needs the `host` of a box paired by ticket"}),
+                    2,
+                ));
+            };
+            return self.forget_method(host).await;
+        }
         // Held until `wanted` is cleared: a restore checks it under this lock
         // before opening a box, so it either sees the box unwanted or has
         // opened it already, and then the box is closed here.

@@ -190,6 +190,45 @@ impl Call {
             .splice(end..end, flags.iter().map(|flag| (*flag).to_owned()));
     }
 
+    /// The arguments as shown to the user and the client, with `<ticket>`
+    /// for the box of `remote connect`, `remote disconnect` or `remote use`
+    /// when it is a pairing ticket and nothing else: a secret, and too long
+    /// to read in a question. Every other argument, of these commands and
+    /// of all others, stays whole, so a question never hides a lane, a
+    /// program or a file behind the word.
+    pub fn shown_args(&self) -> Vec<&str> {
+        let ticket = self
+            .ticket_host()
+            .filter(|host| devlanes_proto::remote::is_ticket_text(devlanes_cli::pasted(host)));
+        self.args
+            .iter()
+            .map(|arg| match ticket {
+                Some(host) if arg == host => "<ticket>",
+                _ => arg.as_str(),
+            })
+            .collect()
+    }
+
+    /// The box positional of `remote connect`, `remote disconnect` and
+    /// `remote use`, the only arguments that may be a ticket.
+    fn ticket_host(&self) -> Option<&str> {
+        match self.cli.command.as_ref()? {
+            Command::Remote { command } => match command {
+                RemoteCommand::Connect { host, .. } => Some(host),
+                RemoteCommand::Disconnect { host, .. } | RemoteCommand::Use { host, .. } => {
+                    host.as_deref()
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// [`Call::shown_args`] as one line.
+    pub fn shown(&self) -> String {
+        self.shown_args().join(" ")
+    }
+
     /// The index of the first `--`, or the length.
     fn end(&self) -> usize {
         self.args
@@ -257,9 +296,10 @@ impl Call {
                 command: LaneCommand::Gc,
             } => "Clean every lane whose worktree or project file is gone, with its data?".into(),
             Command::Daemon { command } => match command {
-                DaemonCommand::Pair => {
-                    "Print a one-time code that lets another machine pair with this one?".into()
-                }
+                DaemonCommand::Pair { .. } => "Print a one-time ticket and code that let another \
+                     machine connect to this one? While the ticket is open, for up to 10 minutes, \
+                     this machine takes pairing requests from any machine that reaches it."
+                    .into(),
                 DaemonCommand::Stop => "Stop the daemon and every process it manages?".into(),
                 DaemonCommand::Restart => {
                     "Restart the daemon? Running services stop and start again.".into()
@@ -273,11 +313,25 @@ impl Call {
                 _ => return None,
             },
             Command::Remote { command } => match command {
+                // The ticket is a secret, and too long to read in a question.
+                RemoteCommand::Connect { host, .. }
+                    if devlanes_proto::remote::is_ticket_text(devlanes_cli::pasted(host)) =>
+                {
+                    "Pair with the box in this ticket and mirror its lanes here?".into()
+                }
                 RemoteCommand::Connect { host, .. } => {
                     format!("Connect to {host} and mirror its lanes here?")
                 }
-                RemoteCommand::Disconnect { host } => match host {
-                    Some(host) => format!("Disconnect from {host}?"),
+                RemoteCommand::Disconnect {
+                    host: Some(host),
+                    forget: true,
+                } => format!(
+                    "Disconnect from {} and forget its pairing? Connecting it again needs a new \
+                     ticket from the box.",
+                    shown_host(host)
+                ),
+                RemoteCommand::Disconnect { host, .. } => match host {
+                    Some(host) => format!("Disconnect from {}?", shown_host(host)),
                     None => "Disconnect from every box?".into(),
                 },
                 _ => return None,
@@ -312,6 +366,16 @@ impl Call {
         let mut plan = self.args.clone();
         plan.push("--dry-run".into());
         Some(plan)
+    }
+}
+
+/// A box name for a question to the user, `<ticket>` when it is a pairing
+/// ticket and nothing else.
+fn shown_host(host: &str) -> &str {
+    if devlanes_proto::remote::is_ticket_text(devlanes_cli::pasted(host)) {
+        "<ticket>"
+    } else {
+        host
     }
 }
 

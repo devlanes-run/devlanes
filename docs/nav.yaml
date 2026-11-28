@@ -79,6 +79,7 @@
       collapsed: true
       items:
         - how-to/remote/prepare-a-box
+        - how-to/remote/connect-by-ticket
         - how-to/remote/connect
         - how-to/remote/connect-by-command
         - how-to/remote/tailscale

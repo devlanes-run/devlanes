@@ -14,13 +14,16 @@ devlanes remote [OPTIONS] <COMMAND>
 
 Connect to a box and mirror its lanes, ports and hostnames here.
 
+With a ticket from `devlanes daemon pair` on the box, this machine pairs with the box and connects to it peer to peer, without SSH. It keeps the box under a name, printed once paired, and `devlanes remote connect NAME` connects to it again later without a ticket.
+
 ```text
 devlanes remote connect [OPTIONS] <HOST>
 ```
 
-- `<HOST>`: Box name from remote.boxes in the user config, or an SSH destination.
+- `<HOST>`: A pairing ticket from devlanes daemon pair on the box, a box name paired by ticket or from remote.boxes in the user config, or an SSH destination.
 - `--background`: Return once connected instead of staying attached for prompts.
-- `--code <CODE>`: One-time pairing code from devlanes daemon pair on the box.
+- `--code <CODE>`: One-time pairing code from devlanes daemon pair on the box, for a box reached over SSH or remote.boxes.
+- `--name <NAME>`: Name to keep the box under when pairing by ticket [default: the box's own host name].
 
 ## devlanes remote disconnect
 
@@ -31,6 +34,7 @@ devlanes remote disconnect [OPTIONS] [HOST]
 ```
 
 - `[HOST]`: Box to disconnect [default: every box].
+- `--forget`: Also delete the pairing of a box paired by ticket, so connecting it again needs a new ticket. The box keeps accepting this machine until devlanes daemon revoke there, and folders synced from it stay on disk.
 
 ## devlanes remote ls
 

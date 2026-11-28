@@ -17,6 +17,7 @@ const ASKING: &[&[&str]] = &[
     &["daemon", "revoke", "laptop"],
     &["remote", "connect", "box"],
     &["remote", "disconnect", "box"],
+    &["remote", "disconnect", "box", "--forget"],
     &["config", "set", "remote.require_pairing", "false"],
     &["config", "unset", "remote.require_pairing"],
 ];
@@ -168,6 +169,154 @@ async fn named_tools_ask_too() {
             assert!(!failed(&result), "{tool}: {}", text(&result));
             assert_eq!(unasked.lines(), [format!("--output agent {line} --yes")]);
         }
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// Pairing by ticket asks about the box in the ticket without showing the
+/// ticket, a secret, and runs with it after a yes; neither the result's
+/// structured content nor a declined answer shows it, nor a usage error
+/// about half of it. Only the box of a remote command is hidden: a URL with
+/// a ticket-like run, a lane name or a program's argument of ticket-like
+/// letters is shown whole.
+async fn a_ticket_is_never_shown_in_the_question() {
+    tokio::time::timeout(LIMIT, async {
+        // Made up: right prefix and letters, nothing a box would accept.
+        let ticket = format!("dlp1{}", "example".repeat(20));
+        let harness = connect(
+            TestClient::new().answering(ElicitationAction::Accept),
+            Lifecycle::Initialize,
+            |_| {},
+        )
+        .await;
+        let result = harness
+            .call("devlanes", &["remote", "connect", &ticket])
+            .await;
+        assert!(!failed(&result), "{}", text(&result));
+        let questions = harness.handler.questions();
+        assert_eq!(questions.len(), 1);
+        assert!(
+            questions[0].contains("Pair with the box in this ticket")
+                && questions[0].contains("devlanes remote connect <ticket>"),
+            "{}",
+            questions[0]
+        );
+        assert!(!questions[0].contains(&ticket), "{}", questions[0]);
+        assert_eq!(
+            ran(&harness),
+            [format!("--output agent remote connect {ticket} --yes")]
+        );
+        // `data` is the fake's echo of what it ran, which a real connect
+        // does not print; the server's own fields must not hold the ticket.
+        let structured = result.structured_content.clone().unwrap_or_default();
+        assert!(
+            !structured["args"].to_string().contains(&ticket),
+            "{structured}"
+        );
+        assert!(
+            structured["args"]
+                .as_array()
+                .is_some_and(|args| args.iter().any(|arg| arg == "<ticket>")),
+            "{structured}"
+        );
+
+        let declining = connect(
+            TestClient::new().answering(ElicitationAction::Decline),
+            Lifecycle::Initialize,
+            |_| {},
+        )
+        .await;
+        let result = declining
+            .call("devlanes", &["remote", "connect", &ticket])
+            .await;
+        assert!(failed(&result));
+        assert!(!text(&result).contains(&ticket), "{}", text(&result));
+
+        // A ticket split in two by a paste is a usage error that does not
+        // quote the second half back to the model.
+        let (first, second) = ticket.split_at(70);
+        let result = declining
+            .call("devlanes", &["remote", "connect", first, second])
+            .await;
+        assert!(failed(&result));
+        assert!(!text(&result).contains(second), "{}", text(&result));
+
+        // Text that only contains a ticket-like run is shown whole: hiding
+        // it would hide what the user agrees to.
+        let url = format!("https://relay.example.invalid/{}", "a".repeat(64));
+        let asking = connect(
+            TestClient::new().answering(ElicitationAction::Accept),
+            Lifecycle::Initialize,
+            |_| {},
+        )
+        .await;
+        asking
+            .call("devlanes", &["config", "set", "remote.relays", &url])
+            .await;
+        let questions = asking.handler.questions();
+        assert!(
+            questions
+                .first()
+                .is_some_and(|question| question.contains(&url) && !question.contains("<ticket>")),
+            "{questions:?}"
+        );
+
+        // Ticket-like text anywhere but a remote command's box is shown
+        // whole: a lane to clean, a program's argument.
+        let lane = "b".repeat(64);
+        let cleaning = connect(
+            TestClient::new().answering(ElicitationAction::Accept),
+            Lifecycle::Initialize,
+            |_| {},
+        )
+        .await;
+        cleaning.call("devlanes", &["lane", "clean", &lane]).await;
+        let questions = cleaning.handler.questions();
+        assert!(
+            questions
+                .first()
+                .is_some_and(|question| question.contains(&lane) && !question.contains("<ticket>")),
+            "{questions:?}"
+        );
+        let file = "c".repeat(64);
+        let running = connect(TestClient::new(), Lifecycle::Initialize, |_| {}).await;
+        let result = running
+            .call("devlanes", &["exec", "--name", "x", "--", "rm", &file])
+            .await;
+        let structured = result.structured_content.clone().unwrap_or_default();
+        assert!(
+            structured["args"]
+                .as_array()
+                .is_some_and(|args| args.iter().any(|arg| arg == file.as_str())),
+            "{structured}"
+        );
+
+        // The question asked again for a command's own confirmation.
+        let confirming = connect(
+            TestClient::new().answering(ElicitationAction::Accept),
+            Lifecycle::Initialize,
+            |config| {
+                config.env.insert("FAKE_CONFIRM".into(), "1".into());
+            },
+        )
+        .await;
+        let result = confirming
+            .call("devlanes", &["remote", "use", &ticket, "acme@0"])
+            .await;
+        assert!(!failed(&result), "{}", text(&result));
+        let questions = confirming.handler.questions();
+        assert!(
+            questions
+                .iter()
+                .any(|question| question.contains("devlanes remote use <ticket> acme@0")),
+            "{questions:?}"
+        );
+        assert!(
+            questions.iter().all(|question| !question.contains(&ticket)),
+            "{questions:?}"
+        );
     })
     .await
     .expect("in time");

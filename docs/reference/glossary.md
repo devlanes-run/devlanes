@@ -22,7 +22,7 @@ The words the devlanes docs use most, in alphabetical order, each with the page 
 | Lane domain | The domain a lane's hostnames end in: `myapp.localhost` in lane 0, `myapp1.localhost` in lane 1. | [Hostnames and HTTPS](../concepts/hostnames-and-https.md) |
 | Lane name | `main` for lane 0 and `lane<N>` for lane N. | [Lanes and projects](../concepts/lanes-and-projects.md) |
 | Local file | `devlanes.local.yaml`: one developer's changes to the project file, kept out of Git. | [Keep personal changes out of Git](../how-to/projects/local-overrides.md) |
-| Pairing | Proving to a box, with a one-time code from `devlanes daemon pair`, that your machine may connect to it. | [Security](../concepts/security.md) |
+| Pairing | Proving to a box, with a one-time code or ticket from `devlanes daemon pair`, that your machine may connect to it. | [Security](../concepts/security.md) |
 | Port block | The range of consecutive ports each lane gets. | [Ports](../concepts/ports.md) |
 | Preset | A service setting, such as `preset: vite`, that passes a framework its port and other per-lane settings. | [Services that find each other](../learn/connecting-services.md) |
 | Profile | A named set of services, and their settings, that a start can select. | [Share settings and choose which services start](../how-to/projects/templates-and-profiles.md) |

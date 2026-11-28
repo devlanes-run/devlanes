@@ -71,7 +71,7 @@ remote:
       command: [wsl.exe, -d, Ubuntu, --exec, /home/you/.local/bin/devlanes, tunnel, --stdio]
 ```
 
-[Connect to a box without SSH](remote/connect-by-command.md) has the pairing step.
+[Connect to a box through a command](remote/connect-by-command.md) has the pairing step.
 
 ## Related
 

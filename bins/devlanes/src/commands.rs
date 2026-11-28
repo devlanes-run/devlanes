@@ -673,6 +673,30 @@ async fn rpc_start(
                                 .await
                                 .unwrap_or(true);
                                 data["require_pairing"] = json!(require);
+                                // A box paired by ticket is reached only while its
+                                // daemon runs, and the login start is this user's.
+                                // Only a sure `false` is added: an installed unit
+                                // may still be turned off.
+                                // Answered as an error, with its exit code, in
+                                // every output mode.
+                                if let Some(error) = devlanes_cli::nothing_minted(&data) {
+                                    let rendered = reporter.error(&error, None);
+                                    emit(&rendered);
+                                    return Ok(rendered.exit_code);
+                                }
+                                if data.get("ticket").is_some() {
+                                    if crate::daemon::starts_at_login(&paths.home).await
+                                        == Some(false)
+                                    {
+                                        data["starts_at_login"] = json!(false);
+                                    }
+                                } else if request.params.get("code") == Some(&json!(false)) {
+                                    // `--ticket` from a daemon that predates tickets.
+                                    let error = old_daemon_pairs_by_code();
+                                    let rendered = reporter.error(&error, None);
+                                    emit(&rendered);
+                                    return Ok(rendered.exit_code);
+                                }
                             }
                             // The counterpart of the not-running answer's `false`.
                             if method == Method::DaemonStatus && data.is_object() {
@@ -1187,6 +1211,43 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
             })
         }
         "confirmation_required" => confirmation_hint(error),
+        // The endpoint dials only relays from remote.relays, so a ticket
+        // whose box is on another one reaches it at its addresses alone.
+        "remote_failed"
+            if request.method == Method::Connect
+                && error
+                    .data
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message| message.contains("is not one this machine uses")) =>
+        {
+            // The ticket's author chose this URL, so it is shown only when it
+            // is one the user could list, in plain printable ASCII, and the
+            // user decides whether to trust it.
+            let ticket = request.params.get("ticket").and_then(Value::as_str)?;
+            let relay = devlanes_transport::Ticket::parse(ticket).ok()?.addr.relay?;
+            let listable = relay.chars().all(|c| c.is_ascii_graphic())
+                && devlanes_config::relay_problem(&relay).is_none();
+            listable.then(|| {
+                Hint(format!(
+                    "the ticket names the relay {relay}, which this machine does not use; if you \
+                     trust it, add it to remote.relays in the user config and run devlanes \
+                     daemon restart"
+                ))
+            })
+        }
+        // A daemon from before tickets reads a ticket as a request without a host.
+        "bad_request"
+            if request.method == Method::Connect
+                && request.params.get("ticket").is_some()
+                && error.data.get("name").is_none() =>
+        {
+            Some(Hint(
+                "if this machine's devlanes daemon is older than this devlanes, it cannot pair \
+                 by ticket; run devlanes daemon restart"
+                    .into(),
+            ))
+        }
         // A unit selector that names a lane (`stop 1`): the same command for that lane.
         "not_found"
             if let Some(lane) = error.data.get("names_lane").and_then(Value::as_str)
@@ -1237,6 +1298,12 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
             .map(|unit| scoped_logs(request, &[unit, "--tail", "200"])),
         _ => None,
     }
+}
+
+/// The error of `daemon pair --ticket` answered by a daemon from before
+/// tickets, which ignores the request's params and mints a code alone.
+fn old_daemon_pairs_by_code() -> RpcError {
+    RpcError::new("tickets_unsupported", json!({}), devlanes_cli::exit::FAILED)
 }
 
 /// Asks on a TTY; agents and CI must pass `--yes` instead.
@@ -1570,6 +1637,74 @@ mod tests {
             std::fs::read_to_string(aside[0].join("acme/1/dump.sql")).expect("kept"),
             "rows"
         );
+    }
+
+    /// A box on a relay this machine does not use: the hint shows the
+    /// ticket's relay only when it is a URL the user could list, in plain
+    /// ASCII, and leaves the choice to the user; a relay with terminal
+    /// escapes, or that the config would refuse, is not shown.
+    #[test]
+    fn a_tickets_relay_is_shown_only_when_it_could_be_listed() {
+        let hint = |relay: &str| {
+            let ticket = devlanes_transport::Ticket {
+                addr: devlanes_transport::PeerAddr {
+                    id: devlanes_transport::PeerId([7; 32]),
+                    relay: Some(relay.to_owned()),
+                    direct: Vec::new(),
+                },
+                secret: devlanes_transport::TicketSecret([9; 16]),
+                ephemeral: false,
+            };
+            let request = Request {
+                id: 0,
+                method: Method::Connect,
+                params: json!({"ticket": ticket.encode()}),
+                context: devlanes_proto::Context::default(),
+            };
+            let error = RpcError::new(
+                "remote_failed",
+                json!({"host": "p2p:07070707", "message": "the box is not reachable (timed out; \
+                       the box's relay relay.example.invalid is not one this machine uses)"}),
+                4,
+            );
+            hint_for(&error, &request).map(|hint| hint.0)
+        };
+        let shown = hint("https://relay.example.invalid").unwrap_or_default();
+        assert!(
+            shown.contains("https://relay.example.invalid") && shown.contains("if you trust it"),
+            "{shown}"
+        );
+        for relay in [
+            "https://relay.example.invalid/\u{1b}[2J",
+            "ftp://relay.example.invalid",
+            "https://user:secret@relay.example.invalid",
+        ] {
+            assert_eq!(hint(relay), None, "{relay:?}");
+        }
+    }
+
+    /// A client daemon from before tickets reads a ticket connect as a
+    /// request without a host; the hint names the restart. A `bad_request`
+    /// about a name the daemon read gets none.
+    #[test]
+    fn an_old_daemon_reading_a_ticket_is_named() {
+        let request = Request {
+            id: 0,
+            method: Method::Connect,
+            params: json!({"ticket": "dlp1example"}),
+            context: devlanes_proto::Context::default(),
+        };
+        let old = RpcError::new("bad_request", json!({"message": "missing field `host`"}), 2);
+        let hint = hint_for(&old, &request)
+            .map(|hint| hint.0)
+            .unwrap_or_default();
+        assert!(hint.contains("devlanes daemon restart"), "{hint}");
+        let named = RpcError::new(
+            "bad_request",
+            json!({"message": "a name has 1 to 63 letters", "name": "a.b"}),
+            2,
+        );
+        assert!(hint_for(&named, &request).is_none());
     }
 
     /// Hints keep the lane and project the user chose.

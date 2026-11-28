@@ -426,6 +426,14 @@ impl Inner {
                 2,
             ));
         }
+        // A ticket given as the box is never echoed in the errors below.
+        if let Some(error) = args
+            .host
+            .as_deref()
+            .and_then(super::peer_link::ticket_as_host)
+        {
+            return Err(error);
+        }
         self.load_choices().await;
         // The box's registry lists its lanes as soon as `remote connect`
         // returns, the assignment only once the mirror built them. A lane

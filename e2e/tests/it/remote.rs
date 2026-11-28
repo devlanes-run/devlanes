@@ -1,5 +1,5 @@
-//! `devlanes remote connect` to a box reached by a command, and sessions the
-//! test opens itself. The box is a second lab on this machine, and the
+//! `devlanes remote connect` to a box reached by a command or paired by
+//! ticket, and sessions the test opens itself. The box is a second lab on this machine, and the
 //! command runs a real `devlanes tunnel --stdio` with that lab's home; on
 //! Windows through PowerShell or cmd.exe, as sshd runs it on a Windows box.
 
@@ -177,6 +177,115 @@ fn a_command_box_mirrors_its_lane() -> Result<()> {
         let status = boxed.json(boxed.repo(), &["status", "--json"])?;
         Ok(status.get("clients").is_none().then_some(()))
     })?;
+    Ok(())
+}
+
+/// Appends `yaml` to the user config of `lab`.
+fn add_config(lab: &Lab, yaml: &str) -> Result<()> {
+    let config = lab.home().join("config.yaml");
+    let mut text = std::fs::read_to_string(&config)?;
+    text.push_str(yaml);
+    std::fs::write(&config, text)?;
+    Ok(())
+}
+
+/// Two daemons pair by ticket peer to peer, with no relay, no address
+/// lookup and no port mapping, so nothing outside this machine is
+/// contacted, the router included: the client reaches the box at the
+/// ticket's addresses, keeps it under the box's name and mirrors its api
+/// port, and a request through the client's proxy reaches the box's api
+/// process. Forgetting the box deletes its pairing.
+#[test]
+fn two_daemons_pair_by_ticket() -> Result<()> {
+    const NO_RELAYS: &str = "remote:\n  relays: []\n  port_mapping: false\n";
+    let boxed = Lab::new("two-services", BUDGET)?;
+    add_config(&boxed, NO_RELAYS)?;
+    let started = boxed.json(boxed.repo(), &["start"])?;
+    assert_eq!(started["ready"], true, "{started}");
+    let lanes = boxed.lanes(boxed.repo())?;
+    let api = need(
+        lane(&lanes, "fixture-two@0").and_then(|lane| unit(lane, "api")),
+        "the box's api",
+    )?;
+    let (api_port, api_pid) = (
+        need(port(api), "the box's api port")?,
+        need(devlanes_e2e::pid(api), "the box's api pid")?,
+    );
+    let client = Lab::without_config(BUDGET)?;
+    add_config(&client, NO_RELAYS)?;
+
+    // The ticket alone: with a code too, the daemon waits only a second for
+    // it, which the first bind on a slow runner can take.
+    let pair = boxed.json(boxed.repo(), &["daemon", "pair", "--ticket"])?;
+    let Some(ticket) = pair["ticket"].as_str().map(str::to_owned) else {
+        return Err(Error::Unexpected(format!(
+            "daemon pair --ticket printed no ticket: {pair}"
+        )));
+    };
+    // Without a relay the addresses are the only way to the box, and a dial
+    // with none fails as unreachable, which would point at the box instead.
+    let parsed = devlanes_transport::Ticket::parse(&ticket)
+        .map_err(|error| Error::Unexpected(format!("daemon pair printed a bad ticket: {error}")))?;
+    if parsed.addr.direct.is_empty() {
+        return Err(Error::Unexpected(
+            "the ticket has no direct address on this runner: iroh found no usable network \
+             interface"
+                .into(),
+        ));
+    }
+    let connected = client.json(
+        client.repo(),
+        &["remote", "connect", &ticket, "--background"],
+    )?;
+    assert_eq!(connected["state"], "connected", "{connected}");
+    assert_eq!(connected["paired"]["kept"], false, "{connected}");
+    let name = need(connected["paired"]["name"].as_str(), "the box's name")?.to_owned();
+    let mirrored = client.eventually("the box's api port in remote ls", CONNECT, || {
+        Ok(host(&client, &name)?.filter(|host| {
+            host["state"] == "connected"
+                && host["ports"]
+                    .as_array()
+                    .is_some_and(|ports| ports.iter().any(|entry| entry["port"] == api_port))
+        }))
+    })?;
+    assert_eq!(mirrored["transport"], "p2p", "{mirrored}");
+
+    if devlanes_e2e::curl()
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        let routes = client.json(client.repo(), &["url", "ls", "--json"])?;
+        let https = &routes["proxy"]["https"];
+        match https["port"].as_u64().filter(|_| https["bound"] == true) {
+            Some(port) => {
+                let ca = client.home().join("ca/ca.pem");
+                let host_name = "api.fixture-two.localhost";
+                client.eventually("the box's api through the proxy", CONNECT, || {
+                    let mut curl = devlanes_e2e::curl();
+                    curl.args(["-sS", "--max-time", "10", "--cacert"])
+                        .arg(&ca)
+                        .arg("--resolve")
+                        .arg(format!("{host_name}:{port}:127.0.0.1"))
+                        .arg(format!("https://{host_name}:{port}/healthz"));
+                    let output = client.run(curl, devlanes_e2e::COMMAND_TIMEOUT)?;
+                    let reflected: Value = serde_json::from_str(&output.stdout).unwrap_or_default();
+                    Ok((reflected["pid"].as_i64() == Some(i64::from(api_pid))).then_some(()))
+                })?;
+            }
+            None => eprintln!("no request through the proxy: it could not bind HTTPS: {https}"),
+        }
+    } else {
+        eprintln!("no request through the proxy: curl is not installed");
+    }
+
+    let forgot = client.json(client.repo(), &["remote", "disconnect", &name, "--forget"])?;
+    assert_eq!(forgot["forgotten"], json!([name]), "{forgot}");
+    assert!(
+        host(&client, &name)?.is_none(),
+        "the box is no longer listed"
+    );
     Ok(())
 }
 

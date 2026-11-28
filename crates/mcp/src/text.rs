@@ -155,7 +155,8 @@ delete, list them with lane_ls, then call this with dry_run on each to see what 
     (
         "daemon_pair",
         "Call it on the box the user wants to reach from another machine; the result has the \
-command to run there. The server asks the user first.",
+ticket and the command to run there, and a code for a machine that reaches this one over SSH. \
+Show the ticket to the user whole, on a line of its own. The server asks the user first.",
     ),
     (
         "doctor",

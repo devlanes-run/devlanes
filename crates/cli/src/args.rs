@@ -807,22 +807,33 @@ pub enum SetupAction {
 #[derive(Debug, Subcommand)]
 pub enum RemoteCommand {
     /// Connect to a box and mirror its lanes, ports and hostnames here
+    ///
+    /// With a ticket from `devlanes daemon pair` on the box, this machine pairs
+    /// with the box and connects to it peer to peer, without SSH. It keeps the
+    /// box under a name, printed once paired, and `devlanes remote connect NAME`
+    /// connects to it again later without a ticket.
     Connect {
-        /// Box name from remote.boxes in the user config, or an SSH destination
+        /// A pairing ticket from devlanes daemon pair on the box, a box name paired by ticket or from remote.boxes in the user config, or an SSH destination
         #[arg(id = "connect_host", value_name = "HOST")]
         host: String,
         /// Return once connected instead of staying attached for prompts
         #[arg(long)]
         background: bool,
-        /// One-time pairing code from devlanes daemon pair on the box
+        /// One-time pairing code from devlanes daemon pair on the box, for a box reached over SSH or remote.boxes
         #[arg(long, value_name = "CODE")]
         code: Option<String>,
+        /// Name to keep the box under when pairing by ticket [default: the box's own host name]
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
     },
     /// Disconnect from a box and remove its mirrored ports and hostnames
     Disconnect {
         /// Box to disconnect [default: every box]
         #[arg(id = "disconnect_host", value_name = "HOST")]
         host: Option<String>,
+        /// Also delete the pairing of a box paired by ticket, so connecting it again needs a new ticket. The box keeps accepting this machine until devlanes daemon revoke there, and folders synced from it stay on disk
+        #[arg(long, requires = "disconnect_host")]
+        forget: bool,
     },
     /// List known boxes and their connection state
     Ls,
@@ -1014,12 +1025,27 @@ pub enum DaemonCommand {
     Uninstall,
     /// Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
     ResetState,
-    /// Print a one-time code that pairs another machine with this one
+    /// Print a one-time ticket and code that pair another machine with this one
     ///
-    /// On a terminal it also prints how long the code is valid and the command
-    /// to run on the other machine. Without a terminal, as in
-    /// `ssh box devlanes daemon pair`, it prints only the code, for scripts.
-    Pair,
+    /// The other machine runs `devlanes remote connect <ticket>` to reach this one
+    /// peer to peer, without SSH. The code is for a machine that reaches this one
+    /// over SSH or by a command from remote.boxes: it runs
+    /// `devlanes remote connect <box> --code CODE`. Both work once, for 10 minutes.
+    ///
+    /// While a ticket is open, this machine's daemon listens for the other
+    /// machine. Afterwards it listens only for the machines it paired with, and
+    /// only while it runs, so install it with `devlanes daemon install`.
+    ///
+    /// Without a terminal, as in `ssh box devlanes daemon pair`, it prints only
+    /// the code, for scripts, and makes no ticket.
+    Pair {
+        /// Print only the ticket, with or without a terminal, and make no code
+        #[arg(long)]
+        ticket: bool,
+        /// Make a ticket for a throwaway box, which the other machine forgets once it is unreachable for an hour. Implies --ticket
+        #[arg(long)]
+        ephemeral: bool,
+    },
     /// List the machines paired or connected to this one
     Clients,
     /// Disconnect a client and delete its pairing
@@ -1573,7 +1599,21 @@ impl Cli {
                 DaemonCommand::Status => (Method::DaemonStatus, json!({})),
                 DaemonCommand::Stop => (Method::DaemonShutdown, json!({})),
                 DaemonCommand::ResetState => (Method::DaemonResetState, json!({})),
-                DaemonCommand::Pair => (Method::RemotePair, json!({})),
+                DaemonCommand::Pair { ticket, ephemeral } => {
+                    // Plain output is one line for scripts: the code, unless a
+                    // ticket was asked for. Without one no listener opens.
+                    let plain = runtime.mode == OutputMode::Plain;
+                    // A code means nothing for a throwaway box.
+                    let alone = *ticket || *ephemeral;
+                    (
+                        Method::RemotePair,
+                        if plain && !alone {
+                            json!({})
+                        } else {
+                            json!({"ticket": true, "ephemeral": ephemeral, "code": !alone})
+                        },
+                    )
+                }
                 DaemonCommand::Clients => (Method::RemoteClients, json!({})),
                 DaemonCommand::Revoke { client } => {
                     (Method::RemoteRevoke, json!({"client": client}))
@@ -1594,15 +1634,57 @@ impl Cli {
                 DaemonCommand::Run => return Ok(Action::DaemonRun),
             },
             Some(Command::Remote { command }) => match command {
+                RemoteCommand::Connect { host, .. } if cut_ticket(pasted(host)) => {
+                    return Err(Error::Usage(
+                        "this looks like a pairing ticket cut short; copy the whole ticket again \
+                         from devlanes daemon pair on the box"
+                            .into(),
+                    ));
+                }
                 RemoteCommand::Connect {
                     host,
                     background,
                     code,
+                    name,
                 } => (
                     Method::Connect,
-                    json!({"host": host, "background": background, "code": code}),
+                    // A ticket pasted from an agent's Markdown keeps its
+                    // quotes or backticks, which would make it an SSH host.
+                    match (is_ticket(pasted(host)), code, name) {
+                        (true, Some(_), _) => {
+                            return Err(Error::Usage(
+                                "--code is for boxes reached over SSH or remote.boxes; a ticket \
+                                 pairs without one"
+                                    .into(),
+                            ));
+                        }
+                        (true, None, name) => json!({
+                            "ticket": pasted(host),
+                            "name": name,
+                            "background": background,
+                        }),
+                        (false, _, Some(_)) => {
+                            return Err(Error::Usage(
+                                "--name applies only when pairing by ticket; pass it with the \
+                                 ticket from devlanes daemon pair on the box"
+                                    .into(),
+                            ));
+                        }
+                        (false, code, None) => json!({
+                            "host": pasted(host),
+                            "background": background,
+                            "code": code,
+                        }),
+                    },
                 ),
-                RemoteCommand::Disconnect { host } => (Method::Disconnect, json!({"host": host})),
+                RemoteCommand::Disconnect { host, forget } => (
+                    Method::Disconnect,
+                    if *forget {
+                        json!({"host": host, "forget": true})
+                    } else {
+                        json!({"host": host})
+                    },
+                ),
                 RemoteCommand::Ls => (Method::HostList, json!({})),
                 RemoteCommand::Sync => (Method::SyncStatus, json!({})),
                 RemoteCommand::Use { host, lane, local } => (
@@ -1924,7 +2006,7 @@ impl Cli {
                 | DaemonCommand::Install
                 | DaemonCommand::Uninstall
                 | DaemonCommand::ResetState
-                | DaemonCommand::Pair
+                | DaemonCommand::Pair { .. }
                 | DaemonCommand::Clients
                 | DaemonCommand::Revoke { .. } => None,
             },
@@ -2028,12 +2110,47 @@ impl Command {
                 | DaemonCommand::Install
                 | DaemonCommand::Uninstall
                 | DaemonCommand::ResetState
-                | DaemonCommand::Pair
+                | DaemonCommand::Pair { .. }
                 | DaemonCommand::Revoke { .. }
                 | DaemonCommand::Run => false,
             },
         }
     }
+}
+
+/// Whether a `remote connect` argument is a pairing ticket rather than a box
+/// name: it starts with the ticket prefix, in any case, and holds what the
+/// daemon takes for a ticket ([`devlanes_proto::remote::holds_ticket`]).
+/// Text that holds one without the prefix is sent as a host, which the
+/// daemon refuses without echoing it.
+pub fn is_ticket(host: &str) -> bool {
+    let prefix = devlanes_proto::remote::TICKET_PREFIX;
+    host.get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        && devlanes_proto::remote::holds_ticket(host)
+}
+
+/// Whether a `remote connect` argument is the start of a ticket cut short:
+/// the prefix, then 40 or more base32 characters and nothing else, and not
+/// a whole ticket. Sent as a host, it would reach `ssh` and `remote ls`
+/// with the box's key in it. Names that start like one, such as SSH aliases
+/// like `dlp1productionbox`, are far shorter and stay names.
+fn cut_ticket(host: &str) -> bool {
+    let prefix = devlanes_proto::remote::TICKET_PREFIX;
+    host.len() >= prefix.len() + 40
+        && !is_ticket(host)
+        && host
+            .get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        && host[prefix.len()..]
+            .chars()
+            .all(|c| matches!(c.to_ascii_lowercase(), 'a'..='z' | '2'..='7'))
+}
+
+/// A `remote connect` argument without the whitespace, quotes and backticks
+/// a copy from a terminal or from Markdown can bring along.
+pub fn pasted(host: &str) -> &str {
+    host.trim_matches(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`'))
 }
 
 /// The subcommand path named by `args` (the command line without the program),
@@ -2079,6 +2196,18 @@ pub fn usage_error(message: &str, args: &[String]) -> String {
     let names: Vec<&str> = path.iter().map(String::as_str).collect();
     let about = about(&names);
     let mut text = message.trim_end().to_owned();
+    // A ticket split by a paste is two arguments, and clap quotes the one it
+    // did not expect: this text reaches the terminal and, through `devlanes
+    // mcp`, the model. Only `remote` commands take tickets; any other
+    // command's error shows its arguments as they are.
+    if names.first() == Some(&"remote") {
+        for arg in args {
+            let arg = pasted(arg);
+            if devlanes_proto::remote::is_ticket_text(arg) {
+                text = text.replace(arg, "<ticket>");
+            }
+        }
+    }
     if !path.is_empty() && !about.is_empty() {
         text.push_str(&format!("\n\ndevlanes {}: {about}\n", names.join(" ")));
     } else {

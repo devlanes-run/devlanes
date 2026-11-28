@@ -306,8 +306,10 @@ pub enum Method {
     /// the name it already has here when it was paired before (`name` is
     /// then ignored), else under `name` or its own host name made safe
     /// (with `-2` to `-9` when that is taken), with a new link, and the
-    /// answer has `host` and `paired: {name, kept}`, `kept` true when an
-    /// earlier pairing's name was kept. Pairing by ticket fails with
+    /// answer has `host` and `paired: {name, kept, name_ignored}`, `kept`
+    /// true when an earlier pairing's name was kept and `name_ignored` when
+    /// a `name` was given then; without `background` the first
+    /// `remote.state` event has `paired` too. Pairing by ticket fails with
     /// `bad_ticket` (`{message}`) for text that is not a usable ticket,
     /// `box_name_taken` (`{name, taken_by, message}`, `taken_by` one of
     /// `p2p`, `ssh_or_command` and `user_config`, for the name asked for)
@@ -315,7 +317,8 @@ pub enum Method {
     /// `pairing_refused` (`{message, retry_after_ms}`, the wait at most a
     /// day) with the box's own reason, `remote_failed` (`{host, message}`)
     /// when the box cannot be reached, where `host` is the name or `p2p:`
-    /// and the box key's first 8 hex digits, `not_supported_yet`
+    /// and the box key's first 8 hex digits, and `pairing: true` marks the
+    /// pairing's own failure, `not_supported_yet`
     /// (`{feature: "pairing by ticket"}`) without a peer-to-peer endpoint,
     /// and `bad_request` for a ticket with `host` or `code`, a `name`
     /// without a ticket, and a `name` that is not 1 to 63 letters, digits,
@@ -328,9 +331,19 @@ pub enum Method {
     /// `box_pairing_missing` (`{host, message}`) when its pairing is gone,
     /// `not_supported_yet` (`{feature: "boxes paired by ticket"}`) without
     /// an endpoint, and `bad_request` with a `code`; its
-    /// `remote_needs_pairing` has `transport: "p2p"`.
+    /// `remote_needs_pairing` has `transport: "p2p"`. A `host` that holds a
+    /// ticket or most of one (the prefix and 60 base32 characters, or 64
+    /// base32 characters in a row) or is longer than 253 bytes fails with
+    /// `bad_ticket` before it is dialed or echoed.
     #[serde(rename = "connect")]
     Connect,
+    /// Client side, for `devlanes remote disconnect`: closes the link to
+    /// `{host}`, or to every box without it, and stops connecting it after
+    /// a restart. Reply `{disconnected: [host]}`. With `forget: true` and a
+    /// box paired by ticket as `host`, it also deletes that pairing, so
+    /// connecting the box again needs a new ticket, and the reply has
+    /// `forgotten: [host]`; any other `host` fails with
+    /// `box_not_paired_by_ticket` (`{host, message}`).
     #[serde(rename = "disconnect")]
     Disconnect,
     /// Client side, for `devlanes remote ls` and the TUI: every known box with
@@ -409,21 +422,36 @@ pub enum Method {
     RemoteReport,
     /// Box side, for `devlanes daemon pair`: a one-time pairing code, valid
     /// once for [`remote::PAIRING_CODE_TTL_MS`] and kept in memory. Params
-    /// `{ticket?, ephemeral?}`, both false by default: with `ticket` the
+    /// `{ticket?, ephemeral?, code?}`, `ticket` and `ephemeral` false and
+    /// `code` true by default: with `ticket` the
     /// reply also has `ticket`, a peer-to-peer pairing ticket
     /// ([`remote::TICKET_PREFIX`]) valid once for as long as the code, and
     /// the box listens for peers until it is used or expires; `ephemeral`
     /// marks the ticket for a client that forgets the box once it stays
-    /// away. Reply `{code, expires_at_ms, valid_ms, ticket?}`: `valid_ms` is
+    /// away; `code: false` with `ticket` mints the ticket alone, and the
+    /// reply has neither `code` nor `code_paused_ms`; `code: false` without
+    /// `ticket` is a `bad_request`. With both, the code always goes out: a
+    /// ticket that cannot be made, or is not ready within about a second,
+    /// leaves the reply without `ticket` and with `ticket_error: {code,
+    /// message}`, `code` one of `p2p_unavailable`, `not_supported_yet`,
+    /// `random_failed` and `ticket_not_ready`. A daemon from before tickets
+    /// ignores every param
+    /// and replies with a code alone.
+    /// Reply `{code, expires_at_ms, valid_ms, ticket?}`: `valid_ms` is
     /// how long the code is valid from the reply, for a countdown that needs
     /// no clock. Error `pairing_paused` with `retry_after_ms` while wrong
     /// codes keep every code refused, `connections_off` while
     /// `remote.allow_connections` is off. With `ticket`: wrong codes do not
     /// stop the ticket, whose reply then has no `code` and has
-    /// `code_paused_ms` instead; error `p2p_unavailable` (`{message}`) when
-    /// the box cannot listen for peers, tell its address or fit its relay
-    /// URL in a ticket, and `not_supported_yet` (`{feature}`) from a daemon
-    /// built without a peer-to-peer endpoint.
+    /// `code_paused_ms` instead. Errors, when no code goes out (`code:
+    /// false`, or codes paused, then with `code_paused_ms`):
+    /// `p2p_unavailable` (`{message}`) when the box cannot listen for peers,
+    /// tell its address, fit its relay URL in a ticket or has no network
+    /// address, `ticket_not_ready` (`{message}`) when a code was asked for
+    /// too and the ticket was not ready within about a second,
+    /// `random_failed` (`{message}`) when the random source failed, and
+    /// `not_supported_yet` (`{feature}`) from a daemon built without a
+    /// peer-to-peer endpoint.
     #[serde(rename = "remote.pair")]
     RemotePair,
     /// Box side, for `devlanes tunnel`: whether a client's remote token is
@@ -1482,6 +1510,38 @@ pub mod remote {
     /// How a peer-to-peer pairing ticket starts, in either case; base32
     /// follows, so a ticket is always longer than 64 characters.
     pub const TICKET_PREFIX: &str = "dlp1";
+
+    /// Whether `text` holds a pairing ticket or most of one, a secret that
+    /// must not be shown, logged or used as a host: [`TICKET_PREFIX`] in any
+    /// case and 60 or more base32 characters (a ticket, or one cut or
+    /// changed on the way), or 64 base32 characters in a row anywhere (one
+    /// whose prefix was mistyped). No host name label, box name or user
+    /// name in use is that long.
+    pub fn holds_ticket(text: &str) -> bool {
+        holds(text)
+    }
+
+    /// Whether `text` is nothing but ticket text, letters and digits that
+    /// [`holds_ticket`]: what may be hidden from a person as `<ticket>`. Text
+    /// with anything else in it, such as a URL or `KEY=VALUE`, is never
+    /// ticket text, so hiding it cannot hide what a command does.
+    pub fn is_ticket_text(text: &str) -> bool {
+        !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric()) && holds(text)
+    }
+
+    /// [`holds_ticket`].
+    fn holds(text: &str) -> bool {
+        let base32 = |c: char| matches!(c.to_ascii_lowercase(), 'a'..='z' | '2'..='7');
+        let prefixed = text
+            .get(..TICKET_PREFIX.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(TICKET_PREFIX))
+            && text[TICKET_PREFIX.len()..]
+                .chars()
+                .take_while(|c| base32(*c))
+                .count()
+                >= 60;
+        prefixed || text.split(|c: char| !base32(c)).any(|run| run.len() >= 64)
+    }
 
     /// Whether `text` is `prefix` followed by 64 lowercase hex digits, the
     /// shape of client ids and remote tokens.

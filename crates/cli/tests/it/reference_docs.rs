@@ -133,7 +133,7 @@ fn index(root: &Command) -> String {
     page.push_str(
         "\n## Hidden commands\n\nHidden from `--help` because you rarely type them. A \
          `remote.boxes.<name>.command` must end with `devlanes tunnel --stdio` \
-         ([Connect to a box without SSH](../../how-to/remote/connect-by-command.md)); \
+         ([Connect to a box through a command](../../how-to/remote/connect-by-command.md)); \
          devlanes, ssh and the install scripts run the others.\n\n",
     );
     let mut found = Vec::new();

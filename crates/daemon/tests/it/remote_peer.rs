@@ -51,7 +51,8 @@ async fn host_when(
 /// nothing. A new ticket for the box keeps its name and permanent pairing,
 /// whatever name and kind it comes with, and replaces the link. With no
 /// direct path the link reconnects with that reason and
-/// comes back once there is one. A revoke on the box, which then stops
+/// comes back once there is one. Forgetting the box deletes its pairing and
+/// record, so a later ticket pairs it as new. A revoke on the box, which then stops
 /// listening, ends the link `failed` with the pair-again text.
 async fn a_ticket_pairs_and_connects_until_the_box_refuses_the_key() {
     if !ipv6_loopback().await {
@@ -162,7 +163,7 @@ async fn a_ticket_pairs_and_connects_until_the_box_refuses_the_key() {
         assert_eq!(repaired["host"], name.as_str(), "{repaired}");
         assert_eq!(
             repaired["paired"],
-            json!({"name": name, "kept": true}),
+            json!({"name": name, "kept": true, "name_ignored": true}),
             "{repaired}"
         );
         assert_eq!(repaired["state"], "connected", "{repaired}");
@@ -217,6 +218,57 @@ async fn a_ticket_pairs_and_connects_until_the_box_refuses_the_key() {
         peers.set_reachable(key, true);
         let back = host_when(&client, &name, |host| host["state"] == "connected").await;
         assert!(back.is_some(), "{}", client.host_named(&name).await);
+
+        // Forgetting closes the live link and deletes the pairing, so the
+        // next ticket pairs a box this machine does not know; only names
+        // paired by ticket are forgotten.
+        let forgot = client
+            .h
+            .call(
+                Method::Disconnect,
+                json!({"host": name, "forget": true}),
+                Context::default(),
+            )
+            .await
+            .expect("forget");
+        assert_eq!(forgot["forgotten"], json!([name]), "{forgot}");
+        assert!(store.p2p_boxes().await.expect("boxes").is_empty());
+        assert!(
+            !store
+                .remote_hosts()
+                .await
+                .expect("hosts")
+                .iter()
+                .any(|host| host.name == name),
+            "the connection record is gone too"
+        );
+        assert_eq!(client.host_named(&name).await, Value::Null);
+        let refused = client
+            .h
+            .call(
+                Method::Disconnect,
+                json!({"host": "lab", "forget": true}),
+                Context::default(),
+            )
+            .await
+            .expect_err("a remote.boxes entry is not forgotten");
+        assert_eq!(refused.code, "box_not_paired_by_ticket", "{refused:?}");
+        let fresh = new_ticket(&side).await.encode();
+        let paired_again = client
+            .h
+            .call(
+                Method::Connect,
+                json!({"ticket": fresh, "name": "lab2", "background": true}),
+                Context::default(),
+            )
+            .await
+            .expect("pair after forgetting");
+        assert_eq!(
+            paired_again["paired"],
+            json!({"name": "lab2", "kept": false, "name_ignored": false}),
+            "{paired_again}"
+        );
+        let name = "lab2".to_owned();
 
         let id = client_id(&client).await;
         side.h

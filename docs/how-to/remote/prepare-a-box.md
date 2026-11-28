@@ -12,7 +12,7 @@ This assumes devlanes runs on your own machine, as [Install devlanes](../../inst
 
 ## Install devlanes on the box
 
-In an SSH shell on the box, install into `~/.devlanes/bin`, where your machine looks for devlanes when it connects, and put that folder on your shell's path.
+In a shell on the box, install into `~/.devlanes/bin`, where your machine looks for devlanes when it connects, and put that folder on your shell's path.
 
 ```console title="on the box"
 $ curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir ~/.devlanes/bin
@@ -46,7 +46,7 @@ See [`ports.range`](/docs/reference/config/user/ports/#ports-range) for the sett
 
 ## Keep the daemon running after you log out
 
-On a Linux box, turn on linger so the daemon outlives your SSH session, and install it as a service so it comes back after a reboot.
+On a Linux box, turn on linger so the daemon outlives your SSH session, and install it as a service so it comes back after a reboot. A box paired by ticket is reachable only while its daemon runs, so install the service on macOS and Windows boxes too.
 
 ```console title="on the box"
 $ sudo loginctl enable-linger "$USER"
@@ -63,7 +63,7 @@ $ cd ~/dev/myapp
 $ devlanes start --no-ui
 ```
 
-The box is ready; [Connect to a box](connect.md) opens its lanes on your machine.
+The box is ready; [Connect to a box with a ticket](connect-by-ticket.md) or, over SSH, [Connect to a box](connect.md) opens its lanes on your machine.
 
 ## If the box runs Windows
 
@@ -80,6 +80,7 @@ $ devlanes daemon restart
 ## Related
 
 - [Connect to a box](connect.md)
-- [Connect to a box without SSH](connect-by-command.md)
+- [Connect to a box with a ticket](connect-by-ticket.md)
+- [Connect to a box through a command](connect-by-command.md)
 - [Lanes on another machine](../../learn/remote.md)
 - [Remote mirroring](../../concepts/remote-mirroring.md)

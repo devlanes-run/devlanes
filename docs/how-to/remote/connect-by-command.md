@@ -1,5 +1,5 @@
 ---
-title: Connect to a box without SSH
+title: Connect to a box through a command
 description: Reach a container, a Kubernetes pod, a WSL distribution or a codespace through the command that runs programs inside it.
 kind: how-to
 ---

@@ -281,6 +281,110 @@ fn entire_command_inventory_builds_actions() {
     }
 }
 
+/// `daemon pair` asks for a ticket, which opens a listener on the box, except
+/// in plain output, which scripts read as the code alone; `--ticket` and
+/// `--ephemeral` ask for the ticket alone in every mode.
+#[test]
+fn daemon_pair_asks_for_a_ticket_except_in_plain_output() {
+    let params = |args: &[&str], mode: OutputMode| {
+        let cli = Cli::try_parse_from(args).expect("parses");
+        request(action(&cli, &runtime(&cli, mode))).params
+    };
+    let pair = ["devlanes", "daemon", "pair"];
+    assert_eq!(params(&pair, OutputMode::Plain), json!({}));
+    for mode in [OutputMode::Human, OutputMode::Agent, OutputMode::Json] {
+        assert_eq!(
+            params(&pair, mode),
+            json!({"ticket": true, "ephemeral": false, "code": true}),
+            "{mode:?}"
+        );
+    }
+    let alone = json!({"ticket": true, "ephemeral": false, "code": false});
+    for mode in [OutputMode::Plain, OutputMode::Human] {
+        assert_eq!(
+            params(&["devlanes", "daemon", "pair", "--ticket"], mode),
+            alone
+        );
+    }
+    // A throwaway box gets a ticket alone: a code means nothing for it.
+    for mode in [OutputMode::Plain, OutputMode::Human, OutputMode::Agent] {
+        assert_eq!(
+            params(&["devlanes", "daemon", "pair", "--ephemeral"], mode),
+            json!({"ticket": true, "ephemeral": true, "code": false}),
+            "{mode:?}"
+        );
+    }
+}
+
+/// `remote connect` sends a ticket as `ticket`, never as an SSH destination,
+/// also with quotes, backticks or whitespace around it, and anything else
+/// as `host`; a code with a ticket, a name without one, or a ticket cut
+/// short is a usage error, and a usage error never quotes ticket text.
+#[test]
+fn remote_connect_tells_a_ticket_from_a_box_name() {
+    let ticket = format!("DLP1{}", "example".repeat(10));
+    let sent = |args: &[&str]| {
+        let mut line = vec!["devlanes", "remote", "connect"];
+        line.extend(args);
+        let cli = Cli::try_parse_from(line).expect("parses");
+        cli.action_with(
+            &runtime(&cli, OutputMode::Agent),
+            PathBuf::from("/fixture/worktree"),
+            BTreeMap::new,
+        )
+    };
+    let params = |args: &[&str]| request(sent(args).expect("action")).params;
+    let paired = params(&[&ticket, "--name", "acme"]);
+    assert_eq!(
+        (&paired["ticket"], &paired["name"]),
+        (&json!(ticket), &json!("acme"))
+    );
+    assert!(paired.get("host").is_none(), "{paired}");
+    // Copied from Markdown or a terminal, with what came along.
+    for wrapped in [
+        format!("`{ticket}`"),
+        format!("\"{ticket}\" "),
+        format!(" '{ticket}'\n"),
+    ] {
+        assert_eq!(params(&[&wrapped])["ticket"], ticket.as_str(), "{wrapped}");
+    }
+    // As long as a ticket, but not one; and the prefix alone.
+    let host = format!("user@{}.example.invalid", "a".repeat(70));
+    for name in ["acme", "dlp1abc", host.as_str()] {
+        let params = params(&[name]);
+        assert_eq!(params["host"], name);
+        assert!(params.get("ticket").is_none(), "{params}");
+    }
+    assert!(sent(&[&ticket, "--code", "K7QM-3XWD"]).is_err());
+    assert!(sent(&["acme", "--name", "other"]).is_err());
+    // A ticket cut short never becomes an SSH host.
+    let cut = format!("dlp1{}", "a2b3".repeat(10));
+    assert!(sent(&[&cut]).is_err(), "{cut}");
+    // An SSH alias or remote.boxes key that starts like one is a name.
+    assert_eq!(params(&["dlp1productionbox"])["host"], "dlp1productionbox");
+    // A ticket split by a paste: clap quotes the second half, shown as
+    // `<ticket>` in the error.
+    let half = "example".repeat(10);
+    let args: Vec<String> = ["remote", "connect", "dlp1abc", half.as_str()]
+        .map(str::to_owned)
+        .to_vec();
+    let usage = devlanes_cli::usage_error(
+        &format!("error: unexpected argument '{half}' found\n\n  tip: use '-- {half}'"),
+        &args,
+    );
+    assert!(
+        !usage.contains(&half) && usage.contains("<ticket>"),
+        "{usage}"
+    );
+    // Any other command's error names its arguments as they are.
+    let lane = "b".repeat(64);
+    let args: Vec<String> = ["lane", "clean", lane.as_str(), "extra"]
+        .map(str::to_owned)
+        .to_vec();
+    let quoted = devlanes_cli::usage_error(&format!("error: no lane {lane}"), &args);
+    assert!(quoted.contains(&lane), "{quoted}");
+}
+
 #[test]
 fn infra_logs_sends_the_container_tail_and_follow() {
     let params = |args: &[&str]| {

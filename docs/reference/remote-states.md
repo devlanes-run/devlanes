@@ -14,11 +14,14 @@ kind: reference
 | `connected` | The box's lanes are mirrored here. | Nothing. |
 | `reconnecting` | The connection dropped, after sleep or a network change, and devlanes tries again on its own. The box's ports and hostnames stay in place meanwhile. | Wait, or run `devlanes remote connect BOX` to try again now. `error` says why it dropped. |
 | `needs_auth` | Reconnecting needs you: SSH asks for a password, a passphrase or a host key. | Run `devlanes remote connect BOX` in a terminal. |
-| `needs_pairing` | The box no longer accepts this machine, or no pairing code was given. | Run `devlanes daemon pair` on the box, then `devlanes remote connect BOX --code CODE` here. |
+| `needs_pairing` | The box no longer accepts this machine, or no pairing code was given. | Run `devlanes daemon pair` on the box, then `devlanes remote connect BOX --code CODE` here, or `devlanes remote connect <ticket>` for a box paired by ticket. |
 | `failed` | Trying again cannot help, for example the two machines run releases too far apart to talk, or the box turns connections away. `error` says why. | Fix the cause, then run `devlanes remote connect BOX`. |
+| `failed`, box paired by ticket | The box revoked this machine, or it stayed unreachable for 24 hours, and devlanes stopped trying. A box paired with a ticket from `devlanes daemon pair --ephemeral` gets an hour, and is then forgotten. | After a revoke, or for a forgotten box, run `devlanes daemon pair` on the box and `devlanes remote connect <ticket>` here. Otherwise run `devlanes remote connect BOX` once the box is back. |
 | `disconnected` | The box is known but not connected, as after `devlanes remote disconnect`. | Run `devlanes remote connect BOX` to connect again. |
 
-A pairing code from `devlanes daemon pair` works once and expires after a few minutes. [Connect to a box](../how-to/remote/connect.md) has the steps.
+A pairing code or ticket from `devlanes daemon pair` works once and expires after 10 minutes. [Connect to a box](../how-to/remote/connect.md) and [Connect to a box with a ticket](../how-to/remote/connect-by-ticket.md) have the steps.
+
+A box paired by ticket that has no direct path to this machine stays `reconnecting` with that reason in `error`; devlanes does not keep a connection going through a relay.
 
 ## Warnings
 

@@ -740,6 +740,27 @@ fn box_settings_fall_to_the_safe_side() {
         settings("remote:\n  require_pairing: false\n  boxes:\n    acme:\n      command: []\n"),
         (true, true, false, 0)
     );
+    // Peer-to-peer settings: a typo there keeps SSH and command clients served.
+    for source in [
+        "remote:\n  require_pairing: false\n  relays: [relay.example.invalid]\n",
+        "remote:\n  require_pairing: false\n  port_mapping: \"no\"\n",
+    ] {
+        assert_eq!(settings(source), (true, true, false, 0), "{source}");
+    }
+    // A malformed entry drops that entry or the key, never the `remote`
+    // section, so connections stay off.
+    for entry in ["{a: 1}", "5", "null", "[x]"] {
+        let source = format!("remote:\n  allow_connections: false\n  relays: [{entry}]\n");
+        assert_eq!(settings(&source), (false, true, true, 0), "{source}");
+    }
+    for source in [
+        "remote:\n  allow_connections: false\n  port_mapping: {a: 1}\n",
+        "remote:\n  allow_connections: false\n  port_mapping: [true]\n",
+        "remote:\n  allow_connections: false\n  boxes: {acme: {command: [{a: 1}]}}\n",
+        "remote:\n  allow_connections: false\n  boxes: [acme]\n",
+    ] {
+        assert_eq!(settings(source), (false, true, true, 0), "{source}");
+    }
     for source in [
         "remote:\n  start_daemon: flase\n",
         "remote:\n  require_pairing: false\n  requre_pairing: false\n",
@@ -786,9 +807,32 @@ fn box_settings_fall_to_the_safe_side_when_the_whole_file_fails() {
 }
 
 /// Command boxes need a name `remote connect` can take and a program; the
-/// rest of the command is passed as written.
+/// rest of the command is passed as written. Relays must be web URLs short
+/// enough for a ticket, and an empty list is allowed.
 #[test]
 fn remote_boxes_need_a_name_and_a_program() {
+    let relays = parse_user("remote: { relays: [] }").expect("no relays");
+    assert!(relays.remote.relays.is_empty());
+    // 199 bytes, 200 with the `/` a ticket adds.
+    let own = format!("https://relay.example.invalid/{}", "r".repeat(169));
+    assert!(
+        parse_user(&format!(
+            "remote: {{ relays: ['http://10.0.0.1:3340', '{own}'] }}"
+        ))
+        .is_ok()
+    );
+    let long = format!("https://relay.example.invalid/{}", "r".repeat(172));
+    // 200 bytes as written, 201 once parsing adds the trailing `/`.
+    let label = "r".repeat(63);
+    let slashless = format!("http://{label}.{label}.{label}.x");
+    assert_eq!(slashless.len(), 200);
+    let many = format!(
+        "remote: {{ relays: [{}] }}",
+        (0..9)
+            .map(|n| format!("'https://relay{n}.example.invalid'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let config = parse_user(
         "remote:\n  boxes:\n    acme_2:\n      command: [docker, exec, -i, acme, devlanes, tunnel, --stdio]\n",
     )
@@ -814,7 +858,7 @@ fn remote_boxes_need_a_name_and_a_program() {
         ),
         (
             "remote: { boxes: { acme.box: { command: [ssh] } } }",
-            "remote.boxes.acme.box: a box name may only hold",
+            "remote.boxes.acme.box: a box name has 1 to 63",
         ),
         (
             "remote: { boxes: { -acme: { command: [ssh] } } }",
@@ -824,6 +868,46 @@ fn remote_boxes_need_a_name_and_a_program() {
         (
             "remote: { boxes: { acme: { command: [ssh], shell: true } } }",
             "unknown field `shell`",
+        ),
+        (
+            "remote: { relays: ['relay.example.invalid'] }",
+            "remote.relays: relay.example.invalid is not an http or https URL",
+        ),
+        (
+            "remote: { relays: ['ftp://relay.example.invalid'] }",
+            "is not an http or https URL",
+        ),
+        (
+            &format!("remote: {{ relays: ['{long}'] }}"),
+            "is longer than 200 bytes",
+        ),
+        (
+            &format!("remote: {{ relays: ['{slashless}'] }}"),
+            "is longer than 200 bytes",
+        ),
+        (
+            &format!("remote: {{ relays: ['{own}x'] }}"),
+            "is longer than 200 bytes",
+        ),
+        (
+            "remote: { relays: ['https://user:secret@relay.example.invalid'] }",
+            "holds a user name or password",
+        ),
+        (
+            "remote: { relays: ['https://relay.example.invalid/?a=1'] }",
+            "has a query or a fragment",
+        ),
+        (
+            "remote: { relays: ['https://relay.example.invalid/#top'] }",
+            "has a query or a fragment",
+        ),
+        (&many, "at most 8 are allowed"),
+        (
+            &format!(
+                "remote: {{ boxes: {{ {}: {{ command: [ssh] }} }} }}",
+                "a".repeat(64)
+            ),
+            "a box name has 1 to 63",
         ),
     ] {
         let error = parse_user(source).expect_err(source);

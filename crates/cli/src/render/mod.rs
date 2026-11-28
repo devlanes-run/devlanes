@@ -14,7 +14,7 @@ use devlanes_proto::{Event, LeftProcess, Method, events};
 use serde_json::Value;
 
 pub(crate) use lanes::display_url;
-pub use other::{DoctorCheck, DoctorState, doctor_checks_of, watch_line};
+pub use other::{DoctorCheck, DoctorState, doctor_checks_of, nothing_minted, watch_line};
 pub(crate) use other::{doctor_failed, hide_env_values};
 pub use statusline::{StatuslineInput, statusline};
 pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording, lane_drift, unit_drift};
@@ -209,6 +209,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::DaemonShutdown => other::daemon_shutdown(data),
         Method::DaemonResetState => other::reset_state(data),
         Method::HostList => other::host_list(data),
+        Method::Connect => other::connect(data, cx),
         Method::RemoteUse => other::remote_use(data, cx),
         Method::RemotePair => other::daemon_pair(data, cx),
         Method::RemoteClients => other::daemon_clients(data, cx),
@@ -254,6 +255,16 @@ pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> 
             &event.data,
         ))],
         events::LANE_CHANGED if method == Method::Status => vec![other::watch_line(event)],
+        // The first state of a connect that paired by ticket names the box.
+        devlanes_proto::remote::STATE_EVENT if event.data.get("paired").is_some() => {
+            let mut lines = other::paired_lines(&event.data["paired"], cx);
+            let mut state = event.clone();
+            if let Some(fields) = state.data.as_object_mut() {
+                fields.remove("paired");
+            }
+            lines.push(other::event_line(&state));
+            lines
+        }
         _ => vec![other::event_line(event)],
     }
 }

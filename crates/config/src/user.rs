@@ -465,12 +465,12 @@ impl Default for DaemonConfig {
 /// machine serves clients when it is a box.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-#[schemars(extend("examples" = [{"allow_connections":false},{"start_daemon":false},{"require_pairing":false},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
+#[schemars(extend("examples" = [{"allow_connections":false},{"start_daemon":false},{"require_pairing":false},{"relays":[]},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
 pub struct RemoteConfig {
     /// Boxes that `devlanes remote connect <name>` reaches by running a command instead of
     /// SSH, keyed by that name. Use it for a container, a WSL distribution or a codespace.
-    /// Names not listed here are SSH destinations. Changes apply at the next
-    /// `remote connect`.
+    /// Names not listed here are SSH destinations. Names are up to 63 letters, digits, `-`
+    /// and `_`, and do not start with `-`. Changes apply at the next `remote connect`.
     #[schemars(extend("examples" = [{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}]))]
     pub boxes: std::collections::BTreeMap<String, RemoteBox>,
     /// Let other machines connect to this one with `devlanes remote connect`. Defaults to
@@ -490,17 +490,48 @@ pub struct RemoteConfig {
     /// reaches this machine over SSH or its command. An invalid value counts as true.
     #[schemars(extend("examples" = [true,false]))]
     pub require_pairing: bool,
+    /// Relays for boxes paired by ticket. A relay helps two machines find each other
+    /// and open a direct connection; devlanes does not keep a connection going through
+    /// it. Defaults to `https://relay1.devlanes.run` and `https://relay2.devlanes.run`.
+    /// The daemon contacts only these relays, and a box writes the one it uses into its
+    /// tickets. A box on a relay that is not in this list is reached only at the
+    /// addresses in its ticket, so to reach a box on your own relay, list that relay
+    /// here too. Up to 8 entries, each an `http` or `https` URL of at most 200 bytes
+    /// with no user name, password, query or fragment. An empty list turns off relays
+    /// and the lookup of boxes by key in n0's DNS (`dns.iroh.link`), so boxes are
+    /// reached only at their ticket's addresses, such as on the same network. Applies
+    /// when the daemon starts.
+    #[schemars(extend("examples" = [["https://relay1.devlanes.run","https://relay2.devlanes.run"],["https://relay.example.invalid"],[]]))]
+    pub relays: Vec<String>,
+    /// Ask the router, over UPnP, NAT-PMP or PCP, to forward a port to this machine, so
+    /// direct connections with machines paired by ticket form behind more routers.
+    /// Defaults to true. Set false to keep devlanes from contacting the router.
+    /// Applies when the daemon starts.
+    #[schemars(extend("examples" = [true,false]))]
+    pub port_mapping: bool,
 }
+
+/// The relays `remote.relays` defaults to. Two, because iroh tells whether a
+/// NAT changes ports per destination only from the answers of two relays.
+/// Numbered, with no region in the name, because the list is compiled into
+/// released binaries and a server may move without its name changing.
+const DEFAULT_RELAYS: [&str; 2] = ["https://relay1.devlanes.run", "https://relay2.devlanes.run"];
+
+/// The longest `remote.relays` entry: the most a pairing ticket can carry
+/// (`Ticket::MAX_RELAY` in devlanes-transport, which this crate cannot use).
+const MAX_RELAY_URL: usize = 200;
 
 impl Default for RemoteConfig {
     /// Connections are allowed, start the daemon and need pairing unless
-    /// turned off; no command boxes.
+    /// turned off; no command boxes; the built-in relays and port mapping.
     fn default() -> Self {
         Self {
             boxes: std::collections::BTreeMap::new(),
             allow_connections: true,
             start_daemon: true,
             require_pairing: true,
+            relays: DEFAULT_RELAYS.map(str::to_owned).to_vec(),
+            port_mapping: true,
         }
     }
 }
@@ -521,18 +552,33 @@ pub struct RemoteBox {
 
 impl RemoteConfig {
     /// Rejects box names that `remote connect` and dotted setting keys cannot
-    /// name, and commands without a program.
+    /// name, commands without a program, and relays the daemon could not use
+    /// or put in a ticket.
     fn validate(&self) -> Result<(), ConfigError> {
+        if self.relays.len() > MAX_RELAYS {
+            return Err(ConfigError::plain(format!(
+                "remote.relays: lists {} relays, and at most {MAX_RELAYS} are allowed",
+                self.relays.len()
+            )));
+        }
+        for relay in &self.relays {
+            relay_problem(relay).map_or(Ok(()), |problem| {
+                Err(ConfigError::plain(format!("remote.relays: {problem}")))
+            })?;
+        }
         for (name, entry) in &self.boxes {
+            // At most 63, as for a box paired by ticket: a longer run of
+            // letters is taken for a pairing ticket.
             let plain = !name.is_empty()
+                && name.len() <= 63
                 && !name.starts_with('-')
                 && name
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
             if !plain {
                 return Err(ConfigError::plain(format!(
-                    "remote.boxes.{name}: a box name may only hold letters, digits, `-` and `_`, \
-                     and cannot start with `-`"
+                    "remote.boxes.{name}: a box name has 1 to 63 letters, digits, `-` and `_`, \
+                     and does not start with `-`"
                 )));
             }
             if entry.command.first().is_none_or(String::is_empty) {
@@ -545,6 +591,41 @@ impl RemoteConfig {
         Ok(())
     }
 }
+
+/// Why `relay` cannot be a `remote.relays` entry, or `None` when it can.
+/// The length is checked on the form a ticket carries: the URL as parsed,
+/// ending in `/`. Public so a client can check a
+/// relay a ticket names by the same rule.
+pub fn relay_problem(relay: &str) -> Option<String> {
+    let parsed = url::Url::parse(relay).ok().filter(|url| {
+        matches!(url.scheme(), "http" | "https") && url.host_str().is_some_and(|h| !h.is_empty())
+    });
+    let Some(url) = parsed else {
+        return Some(format!(
+            "{relay} is not an http or https URL, such as https://relay.example.invalid"
+        ));
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return Some(format!(
+            "{relay} holds a user name or password, which a relay URL cannot have"
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Some(format!(
+            "{relay} has a query or a fragment, which a relay URL cannot have"
+        ));
+    }
+    // iroh ends every relay URL with `/`, also one with a path, and that
+    // form is what a ticket carries.
+    let carried = url.as_str().len() + usize::from(!url.as_str().ends_with('/'));
+    (carried > MAX_RELAY_URL).then(|| {
+        format!("{relay} is longer than {MAX_RELAY_URL} bytes, the most a pairing ticket can carry")
+    })
+}
+
+/// The most `remote.relays` entries: iroh probes every relay, so more than
+/// a few only add probes.
+const MAX_RELAYS: usize = 8;
 
 /// How long the daemon's database keeps records of finished runs and of remote boxes.
 /// An hourly cleanup deletes what is older.
@@ -1396,7 +1477,8 @@ pub struct BoxSettings {
 /// [`BoxSettings`] from a lenient load ([`load_user_lenient`],
 /// [`parse_user_lenient`]), with the load's problems that concern this
 /// machine as a box: those under `remote`, except `remote.boxes`, which is
-/// about the boxes this machine connects to, and a failure of the whole file
+/// about the boxes this machine connects to, `remote.relays` and
+/// `remote.port_mapping`, which the daemon reads at start, and a failure of the whole file
 /// (unreadable, not YAML, or too many problems to keep any setting), which
 /// loses `remote` with everything else. With any such problem every setting
 /// falls to the safe side instead of its default: connections are refused,
@@ -1411,12 +1493,26 @@ pub fn box_settings(
     let remote: Vec<ConfigError> = problems
         .into_iter()
         .filter(|problem| {
-            let message = &problem.message;
-            // A lenient load ends each per-key problem this way; any other
-            // problem is about the whole file.
-            !message.ends_with("; the default applies")
-                || ((message.starts_with("remote.") || message.starts_with("remote:"))
-                    && !message.starts_with("remote.boxes"))
+            // A lenient load ends each per-key problem with what it dropped;
+            // any other problem is about the whole file.
+            let Some(dropped) = dropped_by(&problem.message) else {
+                return true;
+            };
+            // `remote.boxes` is about the boxes this machine connects to, and
+            // `remote.relays` and `remote.port_mapping` only shape
+            // peer-to-peer networking, so a problem there must not turn SSH
+            // and command clients away. Only a drop of that key or inside it
+            // is skipped: one that took the whole `remote` section goes to
+            // the safe side.
+            let inside = |key: &str| {
+                dropped
+                    .strip_prefix(key)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with(['[', '.']))
+            };
+            inside("remote")
+                && !inside("remote.boxes")
+                && !inside("remote.relays")
+                && !inside("remote.port_mapping")
         })
         .collect();
     let settings = if remote.is_empty() {
@@ -1433,6 +1529,23 @@ pub fn box_settings(
         }
     };
     (settings, remote)
+}
+
+/// The path a lenient load dropped for the per-key problem `message`
+/// (`path: text; the default applies`, `...; that entry is left out` for a
+/// list item, or `...; the default of DROPPED applies` when an ancestor
+/// went), or `None` for a problem about the whole file.
+fn dropped_by(message: &str) -> Option<&str> {
+    if let Some(rest) = message
+        .strip_suffix("; the default applies")
+        .or_else(|| message.strip_suffix("; that entry is left out"))
+    {
+        return Some(rest.split_once(": ").map_or(rest, |(path, _)| path));
+    }
+    let (_, dropped) = message
+        .strip_suffix(" applies")?
+        .rsplit_once("; the default of ")?;
+    Some(dropped)
 }
 
 /// Keys dropped before giving up and using the defaults for everything.
@@ -1479,11 +1592,25 @@ pub fn parse_user_lenient(file: &str, source: &str) -> (UserConfig, Vec<ConfigEr
                 (path, message)
             }
         };
-        if path.is_empty() || path == "." || !drop_key(&mut value, &path) {
+        if path.is_empty() || path == "." {
             break;
         }
+        let Some(dropped) = drop_key(&mut value, &path) else {
+            break;
+        };
+        // An ancestor of `path` went when `path` itself was absent; the text
+        // names it, so a reader such as `box_settings` knows which settings
+        // fell back to defaults.
+        let applies = if dropped == path && dropped.ends_with(']') {
+            // One item of a list went, and the rest of the list applies.
+            "that entry is left out".to_owned()
+        } else if dropped == path {
+            "the default applies".to_owned()
+        } else {
+            format!("the default of {dropped} applies")
+        };
         issues.push(crate::loader::locate(
-            ConfigError::plain(format!("{path}: {message}; the default applies")),
+            ConfigError::plain(format!("{path}: {message}; {applies}")),
             file,
             source,
         ));
@@ -1494,24 +1621,27 @@ pub fn parse_user_lenient(file: &str, source: &str) -> (UserConfig, Vec<ConfigEr
     (UserConfig::default(), issues)
 }
 
-/// Removes the key at the dotted `path` from `value`. When the key is absent
-/// (a validation error about a value that must exist), the nearest present
-/// ancestor goes instead, so its section falls back to defaults. False when
-/// nothing could be removed.
-fn drop_key(value: &mut serde_json::Value, path: &str) -> bool {
-    let segments: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
+/// Removes the key at `path` from `value`, a dotted path whose segments may
+/// end in list indices (`remote.relays[0]` is key `remote`, key `relays`,
+/// item 0). When the key is absent (a validation error about a value that
+/// must exist), the nearest present ancestor goes instead, so its section
+/// falls back to defaults. Returns the path of what was removed, in the
+/// same form; `None` when nothing could be removed.
+fn drop_key(value: &mut serde_json::Value, path: &str) -> Option<String> {
+    let segments = path_segments(path);
     for depth in (1..=segments.len()).rev() {
         let (parents, last) = segments[..depth].split_at(depth - 1);
         let pointer: String = parents
             .iter()
-            .map(|segment| format!("/{}", segment.replace('~', "~0").replace('/', "~1")))
+            .map(|(segment, _)| format!("/{}", segment.replace('~', "~0").replace('/', "~1")))
             .collect();
         let Some(node) = value.pointer_mut(&pointer) else {
             continue;
         };
+        let (last, _) = &last[0];
         let removed = match node {
-            serde_json::Value::Object(map) => map.remove(last[0]).is_some(),
-            serde_json::Value::Array(items) => match last[0].parse::<usize>() {
+            serde_json::Value::Object(map) => map.remove(last).is_some(),
+            serde_json::Value::Array(items) => match last.parse::<usize>() {
                 Ok(index) if index < items.len() => {
                     items.remove(index);
                     true
@@ -1521,10 +1651,37 @@ fn drop_key(value: &mut serde_json::Value, path: &str) -> bool {
             _ => false,
         };
         if removed {
-            return true;
+            let mut shown = String::new();
+            for (segment, index) in &segments[..depth] {
+                match (index, shown.is_empty()) {
+                    (true, _) => shown.push_str(&format!("[{segment}]")),
+                    (false, true) => shown.push_str(segment),
+                    (false, false) => shown.push_str(&format!(".{segment}")),
+                }
+            }
+            return Some(shown);
         }
     }
-    false
+    None
+}
+
+/// The keys and list indices of a path such as `remote.relays[0]`, each
+/// with whether it is an index.
+fn path_segments(path: &str) -> Vec<(String, bool)> {
+    let mut segments = Vec::new();
+    for part in path.split('.').filter(|part| !part.is_empty()) {
+        let (key, mut indices) = part
+            .split_once('[')
+            .map_or((part, ""), |(key, rest)| (key, rest));
+        if !key.is_empty() {
+            segments.push((key.to_owned(), false));
+        }
+        while let Some((index, rest)) = indices.split_once(']') {
+            segments.push((index.to_owned(), true));
+            indices = rest.strip_prefix('[').unwrap_or(rest);
+        }
+    }
+    segments
 }
 
 /// Parse, validate with errors located at their field, then drop deferred settings.

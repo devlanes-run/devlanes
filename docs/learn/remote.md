@@ -73,6 +73,7 @@ You start and stop the box's lane in a shell on the box, and work with it from y
 
 - [Prepare a box](../how-to/remote/prepare-a-box.md)
 - [Connect to a box](../how-to/remote/connect.md)
-- [Connect to a box without SSH](../how-to/remote/connect-by-command.md)
+- [Connect to a box with a ticket](../how-to/remote/connect-by-ticket.md)
+- [Connect to a box through a command](../how-to/remote/connect-by-command.md)
 - [Work with several boxes](../how-to/remote/several-boxes.md)
 - [Remote mirroring](../concepts/remote-mirroring.md)

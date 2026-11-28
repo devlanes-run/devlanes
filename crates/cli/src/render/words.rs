@@ -929,6 +929,16 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
     }
 }
 
+/// What `daemon pair` says when the daemon answered with neither a code
+/// nor a ticket, which this release's daemon never does.
+pub(crate) const PAIRING_EMPTY: &str = "the daemon made neither a pairing code nor a ticket; run \
+     devlanes daemon restart, then devlanes daemon pair again";
+
+/// What `daemon pair` says when the daemon answered without a ticket it was
+/// asked for: it predates tickets and ignored the request's params.
+pub(crate) const OLD_DAEMON_NO_TICKETS: &str =
+    "the devlanes daemon running here is older than this devlanes and makes no pairing tickets";
+
 /// Where to find a minimal `devlanes.yaml` to start from.
 pub(crate) const EXAMPLE_CONFIG: &str = devlanes_version::MINIMAL_CONFIG_URL;
 
@@ -1252,16 +1262,24 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         // no hint.
         "remote_failed" => {
             let host = text(data, "host");
-            let message = data
-                .get("message")
-                .and_then(Value::as_str)
-                .map(super::clean)
-                .and_then(|message| {
-                    message
-                        .strip_prefix("the box ")
-                        .map(|rest| format!("box {host} {rest}"))
-                });
-            match message {
+            let message = message.clone();
+            // A pairing by ticket that failed (`pairing`, or before the box had
+            // a name here, as `p2p:` and its key's start): its text is about
+            // "the box" in the ticket, which `remote ls` may not list.
+            let pairing = data.get("pairing").and_then(Value::as_bool) == Some(true);
+            if (pairing || host.starts_with("p2p:"))
+                && let Some(message) = &message
+            {
+                return Some((message.clone(), None));
+            }
+            let named = message.and_then(|message| {
+                match message.strip_prefix("the box ") {
+                    Some(rest) => Some(format!("box {host} {rest}")),
+                    // A link's own text for a box paired by ticket names it.
+                    None => message.starts_with("box ").then_some(message),
+                }
+            });
+            match named {
                 Some(message) => (message, None),
                 None => (
                     with_message(format!("remote {host}")),
@@ -1269,6 +1287,41 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 ),
             }
         }
+        // Pairing by ticket: each text says what to run, so none gets a hint.
+        "bad_ticket"
+        | "box_name_taken"
+        | "box_name_ambiguous"
+        | "box_pairing_missing"
+        | "box_not_paired_by_ticket" => (message.unwrap_or_else(|| code.replace('_', " ")), None),
+        // A ticket alone that failed, or one that failed while wrong codes
+        // paused codes, so no code went out either.
+        code @ ("p2p_unavailable" | "ticket_not_ready") => {
+            let lead = if code == "ticket_not_ready" {
+                "no ticket yet"
+            } else {
+                "no pairing ticket"
+            };
+            let mut line = format!("{lead}: {}", message.clone().unwrap_or_default());
+            if let Some(ms) = data.get("code_paused_ms").and_then(Value::as_u64) {
+                line.push_str(&format!(
+                    "; pairing codes are paused for {} after 5 wrong codes",
+                    super::plural(
+                        usize::try_from(ms.div_ceil(60_000).max(1)).unwrap_or(usize::MAX),
+                        "minute"
+                    )
+                ));
+            }
+            let hint = (code == "p2p_unavailable").then(|| Hint::command(["daemon", "logs"]));
+            (line, hint)
+        }
+        // An old daemon ignored the request and made a code nobody saw.
+        "tickets_unsupported" => (
+            format!(
+                "{OLD_DAEMON_NO_TICKETS}; it made a pairing code instead, which was not printed \
+                 and expires in 10 minutes"
+            ),
+            Some(Hint::command(["daemon", "restart"])),
+        ),
         "connections_off" => {
             let invalid = data.get("invalid").and_then(Value::as_bool) == Some(true);
             (
@@ -1283,10 +1336,6 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         // A restored box whose command left the user config; the message
         // says what to do.
         "box_command_missing" => (text(data, "message"), Some(Hint::command(["remote", "ls"]))),
-        // Pairing and connecting by ticket; each message says what to run.
-        "bad_ticket" | "box_name_taken" | "box_name_ambiguous" | "box_pairing_missing" => {
-            (text(data, "message"), None)
-        }
         "remote_needs_auth" => {
             let host = text(data, "host");
             (
@@ -1294,6 +1343,14 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 Some(Hint::command(["remote", "connect", host.as_str()])),
             )
         }
+        // A box paired by ticket pairs again by ticket, which its own text
+        // and `fix` say; no code would help.
+        "remote_needs_pairing" if text(data, "transport") == "p2p" => (
+            message
+                .clone()
+                .unwrap_or_else(|| format!("box {} needs pairing again", text(data, "host"))),
+            Some(Hint(text(data, "fix"))).filter(|hint| !hint.0.is_empty()),
+        ),
         "remote_needs_pairing" => {
             let host = text(data, "host");
             // The box's reasons mostly start with "the box", which this names.
@@ -1325,14 +1382,19 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 .get("retry_after_ms")
                 .and_then(Value::as_u64)
                 .map_or(10, |ms| ms.div_ceil(60_000).max(1));
-            (
-                format!(
-                    "pairing is paused for {} after 5 wrong codes",
-                    super::plural(usize::try_from(minutes).unwrap_or(usize::MAX), "minute")
-                ),
-                None,
-            )
+            let mut line = format!(
+                "pairing is paused for {} after 5 wrong codes",
+                super::plural(usize::try_from(minutes).unwrap_or(usize::MAX), "minute")
+            );
+            // Asked with a ticket that could not be made either.
+            if let Some(reason) = data.get("ticket_error").map(|error| text(error, "message"))
+                && !reason.is_empty()
+            {
+                line.push_str(&format!("; no ticket: {reason}"));
+            }
+            (line, None)
         }
+        "pairing_empty" => (PAIRING_EMPTY.to_owned(), None),
         // Tunnel-side answers of the box daemon, shown when someone calls
         // these methods by hand.
         "client_not_paired" => (
@@ -1343,8 +1405,11 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             "the client's pairing was revoked on this box".to_owned(),
             Some(Hint::command(["daemon", "clients"])),
         ),
+        // A ticket's refusal says what to do, and some leave the ticket
+        // usable, so no hint sends the user for a new one.
+        "pairing_refused" if data.get("message").is_some() => (message.unwrap_or_default(), None),
         "pairing_refused" => (
-            message.unwrap_or_else(|| "the box refused the pairing code".into()),
+            "the box refused the pairing code".into(),
             Some(Hint::command(["daemon", "pair"])),
         ),
         "random_failed" => (
@@ -1460,6 +1525,15 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         ),
         "log_unavailable" => ("the unit's log cannot be read now; retry".into(), None),
         "unknown_stream" => ("the attached terminal is gone; attach again".into(), None),
+        // A `--name` the daemon read and refused; its text says what a name holds.
+        "bad_request" if data.get("name").is_some() && message.is_some() => (
+            format!(
+                "{} cannot be a box name: {}",
+                field(data, "name"),
+                message.clone().unwrap_or_default()
+            ),
+            None,
+        ),
         "bad_request" => (
             with_message("the daemon could not read the request".into()),
             Some(Hint::command(["daemon", "status"])),

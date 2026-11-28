@@ -29,18 +29,23 @@ fn devlanes(home: &Path, args: &[&str]) -> Run {
         .expect("start devlanes");
     let mut stdout = child.stdout.take().expect("stdout");
     let mut stderr = child.stderr.take().expect("stderr");
-    // Read on threads so a full pipe cannot stall the child.
-    let out = std::thread::spawn(move || {
-        let mut text = String::new();
-        let _ = stdout.read_to_string(&mut text);
-        text
+    // Read on threads so a full pipe cannot stall the child; channels, so a
+    // timeout can collect what arrived without waiting on a pipe that a
+    // child of the child may keep open.
+    let (out_sent, out) = std::sync::mpsc::channel();
+    let (err_sent, err) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = stdout.read_to_end(&mut text);
+        let _ = out_sent.send(String::from_utf8_lossy(&text).into_owned());
     });
-    let err = std::thread::spawn(move || {
-        let mut text = String::new();
-        let _ = stderr.read_to_string(&mut text);
-        text
+    std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = stderr.read_to_end(&mut text);
+        let _ = err_sent.send(String::from_utf8_lossy(&text).into_owned());
     });
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(60);
     let status = loop {
         if let Some(status) = child.try_wait().expect("wait") {
             break status;
@@ -48,14 +53,23 @@ fn devlanes(home: &Path, args: &[&str]) -> Run {
         if Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("devlanes {args:?} did not exit within 60 s");
+            let collect = |text: &std::sync::mpsc::Receiver<String>| {
+                text.recv_timeout(Duration::from_secs(2))
+                    .unwrap_or_else(|_| "(still open after the kill)".into())
+            };
+            panic!(
+                "devlanes {args:?} did not exit within 60 s (killed after {:?})\nstdout:\n{}\nstderr:\n{}",
+                started.elapsed(),
+                collect(&out),
+                collect(&err)
+            );
         }
         std::thread::sleep(Duration::from_millis(20));
     };
     Run {
         code: status.code(),
-        stdout: out.join().expect("stdout reader"),
-        stderr: err.join().expect("stderr reader"),
+        stdout: out.recv().expect("stdout reader"),
+        stderr: err.recv().expect("stderr reader"),
     }
 }
 

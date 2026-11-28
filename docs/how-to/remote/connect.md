@@ -8,7 +8,7 @@ When a box runs your project, connecting to it puts the box's lanes on your mach
 
 ::example{slug="remote-ssh-box"}
 
-The box has to be ready first, as [Prepare a box](prepare-a-box.md) describes.
+The box has to be ready first, as [Prepare a box](prepare-a-box.md) describes. Without SSH, the quickest way to connect is a ticket from the box: [Connect to a box with a ticket](connect-by-ticket.md). This page connects over SSH.
 
 ## Reach the box over SSH
 
@@ -22,7 +22,7 @@ Host my-vps
 
 ## Pair and connect
 
-The box serves only machines it has paired with. Get a one-time code on the box, then connect with it under the name your SSH config gives the box.
+The box serves only machines it has paired with. Get a one-time code on the box, then connect with it under the name your SSH config gives the box. `devlanes daemon pair` prints a ticket too, which this connection does not need.
 
 ```console title="on the box"
 $ devlanes daemon pair
@@ -78,7 +78,8 @@ Set [`remote.require_pairing`](/docs/reference/config/user/remote/#remote-requir
 
 ## Related
 
-- [Connect to a box without SSH](connect-by-command.md)
+- [Connect to a box with a ticket](connect-by-ticket.md)
+- [Connect to a box through a command](connect-by-command.md)
 - [Connect over Tailscale](tailscale.md)
 - [Connect through Cloudflare](cloudflare.md)
 - [Work with several boxes](several-boxes.md)
