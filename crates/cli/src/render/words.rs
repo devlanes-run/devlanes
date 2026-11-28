@@ -2071,7 +2071,30 @@ const GUI_COMMAND_ERRORS: &[&str] = &[
     "gui_window_locked",
     "gui_failed",
     "gui_unknown_key",
+    "gui_outside_window",
+    "gui_size_too_large",
+    "gui_off_in_daemon",
+    "gui_bad_reference",
+    "gui_write_failed",
 ];
+
+/// Why a box's GUI port cannot be reached here, from `{port, state,
+/// message}`: the mirror's own message when something holds the port, else
+/// its state. For `gui ls` and the `gui_not_mirrored` error.
+pub(crate) fn gui_unmirrored(mirror: &Value) -> String {
+    let port = field(mirror, "port");
+    let message = text(mirror, "message");
+    if !message.is_empty() {
+        return message;
+    }
+    // The mirror view's `state` words (`host.list`).
+    match text(mirror, "state").as_str() {
+        "local_lane" => format!("port {port} is in the port block of a lane of this machine"),
+        "in_use" => format!("port {port} is in use on this machine"),
+        "failed" => format!("port {port} could not be bound on this machine"),
+        _ => format!("port {port} is not bound on this machine"),
+    }
+}
 
 /// Whether `code` is a `devlanes gui` failure.
 fn is_gui_command_error(code: &str) -> bool {
@@ -2151,7 +2174,7 @@ fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
         "gui_not_mirrored" => (
             format!(
                 "the GUI port of {unit}{on_box} is not mirrored to this machine: {}",
-                field(data, "message")
+                gui_unmirrored(&data["mirror"])
             ),
             Some(Hint::command(["remote", "ls"])),
         ),
@@ -2211,15 +2234,64 @@ fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
         }
         "gui_unknown_key" => {
             let known: Vec<String> = list(data, "known").iter().map(display_value).collect();
-            (
-                format!(
-                    "{}; known keys: {}",
-                    field(data, "message"),
-                    known.join(", ")
+            let chord = field(data, "chord");
+            let problem = match text(data, "reason").as_str() {
+                "empty" => {
+                    format!("{chord:?} has an empty key name; + is shift+equal on a US keyboard")
+                }
+                "not_a_chord" => format!(
+                    "{chord:?} is not a chord: only modifiers come before the last key, once each"
                 ),
+                _ => format!("unknown key {:?} in {chord:?}", field(data, "name")),
+            };
+            (
+                format!("{problem}; key names: {}", known.join(", ")),
                 Some(Hint::command(["gui", "key", "--help"])),
             )
         }
+        "gui_outside_window" => {
+            let (at, size) = (&data["at"], &data["size"]);
+            (
+                format!(
+                    "{},{} is outside the {}x{} window of {unit}; positions are window pixels from its top-left corner",
+                    field(at, "x"),
+                    field(at, "y"),
+                    field(size, "width"),
+                    field(size, "height")
+                ),
+                Some(ls()),
+            )
+        }
+        "gui_size_too_large" => (
+            format!("a window side can be at most {} pixels", field(data, "max")),
+            None,
+        ),
+        "gui_off_in_daemon" => (
+            "GUI services are off in the running daemon; restart it from a shell that has them on"
+                .into(),
+            Some(Hint::command(["daemon", "restart"])),
+        ),
+        "gui_bad_reference" => (
+            match text(data, "reason").as_str() {
+                "lanes" => format!(
+                    "{} is in another lane than the services before it; name services of one lane",
+                    field(data, "reference")
+                ),
+                _ => format!(
+                    "{}: devlanes gui takes service names, not globs or tags",
+                    field(data, "reference")
+                ),
+            },
+            None,
+        ),
+        "gui_write_failed" => (
+            format!(
+                "cannot write the screenshot to {}: {}",
+                field(data, "path"),
+                field(data, "message")
+            ),
+            None,
+        ),
         _ => (
             format!(
                 "the GUI host of {unit}{on_box} failed: {}",

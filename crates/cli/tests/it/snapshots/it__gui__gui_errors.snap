@@ -19,12 +19,24 @@ error: the GUI host of acme@2:desktop at 127.0.0.1:26012 did not answer: GUI con
 hint: devlanes debug why acme@2:desktop
 error: acme@2:desktop has no window 7; its windows: 1 "Test pattern 1", 2 "Settings"
 hint: devlanes gui ls --lane acme@2
-error: several windows of acme@2:desktop are titled Twin: 1 "Test pattern 1", 2 "Settings"; name one by its id
+error: several windows of acme@2:desktop are titled Twin: 3 "Twin", 4 "Twin"; name one by its id
 hint: devlanes gui ls --lane acme@2
 error: acme@2:desktop has no main window open; its windows: none
 hint: devlanes gui ls --lane acme@2
 error: window 1 "Test pattern 1" of acme@2:desktop is frozen: its lane is frozen for inactivity
 hint: devlanes debug thaw acme@2
 error: the GUI host of acme@2:desktop failed: the GUI host did not answer the screenshot in time
-error: unknown key "hyper" in "hyper+a"; known keys: ctrl, a-z, enter
+error: unknown key "hyper" in "hyper+a"; key names: ctrl, a-z, enter
 hint: devlanes gui key --help
+error: "ctrl++" has an empty key name; + is shift+equal on a US keyboard; key names: ctrl, a-z, enter
+hint: devlanes gui key --help
+error: "a+b" is not a chord: only modifiers come before the last key, once each; key names: ctrl, a-z, enter
+hint: devlanes gui key --help
+error: 5000,5000 is outside the 320x200 window of acme@2:desktop; positions are window pixels from its top-left corner
+hint: devlanes gui ls --lane acme@2
+error: a window side can be at most 8192 pixels
+error: GUI services are off in the running daemon; restart it from a shell that has them on
+hint: devlanes daemon restart
+error: desk*: devlanes gui takes service names, not globs or tags
+error: 2:viewer is in another lane than the services before it; name services of one lane
+error: cannot write the screenshot to /work/out/shot.png: No such file or directory

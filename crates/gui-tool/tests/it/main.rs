@@ -4,7 +4,9 @@
 
 use std::time::Duration;
 
-use devlanes_gui_host::{Echo, ServeOptions, TestPattern, TestPatternOptions, serve, start_backend};
+use devlanes_gui_host::{
+    Echo, ServeOptions, TestPattern, TestPatternOptions, serve, start_backend,
+};
 use devlanes_gui_proto::{Buttons, KeyCode, MAX_TEXT, Point, Size, WindowId};
 use devlanes_gui_tool::{After, ToolError, connect, parse_chord, write_png};
 use tokio::net::TcpListener;

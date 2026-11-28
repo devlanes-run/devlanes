@@ -59,6 +59,16 @@ const COMMANDS: &[(&[&str], bool, bool)] = &[
     (&["url", "ls"], true, false),
     (&["gui", "ls"], true, false),
     (&["gui", "screenshot", "desktop"], true, false),
+    (
+        &["gui", "screenshot", "desktop", "--to", "x.png"],
+        false,
+        false,
+    ),
+    (
+        &["gui", "screenshot", "desktop", "-o", "x.png"],
+        false,
+        false,
+    ),
     (&["gui", "click", "desktop", "10", "20"], false, false),
     (&["gui", "type", "desktop", "hello"], false, false),
     (&["gui", "key", "desktop", "ctrl+s"], false, false),

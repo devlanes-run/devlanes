@@ -20,6 +20,12 @@ window 1 320x200 toplevel "Test pattern 1"
 window 2 320x200 toplevel frozen "Settings"
 stopped acme@2:viewer.2
 unreachable acme@2:editor 127.0.0.1:26013: the GUI host did not answer the connection in time
+--- ls_box human
+running acme@2:desktop on box hetzner: not mirrored here, port 26012 is in the port block of a lane of this machine
+--- ls_box plain
+running acme@2:desktop on box hetzner: not mirrored here, port 26012 is in the port block of a lane of this machine
+--- ls_box agent
+running acme@2:desktop on box hetzner: not mirrored here, port 26012 is in the port block of a lane of this machine
 --- ls_empty human
 no GUI services in acme@2
 --- ls_empty plain
@@ -27,17 +33,17 @@ no GUI services in acme@2
 --- ls_empty agent
 no GUI services in acme@2
 --- screenshot human
-wrote /tmp/devlanes-screenshots/acme@2-desktop-1.png (320x200, window 1 "Test pattern 1" of acme@2:desktop)
+wrote /home/ada/.devlanes/screenshots/acme@2-desktop-1.png (320x200, window 1 "Test pattern 1" of acme@2:desktop)
 --- screenshot plain
-wrote /tmp/devlanes-screenshots/acme@2-desktop-1.png (320x200, window 1 "Test pattern 1" of acme@2:desktop)
+wrote /home/ada/.devlanes/screenshots/acme@2-desktop-1.png (320x200, window 1 "Test pattern 1" of acme@2:desktop)
 --- screenshot agent
-wrote /tmp/devlanes-screenshots/acme@2-desktop-1.png (320x200, window 1 "Test pattern 1" of acme@2:desktop)
+wrote /home/ada/.devlanes/screenshots/acme@2-desktop-1.png (320x200, window 1 "Test pattern 1" of acme@2:desktop)
 --- click human
-double-clicked left at 120,48 in window 1 "Test pattern 1" of acme@2:desktop
+double-clicked left at 120,48 in window 1 "Test pattern 1" of acme@2:desktop; the window closed after it
 --- click plain
-double-clicked left at 120,48 in window 1 "Test pattern 1" of acme@2:desktop
+double-clicked left at 120,48 in window 1 "Test pattern 1" of acme@2:desktop; the window closed after it
 --- click agent
-double-clicked left at 120,48 in window 1 "Test pattern 1" of acme@2:desktop
+double-clicked left at 120,48 in window 1 "Test pattern 1" of acme@2:desktop; the window closed after it
 --- type human
 typed 11 characters into window 1 "Test pattern 1" of acme@2:desktop
 --- type plain
@@ -45,11 +51,11 @@ typed 11 characters into window 1 "Test pattern 1" of acme@2:desktop
 --- type agent
 typed 11 characters into window 1 "Test pattern 1" of acme@2:desktop
 --- key human
-pressed ctrl+s, enter in window 1 "Test pattern 1" of acme@2:desktop
+pressed ctrl+s, enter in window 1 "Test pattern 1" of acme@2:desktop; the window is frozen now, so it takes no input until that ends
 --- key plain
-pressed ctrl+s, enter in window 1 "Test pattern 1" of acme@2:desktop
+pressed ctrl+s, enter in window 1 "Test pattern 1" of acme@2:desktop; the window is frozen now, so it takes no input until that ends
 --- key agent
-pressed ctrl+s, enter in window 1 "Test pattern 1" of acme@2:desktop
+pressed ctrl+s, enter in window 1 "Test pattern 1" of acme@2:desktop; the window is frozen now, so it takes no input until that ends
 --- scroll human
 scrolled 0,-3 lines at 160,100 in window 1 "Test pattern 1" of acme@2:desktop on box hetzner
 --- scroll plain
@@ -57,8 +63,8 @@ scrolled 0,-3 lines at 160,100 in window 1 "Test pattern 1" of acme@2:desktop on
 --- scroll agent
 scrolled 0,-3 lines at 160,100 in window 1 "Test pattern 1" of acme@2:desktop on box hetzner
 --- resize human
-asked window 1 "Test pattern 1" of acme@2:desktop for 2000x900; it took 1920x900
+asked window 1 "Test pattern 1" of acme@2:desktop for 2000x900; it is 1920x900
 --- resize plain
-asked window 1 "Test pattern 1" of acme@2:desktop for 2000x900; it took 1920x900
+asked window 1 "Test pattern 1" of acme@2:desktop for 2000x900; it is 1920x900
 --- resize agent
-asked window 1 "Test pattern 1" of acme@2:desktop for 2000x900; it took 1920x900
+asked window 1 "Test pattern 1" of acme@2:desktop for 2000x900; it is 1920x900

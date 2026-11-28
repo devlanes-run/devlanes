@@ -63,7 +63,7 @@ fn gui_arguments_parse() {
     for bad in [
         &["gui", "resize", "desktop", "1280"][..],
         &["gui", "resize", "desktop", "0x800"],
-        &["gui", "resize", "desktop", "9000x800"],
+        &["gui", "resize", "desktop", "800x-1"],
         &["gui", "click", "desktop", "1", "2", "--button", "back"],
         &["gui", "key", "desktop"],
         &["gui", "scroll", "desktop", "0", "1", "--at", "10"],
@@ -80,16 +80,19 @@ fn fixtures() -> Vec<(&'static str, GuiOutput, Value)> {
     };
     let target = |action: &str| {
         json!({"lane": "acme@2", "unit": "desktop", "box": null,
-               "window": {"id": 1, "title": "Test pattern 1"}, "action": action})
+               "window": {"id": 1, "title": "Test pattern 1"}, "action": action,
+               "window_after": "open"})
     };
     let mut click = target("click");
     click["button"] = json!("left");
     click["double"] = json!(true);
     click["at"] = json!({"x": 120, "y": 48});
+    click["window_after"] = json!("closed");
     let mut typed = target("type");
     typed["characters"] = json!(11);
     let mut key = target("key");
     key["keys"] = json!(["ctrl+s", "enter"]);
+    key["window_after"] = json!("frozen");
     let mut scroll = target("scroll");
     scroll["box"] = json!("hetzner");
     scroll["delta"] = json!({"x": 0, "y": -3});
@@ -103,12 +106,22 @@ fn fixtures() -> Vec<(&'static str, GuiOutput, Value)> {
             GuiOutput::Ls,
             json!({"lane": "acme@2", "box": null, "truncated": false, "next_cursor": null, "items": [
                 {"unit": "desktop", "state": "ready", "host": "running", "address": "127.0.0.1:26012",
-                 "real_desktop": false, "error": null,
+                 "real_desktop": false, "unmirrored": null, "error": null,
                  "windows": [window(1, "Test pattern 1", "unlocked"), window(2, "Settings", "frozen")]},
                 {"unit": "viewer.2", "state": "stopped", "host": "stopped", "address": null,
-                 "real_desktop": null, "error": null, "windows": []},
+                 "real_desktop": null, "unmirrored": null, "error": null, "windows": []},
                 {"unit": "editor", "state": "ready", "host": "unreachable", "address": "127.0.0.1:26013",
-                 "real_desktop": null, "error": "the GUI host did not answer the connection in time",
+                 "real_desktop": null, "unmirrored": null,
+                 "error": "the GUI host did not answer the connection in time", "windows": []},
+            ]}),
+        ),
+        (
+            "ls_box",
+            GuiOutput::Ls,
+            json!({"lane": "acme@2", "box": "hetzner", "truncated": false, "next_cursor": null, "items": [
+                {"unit": "desktop", "state": "ready", "host": "running", "address": null,
+                 "real_desktop": null, "error": null,
+                 "unmirrored": {"port": 26012, "state": "local_lane", "message": null},
                  "windows": []},
             ]}),
         ),
@@ -122,7 +135,7 @@ fn fixtures() -> Vec<(&'static str, GuiOutput, Value)> {
             GuiOutput::Screenshot,
             json!({"lane": "acme@2", "unit": "desktop", "box": null,
                    "window": {"id": 1, "title": "Test pattern 1"},
-                   "path": "/tmp/devlanes-screenshots/acme@2-desktop-1.png", "width": 320, "height": 200}),
+                   "path": "/home/ada/.devlanes/screenshots/acme@2-desktop-1.png", "width": 320, "height": 200}),
         ),
         ("click", GuiOutput::Input, click),
         ("type", GuiOutput::Input, typed),
@@ -203,7 +216,8 @@ fn gui_errors_are_worded() {
         RpcError::new(
             "gui_not_mirrored",
             json!({"lane": "acme@2", "unit": "desktop", "box": "hetzner", "state": "ready",
-                   "message": "port 26012 is not mirrored because node (pid 7) uses it here"}),
+                   "mirror": {"port": 26012, "state": "in_use",
+                              "message": "port 26012 is not mirrored because node (pid 7) uses it here"}}),
             1,
         ),
         RpcError::new(
@@ -219,7 +233,8 @@ fn gui_errors_are_worded() {
         ),
         RpcError::new(
             "gui_window_ambiguous",
-            json!({"lane": "acme@2", "unit": "desktop", "box": null, "window": "Twin", "windows": windows}),
+            json!({"lane": "acme@2", "unit": "desktop", "box": null, "window": "Twin",
+                   "windows": [{"id": 3, "title": "Twin"}, {"id": 4, "title": "Twin"}]}),
             3,
         ),
         RpcError::new(
@@ -241,8 +256,46 @@ fn gui_errors_are_worded() {
         ),
         RpcError::new(
             "gui_unknown_key",
-            json!({"message": "unknown key \"hyper\" in \"hyper+a\"", "known": ["ctrl", "a-z", "enter"]}),
+            json!({"chord": "hyper+a", "name": "hyper", "reason": "unknown", "known": ["ctrl", "a-z", "enter"]}),
             2,
+        ),
+        RpcError::new(
+            "gui_unknown_key",
+            json!({"chord": "ctrl++", "name": null, "reason": "empty", "known": ["ctrl", "a-z", "enter"]}),
+            2,
+        ),
+        RpcError::new(
+            "gui_unknown_key",
+            json!({"chord": "a+b", "name": null, "reason": "not_a_chord", "known": ["ctrl", "a-z", "enter"]}),
+            2,
+        ),
+        RpcError::new(
+            "gui_outside_window",
+            json!({"lane": "acme@2", "unit": "desktop", "box": null,
+                   "window": {"id": 1, "title": "Test pattern 1"},
+                   "at": {"x": 5000, "y": 5000}, "size": {"width": 320, "height": 200}}),
+            2,
+        ),
+        RpcError::new(
+            "gui_size_too_large",
+            json!({"lane": "acme@2", "unit": "desktop", "box": null, "max": 8192}),
+            2,
+        ),
+        RpcError::new("gui_off_in_daemon", json!({}), 1),
+        RpcError::new(
+            "gui_bad_reference",
+            json!({"reference": "desk*", "reason": "selector"}),
+            2,
+        ),
+        RpcError::new(
+            "gui_bad_reference",
+            json!({"reference": "2:viewer", "reason": "lanes"}),
+            2,
+        ),
+        RpcError::new(
+            "gui_write_failed",
+            json!({"path": "/work/out/shot.png", "message": "No such file or directory"}),
+            1,
         ),
     ];
     let mut text = String::new();

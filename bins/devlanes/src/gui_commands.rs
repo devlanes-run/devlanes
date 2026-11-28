@@ -9,14 +9,14 @@
 //! names the unit's ports, and the mirror view says whether its
 //! `devlanes_gui` port is bound here, on loopback under the same number.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use devlanes_cli::{GuiCommand, GuiOutput, Runtime, exit};
+use devlanes_cli::{GuiButton, GuiCommand, GuiOutput, Runtime, exit};
 use devlanes_core::refs::UnitRef;
 use devlanes_gui_codec::Frame;
 use devlanes_gui_proto::{Buttons, LockState, Point, Size, WindowInfo, WindowKind};
-use devlanes_gui_tool::{Chord, Session, ToolError};
+use devlanes_gui_tool::{After, Chord, KeyError, Session, ToolError};
 use devlanes_proto::{Context, GUI_PORT, LaneSummary, Method, Request, RpcError};
 use serde_json::{Value, json};
 
@@ -25,8 +25,9 @@ use crate::output::emit;
 /// The name this process gives in its hello, for the host's logs.
 const CLIENT_NAME: &str = "devlanes gui";
 
-/// Where screenshots go without `--to`, under the temporary directory.
-const SCREENSHOT_DIR: &str = "devlanes-screenshots";
+/// Where screenshots go without `--to`: this folder of the devlanes home,
+/// private to the account as the home is.
+const SCREENSHOT_DIR: &str = "screenshots";
 
 /// One GUI service and where its host listens.
 #[derive(Debug, Clone)]
@@ -40,8 +41,9 @@ struct Service {
     host: String,
     /// Where to connect while the host runs.
     address: Option<SocketAddr>,
-    /// Why a running box unit's port cannot be reached from here.
-    unmirrored: Option<String>,
+    /// Why a running box unit's port cannot be reached from here: `{port,
+    /// state, message}` from the mirror view, which the CLI words.
+    unmirrored: Option<Value>,
 }
 
 /// The lane the units were found in.
@@ -96,11 +98,10 @@ pub(crate) async fn run(
     let (output, mut data, frame) = outcome?;
     if let Some(frame) = frame {
         let window = data["window"]["id"].as_u64().unwrap_or_default();
-        let path = screenshot_path(&cwd, &command, &found.lane, &service.unit, window);
-        let path = save(frame.clone(), path).await?;
-        data["path"] = json!(path);
+        let target = screenshot_target(&cwd, &command, &found.lane, &service.unit, window);
         data["width"] = json!(frame.width());
         data["height"] = json!(frame.height());
+        data["path"] = json!(save(frame, target).await?);
     }
     report(runtime, output, &data)
 }
@@ -114,9 +115,14 @@ fn chords(command: &GuiCommand) -> Result<Vec<Chord>, RpcError> {
         .map(|key| devlanes_gui_tool::parse_chord(key))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {
+            let (chord, name, reason) = match error {
+                KeyError::Empty { chord } => (chord, None, "empty"),
+                KeyError::Unknown { chord, name } => (chord, Some(name), "unknown"),
+                KeyError::NotAChord { chord } => (chord, None, "not_a_chord"),
+            };
             RpcError::new(
                 "gui_unknown_key",
-                json!({"message": error.to_string(), "known": devlanes_gui_tool::known_names()}),
+                json!({"chord": chord, "name": name, "reason": reason, "known": devlanes_gui_tool::known_names()}),
                 exit::USAGE,
             )
         })
@@ -143,7 +149,7 @@ async fn drive(
     }
     let id = window.id;
     let done = async {
-        match command {
+        let after = match command {
             GuiCommand::Screenshot { .. } => {
                 let frame = session.screenshot(id).await?;
                 return Ok((GuiOutput::Screenshot, Some(frame)));
@@ -155,33 +161,37 @@ async fn drive(
                 double,
                 ..
             } => {
-                let buttons = devlanes_gui_tool::button(button.as_str()).unwrap_or(Buttons::LEFT);
-                session.click(id, point(*x, *y), buttons, *double).await?;
+                let buttons = match button {
+                    GuiButton::Left => Buttons::LEFT,
+                    GuiButton::Right => Buttons::RIGHT,
+                    GuiButton::Middle => Buttons::MIDDLE,
+                };
                 data["action"] = json!("click");
                 data["button"] = json!(button.as_str());
                 data["double"] = json!(double);
                 data["at"] = json!({"x": x, "y": y});
+                session.click(id, point(*x, *y), buttons, *double).await?
             }
             GuiCommand::Type { text, .. } => {
-                session.type_text(id, text).await?;
                 data["action"] = json!("type");
                 data["characters"] = json!(text.chars().count());
+                session.type_text(id, text).await?
             }
             GuiCommand::Key { .. } => {
-                session.keys(id, chords).await?;
                 data["action"] = json!("key");
                 data["keys"] = json!(chords.iter().map(|chord| &chord.name).collect::<Vec<_>>());
+                session.keys(id, chords).await?
             }
             GuiCommand::Scroll { dx, dy, at, .. } => {
                 let at = match at.as_deref() {
                     Some([x, y]) => point(*x, *y),
                     _ => devlanes_gui_tool::centre(&window),
                 };
-                // Line counts a person types are far inside f32's exact range.
-                session.scroll(id, at, *dx as f32, *dy as f32).await?;
                 data["action"] = json!("scroll");
                 data["delta"] = json!({"x": dx, "y": dy});
                 data["at"] = json!({"x": at.x, "y": at.y});
+                // Line counts a person types are far inside f32's exact range.
+                session.scroll(id, at, *dx as f32, *dy as f32).await?
             }
             GuiCommand::Resize { size, .. } => {
                 let taken = session
@@ -189,13 +199,18 @@ async fn drive(
                     .await?;
                 data["action"] = json!("resize");
                 data["requested"] = json!({"width": size.width, "height": size.height});
-                data["size"] = match taken {
-                    Some(taken) => json!({"width": taken.width, "height": taken.height}),
-                    None => Value::Null,
-                };
+                data["size"] = json!({"width": taken.width, "height": taken.height});
+                After::Open
             }
-            GuiCommand::Ls { .. } => {}
-        }
+            GuiCommand::Ls { .. } => After::Open,
+        };
+        // Said in the result: the input reached the app, and what became of
+        // the window by then.
+        data["window_after"] = match after {
+            After::Open => json!("open"),
+            After::Closed => json!("closed"),
+            After::Locked(lock) => json!(lock_word(lock)),
+        };
         Ok::<_, ToolError>((GuiOutput::Input, None))
     };
     let (output, frame) = done.await.map_err(|error| tool_error(base, error))?;
@@ -212,10 +227,13 @@ fn point(x: u32, y: u32) -> Point {
 
 /// Prints `data` and returns the exit code.
 fn report(runtime: &Runtime, output: GuiOutput, data: &Value) -> Result<u8, RpcError> {
-    let rendered = runtime
-        .reporter()
-        .gui(output, data)
-        .map_err(|error| RpcError::new("encode", json!({"message": error.to_string()}), 1))?;
+    let rendered = runtime.reporter().gui(output, data).map_err(|error| {
+        RpcError::new(
+            "encode",
+            json!({"message": error.to_string()}),
+            exit::FAILED,
+        )
+    })?;
     emit(&rendered);
     Ok(rendered.exit_code)
 }
@@ -231,8 +249,8 @@ fn split_units(units: &[String]) -> Result<(Option<String>, Vec<String>), RpcErr
         })?;
         if parsed.selector.starts_with('+') || parsed.selector.contains(['*', '?', '[']) {
             return Err(RpcError::new(
-                "usage",
-                json!({"message": format!("{unit}: devlanes gui takes service names, not globs or tags")}),
+                "gui_bad_reference",
+                json!({"reference": unit, "reason": "selector"}),
                 exit::USAGE,
             ));
         }
@@ -244,8 +262,8 @@ fn split_units(units: &[String]) -> Result<(Option<String>, Vec<String>), RpcErr
             lane = this;
         } else if this != lane {
             return Err(RpcError::new(
-                "usage",
-                json!({"message": "the services of one command must be in one lane"}),
+                "gui_bad_reference",
+                json!({"reference": unit, "reason": "lanes"}),
                 exit::USAGE,
             ));
         }
@@ -272,6 +290,7 @@ async fn find(mut context: Context, lane: Option<String>) -> Result<Found, RpcEr
     .await;
     match status {
         Ok(data) => local_lane(&data, named.is_some()),
+        Err(error) if gui_off_in_daemon(&error.data) => Err(daemon_off()),
         Err(error) => {
             let Some(reference) = named.filter(|_| error.exit_code == exit::NOT_FOUND) else {
                 return Err(error);
@@ -287,6 +306,22 @@ async fn find(mut context: Context, lane: Option<String>) -> Result<Found, RpcEr
             box_lane(&boxes, &reference).ok_or(error)
         }
     }
+}
+
+/// What the config loader of a daemon with GUI services off says about a
+/// `gui` key (`devlanes_config`'s wording), the only sign of that switch in
+/// what the daemon answers.
+const GUI_OFF_MARKER: &str = "`gui` is not supported yet";
+
+/// Whether an error or a lane's reason is the daemon refusing `gui` keys,
+/// which means GUI services are off in the daemon though this CLI has them on.
+fn gui_off_in_daemon(data: &Value) -> bool {
+    data.to_string().contains(GUI_OFF_MARKER)
+}
+
+/// `gui_off_in_daemon`: the daemon runs with GUI services off.
+fn daemon_off() -> RpcError {
+    RpcError::new("gui_off_in_daemon", json!({}), exit::FAILED)
 }
 
 /// The lane of a `status` answer: the one lane a named reference gives, or
@@ -328,7 +363,15 @@ fn local_lane(data: &Value, named: bool) -> Result<Found, RpcError> {
                 unmirrored: None,
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
+    if services.is_empty()
+        && lane
+            .reason
+            .as_ref()
+            .is_some_and(|reason| gui_off_in_daemon(&json!(reason)))
+    {
+        return Err(daemon_off());
+    }
     Ok(Found {
         lane: lane.reference,
         host_box: None,
@@ -370,11 +413,26 @@ fn box_lane(data: &Value, reference: &str) -> Option<Found> {
             services,
         });
     }
-    let mirrored = candidates
+    // The box this machine mirrors the lane from, else the one `remote use`
+    // chose for it, else the first.
+    let chosen = |found: &Found| {
+        data["items"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .any(|host| {
+                host["host"].as_str() == found.host_box.as_deref()
+                    && host["chosen_lanes"]
+                        .as_array()
+                        .is_some_and(|lanes| lanes.iter().any(|lane| lane == reference))
+            })
+    };
+    let pick = candidates
         .iter()
         .position(|found| found.services.iter().any(|s| s.address.is_some()))
+        .or_else(|| candidates.iter().position(chosen))
         .unwrap_or(0);
-    (mirrored < candidates.len()).then(|| candidates.swap_remove(mirrored))
+    (pick < candidates.len()).then(|| candidates.swap_remove(pick))
 }
 
 /// A box unit with a `devlanes_gui` port, and the address its mirror has
@@ -393,33 +451,35 @@ fn box_service(host: &Value, lane: &str, unit: &Value) -> Option<Service> {
             .iter()
             .find(|entry| entry["port"] == port && entry["lane"] == lane && entry["unit"] == name)
     });
+    // Only a loopback listener of the mirror, whatever else the list says.
     let address = mirror
         .filter(|entry| entry["state"] == "bound")
         .and_then(|entry| {
-            entry["addresses"]
-                .as_array()?
-                .first()?
-                .as_str()?
-                .parse::<IpAddr>()
-                .ok()
+            let listed = |address: IpAddr| {
+                entry["addresses"].as_array().is_some_and(|addresses| {
+                    addresses
+                        .iter()
+                        .any(|listed| listed.as_str().and_then(|a| a.parse().ok()) == Some(address))
+                })
+            };
+            [
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                IpAddr::V6(Ipv6Addr::LOCALHOST),
+            ]
+            .into_iter()
+            .find(|loopback| listed(*loopback))
         })
         .zip(u16::try_from(port).ok())
         .map(SocketAddr::from);
-    let unmirrored = (serving && address.is_none()).then(|| match mirror {
-        Some(entry) => entry["conflicts"]
-            .as_array()
-            .and_then(|conflicts| conflicts.first())
-            .and_then(|conflict| conflict["message"].as_str())
-            .map_or_else(
-                || {
-                    format!(
-                        "port {port} is {}",
-                        entry["state"].as_str().unwrap_or("not bound")
-                    )
-                },
-                str::to_owned,
-            ),
-        None => format!("port {port} is not mirrored"),
+    // Why the port is not reachable here, for the CLI to word: the mirror's
+    // own message when something holds the port, else its state.
+    let unmirrored = (serving && address.is_none()).then(|| {
+        json!({
+            "port": port,
+            "state": mirror.and_then(|entry| entry["state"].as_str()),
+            "message": mirror
+                .and_then(|entry| entry["conflicts"].as_array()?.first()?["message"].as_str()),
+        })
     });
     Some(Service {
         unit: name.to_owned(),
@@ -504,7 +564,7 @@ fn reachable(base: &Value, service: &Service) -> Result<SocketAddr, RpcError> {
     data["state"] = json!(service.state);
     let (code, exit_code) = match service.host.as_str() {
         _ if service.unmirrored.is_some() => {
-            data["message"] = json!(service.unmirrored);
+            data["mirror"] = json!(service.unmirrored);
             ("gui_not_mirrored", exit::FAILED)
         }
         devlanes_proto::GUI_HOST_NONE => ("gui_no_host", exit::FAILED),
@@ -548,6 +608,15 @@ fn tool_error(base: &Value, error: ToolError) -> RpcError {
             data["windows"] = listed(windows);
             ("gui_no_window", exit::FAILED)
         }
+        ToolError::OutsideWindow { point, size } => {
+            data["at"] = json!({"x": point.x, "y": point.y});
+            data["size"] = json!({"width": size.width, "height": size.height});
+            ("gui_outside_window", exit::USAGE)
+        }
+        ToolError::TooLarge { max } => {
+            data["max"] = json!(max);
+            ("gui_size_too_large", exit::USAGE)
+        }
         _ => {
             data["message"] = json!(chain(&error));
             ("gui_failed", exit::FAILED)
@@ -578,7 +647,8 @@ async fn ls(found: &Found, services: &[Service]) -> Value {
             "host": service.host,
             "address": service.address.map(|address| address.to_string()),
             "real_desktop": null,
-            "error": service.unmirrored,
+            "unmirrored": service.unmirrored,
+            "error": null,
             "windows": [],
         });
         if let Some(address) = service.address {
@@ -643,17 +713,28 @@ fn lock_word(lock: LockState) -> &'static str {
     }
 }
 
-/// `--to` taken from `cwd`, or `devlanes-screenshots/LANE-UNIT-WINDOW.png` in
-/// the temporary directory, a name the next screenshot of the window reuses.
-fn screenshot_path(
+/// Where a screenshot goes.
+#[derive(Debug)]
+enum Target {
+    /// This file name in the screenshots folder of the devlanes home.
+    Folder(String),
+    /// The `--to` file.
+    File(PathBuf),
+}
+
+/// `--to` taken from `cwd`, or `LANE-UNIT-WINDOW.png` in the screenshots
+/// folder, a name the next screenshot of the window reuses. A box's lane and
+/// unit names come from another machine, so the name keeps only characters
+/// that are safe in a file name on every OS.
+fn screenshot_target(
     cwd: &Path,
     command: &GuiCommand,
     lane: &str,
     unit: &str,
     window: u64,
-) -> PathBuf {
+) -> Target {
     if let GuiCommand::Screenshot { to: Some(to), .. } = command {
-        return cwd.join(to);
+        return Target::File(cwd.join(to));
     }
     let name: String = format!("{lane}-{unit}-{window}")
         .chars()
@@ -665,39 +746,55 @@ fn screenshot_path(
             }
         })
         .collect();
-    std::env::temp_dir()
-        .join(SCREENSHOT_DIR)
-        .join(format!("{name}.png"))
+    Target::Folder(format!("{name}.png"))
 }
 
-/// Encodes `frame` and writes it to `path` through a temporary file in the
-/// same directory, so a reader never sees half a picture. Returns the
-/// absolute path.
-async fn save(frame: Frame, path: PathBuf) -> Result<PathBuf, RpcError> {
-    let io = |error: &dyn std::fmt::Display| {
-        RpcError::new(
-            "io",
-            json!({"message": format!("{}: {error}", path.display())}),
-            1,
-        )
-    };
-    let target = path.clone();
-    let write = move || -> Result<PathBuf, String> {
-        let png = devlanes_gui_tool::encode_png(&frame).map_err(|error| error.to_string())?;
-        let path = std::path::absolute(&target).map_err(|error| error.to_string())?;
-        let dir = path.parent().unwrap_or(Path::new("."));
-        if path.starts_with(std::env::temp_dir().join(SCREENSHOT_DIR)) {
-            std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+/// Writes `frame` as a PNG where `target` says and returns the absolute
+/// path. In the screenshots folder the file goes through a temporary file in
+/// the folder, so a reader never sees half a picture; a `--to` file is
+/// written in place, with the permissions a new file normally gets.
+async fn save(frame: Frame, target: Target) -> Result<PathBuf, RpcError> {
+    let write = move || -> Result<PathBuf, (String, String)> {
+        let failed = |path: &Path| {
+            let path = path.display().to_string();
+            move |error: &dyn std::fmt::Display| (path.clone(), error.to_string())
+        };
+        match target {
+            Target::Folder(name) => {
+                let paths = devlanes_client::Paths::discover()
+                    .map_err(|error| failed(Path::new(SCREENSHOT_DIR))(&error))?;
+                let dir = paths
+                    .private_subdirectory(SCREENSHOT_DIR)
+                    .map_err(|error| failed(&paths.home.join(SCREENSHOT_DIR))(&error))?;
+                let path = dir.join(name);
+                let fail = failed(&path);
+                let mut file = tempfile::NamedTempFile::new_in(&dir).map_err(|e| fail(&e))?;
+                devlanes_gui_tool::write_png(&frame, std::io::BufWriter::new(file.as_file_mut()))
+                    .map_err(|e| fail(&e))?;
+                file.persist(&path).map_err(|e| fail(&e))?;
+                Ok(path)
+            }
+            Target::File(path) => {
+                let path = std::path::absolute(&path).map_err(|e| failed(&path)(&e))?;
+                let fail = failed(&path);
+                let file = std::fs::File::create(&path).map_err(|e| fail(&e))?;
+                devlanes_gui_tool::write_png(&frame, std::io::BufWriter::new(file))
+                    .map_err(|e| fail(&e))?;
+                Ok(path)
+            }
         }
-        let mut file = tempfile::NamedTempFile::new_in(dir).map_err(|error| error.to_string())?;
-        std::io::Write::write_all(&mut file, &png).map_err(|error| error.to_string())?;
-        file.persist(&path).map_err(|error| error.to_string())?;
-        Ok(path)
+    };
+    let io = |(path, message): (String, String)| {
+        RpcError::new(
+            "gui_write_failed",
+            json!({"path": path, "message": message}),
+            exit::FAILED,
+        )
     };
     tokio::task::spawn_blocking(write)
         .await
-        .map_err(|error| io(&error))?
-        .map_err(|error| io(&error))
+        .map_err(|error| io((String::new(), error.to_string())))?
+        .map_err(io)
 }
 
 #[cfg(test)]
@@ -748,7 +845,7 @@ mod tests {
         let error = reachable(&json!({}), &held.services[0]).expect_err("not mirrored");
         assert_eq!(error.code, "gui_not_mirrored");
         assert!(
-            error.data["message"]
+            error.data["mirror"]["message"]
                 .as_str()
                 .unwrap_or_default()
                 .contains("node (pid 7)")

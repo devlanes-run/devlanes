@@ -75,6 +75,11 @@ fn ls(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         let error = text(item, "error");
         if !error.is_empty() {
             line.push_str(&format!(": {error}"));
+        } else if item.get("unmirrored").is_some_and(|value| !value.is_null()) {
+            line.push_str(&format!(
+                ": not mirrored here, {}",
+                super::words::gui_unmirrored(&item["unmirrored"])
+            ));
         }
         lines.push(line);
         let rows: Vec<Vec<String>> = list(item, "windows")
@@ -128,7 +133,9 @@ fn screenshot(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     )]
 }
 
-/// The input commands: what was sent, which the host applied.
+/// The input commands: what the app got, and what became of the window.
+/// Nothing here says the app drew its result: the command waits for one
+/// frame after the input, or 3 seconds.
 fn input(data: &Value) -> Vec<String> {
     let place = format!("{} of {}", window(&data["window"]), target(data));
     let point = |key: &str| {
@@ -184,15 +191,19 @@ fn input(data: &Value) -> Vec<String> {
                 )
             };
             let (asked, took) = (size("requested"), size("size"));
-            if data["size"].is_null() {
-                format!("asked {place} for {asked}")
-            } else if asked == took {
+            if asked == took {
                 format!("resized {place} to {took}")
             } else {
-                format!("asked {place} for {asked}; it took {took}")
+                format!("asked {place} for {asked}; it is {took}")
             }
         }
         other => format!("sent {} to {place}", clean(other)),
     };
-    vec![line]
+    // What became of the window once the app had the input.
+    let after = match text(data, "window_after").as_str() {
+        "" | "open" => String::new(),
+        "closed" => "; the window closed after it".into(),
+        lock => format!("; the window is {lock} now, so it takes no input until that ends"),
+    };
+    vec![format!("{line}{after}")]
 }

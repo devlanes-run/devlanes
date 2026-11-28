@@ -275,8 +275,7 @@ impl Session {
         self.sync().await?;
         // What the host said before it answered the sync is queued already,
         // so it is read without waiting (a zero timeout polls once).
-        while let Ok(Some(event)) = tokio::time::timeout(Duration::ZERO, self.events.next()).await
-        {
+        while let Ok(Some(event)) = tokio::time::timeout(Duration::ZERO, self.events.next()).await {
             track(&mut self.windows, event);
         }
         if !self.windows.iter().any(|info| info.id == window) {

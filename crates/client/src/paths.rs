@@ -102,6 +102,16 @@ impl Paths {
         })
     }
 
+    /// `<home>/<name>`, created private like the home's other directories,
+    /// and refused when it is a link, not a directory or another account's.
+    /// Blocking: call off async executor threads.
+    pub fn private_subdirectory(&self, name: &str) -> Result<PathBuf> {
+        private_directory(&self.home)?;
+        let directory = self.home.join(name);
+        private_directory(&directory)?;
+        Ok(directory)
+    }
+
     /// Creates private directories before daemon startup; call off async executor threads.
     pub fn prepare(&self) -> Result<()> {
         for directory in [&self.home, &self.run, &self.logs] {

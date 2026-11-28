@@ -85,13 +85,14 @@ impl<'a> Report<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuiOutput {
     /// `gui ls`: `{lane, box, items: [{unit, state, host, address,
-    /// real_desktop, error, windows: [{id, title, app_id, width, height,
+    /// real_desktop, unmirrored, error, windows: [{id, title, app_id, width, height,
     /// kind, lock, parent}]}]}`.
     Ls,
     /// `gui screenshot`: `{lane, unit, box, window: {id, title}, path, width, height}`.
     Screenshot,
-    /// The input commands: `{lane, unit, box, window: {id, title}, action}`
-    /// and the action's fields.
+    /// The input commands: `{lane, unit, box, window: {id, title}, action,
+    /// window_after}` and the action's fields; `window_after` is `open`,
+    /// `closed` or the lock state the window has once the app got the input.
     Input,
 }
 

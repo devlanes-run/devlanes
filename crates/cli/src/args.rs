@@ -64,11 +64,6 @@ Examples:
   devlanes with --profile e2e -- pnpm test:e2e
   devlanes with api --logs-dir devlanes-logs -- cargo test --test api";
 
-/// Hidden top-level commands of a feature users cannot reach yet: `gui`, while
-/// GUI services are off in releases. The generated CLI reference leaves them
-/// out, where it lists the other hidden commands.
-pub const UNRELEASED_COMMANDS: &[&str] = &["gui"];
-
 /// Public parser for the binary and shell completion frontend.
 #[derive(Debug, Parser)]
 #[command(
@@ -674,40 +669,42 @@ const GUI_ABOUT: &str = "\
 List, screenshot and drive the windows of GUI services: click, type, press keys, scroll and resize.
 
 Works on services with gui: true without opening their windows. Each command
-connects to the service's GUI host, does one thing, and returns once the host
-has passed it to the app, so a screenshot taken next shows the result.
-Coordinates are window pixels from the window's top-left corner.
+does one thing and returns once the app has the input and has drawn once
+after it, or after 3 seconds, so a slow app may not show its result in a
+screenshot taken right after. Coordinates are window pixels from the window's
+top-left corner, and a point outside the window is refused.
 
 --window picks a window by the id or title gui ls prints; without it, the
-service's first main window. A box's GUI service works the same from a
-connected machine: name its lane, such as acme@2:desktop.";
+service's first main window. A box's GUI service works the same from your
+machine: name its lane, such as acme@2:desktop.";
 
 const GUI_AFTER: &str = "\
 Examples:
   devlanes gui ls                               GUI services of this lane and their windows
   devlanes gui screenshot desktop               save a PNG and print its path
-  devlanes gui click desktop 120 48
-  devlanes gui type desktop 'hello world'
-  devlanes gui key desktop ctrl+s enter
-  devlanes gui resize desktop 1280x800";
+  devlanes gui click desktop 120 48             click 120 pixels right and 48 down
+  devlanes gui type desktop 'hello world'       type into the focused field
+  devlanes gui key desktop ctrl+s enter         save, then press enter
+  devlanes gui resize desktop 1280x800          resize the main window";
 
 const GUI_SCREENSHOT_ABOUT: &str = "\
 Save a PNG of a GUI service's window and print where it went.
 
-Without --to the file goes to devlanes-screenshots in the temporary directory,
-named after the lane, the service and the window id, such as
-acme@2-desktop-1.png, and the next screenshot of that window replaces it. JSON output names the
-file and the image's size.";
+Without --to the file goes to the screenshots folder of the devlanes home
+(~/.devlanes, or $DEVLANES_HOME), named after the lane, the service and the
+window id, such as acme@2-desktop-1.png, and the next screenshot of that
+window replaces it. JSON output names the file and the image's size.";
 
 const GUI_KEY_ABOUT: &str = "\
 Press keys and chords in a GUI service's window, such as enter or ctrl+s.
 
 Each KEY is a key name, or names joined by + where every name before the last
 is a modifier (ctrl, shift, alt, meta). Names follow the key's place on a US
-keyboard: a to z, 0 to 9, f1 to f24, enter, esc, tab, space, backspace,
-delete, insert, home, end, pageup, pagedown, up, down, left, right and the
-punctuation keys by name (minus, equal, comma, period, slash, ...). The keys of
-a chord go down in order and up in reverse; chords are pressed one after
+keyboard, such as a to z, 0 to 9, f1 to f24, enter, esc, tab, space,
+backspace, delete, home, end, pageup, pagedown and the arrows up, down, left
+and right; punctuation keys go by name, such as minus, equal and slash, and +
+is shift+equal. An unknown name fails with the list of every name. The keys
+of a chord go down in order and up in reverse; chords are pressed one after
 another. For text, use devlanes gui type.";
 
 /// A mouse button of `gui click`.
@@ -742,7 +739,7 @@ pub struct GuiSize {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum GuiCommand {
-    /// List the lane's GUI services with their windows and the state of their GUI hosts
+    /// List the lane's GUI services, whether their windows can be reached, and the windows
     Ls {
         /// GUI services to list ([lane:]unit, such as desktop or acme@2:desktop) [default: every GUI service of the lane]
         #[arg(value_name = "UNIT")]
@@ -757,7 +754,7 @@ pub enum GuiCommand {
         /// Window id or title, as gui ls prints them [default: the first main window]
         #[arg(long, value_name = "WINDOW")]
         window: Option<String>,
-        /// Write the PNG here [default: devlanes-screenshots/LANE-UNIT-WINDOW.png in the temporary directory]
+        /// Write the PNG here, replacing the file [default: screenshots/LANE-UNIT-WINDOW.png in the devlanes home]
         #[arg(short = 'o', long, value_name = "FILE")]
         to: Option<PathBuf>,
     },
@@ -782,7 +779,7 @@ pub enum GuiCommand {
         #[arg(long, value_name = "WINDOW")]
         window: Option<String>,
     },
-    /// Type text into a GUI service's window, as committed text
+    /// Type text into a GUI service's window, as if typed
     Type {
         /// GUI service ([lane:]unit, such as desktop or 2:desktop)
         #[arg(value_name = "UNIT")]
@@ -867,18 +864,16 @@ impl GuiCommand {
     }
 }
 
-/// `WIDTHxHEIGHT`, each side from 1 to 8192 (the GUI protocol's largest).
+/// `WIDTHxHEIGHT` with positive sides. The GUI protocol's largest side is
+/// checked where the protocol is known, before the resize is sent.
 fn parse_size(value: &str) -> Result<GuiSize, String> {
-    let error = || "expected WIDTHxHEIGHT in pixels, such as 1280x800".to_owned();
-    let (width, height) = value.split_once(['x', 'X']).ok_or_else(error)?;
-    let side = |side: &str| {
-        side.parse::<u32>()
-            .ok()
-            .filter(|side| (1..=8192).contains(side))
-    };
-    match (side(width), side(height)) {
-        (Some(width), Some(height)) => Ok(GuiSize { width, height }),
-        _ => Err(format!("{}; each side from 1 to 8192", error())),
+    let side = |side: &str| side.parse::<u32>().ok().filter(|side| *side > 0);
+    match value
+        .split_once(['x', 'X'])
+        .map(|(w, h)| (side(w), side(h)))
+    {
+        Some((Some(width), Some(height))) => Ok(GuiSize { width, height }),
+        _ => Err("expected WIDTHxHEIGHT in pixels, such as 1280x800".to_owned()),
     }
 }
 
@@ -2244,9 +2239,11 @@ impl Command {
             Self::Url { command } => match command {
                 UrlCommand::Print { .. } | UrlCommand::Open { .. } | UrlCommand::Ls => true,
             },
-            // A screenshot writes a file only the caller reads; the app sees nothing.
+            // A screenshot to the screenshots folder changes nothing the app
+            // or a later command sees; `--to` may replace any file.
             Self::Gui { command } => match command {
-                GuiCommand::Ls { .. } | GuiCommand::Screenshot { .. } => true,
+                GuiCommand::Ls { .. } => true,
+                GuiCommand::Screenshot { to, .. } => to.is_none(),
                 GuiCommand::Click { .. }
                 | GuiCommand::Type { .. }
                 | GuiCommand::Key { .. }

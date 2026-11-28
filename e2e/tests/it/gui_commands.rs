@@ -4,12 +4,12 @@
 //!
 //! The pattern shows what it got in its picture: a click leaves a black
 //! square where it landed, and every redraw counts up in the bottom row (one
-//! pixel per bit, white for 1). It redraws once per frame the host asks for
-//! (each sync and each screenshot ask for one), per press, per text and per
-//! key going down, so the counter tells how much input arrived. Which keys
-//! and which text arrived is checked against the pattern's own list in
-//! `devlanes-gui-tool`'s tests; a second window can only be opened there too,
-//! since nothing outside the host process can tell the pattern to open one.
+//! pixel per bit, white for 1). It redraws for each frame the host asks for,
+//! each press, each text and each key going down, so input shows as the
+//! counter moving by at least that much. Which keys and which text arrived is
+//! checked against the pattern's own list in `devlanes-gui-tool`'s tests; a
+//! second window can only be opened there too, since nothing outside the host
+//! process can tell the pattern to open one.
 
 use std::{path::Path, process::Command, time::Duration};
 
@@ -164,14 +164,29 @@ fn gui_commands_drive_the_test_pattern() -> Result<()> {
     let (_, after) = screenshot(&lab, shots.path(), "desktop", "clicked")?;
     assert_eq!(after.at(x, y), [0, 0, 0], "the click's marker");
 
-    // A sync before and after the text, the text, and the screenshot.
+    // Each screenshot redraws once, so input shows as more than that.
     devlanes(&lab, &["gui", "type", "desktop", "hello"])?.expect_code(0)?;
     let (_, typed) = screenshot(&lab, shots.path(), "desktop", "typed")?;
-    assert_eq!(typed.counter(), after.counter() + 4, "the text redrew once");
-    // Syncs, ctrl and s going down, and the screenshot; releases draw nothing.
+    assert!(typed.counter() >= after.counter() + 2, "the text redrew");
     devlanes(&lab, &["gui", "key", "desktop", "ctrl+s"])?.expect_code(0)?;
     let (_, keyed) = screenshot(&lab, shots.path(), "desktop", "keyed")?;
-    assert_eq!(keyed.counter(), typed.counter() + 5, "two keys went down");
+    assert!(keyed.counter() >= typed.counter() + 3, "two keys went down");
+    let refused = devlanes(&lab, &["gui", "click", "desktop", "5000", "5000"])?;
+    assert!(
+        refused.expect_code(2)?.stderr.contains("is outside the"),
+        "{refused}"
+    );
+
+    // Without --to, into the screenshots folder of the lab's home.
+    let shot = devlanes(&lab, &["gui", "screenshot", "desktop", "--json"])?
+        .expect_code(0)?
+        .json()?;
+    let path = need(shot["path"].as_str(), "the screenshot path")?;
+    assert!(
+        Path::new(path).starts_with(lab.home().join("screenshots")),
+        "{shot}"
+    );
+    Picture::read(Path::new(path))?;
 
     let resized = devlanes(&lab, &["gui", "resize", "desktop", "200x120", "--json"])?
         .expect_code(0)?
@@ -213,6 +228,25 @@ fn gui_commands_drive_the_test_pattern() -> Result<()> {
     assert!(
         stopped.expect_code(1)?.stderr.contains("is not running"),
         "{stopped}"
+    );
+    Ok(())
+}
+
+/// A CLI with GUI services on against a daemon started without them says
+/// so, instead of failing to find the GUI service.
+#[test]
+fn gui_commands_name_a_daemon_with_gui_services_off() -> Result<()> {
+    let lab = Lab::with_config(CONFIG, BUDGET)?;
+    // Spawns the daemon without the switch.
+    lab.devlanes(lab.repo(), &["daemon", "start"])?
+        .expect_code(0)?;
+    let refused = devlanes(&lab, &["gui", "ls"])?;
+    assert!(
+        refused
+            .expect_code(1)?
+            .stderr
+            .contains("GUI services are off in the running daemon"),
+        "{refused}"
     );
     Ok(())
 }
@@ -274,7 +308,7 @@ fn gui_commands_find_a_box_lane() -> Result<()> {
     assert_eq!(item["address"], Value::Null, "{listed}");
     let held = format!("port {port} is not mirrored because devlanes-gui");
     assert!(
-        item["error"]
+        item["unmirrored"]["message"]
             .as_str()
             .is_some_and(|error| error.contains(&held)),
         "{listed}"

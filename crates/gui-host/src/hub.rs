@@ -877,7 +877,8 @@ impl Hub {
         let stray = match &message {
             ClientMessage::Pointer(p) if !only_release => {
                 outside(p.position)
-                    && (self.buttons.is_empty() || !p.buttons.pressed_since(self.buttons).is_empty())
+                    && (self.buttons.is_empty()
+                        || !p.buttons.pressed_since(self.buttons).is_empty())
             }
             ClientMessage::Wheel(w) => outside(w.position),
             _ => false,
