@@ -1192,15 +1192,24 @@ fn remote_needs_pairing(
     )
 }
 
-/// `connect` parameters. Not `Debug`: `code` is a secret.
+/// `connect` parameters: `host`, or a `ticket` and an optional `name`. Not
+/// `Debug`: `code` and `ticket` hold secrets.
 #[derive(Deserialize)]
 struct ConnectParams {
+    #[serde(default)]
     host: String,
     #[serde(default)]
     background: bool,
     /// A pairing code from `devlanes daemon pair` on the box.
     #[serde(default)]
     code: Option<String>,
+    /// A pairing ticket from `devlanes daemon pair` on the box, which pairs
+    /// with the box it names before connecting.
+    #[serde(default)]
+    ticket: Option<String>,
+    /// The name to keep a box paired by ticket under.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 /// `disconnect` parameters; no host means every box.
@@ -1315,13 +1324,37 @@ impl Inner {
     /// `background` only returns once the first attempt settled and, when it
     /// connected, the connection is recorded. A `code` is kept for the next
     /// time the box asks for one, and dropped when the link is up already and
-    /// when this request returns or its CLI detaches.
+    /// when this request returns or its CLI detaches. A `ticket` pairs with
+    /// its box first ([`Inner::pair_by_ticket`]) and then connects the name
+    /// the box is kept under, with a new link.
     pub(crate) async fn connect_method(
         self: &Arc<Self>,
         value: Value,
         session: &Session,
     ) -> Result<Value, RpcError> {
-        let args: ConnectParams = required(value)?;
+        let mut args: ConnectParams = required(value)?;
+        // A ticket names its box, and pairing by ticket takes no code.
+        let paired = match args.ticket.take() {
+            Some(ticket) if args.host.is_empty() && args.code.is_none() => {
+                args.host = self.pair_by_ticket(&ticket, args.name.take()).await?;
+                true
+            }
+            Some(_) => {
+                return Err(RpcError::new(
+                    "bad_request",
+                    json!({"message": "a ticket goes without a host or a code"}),
+                    2,
+                ));
+            }
+            None if args.name.is_some() => {
+                return Err(RpcError::new(
+                    "bad_request",
+                    json!({"message": "a name goes with a ticket"}),
+                    2,
+                ));
+            }
+            None => false,
+        };
         if !valid_host(&args.host) {
             return Err(RpcError::new(
                 "bad_request",
@@ -1331,7 +1364,7 @@ impl Inner {
         }
         let code = args.code.filter(|code| !code.trim().is_empty());
         let (conn, _watching) = self
-            .ensure_host(&args.host, Some(session), false, code.clone())
+            .ensure_host(&args.host, Some(session), false, paired, code.clone())
             .await?;
         let _forget = code.map(|code| ForgetCode {
             slot: conn.code.clone(),
@@ -1389,8 +1422,10 @@ impl Inner {
     /// its listeners, before its replacement starts. `watcher`, the CLI of a
     /// `connect`, gets the link's prompts from before its first attempt until
     /// the returned guard drops. `connected_before` marks a box restored after
-    /// a daemon restart (see [`RemoteConnector::transport`]). `code` is a
-    /// pairing code for the next time the box asks for one.
+    /// a daemon restart (see [`RemoteConnector::transport`]). `fresh`
+    /// replaces a live link too, after pairing by ticket, so the new link
+    /// dials what the new ticket says. `code` is a pairing code for the
+    /// next time the box asks for one.
     ///
     /// [`RemoteConnector::transport`]: crate::integrations::RemoteConnector::transport
     async fn ensure_host(
@@ -1398,31 +1433,34 @@ impl Inner {
         host: &str,
         watcher: Option<&Session>,
         connected_before: bool,
+        fresh: bool,
         code: Option<String>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let identity = self.client_identity().await?;
         self.load_choices().await;
         let _connecting = self.remote.connecting.lock().await;
-        self.replace_host(host, identity, watcher, connected_before, None, code)
+        self.replace_host(host, identity, watcher, connected_before, fresh, None, code)
             .await
     }
 
     /// [`Inner::ensure_host`]'s work, with [`Remotes::connecting`] held.
     /// `recorded` is the transport `remote_hosts` holds for a restored box
     /// (see [`Inner::open_host`]).
+    #[allow(clippy::too_many_arguments)]
     async fn replace_host(
         self: &Arc<Self>,
         host: &str,
         identity: identity::ClientIdentity,
         watcher: Option<&Session>,
         connected_before: bool,
+        fresh: bool,
         recorded: Option<&str>,
         code: Option<String>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let old = {
             let mut hosts = lock(&self.remote.hosts);
             match hosts.get(host) {
-                Some(conn) if !conn.ended() => {
+                Some(conn) if !conn.ended() && !fresh => {
                     let guard = watcher.map(|session| conn.board.watch(session));
                     if let Some(code) = code {
                         *lock(&conn.code) = Some((code, std::time::Instant::now()));
@@ -1951,7 +1989,7 @@ impl Inner {
                 return;
             }
             match self
-                .replace_host(&name, identity, None, true, Some(&transport), None)
+                .replace_host(&name, identity, None, true, false, Some(&transport), None)
                 .await
             {
                 Ok(_) => {

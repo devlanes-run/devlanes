@@ -297,6 +297,21 @@ pub enum Method {
     Subscribe,
     #[serde(rename = "sync.status")]
     SyncStatus,
+    /// Client side, for `devlanes remote connect`: keeps a reconnecting link
+    /// to a box and mirrors it, streaming `remote.state` events until the
+    /// client detaches, or with `background` answering once the first
+    /// attempt settled. Params `{host, background?, code?}`, or `{ticket,
+    /// name?, background?}` to pair with the box in a peer-to-peer pairing
+    /// ticket ([`remote::TICKET_PREFIX`]) first: the box is then kept under
+    /// `name` or its own host name made safe (with `-2` to `-9` when that is
+    /// taken), or the name it already has here, and the answer's `host` is
+    /// that name. Pairing by ticket fails with `bad_ticket` (`{message}`)
+    /// for text that is not a usable ticket, `box_name_taken` (`{name,
+    /// taken_by, message}`, `taken_by` one of `p2p`, `ssh_or_command` and
+    /// `user_config`) for a name another box has, `pairing_refused`
+    /// (`{message, retry_after_ms}`) with the box's own reason, and
+    /// `remote_failed` (`{host, message}`) when the box cannot be reached,
+    /// where `host` is `name` or `p2p:` and the box key's first 8 hex digits.
     #[serde(rename = "connect")]
     Connect,
     #[serde(rename = "disconnect")]

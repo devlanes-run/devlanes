@@ -19,13 +19,14 @@ use async_trait::async_trait;
 use devlanes_proto::RpcError;
 use devlanes_state::P2pBox;
 use devlanes_transport::{
-    Alpn, BoxConnection, BoxDuplex, Connection, ConnectionError, PeerAddr, PeerEndpoint, PeerError,
-    PeerId, Transport, TransportError,
+    Alpn, BoxConnection, BoxDuplex, Connection, ConnectionError, PairAnswer, PairRequest, PeerAddr,
+    PeerEndpoint, PeerError, PeerId, Ticket, Transport, TransportError, request_pairing,
 };
 use futures_util::FutureExt as _;
 use serde_json::json;
 use tokio::time::Instant;
 
+use super::feed::clean;
 use crate::{engine::Inner, model::lock};
 
 /// How long a box paired by ticket may stay unreachable before its link
@@ -365,6 +366,288 @@ impl Inner {
     }
 }
 
+/// Longest box name this client keeps for a box paired by ticket, in bytes.
+const MAX_NAME: usize = 63;
+
+/// What a refused pairing dial means: the box listens, but for sessions
+/// of keys it paired only, since no ticket is outstanding there.
+const NO_TICKET_OUT: &str = "the box takes no pairing ticket now: the ticket expired or was \
+                             already used. Get a new one with `devlanes daemon pair` on the box";
+
+/// Whether `name` may be given for a box paired by ticket: what
+/// `remote.boxes` allows (letters, digits, `-` and `_`), at most
+/// [`MAX_NAME`] bytes, and no leading `-`, which `remote connect` would
+/// read as an option.
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_NAME
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The name a box that calls itself `answered` gets here: lowercase, every
+/// character but letters, digits, `-` and `_` turned into `-`, no leading
+/// `-`, cut so that a `-9` suffix still fits in [`MAX_NAME`], and `box`
+/// when nothing is left. The box chooses `answered`, so it is never shown
+/// or stored as sent.
+fn derived_name(answered: &str) -> String {
+    let mut name: String = answered
+        .chars()
+        .map(|c| match c.to_ascii_lowercase() {
+            c @ ('a'..='z' | '0'..='9' | '-' | '_') => c,
+            _ => '-',
+        })
+        .skip_while(|c| *c == '-')
+        .take(MAX_NAME - 2)
+        .collect();
+    if name.is_empty() {
+        name.push_str("box");
+    }
+    name
+}
+
+/// `bad_ticket`: text that is not a usable ticket.
+fn bad_ticket(message: impl std::fmt::Display) -> RpcError {
+    RpcError::new("bad_ticket", json!({"message": message.to_string()}), 2)
+}
+
+/// `pairing_refused`: the box answered the pairing with a refusal, whose
+/// text says what to do, and how long to wait when it said so.
+fn pairing_refused(message: &str, retry_after_ms: Option<u64>) -> RpcError {
+    RpcError::new(
+        "pairing_refused",
+        json!({"message": clean(message), "retry_after_ms": retry_after_ms}),
+        4,
+    )
+}
+
+/// What already has a box name here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Holder {
+    /// Another box paired by ticket.
+    Paired,
+    /// A box reached over SSH or by a command, recorded or connecting.
+    Reached,
+    /// An entry of `remote.boxes` in the user config.
+    Configured,
+}
+
+impl Holder {
+    /// The `taken_by` field of `box_name_taken`.
+    fn code(self) -> &'static str {
+        match self {
+            Self::Paired => "p2p",
+            Self::Reached => "ssh_or_command",
+            Self::Configured => "user_config",
+        }
+    }
+
+    /// What has the name, after "taken by".
+    fn text(self) -> &'static str {
+        match self {
+            Self::Paired => "another box paired by ticket",
+            Self::Reached => "a box reached over SSH or by a command",
+            Self::Configured => "an entry of remote.boxes in the user config",
+        }
+    }
+}
+
+/// `box_name_taken`: `holder` already has box name `name` here.
+fn name_taken(name: &str, holder: Holder, message: String) -> RpcError {
+    RpcError::new(
+        "box_name_taken",
+        json!({"name": name, "taken_by": holder.code(), "message": message}),
+        1,
+    )
+}
+
+impl Inner {
+    /// `connect` with a ticket: pairs with the box in `text` and stores it,
+    /// then returns the name it is kept under, which the caller connects.
+    /// The name is `given` or the box's host name made safe, with `-2` to
+    /// `-9` when that is taken; a box this client already paired with
+    /// keeps its name. A `given` name another box has fails before the
+    /// ticket is used. The secret goes only to the ticket's key over the
+    /// pairing ALPN, on a direct path, and is neither logged nor stored; a
+    /// pairing that fails stores nothing.
+    pub(super) async fn pair_by_ticket(
+        self: &Arc<Self>,
+        text: &str,
+        given: Option<String>,
+    ) -> Result<String, RpcError> {
+        let ticket = Ticket::parse(text).map_err(bad_ticket)?;
+        let Some(endpoint) = self.integ.peer.clone() else {
+            return Err(RpcError::new(
+                "not_supported_yet",
+                json!({"feature": "pairing by ticket"}),
+                1,
+            ));
+        };
+        let key = ticket.addr.id.to_string();
+        if let Some(name) = &given {
+            if !valid_name(name) {
+                return Err(RpcError::new(
+                    "bad_request",
+                    json!({
+                        "message": format!(
+                            "a box name has at most {MAX_NAME} letters, digits, `-` and `_`, and \
+                             does not start with `-`"
+                        ),
+                        "name": name,
+                    }),
+                    2,
+                ));
+            }
+            if let Some(holder) = self.name_holder(name, &key).await? {
+                return Err(name_taken(
+                    name,
+                    holder,
+                    format!(
+                        "the box name {name} is taken by {}; choose another with `--name`",
+                        holder.text()
+                    ),
+                ));
+            }
+        }
+        let identity = self.client_identity().await?;
+        // Named after the pairing's box until it has a name here.
+        let label = given.clone().unwrap_or_else(|| super::p2p_address(&key));
+        let connection = match endpoint.connect(&ticket.addr, Alpn::Pair).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                return Err(match error.downcast_ref::<PeerError>() {
+                    Some(PeerError::InvalidId(_)) => bad_ticket(&error),
+                    Some(PeerError::Refused) => pairing_refused(NO_TICKET_OUT, None),
+                    _ => super::remote_failed(&label, &error),
+                });
+            }
+        };
+        let request = PairRequest::new(
+            &ticket.secret,
+            identity.id,
+            identity.name,
+            format!("devlanes {}", devlanes_version::VERSION),
+        );
+        let answer = request_pairing(connection, request)
+            .await
+            .map_err(|error| {
+                super::remote_failed(&label, format!("pairing with the box failed: {error}"))
+            })?;
+        let answered = match answer {
+            PairAnswer::Paired { name, .. } => name,
+            PairAnswer::Refused {
+                message,
+                retry_after_ms,
+            } => return Err(pairing_refused(&message, retry_after_ms)),
+        };
+        // Under the connect lock, so no other connect takes the name
+        // between the check and the row.
+        let _connecting = self.remote.connecting.lock().await;
+        let name = match given {
+            Some(name) => match self.name_holder(&name, &key).await? {
+                None => name,
+                Some(holder) => {
+                    return Err(name_taken(
+                        &name,
+                        holder,
+                        format!(
+                            "the box name {name} was taken by {} while this machine paired with \
+                             the box, which used the ticket. Get a new ticket with `devlanes \
+                             daemon pair` on the box and choose another name with `--name`",
+                            holder.text()
+                        ),
+                    ));
+                }
+            },
+            None => self.free_name(&derived_name(&answered), &key).await?,
+        };
+        let paired = P2pBox {
+            name,
+            peer_key: key,
+            relay_url: ticket.addr.relay.clone(),
+            direct_addrs: ticket.addr.direct.iter().map(ToString::to_string).collect(),
+            ephemeral: ticket.ephemeral,
+            paired_at: i64::try_from(super::now_ms()).unwrap_or(i64::MAX),
+        };
+        let name = self
+            .store
+            .add_p2p_box(paired)
+            .await
+            .map_err(crate::registry::store_error)?;
+        tracing::info!(host = %name, peer = %ticket.addr.id.short(), ephemeral = ticket.ephemeral, "paired with a box by ticket");
+        Ok(name)
+    }
+
+    /// `base`, or the first of `base-2` to `base-9` no other box here has,
+    /// for the box with key `key`; `box_name_taken` when all are taken.
+    async fn free_name(&self, base: &str, key: &str) -> Result<String, RpcError> {
+        let mut holder = Holder::Paired;
+        for candidate in
+            std::iter::once(base.to_owned()).chain((2..=9).map(|n| format!("{base}-{n}")))
+        {
+            match self.name_holder(&candidate, key).await? {
+                None => return Ok(candidate),
+                Some(taken) => holder = taken,
+            }
+        }
+        Err(name_taken(
+            base,
+            holder,
+            format!(
+                "the box is called {base}, and {base} and {base}-2 to {base}-9 are taken here, so \
+                 this machine kept nothing of the pairing, which used the ticket. Get a new ticket \
+                 with `devlanes daemon pair` on the box and choose a name with `--name`"
+            ),
+        ))
+    }
+
+    /// What already has box name `name` here, other than the box with key
+    /// `key`: another box paired by ticket, a box reached by SSH or a
+    /// command, or an entry of `remote.boxes` in the user config. `None`
+    /// when the name is free.
+    async fn name_holder(&self, name: &str, key: &str) -> Result<Option<Holder>, RpcError> {
+        let paired = self
+            .store
+            .p2p_box(name.to_owned())
+            .await
+            .map_err(crate::registry::store_error)?;
+        if let Some(paired) = paired {
+            return Ok((paired.peer_key != key).then_some(Holder::Paired));
+        }
+        let recorded = self
+            .store
+            .remote_hosts()
+            .await
+            .map_err(crate::registry::store_error)?
+            .into_iter()
+            .any(|host| host.name == name && host.transport != super::P2P);
+        let live = lock(&self.remote.hosts)
+            .get(name)
+            .is_some_and(|conn| conn.kind != super::P2P);
+        if recorded || live {
+            return Ok(Some(Holder::Reached));
+        }
+        let home = self.opts.home.clone();
+        let configured = tokio::task::spawn_blocking({
+            let name = name.to_owned();
+            move || {
+                let path = home.join("config.yaml");
+                path.exists()
+                    && devlanes_config::load_user_lenient(&path)
+                        .0
+                        .remote
+                        .boxes
+                        .contains_key(&name)
+            }
+        })
+        .await
+        .unwrap_or(false);
+        Ok(configured.then_some(Holder::Configured))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -375,6 +658,29 @@ mod tests {
     };
 
     use super::*;
+
+    /// The name a box gives itself becomes one `remote connect` takes back:
+    /// no control characters, separators or option-like start, and short
+    /// enough for a suffix.
+    #[test]
+    fn a_box_name_is_made_safe() {
+        let long = "x".repeat(10_000);
+        let rows = [
+            ("Acme-Box_2", "acme-box_2"),
+            ("acme.local", "acme-local"),
+            ("--acme", "acme"),
+            ("\u{1b}[31macme\n", "31macme-"),
+            ("büro", "b-ro"),
+            ("../..", "box"),
+            ("", "box"),
+            (long.as_str(), &long[..61]),
+        ];
+        for (answered, expected) in rows {
+            let name = derived_name(answered);
+            assert_eq!(name, expected, "{answered:?}");
+            assert!(valid_name(&format!("{name}-9")), "{name}");
+        }
+    }
 
     /// Lets every peer in, for both ALPNs.
     struct AdmitAll;

@@ -35,7 +35,7 @@ On Windows `Options::socket` is a pipe name (`\\.\pipe\...`). The home and `run`
 - `Server` / `Options`: socket, lock, peer check, framing and per-connection sessions.
 - `Handler` / `Session`: the request, input and shutdown contract a server drives; `Session::local` serves in-process clients and tests.
 - `Engine` / `EngineOptions`: the `Handler` that runs projects, lanes, tasks, units, logs, attach and metrics.
-- `integrations::Integrations`: everything injected. Its traits are `UnitRunner`/`ManagedUnit`, `InfraProvider`, `RouteSink`, `PortInspector`, `ProcessTable`, `LaunchCheck`, `RemoteConnector`, `RemotePrompter` and `BoxServing` (with `peer`, a `devlanes_transport::PeerEndpoint`, for clients paired by ticket); `Integrations::with_runner` fills the rest with no-op providers. `start_gate` and `pressure` take the core `StartGate` and `PressureSource`; without a gate every service spawns at once.
+- `integrations::Integrations`: everything injected. Its traits are `UnitRunner`/`ManagedUnit`, `InfraProvider`, `RouteSink`, `PortInspector`, `ProcessTable`, `LaunchCheck`, `RemoteConnector`, `RemotePrompter` and `BoxServing` (with `peer`, a `devlanes_transport::PeerEndpoint`, for boxes and clients paired by ticket); `Integrations::with_runner` fills the rest with no-op providers. `start_gate` and `pressure` take the core `StartGate` and `PressureSource`; without a gate every service spawns at once.
 - `units::UnitHost`: one running unit with its output pump, screen snapshot, log writer and state watch.
 - `process::install_panic_hook`: routes panics into `daemon.log`.
 

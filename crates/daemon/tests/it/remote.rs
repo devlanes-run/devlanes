@@ -17,6 +17,8 @@ mod large_sync;
 mod lifecycle;
 #[path = "remote_pairing.rs"]
 mod pairing;
+#[path = "remote_peer.rs"]
+mod peer;
 #[path = "remote_ssh.rs"]
 mod real_ssh;
 #[path = "remote_report.rs"]
@@ -98,16 +100,19 @@ async fn engine_with(
     remote: Option<Arc<dyn RemoteConnector>>,
     routes: Option<Arc<dyn RouteSink>>,
 ) -> Harness {
-    engine_with_peer(home, ports, remote, routes, None).await
+    engine_with_peer(home, ports, remote, routes, None, None).await
 }
 
-/// [`engine_with`], serving clients paired by ticket over `peer` when set.
+/// [`engine_with`] with this machine's peer-to-peer endpoint `peer`, which
+/// dials boxes paired by ticket, and with `serving` also serves clients
+/// paired by ticket over it.
 async fn engine_with_peer(
     home: &Path,
     ports: &str,
     remote: Option<Arc<dyn RemoteConnector>>,
     routes: Option<Arc<dyn RouteSink>>,
-    peer: Option<(Arc<dyn PeerEndpoint>, Arc<dyn BoxServing>)>,
+    peer: Option<Arc<dyn PeerEndpoint>>,
+    serving: Option<Arc<dyn BoxServing>>,
 ) -> Harness {
     let runner = FakeRunner::default();
     let processes = FakeProcesses::default();
@@ -122,10 +127,8 @@ async fn engine_with_peer(
     if let Some(routes) = routes {
         integ.routes = routes;
     }
-    if let Some((peer, serving)) = peer {
-        integ.peer = Some(peer);
-        integ.box_serving = Some(serving);
-    }
+    integ.peer = peer;
+    integ.box_serving = serving;
     std::fs::create_dir_all(home).expect("home");
     let store = Store::open(home.join("state.db")).await.expect("store");
     let mut options = EngineOptions::new(home, home.join("d.sock"));
@@ -250,9 +253,10 @@ impl BoxSide {
             logs: home.join("logs"),
             home,
         };
-        let serving: Arc<dyn BoxServing> = Arc::new(TunnelServing(paths.clone()));
-        let peer = peer.map(|peer| (peer, serving));
-        let h = engine_with_peer(&tmp.path.join(name), ports, None, None, peer).await;
+        let serving = peer
+            .is_some()
+            .then(|| Arc::new(TunnelServing(paths.clone())) as Arc<dyn BoxServing>);
+        let h = engine_with_peer(&tmp.path.join(name), ports, None, None, peer, serving).await;
         let server = Server::bind(options).await.expect("bind");
         let token = server.shutdown_token();
         let handler: Arc<dyn Handler> = Arc::new(h.engine.clone());
@@ -773,7 +777,19 @@ impl ClientSide {
         side: &BoxSide,
         controls: Arc<Controls>,
     ) -> Self {
-        Self::start_full(tmp, name, ports, &[("box", side)], None, controls).await
+        Self::start_full(tmp, name, ports, &[("box", side)], None, controls, None).await
+    }
+
+    /// A client engine that dials boxes paired by ticket through `peer`,
+    /// and reaches each of `boxes` by name as [`ClientSide::start_with`].
+    async fn start_peer(
+        tmp: &Temp,
+        name: &str,
+        ports: &str,
+        boxes: &[(&str, &BoxSide)],
+        peer: Arc<dyn PeerEndpoint>,
+    ) -> Self {
+        Self::start_full(tmp, name, ports, boxes, None, Arc::default(), Some(peer)).await
     }
 
     /// A client engine whose `connect <name>` reaches each named box, with
@@ -785,10 +801,11 @@ impl ClientSide {
         boxes: &[(&str, &BoxSide)],
         tls: Option<(u16, Arc<CertificateAuthority>)>,
     ) -> Self {
-        Self::start_full(tmp, name, ports, boxes, tls, Arc::default()).await
+        Self::start_full(tmp, name, ports, boxes, tls, Arc::default(), None).await
     }
 
-    /// [`ClientSide::start_with`] with `controls` set up by the test.
+    /// [`ClientSide::start_with`] with `controls` set up by the test, and
+    /// dialing boxes paired by ticket through `peer` when set.
     async fn start_full(
         tmp: &Temp,
         name: &str,
@@ -796,6 +813,7 @@ impl ClientSide {
         boxes: &[(&str, &BoxSide)],
         tls: Option<(u16, Arc<CertificateAuthority>)>,
         controls: Arc<Controls>,
+        peer: Option<Arc<dyn PeerEndpoint>>,
     ) -> Self {
         let proxy = devlanes_proxy::Proxy::new(
             devlanes_proxy::ProxyConfig::default(),
@@ -820,7 +838,7 @@ impl ClientSide {
         });
         let published = Published::default();
         let pool_keys = PoolKeys::default();
-        let h = engine_with(
+        let h = engine_with_peer(
             &tmp.path.join(name),
             ports,
             Some(connector),
@@ -831,6 +849,8 @@ impl ClientSide {
                 published.clone(),
                 pool_keys.clone(),
             ))),
+            peer,
+            None,
         )
         .await;
         Self {

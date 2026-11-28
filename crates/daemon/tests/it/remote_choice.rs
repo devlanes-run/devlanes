@@ -756,7 +756,8 @@ async fn a_switch_keeps_routes_that_name_the_port() {
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let boxes = [("alpha", &alpha), ("beta", &beta)];
         let client =
-            ClientSide::start_full(&tmp, "client", "26400-26489", &boxes, None, controls).await;
+            ClientSide::start_full(&tmp, "client", "26400-26489", &boxes, None, controls, None)
+                .await;
         client.connect("alpha").await;
         let routed = eventually(SOON, || async {
             answers(&client, FORK_HOSTS[0], "web-from-alpha")
