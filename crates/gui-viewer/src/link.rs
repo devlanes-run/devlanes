@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use devlanes_gui_client::{Client, ClientError, ClientOptions, DecodedFrame, Event, connect};
-use devlanes_gui_proto::{RECONNECT_AFTER, WindowId, WindowInfo};
+use devlanes_gui_proto::{CodecId, RECONNECT_AFTER, WindowId, WindowInfo};
 use tokio::sync::mpsc;
 
 use crate::model::{Check, Out};
@@ -103,7 +103,7 @@ pub type Tell = Arc<dyn Fn(FromLink) -> bool + Send + Sync>;
 /// to stop reconnecting, reporting through `tell`, frames through `frames`.
 pub async fn run(
     address: SocketAddr,
-    options: ClientOptions,
+    mut options: ClientOptions,
     check: Option<UnitCheck>,
     mut rx: mpsc::UnboundedReceiver<Out>,
     tell: Tell,
@@ -142,6 +142,14 @@ pub async fn run(
                         break;
                     }
                     Some(Event::Closed(None)) | None => break,
+                    // The protocol has no way to change codecs on a live
+                    // connection, so the viewer dials again without the
+                    // decoder; `raw`, which every host has, always stays.
+                    Some(Event::CodecFailed(codec)) if codec != CodecId::RAW => {
+                        tracing::warn!(codec = ?codec.name(), "a GUI decoder failed twice; reconnecting without it");
+                        options.decoders.retain(|decoder| decoder.offer().codec != codec);
+                        break;
+                    }
                     Some(Event::Frame(frame)) => {
                         let window = frame.window;
                         if frames.put(frame) && !tell(FromLink::Frame(window)) {

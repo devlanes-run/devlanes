@@ -282,8 +282,11 @@ type Job = (VideoFrame, oneshot::Sender<DecodedFrame>);
 type Decoder = (CodecId, Box<dyn VideoDecoder>);
 
 /// Decodes one window's frames in order on the blocking pool. A frame that
-/// fails is acknowledged as discarded and followed by a keyframe request; a
-/// decoded one fills its event's place and is acknowledged when read.
+/// fails is acknowledged as discarded and answered with one keyframe request;
+/// frames after it are discarded undecoded until a keyframe comes, since they
+/// need the picture that failed. When that keyframe fails too, the codec is
+/// broken here and [`Event::CodecFailed`] says so. A decoded frame fills its
+/// event's place and is acknowledged when read.
 async fn decode_loop(
     window: WindowId,
     mut rx: mpsc::UnboundedReceiver<Job>,
@@ -291,8 +294,15 @@ async fn decode_loop(
     shared: Arc<Shared>,
 ) {
     let mut decoder: Option<Decoder> = None;
+    // The codec whose failure asked for a keyframe that has not come yet.
+    let mut awaiting_keyframe: Option<CodecId> = None;
+    let mut reported = false;
     while let Some((frame, slot)) = rx.recv().await {
-        let (seq, keyframe) = (frame.seq, frame.keyframe);
+        let (seq, keyframe, codec) = (frame.seq, frame.keyframe, frame.codec);
+        if awaiting_keyframe == Some(codec) && !keyframe {
+            let _ = shared.send(&ClientMessage::FrameAck { window, seq });
+            continue;
+        }
         let backends = backends.clone();
         let current = decoder.take();
         let job = move || decode_one(current, &backends, &frame);
@@ -301,6 +311,9 @@ async fn decode_loop(
             Err(_) => (None, Err(())),
         };
         decoder = kept;
+        if outcome.is_ok() {
+            awaiting_keyframe = None;
+        }
         match outcome {
             Ok(Some(picture)) => {
                 let _ = slot.send(DecodedFrame {
@@ -315,7 +328,15 @@ async fn decode_loop(
             }
             Err(()) => {
                 let _ = shared.send(&ClientMessage::FrameAck { window, seq });
-                let _ = shared.send(&ClientMessage::KeyframeRequest { window });
+                if awaiting_keyframe == Some(codec) {
+                    if !reported {
+                        reported = true;
+                        shared.emit(Event::CodecFailed(codec));
+                    }
+                } else {
+                    awaiting_keyframe = Some(codec);
+                    let _ = shared.send(&ClientMessage::KeyframeRequest { window });
+                }
             }
         }
     }

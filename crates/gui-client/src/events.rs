@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use devlanes_gui_codec::Frame;
 use devlanes_gui_proto::{
-    ClientMessage, Cursor, Holder, LockState, MoveResize, WindowId, WindowInfo,
+    ClientMessage, CodecId, Cursor, Holder, LockState, MoveResize, WindowId, WindowInfo,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -62,6 +62,11 @@ pub enum Event {
     InputHolder(Option<Holder>),
     /// A viewer sent input; control connections only.
     Activity,
+    /// This client's decoder of a codec failed on a frame and again on the
+    /// keyframe it asked for after that, so the codec does not work here.
+    /// The protocol has no way to change codecs on a connection: a viewer
+    /// reconnects without offering that decoder.
+    CodecFailed(CodecId),
     /// The connection closed, with the error that closed it, if any. Every
     /// window was reported locked before this.
     Closed(Option<ClientError>),

@@ -133,6 +133,7 @@ async fn a_frame_that_fails_to_decode_is_acknowledged_and_a_keyframe_requested()
         frame_interval: Duration::ZERO,
         quality: 100,
         keyframe: true,
+        refine: false,
     };
     let good = RawEncoder::new()
         .encode(&picture, &params)
@@ -166,6 +167,40 @@ async fn a_frame_that_fails_to_decode_is_acknowledged_and_a_keyframe_requested()
     assert_eq!(
         host.read().await,
         ClientMessage::FrameAck { window: W, seq: 2 }
+    );
+}
+
+/// After a failure, frames that need the lost picture are discarded until the
+/// keyframe asked for comes; when that keyframe fails too, the codec is
+/// reported broken, which is when a viewer reconnects without it.
+#[tokio::test(start_paused = true)]
+async fn a_codec_that_fails_on_its_keyframe_too_is_reported_broken() {
+    let (client, mut host) = connect(Role::Viewer, bytes(&welcome())).await;
+    let (_client, mut events) = client.expect("welcomed");
+    host.send(&raw_frame(1, Bytes::from_static(b"not zstd")))
+        .await;
+    let HostMessage::VideoFrame(mut delta) = raw_frame(2, Bytes::from_static(b"not zstd")) else {
+        unreachable!("a video frame");
+    };
+    delta.keyframe = false;
+    host.send(&HostMessage::VideoFrame(delta)).await;
+    host.send(&raw_frame(3, Bytes::from_static(b"still not zstd")))
+        .await;
+    let expected = [
+        ClientMessage::FrameAck { window: W, seq: 1 },
+        ClientMessage::KeyframeRequest { window: W },
+        ClientMessage::FrameAck { window: W, seq: 2 },
+        ClientMessage::FrameAck { window: W, seq: 3 },
+    ];
+    for message in expected {
+        assert_eq!(host.read().await, message);
+    }
+    let event = tokio::time::timeout(PATIENCE, events.next())
+        .await
+        .expect("an event");
+    assert!(
+        matches!(event, Some(Event::CodecFailed(CodecId::RAW))),
+        "{event:?}"
     );
 }
 
