@@ -172,6 +172,17 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           "TMP=$dir" >> $env:GITHUB_ENV
           "TEMP=$dir" >> $env:GITHUB_ENV
+      # The H.264 tests of devlanes-gui-codec load the system's OpenH264, as
+      # devlanes-gui does on a user's Linux machine, and skip with the reason
+      # printed where it is missing. The development package depends on the
+      # release's library, whatever its soname (libopenh264-7 on 24.04,
+      # libopenh264-8 on 26.04). Nothing links it, so the release builds in
+      # build.yml do not need it.
+      - name: Install OpenH264
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libopenh264-dev
       - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: nextest
@@ -185,6 +196,16 @@ jobs:
         env:
           TESTS: ${{ needs.changes.outputs.tests }}
         run: cargo nextest run --workspace --all-features --locked --no-fail-fast --failure-output immediate-final ${TESTS:+--no-tests=pass -E "$TESTS"}
+      # Which H.264 this runner has, or why it has none, which is when the
+      # H.264 tests above skip: nextest shows no output of a passing test.
+      # Microsoft documents its H.264 transforms for client Windows only, and
+      # the Windows runners are Windows Server.
+      - name: H.264 on this runner
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          bin=target/debug/devlanes-gui
+          if [ -x "$bin" ] || [ -x "$bin.exe" ]; then "$bin" codecs; else echo "devlanes-gui was not built"; fi
       # Only the Linux runners have Docker. This reuses the test binaries built above.
       - name: Docker tests
         if: runner.os == 'Linux'
