@@ -287,15 +287,14 @@ pub async fn get(runtime: &Runtime, paths: &Paths, key: Option<&str>) -> Result<
     // The settings of GUI services exist only in a build that has them on.
     let gui = crate::gui::enabled();
     if let Some(key) = key {
-        devlanes_config::check_user_key_for(key, gui)
-            .map_err(|error| unknown_setting(key, &error))?;
+        devlanes_config::check_user_key(key, gui).map_err(|error| unknown_setting(key, &error))?;
     }
     let shared = paths.clone();
     let config = blocking(move || display(&shared).clone()).await?;
     let value = match key {
-        Some(key) => devlanes_config::user_setting_for(&config, key, gui)
+        Some(key) => devlanes_config::user_setting(&config, key, gui)
             .map_err(|error| unknown_setting(key, &error))?,
-        None => devlanes_config::effective_user_value_for(&config, gui),
+        None => devlanes_config::effective_user_value(&config, gui),
     };
     let stdout = if runtime.mode == OutputMode::Json {
         let mut data = json!({"file": file(paths), "value": value});
@@ -320,7 +319,7 @@ pub async fn get(runtime: &Runtime, paths: &Paths, key: Option<&str>) -> Result<
 /// keeping the file's comments. A value that does not parse or validate
 /// leaves the file as it is.
 pub async fn set(runtime: &Runtime, paths: &Paths, key: &str, value: &str) -> Result<u8, RpcError> {
-    devlanes_config::check_user_key_for(key, crate::gui::enabled())
+    devlanes_config::check_user_key(key, crate::gui::enabled())
         .map_err(|error| unknown_setting(key, &error))?;
     let path = file(paths);
     let value = devlanes_config::parse_setting_value(value)
@@ -350,7 +349,7 @@ pub async fn set(runtime: &Runtime, paths: &Paths, key: &str, value: &str) -> Re
 /// key the schema does not know is still removed when the file has it, so a
 /// misspelled setting can be taken out.
 pub async fn unset(runtime: &Runtime, paths: &Paths, key: &str) -> Result<u8, RpcError> {
-    let known = devlanes_config::check_user_key_for(key, crate::gui::enabled());
+    let known = devlanes_config::check_user_key(key, crate::gui::enabled());
     let path = file(paths);
     let (target, owned_key) = (path.clone(), key.to_owned());
     let present = blocking(move || {

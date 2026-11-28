@@ -51,9 +51,10 @@ pub struct Found {
     pub units: Vec<String>,
 }
 
-/// Whether a local unit in `state` runs or is on its way up. A unit being
-/// restarted passes through `stopping` and `starting`, which count.
-pub fn local_runs(state: &str) -> bool {
+/// Whether a unit in `state`, of this machine or of a box, runs or is on its
+/// way up. A unit being restarted passes through `stopping` and `starting`,
+/// which count.
+pub fn unit_runs(state: &str) -> bool {
     !matches!(state, "stopped" | "failed" | "exited" | "idle")
 }
 
@@ -73,7 +74,7 @@ pub fn lane_services(lane: &LaneSummary) -> Vec<Service> {
                     .filter(|_| host_runs)
                     .map(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port))),
                 real_desktop: gui.real_desktop.filter(|_| host_runs),
-                runs: local_runs(&unit.state),
+                runs: unit_runs(&unit.state),
                 unmirrored: None,
             })
         })
@@ -168,6 +169,9 @@ fn box_service(host: &Value, lane: &str, unit: &Value) -> Option<Service> {
         .as_u64()?;
     let state = unit["state"].as_str().unwrap_or_default().to_owned();
     let serving = devlanes_transport::serving(&state);
+    // The same rule as for this machine's units: a box unit that restarts
+    // passes through `stopping` too.
+    let runs = unit_runs(&state);
     let mirror = host["ports"].as_array().and_then(|ports| {
         ports
             .iter()
@@ -209,7 +213,7 @@ fn box_service(host: &Value, lane: &str, unit: &Value) -> Option<Service> {
         host: if serving { "running" } else { "stopped" }.to_owned(),
         address,
         real_desktop: None,
-        runs: serving,
+        runs,
         unmirrored,
     })
 }

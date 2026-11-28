@@ -33,6 +33,9 @@ pub struct Launch {
     /// The `devlanes` executable the viewer asks whether the service still
     /// runs while it cannot reconnect.
     pub devlanes: Option<PathBuf>,
+    /// The box the service was found on, for a box's lane: the viewer's
+    /// check tells that box being away from the lane being gone.
+    pub host_box: Option<String>,
     /// Where the viewer's log goes; new lines are appended.
     pub log: PathBuf,
     /// Variables to set for the viewer on top of the starter's environment.
@@ -61,6 +64,9 @@ impl Launch {
                 "--unit".to_owned(),
                 self.service.clone(),
             ]);
+        }
+        if let Some(host_box) = &self.host_box {
+            args.extend(["--box".to_owned(), host_box.clone()]);
         }
         args
     }
@@ -307,11 +313,12 @@ mod tests {
         (PathBuf::from("sleep"), vec!["30".to_owned()])
     }
 
-    /// The helper side of the test below: started with its standard output
-    /// on a pipe, it starts a long-running program the way a viewer is
-    /// started, writes that program's pid where the test asked, and exits.
+    /// Not a test of its own: the helper process of the test below, which
+    /// does nothing unless that test started it. Started with its standard
+    /// output on a pipe, it starts a long-running program the way a viewer
+    /// is started, writes that program's pid where the test asked, and exits.
     #[test]
-    fn detach_helper() {
+    fn helper_process_of_the_pipe_test() {
         let Some(pid_file) = std::env::var_os(HELPER_ENV) else {
             return;
         };
@@ -341,7 +348,7 @@ mod tests {
         let mut helper = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
                 "--exact",
-                "gui::viewer::tests::detach_helper",
+                "gui::viewer::tests::helper_process_of_the_pipe_test",
                 "--nocapture",
             ])
             .env(HELPER_ENV, &pid_file)
@@ -357,9 +364,24 @@ mod tests {
             let _ = std::io::Read::read_to_string(&mut stdout, &mut text);
             let _ = done.send(text);
         });
-        let text = read.recv_timeout(std::time::Duration::from_secs(20));
-        let _ = helper.wait();
-        // The started program is the test's to end.
+        let limit = std::time::Duration::from_secs(20);
+        let text = read.recv_timeout(limit);
+        // The helper exits right after writing; one that hangs is ended.
+        let deadline = std::time::Instant::now() + limit;
+        let exited = loop {
+            match helper.try_wait() {
+                Ok(Some(_)) => break true,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                _ => {
+                    let _ = helper.kill();
+                    let _ = helper.wait();
+                    break false;
+                }
+            }
+        };
+        // The started program is the test's to end, whatever happened.
         let identity = std::fs::read_to_string(&pid_file)
             .ok()
             .and_then(|pid| pid.trim().parse().ok())
@@ -370,6 +392,7 @@ mod tests {
             #[cfg(windows)]
             let _ = devlanes_sys::terminate_verified(&identity, 1);
         }
+        assert!(exited, "the helper did not exit");
         let text = text.expect("end of file while the started program still runs");
         assert!(text.contains("started"), "{text}");
         assert!(identity.is_some(), "the started program was running");

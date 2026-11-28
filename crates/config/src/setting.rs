@@ -33,14 +33,9 @@ pub fn applies(key: &str) -> Applies {
 }
 
 /// Every section and setting of the user config as a dotted key (`proxy`,
-/// `proxy.https_port`), in schema order.
-pub fn user_keys() -> Vec<String> {
-    user_keys_for(false)
-}
-
-/// [`user_keys`], with the settings of GUI services (`gui`) when
-/// `gui_services`, for a build that has them on.
-pub fn user_keys_for(gui_services: bool) -> Vec<String> {
+/// `proxy.https_port`), in schema order. The settings of GUI services
+/// (`gui`) are there only when the caller says `gui_services` are on.
+pub fn user_keys(gui_services: bool) -> Vec<String> {
     let schema = crate::user_schema_for(gui_services);
     let mut keys = Vec::new();
     collect(&schema, &schema, "", &mut keys);
@@ -50,15 +45,9 @@ pub fn user_keys_for(gui_services: bool) -> Vec<String> {
 /// Fails unless `key` names a section or setting of the user config, with
 /// the closest known key when it looks like a typo. Under a section keyed by
 /// name (`remote.boxes`) any name counts, so `remote.boxes.acme.command` is a
-/// setting.
-pub fn check_user_key(key: &str) -> Result<(), ConfigError> {
-    check_user_key_for(key, false)
-}
-
-/// [`check_user_key`], knowing the settings of GUI services when
-/// `gui_services`.
-pub fn check_user_key_for(key: &str, gui_services: bool) -> Result<(), ConfigError> {
-    let keys = user_keys_for(gui_services);
+/// setting. The `gui` settings count only with `gui_services`.
+pub fn check_user_key(key: &str, gui_services: bool) -> Result<(), ConfigError> {
+    let keys = user_keys(gui_services);
     if keys.iter().any(|known| known == key) || in_named_section(key) {
         return Ok(());
     }
@@ -77,14 +66,9 @@ pub fn check_user_key_for(key: &str, gui_services: bool) -> Result<(), ConfigErr
 /// The effective user config as plain data, every default included. An unset
 /// `terminal`, or the app name older versions used, reads as its default
 /// settings, since that is what devlanes uses. Durations and sizes use their
-/// largest exact unit (`7d`, `5GiB`).
-pub fn effective_user_value(config: &UserConfig) -> Value {
-    effective_user_value_for(config, false)
-}
-
-/// [`effective_user_value`], with the settings of GUI services when
-/// `gui_services`; without, they are left out, as from the schema.
-pub fn effective_user_value_for(config: &UserConfig, gui_services: bool) -> Value {
+/// largest exact unit (`7d`, `5GiB`). The `gui` settings are left out, as
+/// from the schema, unless `gui_services`.
+pub fn effective_user_value(config: &UserConfig, gui_services: bool) -> Value {
     let mut value = serde_json::to_value(config).unwrap_or_default();
     let terminal = config
         .terminal
@@ -175,20 +159,15 @@ fn digits(text: &str) -> Option<u64> {
 
 /// The effective value of the dotted `key` in `config`, defaults included.
 /// Null for a setting that is unset and has no default (`startup.max`).
-/// Fails like [`check_user_key`] for an unknown key.
-pub fn user_setting(config: &UserConfig, key: &str) -> Result<Value, ConfigError> {
-    user_setting_for(config, key, false)
-}
-
-/// [`user_setting`], knowing the settings of GUI services when
-/// `gui_services`.
-pub fn user_setting_for(
+/// Fails like [`check_user_key`] for an unknown key, the `gui` settings
+/// included unless `gui_services`.
+pub fn user_setting(
     config: &UserConfig,
     key: &str,
     gui_services: bool,
 ) -> Result<Value, ConfigError> {
-    check_user_key_for(key, gui_services)?;
-    let effective = effective_user_value_for(config, gui_services);
+    check_user_key(key, gui_services)?;
+    let effective = effective_user_value(config, gui_services);
     Ok(key
         .split('.')
         .try_fold(&effective, |node, segment| node.get(segment))
@@ -300,7 +279,7 @@ mod tests {
 
     #[test]
     fn keys_cover_sections_settings_and_both_terminal_forms() {
-        let keys = user_keys();
+        let keys = user_keys(false);
         for key in [
             "tui",
             "tui.theme",
@@ -312,34 +291,52 @@ mod tests {
         ] {
             assert!(keys.iter().any(|k| k == key), "{key}: {keys:?}");
         }
-        assert!(check_user_key("proxy.https_port").is_ok());
+        let check = |key: &str| check_user_key(key, false);
+        assert!(check("proxy.https_port").is_ok());
         assert_eq!(
-            check_user_key("proxy.htps_port").expect_err("typo").message,
+            check("proxy.htps_port").expect_err("typo").message,
             "unknown setting `proxy.htps_port`; did you mean `proxy.https_port`?"
         );
         assert_eq!(
-            check_user_key("zzz").expect_err("unknown").message,
+            check("zzz").expect_err("unknown").message,
             "unknown setting `zzz`"
         );
         // Boxes are keyed by name, and only their own settings exist.
-        assert!(check_user_key("remote.boxes").is_ok());
-        assert!(check_user_key("remote.boxes.acme").is_ok());
-        assert!(check_user_key("remote.boxes.acme.command").is_ok());
-        assert!(check_user_key("remote.boxes.acme.comand").is_err());
-        assert!(check_user_key("remote.boxes..command").is_err());
-        assert!(check_user_key("tui.theme.dark").is_err());
+        assert!(check("remote.boxes").is_ok());
+        assert!(check("remote.boxes.acme").is_ok());
+        assert!(check("remote.boxes.acme.command").is_ok());
+        assert!(check("remote.boxes.acme.comand").is_err());
+        assert!(check("remote.boxes..command").is_err());
+        assert!(check("tui.theme.dark").is_err());
         // A section is no suggestion for a mistyped setting.
         assert!(
-            !check_user_key("tui.colr")
+            !check("tui.colr")
                 .expect_err("unknown")
                 .message
                 .contains("`tui`")
         );
     }
 
+    /// The settings of GUI services exist only when the caller says GUI
+    /// services are on: listed, known, read and in the effective config.
+    #[test]
+    fn gui_settings_exist_only_with_gui_services() {
+        let config = UserConfig::default();
+        for on in [false, true] {
+            assert_eq!(user_keys(on).iter().any(|key| key == "gui.auto_open"), on);
+            assert_eq!(check_user_key("gui.auto_open", on).is_ok(), on);
+            assert_eq!(user_setting(&config, "gui.auto_open", on).is_ok(), on);
+            assert_eq!(effective_user_value(&config, on).get("gui").is_some(), on);
+        }
+        assert_eq!(
+            user_setting(&config, "gui.auto_open", true).expect("known"),
+            json!(true)
+        );
+    }
+
     #[test]
     fn durations_and_sizes_read_in_their_largest_unit() {
-        let whole = effective_user_value(&UserConfig::default());
+        let whole = effective_user_value(&UserConfig::default(), false);
         assert_eq!(whole["metrics"]["retention"], "7d");
         assert_eq!(whole["startup"]["slot_timeout"], "20s");
         assert_eq!(whole["lanes"]["throttle_after"], "5m");
@@ -354,7 +351,7 @@ mod tests {
         // What `get` prints, `set` takes back.
         let config = crate::parse_user("metrics:\n  retention: 7d\nstate:\n  max_size: 5GB\n")
             .expect("valid");
-        let value = effective_user_value(&config);
+        let value = effective_user_value(&config, false);
         assert_eq!(
             (&value["metrics"]["retention"], &value["state"]["max_size"]),
             (&json!("7d"), &json!("5GB"))
@@ -364,28 +361,26 @@ mod tests {
     #[test]
     fn effective_values_include_defaults() {
         let config = crate::parse_user("tui:\n  theme: dark\nterminal: ghostty\n").expect("valid");
-        assert_eq!(user_setting(&config, "tui.theme").expect("known"), "dark");
-        assert_eq!(user_setting(&config, "tui.glyphs").expect("known"), "auto");
+        let setting = |config: &UserConfig, key: &str| user_setting(config, key, false);
+        assert_eq!(setting(&config, "tui.theme").expect("known"), "dark");
+        assert_eq!(setting(&config, "tui.glyphs").expect("known"), "auto");
         assert_eq!(
-            user_setting(&config, "terminal.progress").expect("known"),
+            setting(&config, "terminal.progress").expect("known"),
             "auto"
         );
-        assert_eq!(
-            user_setting(&config, "startup.max").expect("known"),
-            Value::Null
-        );
-        assert!(user_setting(&config, "tui.colour").is_err());
+        assert_eq!(setting(&config, "startup.max").expect("known"), Value::Null);
+        assert!(setting(&config, "tui.colour").is_err());
         let boxes = crate::parse_user("remote:\n  boxes:\n    acme:\n      command: [wsl.exe]\n")
             .expect("valid");
         assert_eq!(
-            user_setting(&boxes, "remote.boxes.acme.command").expect("known"),
+            setting(&boxes, "remote.boxes.acme.command").expect("known"),
             json!(["wsl.exe"])
         );
         assert_eq!(
-            user_setting(&boxes, "remote.boxes.other").expect("known"),
+            setting(&boxes, "remote.boxes.other").expect("known"),
             Value::Null
         );
-        let whole = effective_user_value(&UserConfig::default());
+        let whole = effective_user_value(&UserConfig::default(), false);
         assert_eq!(whole["proxy"]["https_port"], json!(443));
         assert!(whole["terminal"].is_object());
     }

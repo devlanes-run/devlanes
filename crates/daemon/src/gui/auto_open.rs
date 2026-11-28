@@ -15,8 +15,10 @@
 //! viewer per period it runs: a viewer the user ended is not started again
 //! until the service stopped and runs again, and one that runs already (from
 //! `gui open`, or left by an earlier daemon) is not doubled, through the lock
-//! of [`devlanes_gui_client::instance`]. A viewer this daemon or an earlier
-//! one started ends once its service has not run for [`END_GRACE`]: a
+//! of [`devlanes_gui_client::instance`]; a viewer that ended with its
+//! service's last run is no viewer the user ended. A viewer this daemon or
+//! an earlier one started ends once its service has not run for
+//! [`END_GRACE`], counted only while its box is connected: a
 //! restart whose new start failed leaves no host to tell it, and a box whose
 //! link is gone leaves it reconnecting. A daemon that stops for good ends the
 //! viewers daemons started; a restart, an update's included, leaves them
@@ -54,6 +56,8 @@ pub(crate) struct Candidate {
     pub runs: bool,
     /// Whether its display is this machine's desktop, for a local service.
     pub real_desktop: Option<bool>,
+    /// The box it runs on, for a box's lane.
+    pub host_box: Option<String>,
 }
 
 /// Who holds the viewer lock of a service.
@@ -76,6 +80,8 @@ pub(crate) enum Action {
         label: String,
         /// Its host.
         address: SocketAddr,
+        /// The box it runs on, for a box's lane.
+        host_box: Option<String>,
     },
     /// End the viewer a daemon started, of the lock `key`.
     End {
@@ -91,6 +97,11 @@ pub(crate) enum Action {
     },
 }
 
+/// How long after its service runs again a viewer of the run before may
+/// still end by itself: it ends 3 seconds after its host said Closed. A free
+/// lock in that time means the service gets a new viewer.
+const CARRY_OVER: Duration = Duration::from_secs(10);
+
 /// A service whose viewer was opened, adopted or left to the user for the
 /// period it runs.
 #[derive(Debug, Clone)]
@@ -99,8 +110,14 @@ struct Opened {
     key: String,
     /// Whether a daemon started it, so this daemon ends it.
     ours: bool,
+    /// The box the service runs on, for a box's lane.
+    host_box: Option<String>,
     /// Since when the service has not run.
     gone_since: Option<Instant>,
+    /// The service was seen not running since the viewer opened, and since
+    /// when it runs again: a viewer that ended meanwhile is no window the
+    /// user closed in this run.
+    stopped: Option<Option<Instant>>,
 }
 
 /// The bookkeeping of auto-open.
@@ -108,9 +125,21 @@ struct Opened {
 pub(crate) struct Planner {
     opened: HashMap<String, Opened>,
     noted: HashSet<String>,
+    /// The boxes this machine knows but is not connected to: their services
+    /// count as running, since nothing is known about them.
+    away: HashSet<String>,
+    /// Every box counts as away: the daemon is still reopening them.
+    restoring: bool,
 }
 
 impl Planner {
+    /// The boxes known but not connected for the next [`Planner::plan`],
+    /// or every box while `restoring`.
+    pub(crate) fn set_away(&mut self, away: HashSet<String>, restoring: bool) {
+        self.away = away;
+        self.restoring = restoring;
+    }
+
     /// What to do at `now` about `candidates`. `holder` says who holds the
     /// lock of a key; `display` whether a viewer could open windows here.
     pub(crate) fn plan(
@@ -124,7 +153,19 @@ impl Planner {
         for candidate in candidates.iter().filter(|c| c.runs) {
             if let Some(opened) = self.opened.get_mut(&candidate.label) {
                 opened.gone_since = None;
-                continue;
+                let Some(stopped) = &mut opened.stopped else {
+                    continue;
+                };
+                let back = *stopped.get_or_insert(now);
+                if holder(&opened.key) != Holder::Free {
+                    // The viewer carried over into this run once it outlived
+                    // its own end after a Closed.
+                    if now >= back + CARRY_OVER {
+                        opened.stopped = None;
+                    }
+                    continue;
+                }
+                self.opened.remove(&candidate.label);
             }
             // A window already on this machine's desktop needs no viewer,
             // and a host that does not run yet has nothing to show.
@@ -150,6 +191,7 @@ impl Planner {
                     actions.push(Action::Open {
                         label: candidate.label.clone(),
                         address,
+                        host_box: candidate.host_box.clone(),
                     });
                     true
                 }
@@ -159,7 +201,9 @@ impl Planner {
                 Opened {
                     key,
                     ours,
+                    host_box: candidate.host_box.clone(),
                     gone_since: None,
+                    stopped: None,
                 },
             );
         }
@@ -168,10 +212,22 @@ impl Planner {
             .filter(|c| c.runs)
             .map(|c| c.label.as_str())
             .collect();
+        let (away, restoring) = (&self.away, self.restoring);
         self.opened.retain(|label, opened| {
             if running.contains(label.as_str()) {
                 return true;
             }
+            // A box that is not connected (yet) says nothing about its
+            // services: the grace counts only while it is connected.
+            if opened
+                .host_box
+                .as_ref()
+                .is_some_and(|host_box| restoring || away.contains(host_box))
+            {
+                opened.gone_since = None;
+                return true;
+            }
+            opened.stopped = Some(None);
             let since = *opened.gone_since.get_or_insert(now);
             if now < since + END_GRACE {
                 return true;
@@ -187,14 +243,17 @@ impl Planner {
         actions
     }
 
-    /// Takes on the viewer of `label` holding the lock `key`, which an
-    /// earlier daemon started: it ends like one this daemon started, once
-    /// its service has not run for [`END_GRACE`].
-    pub(crate) fn adopt(&mut self, label: String, key: String) {
+    /// Takes on the viewer of `label` (on `host_box`, for a box's lane)
+    /// holding the lock `key`, which an earlier daemon started: it ends like
+    /// one this daemon started, once its service has not run for
+    /// [`END_GRACE`].
+    pub(crate) fn adopt(&mut self, label: String, key: String, host_box: Option<String>) {
         self.opened.entry(label).or_insert(Opened {
             key,
             ours: true,
+            host_box,
             gone_since: None,
+            stopped: None,
         });
     }
 
@@ -231,7 +290,7 @@ impl AutoOpen {
             if let Ok(Some(info)) = instance::holder(dir, &key)
                 && info.started_by == StartedBy::Daemon
             {
-                self.planner.adopt(info.service, key);
+                self.planner.adopt(info.service, key, info.host_box);
             }
         }
     }
@@ -251,9 +310,12 @@ impl Inner {
                 () = self.shutdown.cancelled() => return,
                 _ = tick.tick() => {}
             }
-            let candidates = self.gui_candidates().await;
+            let restoring = self.remote.restoring();
+            let (candidates, away) = self.gui_candidates().await;
             let engine = self.clone();
-            let step = tokio::task::spawn_blocking(move || engine.auto_open_step(&candidates));
+            let step = tokio::task::spawn_blocking(move || {
+                engine.auto_open_step(&candidates, away, restoring)
+            });
             match step.await {
                 Ok(unseen) => {
                     for label in unseen {
@@ -265,10 +327,11 @@ impl Inner {
         }
     }
 
-    /// The GUI services of this machine's lanes and of the boxes it mirrors.
-    /// Cheap, since it runs every [`POLL`]: lane summaries without metrics,
-    /// and the connected boxes from memory, read only when there are some.
-    async fn gui_candidates(self: &Arc<Self>) -> Vec<Candidate> {
+    /// The GUI services of this machine's lanes and of the boxes it mirrors,
+    /// and the boxes with a connection that is not up. Cheap, since it runs
+    /// every [`POLL`]: lane summaries without metrics, and the box
+    /// connections from memory, read only when there are some.
+    async fn gui_candidates(self: &Arc<Self>) -> (Vec<Candidate>, HashSet<String>) {
         let mut candidates = Vec::new();
         for (project, lane) in self.all_lanes() {
             let summary = {
@@ -289,9 +352,11 @@ impl Inner {
                     address: service.address,
                     runs: service.runs,
                     real_desktop: service.real_desktop,
+                    host_box: None,
                 }
             }));
         }
+        let mut away = HashSet::new();
         if self.remote.has_boxes()
             && let Ok(boxes) = self.live_host_list().await
         {
@@ -301,10 +366,18 @@ impl Inner {
                     address: service.address,
                     runs: service.runs,
                     real_desktop: None,
+                    host_box: found.host_box.clone(),
                 }));
             }
+            away = boxes["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|host| host["state"] != "connected")
+                .filter_map(|host| host["host"].as_str().map(str::to_owned))
+                .collect();
         }
-        candidates
+        (candidates, away)
     }
 
     /// Says on the unit of the local service `label` that its windows did not
@@ -339,7 +412,12 @@ impl Inner {
     /// One auto-open pass over `candidates`. Blocking: it reads the locks
     /// and starts and ends processes. Returns the services whose windows did
     /// not open for lack of a display, said once each.
-    fn auto_open_step(&self, candidates: &[Candidate]) -> Vec<String> {
+    fn auto_open_step(
+        &self,
+        candidates: &[Candidate],
+        away: HashSet<String>,
+        restoring: bool,
+    ) -> Vec<String> {
         let dir = viewer::instance_dir(&self.opts.home);
         let display = viewer::display_env();
         let mut unseen = Vec::new();
@@ -359,12 +437,17 @@ impl Inner {
             .children
             .retain(|_, child| !matches!(child.exited(), Ok(Some(_))));
         state.adopt_left(&dir);
+        state.planner.set_away(away, restoring);
         let actions = state
             .planner
             .plan(candidates, holder, display.is_some(), Instant::now());
         for action in actions {
             match action {
-                Action::Open { label, address } => {
+                Action::Open {
+                    label,
+                    address,
+                    host_box,
+                } => {
                     let key = instance::key(&label, address.port());
                     let launch = Launch {
                         program: self.opts.gui.program.clone(),
@@ -374,6 +457,7 @@ impl Inner {
                         auto: true,
                         // So it ends by itself when no daemon comes back.
                         devlanes: std::env::current_exe().ok(),
+                        host_box,
                         log: viewer::log_path(&self.opts.home, &key),
                         env: display.clone().unwrap_or_default(),
                     };
@@ -457,6 +541,7 @@ mod tests {
             address: Some(SocketAddr::from(([127, 0, 0, 1], port))),
             runs: true,
             real_desktop,
+            host_box: None,
         }
     }
 
@@ -467,6 +552,7 @@ mod tests {
             address: None,
             runs: false,
             real_desktop: None,
+            host_box: None,
         }
     }
 
@@ -499,15 +585,21 @@ mod tests {
         assert_eq!(opened, ["acme@2:desktop", "acme@1:desktop"]);
         assert_eq!(planner.plan(&services, free, true, t0), [], "once per run");
 
-        // A restart: stopped for a moment, then running again with its viewer.
+        // A restart: stopped for a moment, then running again with its
+        // viewer, which still holds the lock.
+        let held = |_: &str| Holder::Daemon;
         let restarting = [stopped("acme@2:desktop"), services[1].clone()];
-        assert_eq!(planner.plan(&restarting, free, true, t0), []);
+        assert_eq!(planner.plan(&restarting, held, true, t0), []);
         let back = t0 + END_GRACE - Duration::from_secs(1);
-        assert_eq!(planner.plan(&services[..2], free, true, back), []);
+        assert_eq!(planner.plan(&services[..2], held, true, back), []);
+        assert_eq!(
+            planner.plan(&services[..2], held, true, back + CARRY_OVER),
+            []
+        );
 
         // Stopped for good: the viewer ends after the grace, and opens again
         // with the next run.
-        let later = back + Duration::from_secs(1);
+        let later = back + CARRY_OVER + Duration::from_secs(1);
         assert_eq!(planner.plan(&restarting, free, true, later), []);
         let ended = planner.plan(&restarting, free, true, later + END_GRACE);
         assert_eq!(
@@ -574,12 +666,81 @@ mod tests {
         let free = |_: &str| Holder::Free;
         let key = instance::key("acme@2:desktop", 26012);
         let mut planner = Planner::default();
-        planner.adopt("acme@2:desktop".into(), key.clone());
+        planner.adopt("acme@2:desktop".into(), key.clone(), None);
         let back = [running("acme@2:desktop", 26012, None)];
         assert_eq!(planner.plan(&back, free, true, t0), [], "kept, not doubled");
         assert_eq!(planner.plan(&[], free, true, t0), []);
         assert_eq!(
             planner.plan(&[], free, true, t0 + END_GRACE),
+            [Action::End {
+                label: "acme@2:desktop".into(),
+                key,
+            }]
+        );
+    }
+
+    /// A service stopped and started again within the grace gets a new
+    /// viewer once the old one ended by itself (3 seconds after its host
+    /// said Closed). A viewer the user ended during a run, with no stop in
+    /// between, stays ended for that run, also after the old viewer
+    /// carried over into a new run.
+    #[test]
+    fn a_quick_restart_reopens_a_viewer_that_ended_with_the_old_run() {
+        let t0 = Instant::now();
+        let viewer = std::cell::Cell::new(Holder::Free);
+        let holder = |_: &str| viewer.get();
+        let services = [running("acme@2:desktop", 26012, None)];
+        let opens = |actions: &[Action]| matches!(actions, [Action::Open { .. }]);
+        let mut planner = Planner::default();
+        assert!(opens(&planner.plan(&services, holder, true, t0)));
+        viewer.set(Holder::Daemon);
+
+        // The user ends the viewer during the run: nothing reopens it.
+        viewer.set(Holder::Free);
+        let t1 = t0 + Duration::from_secs(5);
+        assert_eq!(planner.plan(&services, holder, true, t1), []);
+
+        // Stopped, and running again 4 seconds later: the old viewer ended
+        // by itself meanwhile, so a new one opens.
+        let stop = [stopped("acme@2:desktop")];
+        assert_eq!(planner.plan(&stop, holder, true, t1), []);
+        let t2 = t1 + Duration::from_secs(4);
+        assert!(opens(&planner.plan(&services, holder, true, t2)));
+        viewer.set(Holder::Daemon);
+
+        // A viewer that outlived the restart carries over; ended by the
+        // user later in that run, it stays ended.
+        assert_eq!(planner.plan(&stop, holder, true, t2), []);
+        let t3 = t2 + Duration::from_secs(2);
+        assert_eq!(planner.plan(&services, holder, true, t3), []);
+        assert_eq!(planner.plan(&services, holder, true, t3 + CARRY_OVER), []);
+        viewer.set(Holder::Free);
+        let t4 = t3 + CARRY_OVER + Duration::from_secs(1);
+        assert_eq!(planner.plan(&services, holder, true, t4), []);
+    }
+
+    /// The grace of a box's viewer counts only while the box is connected:
+    /// a box that is away, or every box while the daemon still reopens
+    /// them, counts as running; once connected without the service, the
+    /// grace runs.
+    #[test]
+    fn a_box_that_is_away_keeps_its_viewers() {
+        let t0 = Instant::now();
+        let free = |_: &str| Holder::Free;
+        let key = instance::key("acme@2:desktop", 26012);
+        let mut planner = Planner::default();
+        planner.adopt("acme@2:desktop".into(), key.clone(), Some("hetzner".into()));
+        planner.set_away(HashSet::new(), true);
+        assert_eq!(planner.plan(&[], free, true, t0), []);
+        planner.set_away(HashSet::from(["hetzner".to_owned()]), false);
+        assert_eq!(planner.plan(&[], free, true, t0 + END_GRACE), []);
+        assert_eq!(planner.plan(&[], free, true, t0 + 3 * END_GRACE), []);
+        // Another box being away does not keep it.
+        planner.set_away(HashSet::from(["other".to_owned()]), false);
+        let connected = t0 + 4 * END_GRACE;
+        assert_eq!(planner.plan(&[], free, true, connected), []);
+        assert_eq!(
+            planner.plan(&[], free, true, connected + END_GRACE),
             [Action::End {
                 label: "acme@2:desktop".into(),
                 key,

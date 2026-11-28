@@ -270,8 +270,17 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
         "not_found" => {
             let options = list(data, "candidates");
             let name = reference();
+            // A box lane a `gui` command looked for, with boxes that are away.
+            let away: Vec<String> = list(data, "boxes_not_connected")
+                .iter()
+                .map(display_value)
+                .collect();
             // A typo of a listed name is the likeliest meaning.
-            let mut message = format!("{name} not found");
+            let mut message = if away.is_empty() {
+                format!("{name} not found")
+            } else {
+                format!("{name} is not a lane of this machine or of a connected box")
+            };
             if let Some(guess) = did_you_mean(name.rsplit(':').next().unwrap_or(&name), options) {
                 message.push_str(&format!("; did you mean {}?", super::clean(guess)));
             }
@@ -291,6 +300,14 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             let lane = text(data, "names_lane");
             if !lane.is_empty() {
                 message.push_str(&format!("; {name} is lane {lane}"));
+            }
+            if !away.is_empty() {
+                let hint = format!(
+                    "not connected: {}; {}",
+                    away.join(", "),
+                    Hint::command(["remote", "ls"]).0
+                );
+                return (message, Some(Hint(hint)));
             }
             (message, Some(Hint::command(["lane", "ls"])))
         }
@@ -2081,7 +2098,6 @@ const GUI_COMMAND_ERRORS: &[&str] = &[
     "gui_viewer_missing",
     "gui_viewer_failed",
     "gui_open_for_people",
-    "gui_box_not_connected",
 ];
 
 /// Why a box's GUI port cannot be reached here, from `{port, state,
@@ -2327,17 +2343,6 @@ fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
             ),
             None,
         ),
-        "gui_box_not_connected" => {
-            let boxes: Vec<String> = list(data, "boxes").iter().map(display_value).collect();
-            (
-                format!(
-                    "{} is no lane of this machine or of a connected box; not connected: {}",
-                    field(data, "reference"),
-                    boxes.join(", ")
-                ),
-                Some(Hint::command(["remote", "ls"])),
-            )
-        }
         "gui_open_for_people" => (
             format!(
                 "devlanes gui open does not run for an agent: {}",

@@ -89,6 +89,7 @@ pub(crate) async fn open(
             instance_dir: viewer::instance_dir(&home),
             auto: false,
             devlanes: devlanes.clone(),
+            host_box: found.host_box.clone(),
             log: viewer::log_path(&home, &instance::key(&label, address.port())),
             env: Vec::new(),
         };

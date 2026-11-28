@@ -319,10 +319,12 @@ fn gui_errors_are_worded() {
         RpcError::new("gui_no_services", json!({"lane": "acme@2", "box": null}), 1),
         RpcError::new("gui_no_display", json!({}), 1),
         RpcError::new("gui_open_for_people", json!({}), 2),
+        // A box lane found nowhere while a box is away keeps its lanes and
+        // exit code and says which box is not connected.
         RpcError::new(
-            "gui_box_not_connected",
-            json!({"reference": "acme@2", "boxes": ["hetzner"]}),
-            1,
+            "not_found",
+            json!({"reference": "acme@9", "candidates": ["acme@2"], "boxes_not_connected": ["hetzner"]}),
+            3,
         ),
         RpcError::new(
             "gui_viewer_missing",

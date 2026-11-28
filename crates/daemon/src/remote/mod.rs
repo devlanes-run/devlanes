@@ -347,6 +347,12 @@ impl Remotes {
         !lock(&self.hosts).is_empty()
     }
 
+    /// Whether a starting daemon is still reopening the boxes an earlier one
+    /// had connected, some of which may have no connection yet.
+    pub(crate) fn restoring(&self) -> bool {
+        self.restoring.load(Ordering::Relaxed)
+    }
+
     /// Every connection, in connect order.
     fn all(&self) -> Vec<Arc<HostConn>> {
         let mut all: Vec<Arc<HostConn>> = lock(&self.hosts).values().cloned().collect();

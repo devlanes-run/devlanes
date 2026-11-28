@@ -1247,11 +1247,7 @@ fn open_url(url: &str) -> io::Result<()> {
 /// the viewer from this environment. Fails with the command's error line.
 async fn open_viewer(reference: &str) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-    let output = tokio::process::Command::new(exe)
-        .args(["gui", "open", reference, "--output", "plain"])
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
+    let output = viewer_command(exe, reference).output();
     let output = tokio::time::timeout(std::time::Duration::from_secs(30), output)
         .await
         .map_err(|_| "devlanes gui open did not answer in time".to_owned())?
@@ -1265,6 +1261,37 @@ async fn open_viewer(reference: &str) -> Result<(), String> {
         .find_map(|line| line.strip_prefix("error: "))
         .unwrap_or("devlanes gui open failed")
         .to_owned())
+}
+
+/// The `devlanes gui open REFERENCE` the TUI runs with `exe`. A person
+/// pressed the key, so the command does not run as the agent whose terminal
+/// may have started the TUI: `DEVLANES_AGENT=0` turns agent detection off.
+fn viewer_command(exe: std::path::PathBuf, reference: &str) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(exe);
+    command
+        .args(["gui", "open", reference, "--output", "plain"])
+        .env("DEVLANES_AGENT", "0")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    command
+}
+
+#[cfg(test)]
+mod viewer_tests {
+    /// The TUI's `gui open` runs as the person who pressed the key, also
+    /// from an agent's terminal, in plain output.
+    #[test]
+    fn the_viewer_command_runs_as_a_person() {
+        let command = super::viewer_command("devlanes".into(), "acme@2:desktop");
+        let command = command.as_std();
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["gui", "open", "acme@2:desktop", "--output", "plain"]);
+        let agent = command
+            .get_envs()
+            .find(|(name, _)| *name == "DEVLANES_AGENT")
+            .and_then(|(_, value)| value);
+        assert_eq!(agent, Some(std::ffi::OsStr::new("0")));
+    }
 }
 
 /// Hands a URL to the shell, which opens only plain `http` and `https` URLs

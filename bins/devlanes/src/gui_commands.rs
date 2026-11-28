@@ -44,9 +44,9 @@ pub(crate) async fn run(
         ));
     }
     // Windows on the desktop are for a person: an agent cannot use them, and
-    // they would take focus and send the local clipboard to the app.
-    if matches!(command, GuiCommand::Open { .. }) && runtime.mode == devlanes_cli::OutputMode::Agent
-    {
+    // they would take focus and send the local clipboard to the app. Decided
+    // on who runs the command, whatever output it asked for.
+    if matches!(command, GuiCommand::Open { .. }) && opened_by_agent(runtime) {
         return Err(RpcError::new("gui_open_for_people", json!({}), exit::USAGE));
     }
     let chords = chords(&command)?;
@@ -93,6 +93,13 @@ pub(crate) async fn run(
         data["path"] = json!(save(frame, target).await?);
     }
     report(runtime, output, &data)
+}
+
+/// Whether an agent runs this command, by agent detection, which
+/// `DEVLANES_AGENT=0` turns off; `--json`, `--output` or `DEVLANES_OUTPUT`
+/// change only the output.
+fn opened_by_agent(runtime: &Runtime) -> bool {
+    runtime.actor.kind == devlanes_proto::ActorKind::Agent
 }
 
 /// The chords of `gui key`, checked before anything connects.
@@ -286,7 +293,7 @@ async fn find(mut context: Context, lane: Option<String>) -> Result<Found, RpcEr
     match status {
         Ok(data) => local_lane(&data, named.is_some()),
         Err(error) if gui_off_in_daemon(&error) => Err(daemon_off()),
-        Err(error) => {
+        Err(mut error) => {
             let Some(reference) = named.filter(|_| error.exit_code == exit::NOT_FOUND) else {
                 return Err(error);
             };
@@ -301,24 +308,25 @@ async fn find(mut context: Context, lane: Option<String>) -> Result<Found, RpcEr
             if let Some(found) = lookup::box_lane(&boxes, &reference) {
                 return Ok(found);
             }
-            // A box this machine knows but is not connected to may have the
-            // lane: that is not a lane that does not exist.
-            let disconnected: Vec<&str> = boxes["items"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|host| host["state"] != "connected")
-                .filter_map(|host| host["host"].as_str())
-                .collect();
-            if disconnected.is_empty() {
-                return Err(error);
-            }
-            Err(RpcError::new(
-                "gui_box_not_connected",
-                json!({"reference": reference, "boxes": disconnected}),
-                exit::FAILED,
-            ))
+            note_boxes_away(&mut error, &boxes);
+            Err(error)
         }
+    }
+}
+
+/// Adds to the `not_found` `error` of a lane found nowhere the boxes of
+/// `remote ls` (`boxes`) this machine knows but is not connected to, which
+/// may have it. The error keeps its code, exit code and lanes.
+fn note_boxes_away(error: &mut RpcError, boxes: &Value) {
+    let away: Vec<&str> = boxes["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|host| host["state"] != "connected")
+        .filter_map(|host| host["host"].as_str())
+        .collect();
+    if !away.is_empty() && error.data.is_object() {
+        error.data["boxes_not_connected"] = json!(away);
     }
 }
 
@@ -708,6 +716,80 @@ mod tests {
                  "hidden": false, "state": state, "ports": [{"name": "default", "port": 26011}], "hosts": []},
             ]},
         }]})
+    }
+
+    /// An agent cannot open windows by asking for another output: `--json`,
+    /// `--output plain` and `DEVLANES_OUTPUT` leave it an agent. With agent
+    /// detection off (`DEVLANES_AGENT=0`, as the TUI runs it) it is a person.
+    #[test]
+    fn gui_open_is_refused_to_an_agent_in_any_output() {
+        use devlanes_cli::clap::Parser;
+        use devlanes_cli::{Cli, Signals};
+        let agent = devlanes_proto::Actor {
+            kind: devlanes_proto::ActorKind::Agent,
+            agent_id: Some("codex".into()),
+            session_id: None,
+        };
+        let runtime = |args: &[&str], env_output: Option<&str>, disabled: bool| {
+            let line = ["devlanes", "gui", "open", "desktop"]
+                .into_iter()
+                .chain(args.iter().copied());
+            let signals = Signals {
+                env_output: env_output.map(str::to_owned),
+                agent_disabled: disabled,
+                detected_actor: (!disabled).then(|| agent.clone()),
+                ..Signals::default()
+            };
+            Runtime::resolve(&Cli::parse_from(line), signals).expect("runtime")
+        };
+        for (args, env) in [
+            (&[][..], None),
+            (&["--json"][..], None),
+            (&["--output", "plain"][..], None),
+            (&[][..], Some("json")),
+        ] {
+            assert!(
+                opened_by_agent(&runtime(args, env, false)),
+                "{args:?} {env:?}"
+            );
+        }
+        assert!(!opened_by_agent(&runtime(
+            &["--output", "plain"],
+            None,
+            true
+        )));
+    }
+
+    /// A typo such as `acme@9:desktop` stays `not_found` with exit 3 and its
+    /// lanes while a box is away, and names that box; with every box
+    /// connected nothing is added.
+    #[test]
+    fn a_lane_found_nowhere_stays_not_found_and_names_the_boxes_away() {
+        let not_found = || {
+            RpcError::new(
+                "not_found",
+                json!({"reference": "acme@9", "candidates": ["acme@1"]}),
+                exit::NOT_FOUND,
+            )
+        };
+        let mut away = boxes("running", true);
+        away["items"]
+            .as_array_mut()
+            .expect("items")
+            .push(json!({"host": "other", "state": "disconnected", "ports": []}));
+        assert!(box_lane(&away, "acme@9").is_none());
+        let mut error = not_found();
+        note_boxes_away(&mut error, &away);
+        assert_eq!(
+            (error.code.as_str(), error.exit_code),
+            ("not_found", exit::NOT_FOUND)
+        );
+        assert_eq!(error.data["candidates"], json!(["acme@1"]));
+        assert_eq!(error.data["boxes_not_connected"], json!(["other"]));
+
+        let mut error = not_found();
+        note_boxes_away(&mut error, &boxes("running", true));
+        assert!(error.data.get("boxes_not_connected").is_none());
     }
 
     /// The loader's error for a `gui: true` service with GUI services off, as

@@ -701,7 +701,8 @@ person at this machine.";
 
 /// Why `gui open` does not run for an agent, as the MCP server and the agent
 /// output mode say it.
-pub(crate) const GUI_OPEN_FOR_PEOPLE: &str = "it opens windows on this machine's desktop for the person at it; ask the user to run it, or let the windows open by themselves";
+pub(crate) const GUI_OPEN_FOR_PEOPLE: &str =
+    "it opens windows on this machine's desktop; ask the user to run it";
 
 const GUI_SCREENSHOT_ABOUT: &str = "\
 Save a PNG of a GUI service's window and print where it went.
@@ -764,7 +765,7 @@ pub enum GuiCommand {
     /// Open a GUI service's windows on this machine's desktop, or bring them to the front
     #[command(long_about = GUI_OPEN_ABOUT)]
     Open {
-        /// GUI service ([lane:]unit, such as desktop or acme@2:desktop) [default: every running GUI service of the lane]
+        /// GUI service (unit or lane:unit, such as desktop or acme@2:desktop) [default: every running GUI service of the lane]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
     },

@@ -48,9 +48,8 @@ pub use model::*;
 pub use scalar::{ByteSize, ConfigDuration, Percent, Scalar, Templated};
 pub use service::{GUI_UNSUPPORTED, ServiceConfig, StopConfig};
 pub use setting::{
-    Applies, applies, check_user_key, check_user_key_for, effective_user_value,
-    effective_user_value_for, parse_setting_value, to_yaml, user_keys, user_keys_for, user_setting,
-    user_setting_for,
+    Applies, applies, check_user_key, effective_user_value, parse_setting_value, to_yaml,
+    user_keys, user_setting,
 };
 pub use tags::{TagColor, TagConfig};
 pub use user::*;

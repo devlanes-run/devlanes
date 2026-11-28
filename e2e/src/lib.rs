@@ -481,8 +481,9 @@ impl Lab {
 
     /// Puts `gui.auto_open: false` back into the lab's `config.yaml` when a
     /// test rewrote the file without it, so no GUI service ever opens a
-    /// viewer window on the test machine. A `gui` section of the test's own
-    /// that leaves the key out fails the test instead of being edited.
+    /// viewer window on the test machine ([`auto_open_guard`]). The file is
+    /// replaced through a temporary file, so the daemon never reads half of
+    /// it.
     fn keep_auto_open_off(&self) -> Result<()> {
         let path = self.home.path().join("config.yaml");
         let text = match fs::read_to_string(&path) {
@@ -490,23 +491,12 @@ impl Lab {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(error) => return Err(error.into()),
         };
-        if text.contains("\n  auto_open: false") {
+        let Some(text) = auto_open_guard(&text).map_err(Error::Unexpected)? else {
             return Ok(());
-        }
-        if text.lines().any(|line| line.trim_end() == "gui:") {
-            return Err(Error::Unexpected(
-                "the test's config.yaml has a gui section without auto_open: false".into(),
-            ));
-        }
-        let separator = if text.is_empty() || text.ends_with('\n') {
-            ""
-        } else {
-            "\n"
         };
-        fs::write(
-            &path,
-            format!("{text}{separator}gui:\n  auto_open: false\n"),
-        )?;
+        let temporary = self.home.path().join("config.yaml.e2e-guard");
+        fs::write(&temporary, text)?;
+        fs::rename(&temporary, &path)?;
         Ok(())
     }
 
@@ -1083,4 +1073,83 @@ pub fn port(unit: &Value) -> Option<u16> {
 /// The PID of a unit summary.
 pub fn pid(unit: &Value) -> Option<i32> {
     unit["pid"].as_i64().and_then(|p| i32::try_from(p).ok())
+}
+
+/// A lab's `config.yaml` text with `gui.auto_open: false`: `None` when it
+/// has it already, as `gui:` with an indented `auto_open: false` or as
+/// `gui: {auto_open: false}`; the text with that section added when it has
+/// no `gui` section. A `gui` section without the key, or in another shape,
+/// is the test's mistake and fails it with a message instead of an edit
+/// that could be wrong.
+fn auto_open_guard(text: &str) -> std::result::Result<Option<String>, String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(start) = lines
+        .iter()
+        .position(|line| line.starts_with("gui:") || line.starts_with("gui :"))
+    else {
+        let separator = if text.is_empty() || text.ends_with('\n') {
+            ""
+        } else {
+            "\n"
+        };
+        return Ok(Some(format!("{text}{separator}gui:\n  auto_open: false\n")));
+    };
+    let rest = lines[start]
+        .split_once(':')
+        .map(|(_, rest)| rest.split('#').next().unwrap_or_default().trim())
+        .unwrap_or_default();
+    let unknown = || {
+        Err(format!(
+            "the test's config.yaml has `{}`, a gui section the e2e guard cannot check; write \
+             it as `gui:` with `  auto_open: false` under it, or as `gui: {{auto_open: false}}`",
+            lines[start]
+        ))
+    };
+    let off = if rest.is_empty() {
+        lines[start + 1..]
+            .iter()
+            .take_while(|line| line.is_empty() || line.starts_with(' '))
+            .any(|line| line.trim() == "auto_open: false")
+    } else if let Some(inner) = rest.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
+        inner
+            .split(',')
+            .any(|entry| entry.replace(' ', "") == "auto_open:false")
+    } else {
+        return unknown();
+    };
+    if off {
+        return Ok(None);
+    }
+    Err("the test's config.yaml has a gui section without auto_open: false".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::auto_open_guard;
+
+    /// Both YAML forms of the setting pass, a file without `gui` gets it,
+    /// and a `gui` section without it, or in a shape the guard does not
+    /// read, fails.
+    #[test]
+    fn the_guard_keeps_auto_open_off() {
+        assert_eq!(auto_open_guard("gui:\n  auto_open: false\n"), Ok(None));
+        assert_eq!(
+            auto_open_guard("ports:\n  range: 1-2\ngui: {auto_open: false}\n"),
+            Ok(None)
+        );
+        assert_eq!(
+            auto_open_guard("gui: { theme: x, auto_open: false }"),
+            Ok(None)
+        );
+        assert_eq!(
+            auto_open_guard("proxy:\n  https_port: 1"),
+            Ok(Some(
+                "proxy:\n  https_port: 1\ngui:\n  auto_open: false\n".into()
+            ))
+        );
+        // Another section's key does not count.
+        assert!(auto_open_guard("gui:\n  x: 1\nother:\n  auto_open: false\n").is_err());
+        assert!(auto_open_guard("gui: {auto_open: true}").is_err());
+        assert!(auto_open_guard("gui: !!map {}").is_err());
+    }
 }
