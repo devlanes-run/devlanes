@@ -1288,15 +1288,32 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         | "box_name_ambiguous"
         | "box_pairing_missing"
         | "box_not_paired_by_ticket" => (message.unwrap_or_else(|| code.replace('_', " ")), None),
-        "p2p_unavailable" => (
-            with_message("this machine cannot make a pairing ticket now".into()),
-            Some(Hint::command(["daemon", "logs"])),
-        ),
+        // A ticket alone that failed, or one that failed while wrong codes
+        // paused codes, so no code went out either.
+        code @ ("p2p_unavailable" | "ticket_not_ready") => {
+            let lead = if code == "ticket_not_ready" {
+                "no ticket yet"
+            } else {
+                "no pairing ticket"
+            };
+            let mut line = format!("{lead}: {}", message.clone().unwrap_or_default());
+            if let Some(ms) = data.get("code_paused_ms").and_then(Value::as_u64) {
+                line.push_str(&format!(
+                    "; pairing codes are paused for {} after 5 wrong codes",
+                    super::plural(
+                        usize::try_from(ms.div_ceil(60_000).max(1)).unwrap_or(usize::MAX),
+                        "minute"
+                    )
+                ));
+            }
+            let hint = (code == "p2p_unavailable").then(|| Hint::command(["daemon", "logs"]));
+            (line, hint)
+        }
         // An old daemon ignored the request and made a code nobody saw.
         "tickets_unsupported" => (
             format!(
-                "{OLD_DAEMON_NO_TICKETS}; it made a pairing code instead, which nobody was shown \
-                 and which expires in 10 minutes"
+                "{OLD_DAEMON_NO_TICKETS}; it made a pairing code instead, which was not printed \
+                 and expires in 10 minutes"
             ),
             Some(Hint::command(["daemon", "restart"])),
         ),

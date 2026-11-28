@@ -1863,6 +1863,10 @@ impl Inner {
         value: Value,
     ) -> Result<Value, RpcError> {
         let args: DisconnectParams = crate::engine::params(value)?;
+        // A ticket given as the box is never echoed in `not_connected`.
+        if let Some(error) = args.host.as_deref().and_then(peer_link::ticket_as_host) {
+            return Err(error);
+        }
         if args.forget {
             let Some(host) = &args.host else {
                 return Err(RpcError::new(

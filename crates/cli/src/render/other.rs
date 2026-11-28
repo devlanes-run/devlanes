@@ -2471,6 +2471,9 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     // says nothing predates tickets.
     let no_ticket = match (&ticket, data.get("ticket_error")) {
         (Some(_), _) => None,
+        (None, Some(error)) if text(error, "code") == "ticket_not_ready" => {
+            Some(format!("no ticket yet: {}", text(error, "message")))
+        }
         (None, Some(error)) => Some(format!("no ticket: {}", text(error, "message"))),
         (None, None) => Some(format!(
             "{OLD_DAEMON_NO_TICKETS}; devlanes daemon restart starts this release's daemon"

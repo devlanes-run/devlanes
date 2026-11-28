@@ -63,8 +63,8 @@ fn literals_after(text: &str, marker: &str, codes: &mut BTreeSet<String>) {
 }
 
 /// Every code literal of the daemon: `RpcError::new("x", ..)`, `internal("x", ..)`,
-/// phase `reason("x", ..)`, `("x", json!(..))` tuples, `"code": "x"` and
-/// `code: "x".into()`.
+/// phase `reason("x", ..)`, `("x", json!(..))` tuples, `Err(("x", ..))`,
+/// `"code": "x"` and `code: "x".into()`.
 fn daemon_codes() -> BTreeSet<String> {
     let mut files = Vec::new();
     sources(
@@ -80,6 +80,8 @@ fn daemon_codes() -> BTreeSet<String> {
             "reason(",
             "\"code\":",
             "code:",
+            // A code carried in a tuple until an `RpcError` is made of it.
+            "Err((",
         ] {
             literals_after(&text, marker, &mut codes);
         }

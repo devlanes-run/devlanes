@@ -1676,6 +1676,30 @@ mod tests {
         }
     }
 
+    /// A client daemon from before tickets reads a ticket connect as a
+    /// request without a host; the hint names the restart. A `bad_request`
+    /// about a name the daemon read gets none.
+    #[test]
+    fn an_old_daemon_reading_a_ticket_is_named() {
+        let request = Request {
+            id: 0,
+            method: Method::Connect,
+            params: json!({"ticket": "dlp1example"}),
+            context: devlanes_proto::Context::default(),
+        };
+        let old = RpcError::new("bad_request", json!({"message": "missing field `host`"}), 2);
+        let hint = hint_for(&old, &request)
+            .map(|hint| hint.0)
+            .unwrap_or_default();
+        assert!(hint.contains("devlanes daemon restart"), "{hint}");
+        let named = RpcError::new(
+            "bad_request",
+            json!({"message": "a name has 1 to 63 letters", "name": "a.b"}),
+            2,
+        );
+        assert!(hint_for(&named, &request).is_none());
+    }
+
     /// Hints keep the lane and project the user chose.
     #[test]
     fn log_hints_keep_lane_and_project() {

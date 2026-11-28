@@ -769,14 +769,21 @@ pub async fn service_report() -> serde_json::Value {
 pub async fn starts_at_login(home: &Path) -> Option<bool> {
     let manager = Manager::current();
     let user = user_home().ok()?;
-    let contents = tokio::fs::read_to_string(manager.path(&user)).await.ok();
-    let Some(contents) = contents else {
-        return Some(false);
+    let contents = match tokio::fs::read_to_string(manager.path(&user)).await {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(false),
+        // Unreadable for another reason: it may well be installed.
+        Err(_) => return None,
     };
     let started = manager
         .home(&contents)
         .unwrap_or_else(|| user.join(".devlanes"));
-    (!devlanes_core::paths::same_path(&started, home)).then_some(false)
+    // Through a symlink the two may name one folder.
+    let started = tokio::fs::canonicalize(&started).await.unwrap_or(started);
+    let home = tokio::fs::canonicalize(home)
+        .await
+        .unwrap_or_else(|_| home.to_owned());
+    (started != home).then_some(false)
 }
 
 /// [`service_report`] for a definition read from `path` (`None`: not installed).

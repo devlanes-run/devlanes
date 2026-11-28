@@ -2112,14 +2112,15 @@ impl Command {
 }
 
 /// Whether a `remote connect` argument is a pairing ticket rather than a box
-/// name: it starts with the ticket prefix, in any case, and is longer than
-/// any SSH destination or box name in use.
+/// name: it starts with the ticket prefix, in any case, and holds what the
+/// daemon takes for a ticket ([`devlanes_proto::remote::holds_ticket`]).
+/// Text that holds one without the prefix is sent as a host, which the
+/// daemon refuses without echoing it.
 pub fn is_ticket(host: &str) -> bool {
     let prefix = devlanes_proto::remote::TICKET_PREFIX;
-    host.len() > 64
-        && host
-            .get(..prefix.len())
-            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    host.get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        && devlanes_proto::remote::holds_ticket(host)
 }
 
 /// A `remote connect` argument without the whitespace, quotes and backticks

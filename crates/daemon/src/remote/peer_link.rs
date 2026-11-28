@@ -588,27 +588,12 @@ fn derived_name(answered: &str) -> String {
 /// name or SSH destination in use.
 const MAX_HOST: usize = 253;
 
-/// `bad_ticket` for a `host` that is a ticket, or most of one: the ticket
-/// prefix in any case and 60 or more base32 characters, as a ticket cut,
-/// wrapped or changed on the way leaves it, 64 base32 characters in a row
-/// (a ticket whose prefix was mistyped), or any text longer than
+/// `bad_ticket` for a `host` that holds a ticket or most of one
+/// ([`devlanes_proto::remote::holds_ticket`]), or any text longer than
 /// [`MAX_HOST`]. Such text holds a secret, so it is never passed to `ssh`,
-/// listed as a box or logged as a host.
+/// listed as a box, echoed or logged as a host.
 pub(super) fn ticket_as_host(host: &str) -> Option<RpcError> {
-    let base32 = host.get(TICKET_PREFIX.len()..).map_or(0, |rest| {
-        rest.bytes()
-            .take_while(|b| matches!(b.to_ascii_lowercase(), b'a'..=b'z' | b'2'..=b'7'))
-            .count()
-    });
-    let ticket_like = looks_like_ticket(host) && base32 >= 60;
-    // A ticket with a mistyped prefix: no host name label or user name in
-    // use is 64 base32 characters in a row.
-    let longest = host
-        .split(|c: char| !matches!(c.to_ascii_lowercase(), 'a'..='z' | '2'..='7'))
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
-    (ticket_like || longest >= 64 || host.len() > MAX_HOST).then(|| {
+    (devlanes_proto::remote::holds_ticket(host) || host.len() > MAX_HOST).then(|| {
         bad_ticket(
             "this is not a box name or an SSH destination, and not a whole pairing ticket \
              either; copy the ticket again from `devlanes daemon pair` on the box",

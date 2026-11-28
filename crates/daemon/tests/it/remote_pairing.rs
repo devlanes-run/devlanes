@@ -418,7 +418,8 @@ async fn the_attached_cli_is_asked_for_the_code() {
 #[tokio::test(flavor = "multi_thread")]
 /// A wrong code voids the box's outstanding codes, so the right one fails
 /// after it. After five failures `daemon pair` hands out no code and says
-/// how long, every code is refused, and the client keeps the time the box
+/// how long, also next to a ticket that failed, every code is refused, and
+/// the client keeps the time the box
 /// takes codes again, not a wait that goes stale.
 async fn wrong_codes_void_codes_and_lock_out_pairing() {
     tokio::time::timeout(LIMIT, async {
@@ -462,6 +463,24 @@ async fn wrong_codes_void_codes_and_lock_out_pairing() {
         assert_eq!(paused.code, "pairing_paused", "{paused:?}");
         let wait = paused.data["retry_after_ms"].as_u64().unwrap_or_default();
         assert!(wait > 0 && wait <= 10 * 60_000, "{paused:?}");
+        // With codes paused and no ticket either (this box has no endpoint),
+        // nothing goes out, and the error carries both reasons.
+        let neither = side
+            .h
+            .call(
+                Method::RemotePair,
+                json!({"ticket": true}),
+                Context::default(),
+            )
+            .await
+            .expect_err("neither a code nor a ticket");
+        assert_eq!(neither.code, "not_supported_yet", "{neither:?}");
+        assert!(
+            neither.data["code_paused_ms"]
+                .as_u64()
+                .is_some_and(|ms| ms > 0),
+            "{neither:?}"
+        );
         let locked = attempt("0000-0000".into()).await;
         assert!(
             locked.data["message"]
@@ -1084,6 +1103,111 @@ async fn a_ticket_that_cannot_be_made_leaves_codes_working() {
         assert_eq!(neither.code, "bad_request", "{neither:?}");
         plain.stop().await;
         stopped.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// A memory endpoint whose address is not ready until the test says so,
+/// as an iroh endpoint waits for relays that do not answer.
+struct HeldAddress {
+    inner: Arc<MemoryPeer>,
+    ready: tokio::sync::watch::Receiver<bool>,
+}
+
+#[async_trait::async_trait]
+impl PeerEndpoint for HeldAddress {
+    /// The inner endpoint's id.
+    async fn id(&self) -> Result<devlanes_transport::PeerId, PeerError> {
+        self.inner.id().await
+    }
+
+    /// The inner endpoint's address, once the test released it.
+    async fn addr(&self) -> Result<PeerAddr, PeerError> {
+        let mut ready = self.ready.clone();
+        let _ = ready.wait_for(|ready| *ready).await;
+        self.inner.addr().await
+    }
+
+    /// Dials through the inner endpoint.
+    async fn connect(
+        &self,
+        addr: &PeerAddr,
+        alpn: Alpn,
+    ) -> Result<devlanes_transport::BoxConnection, devlanes_transport::TransportError> {
+        self.inner.connect(addr, alpn).await
+    }
+
+    /// Listens on the inner endpoint.
+    async fn listen(
+        &self,
+        admission: Option<Arc<dyn devlanes_transport::Admission>>,
+    ) -> Result<(), PeerError> {
+        self.inner.listen(admission).await
+    }
+
+    /// The inner endpoint's next connection.
+    async fn accept(&self) -> Option<devlanes_transport::PeerIncoming> {
+        self.inner.accept().await
+    }
+
+    /// Closes the peer's sessions on the inner endpoint.
+    fn close_peer(&self, peer: &devlanes_transport::PeerId) {
+        self.inner.close_peer(peer);
+    }
+
+    /// Closes the inner endpoint.
+    async fn close(&self) {
+        self.inner.close().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// When the ticket is slow, as with relays that do not answer, the code
+/// goes out after about a second with `ticket_not_ready`, and no ticket is
+/// left open; once the address is ready, the next request has a ticket.
+async fn a_slow_ticket_does_not_hold_up_the_code() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let (release, ready) = tokio::sync::watch::channel(false);
+        let held = Arc::new(HeldAddress {
+            inner: MemoryPeers::new().endpoint(),
+            ready,
+        });
+        let side = BoxSide::start_peer(&tmp, "slow", "17000-17049", held.clone()).await;
+        let started = std::time::Instant::now();
+        let pair = side
+            .h
+            .call(
+                Method::RemotePair,
+                json!({"ticket": true}),
+                Context::default(),
+            )
+            .await
+            .expect("the code");
+        let waited = started.elapsed();
+        assert!(pair["code"].as_str().is_some(), "{pair}");
+        assert_eq!(pair["ticket_error"]["code"], "ticket_not_ready", "{pair}");
+        assert!(
+            waited < std::time::Duration::from_secs(4),
+            "the code waited {waited:?}"
+        );
+        assert!(!held.inner.is_listening(), "the ticket was taken back");
+        let _ = release.send(true);
+        let pair = side
+            .h
+            .call(
+                Method::RemotePair,
+                json!({"ticket": true}),
+                Context::default(),
+            )
+            .await
+            .expect("a code and a ticket");
+        assert!(
+            pair["ticket"].as_str().is_some() && pair["code"].as_str().is_some(),
+            "{pair}"
+        );
+        side.stop().await;
     })
     .await
     .expect("timeout");

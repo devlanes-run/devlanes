@@ -2864,7 +2864,7 @@ fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
     // Peer-to-peer trouble never costs the code: it goes out with the reason.
     let failed = json!({"code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000,
         "ticket_error": {"code": "ticket_not_ready",
-                         "message": "the ticket was not ready within a second; run `devlanes daemon pair --ticket` to wait for it"}});
+                         "message": "this machine was still connecting for pairing by ticket; run devlanes daemon pair --ticket, which waits up to 5 seconds"}});
     for mode in [OutputMode::Human, OutputMode::Agent] {
         let text = render(mode, &failed);
         assert!(
@@ -2872,7 +2872,7 @@ fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
             "{text}"
         );
         assert!(
-            text.contains("o ticket: the ticket was not ready within a second"),
+            text.contains("o ticket yet: this machine was still connecting"),
             "{text}"
         );
         assert!(!text.contains("older than"), "{text}");
@@ -2883,9 +2883,20 @@ fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
         json!({"message": "this machine has no network address to put in a ticket; check that it is connected to a network"}),
     );
     assert!(
-        alone_failed
-            .contains("cannot make a pairing ticket now: this machine has no network address"),
+        alone_failed.contains("error: no pairing ticket: this machine has no network address"),
         "{alone_failed}"
+    );
+    // Codes paused and the ticket failed too: nothing went out, and both
+    // reasons are said.
+    let neither = error(
+        "ticket_not_ready",
+        json!({"message": "this machine was still connecting for pairing by ticket",
+               "code_paused_ms": 3 * 60_000 - 5}),
+    );
+    assert!(
+        neither.contains("no ticket yet: this machine was still connecting")
+            && neither.contains("pairing codes are paused for 3 minutes"),
+        "{neither}"
     );
     let unsupported = error("not_supported_yet", json!({"feature": "pairing by ticket"}));
     assert!(

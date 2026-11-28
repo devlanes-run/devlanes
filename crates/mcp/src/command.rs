@@ -196,7 +196,7 @@ impl Call {
         self.args
             .iter()
             .map(|arg| {
-                if devlanes_cli::is_ticket(devlanes_cli::pasted(arg)) {
+                if devlanes_proto::remote::holds_ticket(devlanes_cli::pasted(arg)) {
                     "<ticket>"
                 } else {
                     arg.as_str()
@@ -296,7 +296,7 @@ impl Call {
             Command::Remote { command } => match command {
                 // The ticket is a secret, and too long to read in a question.
                 RemoteCommand::Connect { host, .. }
-                    if devlanes_cli::is_ticket(devlanes_cli::pasted(host)) =>
+                    if devlanes_proto::remote::holds_ticket(devlanes_cli::pasted(host)) =>
                 {
                     "Pair with the box in this ticket and mirror its lanes here?".into()
                 }
@@ -307,11 +307,12 @@ impl Call {
                     host: Some(host),
                     forget: true,
                 } => format!(
-                    "Disconnect from {host} and forget its pairing? Connecting it again needs a \
-                     new ticket from the box."
+                    "Disconnect from {} and forget its pairing? Connecting it again needs a new \
+                     ticket from the box.",
+                    shown_host(host)
                 ),
                 RemoteCommand::Disconnect { host, .. } => match host {
-                    Some(host) => format!("Disconnect from {host}?"),
+                    Some(host) => format!("Disconnect from {}?", shown_host(host)),
                     None => "Disconnect from every box?".into(),
                 },
                 _ => return None,
@@ -346,6 +347,16 @@ impl Call {
         let mut plan = self.args.clone();
         plan.push("--dry-run".into());
         Some(plan)
+    }
+}
+
+/// A box name for a question to the user, `<ticket>` when it holds a
+/// pairing ticket.
+fn shown_host(host: &str) -> &str {
+    if devlanes_proto::remote::holds_ticket(devlanes_cli::pasted(host)) {
+        "<ticket>"
+    } else {
+        host
     }
 }
 

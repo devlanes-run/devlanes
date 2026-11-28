@@ -1493,25 +1493,26 @@ pub fn box_settings(
     let remote: Vec<ConfigError> = problems
         .into_iter()
         .filter(|problem| {
-            let message = &problem.message;
-            // A lenient load ends each per-key problem this way; any other
-            // problem is about the whole file.
+            // A lenient load ends each per-key problem with what it dropped;
+            // any other problem is about the whole file.
+            let Some(dropped) = dropped_by(&problem.message) else {
+                return true;
+            };
             // `remote.boxes` is about the boxes this machine connects to, and
             // `remote.relays` and `remote.port_mapping` only shape
             // peer-to-peer networking, so a problem there must not turn SSH
-            // and command clients away. The message names what was dropped,
-            // so only a drop of that key or inside it is skipped: one that
-            // took the whole `remote` section goes to the safe side.
+            // and command clients away. Only a drop of that key or inside it
+            // is skipped: one that took the whole `remote` section goes to
+            // the safe side.
             let inside = |key: &str| {
-                message
+                dropped
                     .strip_prefix(key)
-                    .is_some_and(|rest| rest.starts_with([':', '[', '.']))
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with(['[', '.']))
             };
-            let elsewhere =
-                inside("remote.boxes") || inside("remote.relays") || inside("remote.port_mapping");
-            !message.ends_with("; the default applies")
-                || ((message.starts_with("remote.") || message.starts_with("remote:"))
-                    && !elsewhere)
+            inside("remote")
+                && !inside("remote.boxes")
+                && !inside("remote.relays")
+                && !inside("remote.port_mapping")
         })
         .collect();
     let settings = if remote.is_empty() {
@@ -1528,6 +1529,20 @@ pub fn box_settings(
         }
     };
     (settings, remote)
+}
+
+/// The path a lenient load dropped for the per-key problem `message`
+/// (`path: text; the default applies`, or `...; the default of DROPPED
+/// applies` when an ancestor went), or `None` for a problem about the whole
+/// file.
+fn dropped_by(message: &str) -> Option<&str> {
+    if let Some(rest) = message.strip_suffix("; the default applies") {
+        return Some(rest.split_once(": ").map_or(rest, |(path, _)| path));
+    }
+    let (_, dropped) = message
+        .strip_suffix(" applies")?
+        .rsplit_once("; the default of ")?;
+    Some(dropped)
 }
 
 /// Keys dropped before giving up and using the defaults for everything.
@@ -1577,14 +1592,19 @@ pub fn parse_user_lenient(file: &str, source: &str) -> (UserConfig, Vec<ConfigEr
         if path.is_empty() || path == "." {
             break;
         }
-        // Named after what was dropped, which is an ancestor of `path` when
-        // `path` itself was absent, so a reader of the problem (such as
-        // `box_settings`) knows which settings fell back to defaults.
         let Some(dropped) = drop_key(&mut value, &path) else {
             break;
         };
+        // An ancestor of `path` went when `path` itself was absent; the text
+        // names it, so a reader such as `box_settings` knows which settings
+        // fell back to defaults.
+        let applies = if dropped == path {
+            "the default applies".to_owned()
+        } else {
+            format!("the default of {dropped} applies")
+        };
         issues.push(crate::loader::locate(
-            ConfigError::plain(format!("{dropped}: {message}; the default applies")),
+            ConfigError::plain(format!("{path}: {message}; {applies}")),
             file,
             source,
         ));

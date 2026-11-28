@@ -359,6 +359,15 @@ fn paused(wait: Duration) -> RpcError {
     )
 }
 
+/// `p2p_unavailable`: the box cannot make a ticket now, for `message`.
+fn unavailable(message: impl std::fmt::Display) -> RpcError {
+    RpcError::new(
+        "p2p_unavailable",
+        json!({"message": message.to_string()}),
+        1,
+    )
+}
+
 /// `io` errors of the random source, as the daemon reports them.
 fn random_error(error: io::Error) -> RpcError {
     RpcError::new("random_failed", json!({"message": error.to_string()}), 1)
@@ -643,22 +652,20 @@ impl Inner {
         let secret = minted.map_err(random_error)?;
         let read = async {
             match self.refresh_listening().await {
-                Ok(()) => endpoint
-                    .addr()
-                    .await
-                    .map_err(|error| ("p2p_unavailable", error.to_string())),
-                Err(error) => Err(("p2p_unavailable", error.to_string())),
+                Ok(()) => endpoint.addr().await.map_err(unavailable),
+                Err(error) => Err(unavailable(error)),
             }
         };
-        // Dropping the wait is safe: the bind it may leave halfway is
-        // started again by the next call that needs it.
+        // The endpoint binds in a task of its own, so ending the wait does
+        // not stop a bind halfway; the next call finds it done.
         let addr = match wait {
             Some(wait) => tokio::time::timeout(wait, read).await.unwrap_or_else(|_| {
-                Err((
+                Err(RpcError::new(
                     "ticket_not_ready",
-                    "the ticket was not ready within a second; run `devlanes daemon pair \
-                     --ticket` to wait for it"
-                        .to_owned(),
+                    json!({"message": "this machine was still connecting for pairing by ticket; \
+                                       run devlanes daemon pair --ticket, which waits up to 5 \
+                                       seconds"}),
+                    1,
                 ))
             }),
             None => read.await,
@@ -666,19 +673,14 @@ impl Inner {
         // A ticket without its relay works on a LAN only and fails across
         // NATs with a reason that points elsewhere, so it is not handed out.
         let addr = addr.and_then(|addr| match &addr.relay {
-            Some(relay) if relay.len() > Ticket::MAX_RELAY => Err((
-                "p2p_unavailable",
-                format!(
-                    "the relay URL {relay} is longer than {} bytes, so a ticket cannot hold it; \
-                     shorten remote.relays",
-                    Ticket::MAX_RELAY
-                ),
-            )),
-            Some(_) if addr.direct.is_empty() => Err((
-                "p2p_unavailable",
+            Some(relay) if relay.len() > Ticket::MAX_RELAY => Err(unavailable(format!(
+                "the relay URL {relay} is longer than {} bytes, so a ticket cannot hold it; \
+                 shorten remote.relays",
+                Ticket::MAX_RELAY
+            ))),
+            Some(_) if addr.direct.is_empty() => Err(unavailable(
                 "this machine has no network address to put in a ticket; check that it is \
-                 connected to a network"
-                    .to_owned(),
+                 connected to a network",
             )),
             _ => Ok(addr),
         });
@@ -691,10 +693,10 @@ impl Inner {
                 };
                 Ok((ticket.encode(), secret))
             }
-            Err((code, message)) => {
+            Err(error) => {
                 self.take_back_ticket(&secret).await;
-                tracing::warn!(%message, "cannot hand out a pairing ticket");
-                Err(RpcError::new(code, json!({"message": message}), 1))
+                tracing::warn!(code = %error.code, message = %error.data["message"], "cannot hand out a pairing ticket");
+                Err(error)
             }
         }
     }

@@ -230,6 +230,29 @@ async fn a_ticket_is_never_shown_in_the_question() {
             .await;
         assert!(failed(&result));
         assert!(!text(&result).contains(&ticket), "{}", text(&result));
+
+        // The question asked again for a command's own confirmation.
+        let confirming = connect(
+            TestClient::new().answering(ElicitationAction::Accept),
+            Lifecycle::Initialize,
+            |config| {
+                config.env.insert("FAKE_CONFIRM".into(), "1".into());
+            },
+        )
+        .await;
+        let result = confirming.call("devlanes", &["run", &ticket]).await;
+        assert!(!failed(&result), "{}", text(&result));
+        let questions = confirming.handler.questions();
+        assert!(
+            questions
+                .iter()
+                .any(|question| question.contains("devlanes run <ticket>")),
+            "{questions:?}"
+        );
+        assert!(
+            questions.iter().all(|question| !question.contains(&ticket)),
+            "{questions:?}"
+        );
     })
     .await
     .expect("in time");
