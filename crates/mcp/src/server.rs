@@ -82,7 +82,7 @@ impl Server {
         let shell_env =
             shell_env::Cache::new(config.shell_env, config.exe.clone(), config.env.clone());
         Self {
-            catalog: Arc::new(Catalog::new(config.read_only)),
+            catalog: Arc::new(Catalog::new(config.read_only, config.gui)),
             config: Arc::new(config),
             calls: Calls::default(),
             shell_env,
@@ -255,15 +255,19 @@ impl Server {
                 Answer::Pending(result) => return Ok(result.into()),
             }
         }
-        Ok(result(
+        let image = screenshot(&call, &output).await;
+        let mut result = result(
             &call,
             &cwd,
             &output,
             &notes,
             self.config.read_only,
             &self.cards,
-        )
-        .into())
+        );
+        if let Some(image) = image {
+            result.content.push(image);
+        }
+        Ok(result.into())
     }
 
     /// The directory a call runs in, and whether `--lane` applies: the call's
@@ -734,6 +738,28 @@ fn result(
         "read_only": read_only,
     }));
     result
+}
+
+/// The picture of a `gui screenshot` that succeeded, as PNG image content.
+/// The command writes the PNG to a file and names it in its JSON, so the
+/// image is read from there; a file that cannot be read leaves the result
+/// with its text, which names the path.
+async fn screenshot(call: &Call, output: &Output) -> Option<ContentBlock> {
+    use base64::Engine as _;
+    if call.path != "gui screenshot" || output.exit_code != 0 || output.cancelled {
+        return None;
+    }
+    let path = output.data.get("path")?.as_str()?;
+    match tokio::fs::read(path).await {
+        Ok(png) => Some(ContentBlock::image(
+            base64::engine::general_purpose::STANDARD.encode(png),
+            "image/png",
+        )),
+        Err(error) => {
+            tracing::warn!(path, %error, "cannot read the screenshot");
+            None
+        }
+    }
 }
 
 /// `data`, or `Null` and `true` when its JSON is over [`DATA_LIMIT`].

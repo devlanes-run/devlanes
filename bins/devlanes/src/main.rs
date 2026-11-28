@@ -238,6 +238,7 @@ fn mcp(read_only: bool, path: Option<std::path::PathBuf>, lane: Option<String>) 
     config.read_only = read_only;
     config.path = path;
     config.lane = lane;
+    config.gui = gui::enabled();
     config.ui = Some(devlanes_mcp::UiResource {
         uri: devlanes_mcp_ui::URI,
         mime: devlanes_mcp_ui::MIME_TYPE,

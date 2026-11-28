@@ -5,6 +5,7 @@
 mod calls;
 mod cards;
 mod consent;
+mod gui;
 mod listing;
 mod shell_env;
 
@@ -191,6 +192,7 @@ pub async fn connect(
         agent_detected: false,
         // No test reads the login shell of whoever runs it.
         shell_env: |_, _| Err(ShellEnvError::Disabled),
+        gui: false,
     };
     adjust(&mut config);
     let (server_side, client_side) = tokio::io::duplex(1 << 20);
