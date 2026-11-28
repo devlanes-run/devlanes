@@ -40,6 +40,9 @@ mod listeners;
 mod mirror;
 mod pairing;
 mod peer;
+// Used once `open_host` dials boxes paired by ticket, in the next commit.
+#[allow(dead_code)]
+mod peer_link;
 mod report;
 mod sync;
 
