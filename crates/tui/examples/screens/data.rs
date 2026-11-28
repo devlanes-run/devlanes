@@ -396,6 +396,26 @@ pub fn lanes() -> Vec<LaneSummary> {
     ]
 }
 
+/// [`lanes`] with `shop@0`'s storefront a GUI service whose host runs on a
+/// display of its own.
+pub fn gui_lanes() -> Vec<LaneSummary> {
+    let mut lanes = lanes();
+    for lane in lanes.iter_mut().filter(|lane| lane.reference == "shop@0") {
+        for unit in lane
+            .units
+            .iter_mut()
+            .filter(|unit| unit.name == "storefront")
+        {
+            unit.gui = Some(devlanes_proto::GuiStatus {
+                host: devlanes_proto::GUI_HOST_RUNNING.into(),
+                real_desktop: Some(false),
+            });
+            unit.ports.insert(devlanes_proto::GUI_PORT.into(), 26412);
+        }
+    }
+    lanes
+}
+
 /// [`lanes`] after a quiet stretch: `acme@0` frozen with its own containers
 /// paused, `acme@1` started and throttled. Their failed, orphaned and busy
 /// units are settled first, since the daemon never idles a lane with those.

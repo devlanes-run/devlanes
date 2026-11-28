@@ -590,6 +590,86 @@ async fn input_in_a_frozen_lanes_window_thaws_it() {
     .expect("timeout");
 }
 
+/// A process that runs for a while, standing in for a viewer.
+fn stand_in() -> tokio::process::Child {
+    #[cfg(windows)]
+    let mut command = {
+        let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let mut command = tokio::process::Command::new(format!(
+            r"{system}\System32\WindowsPowerShell\v1.0\powershell.exe"
+        ));
+        command.args(["-NoProfile", "-Command", "Start-Sleep 60"]);
+        command
+    };
+    #[cfg(unix)]
+    let mut command = {
+        let mut command = tokio::process::Command::new("sleep");
+        command.arg("60");
+        command
+    };
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("stand-in")
+}
+
+/// A viewer an earlier daemon started stays open across a daemon restart
+/// (the next daemon takes it on) and ends when the daemon stops for good.
+/// The viewer is a stand-in process holding the viewer lock; no window opens.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_daemon_restart_keeps_auto_opened_viewers_and_a_stop_ends_them() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let home = tmp.path.join("home");
+        let mut viewer = stand_in();
+        let pid = viewer.id().expect("pid");
+        let identity = devlanes_sys::identity(pid)
+            .ok()
+            .flatten()
+            .expect("identity");
+        let dir = devlanes_daemon::gui::viewer::instance_dir(&home);
+        let key = devlanes_gui_client::instance::key("acme@1:desktop", 26001);
+        let info = devlanes_gui_client::instance::Info {
+            pid,
+            start_time: identity.start_time,
+            started_by: devlanes_gui_client::instance::StartedBy::Daemon,
+            service: "acme@1:desktop".into(),
+            host_box: None,
+        };
+        // This test holds the lock in the viewer's place.
+        let _lock = devlanes_gui_client::instance::claim(&dir, &key, &info).expect("claim");
+        let program = tmp.path.join("bin").join("devlanes-gui");
+        let setup = || Setup {
+            auto_open: true,
+            ..Setup::default()
+        };
+        for restart in [true, false] {
+            let h = gui_harness_at(&home, "17350-17399", None, program.clone(), setup()).await;
+            let mut shutdown = crate::signal_shutdown();
+            shutdown.restart = restart;
+            let _ = devlanes_daemon::Handler::shutdown(&h.engine, shutdown).await;
+            if restart {
+                assert!(
+                    devlanes_sys::matches(&identity).unwrap_or(false),
+                    "a restart leaves the viewer open"
+                );
+            } else {
+                let ended = eventually(Duration::from_secs(10), || async {
+                    (!devlanes_sys::matches(&identity).unwrap_or(true)).then_some(())
+                })
+                .await;
+                assert!(ended.is_some(), "a stop ends the viewer");
+            }
+        }
+        let _ = viewer.wait().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// On a machine without a GUI backend a GUI service runs as before, without
 /// a host, and says so; turning `gui` off later is drift.

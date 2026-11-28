@@ -1048,6 +1048,24 @@ fn scenes() -> Vec<Scene> {
             setup: |f| f.key(KeyCode::Char('?')),
         },
         Scene {
+            name: "gui-service",
+            what: "a build with GUI services on: a running GUI service selected, w opens its windows",
+            setup: |f| {
+                f.app.gui = true;
+                f.lanes = data::gui_lanes;
+                f.send(Msg::Status(Ok(data::gui_lanes())));
+                f.unit("shop@0", "storefront");
+            },
+        },
+        Scene {
+            name: "dialog-help-gui",
+            what: "every key with GUI services on: w shares the line of o, so the list still fits",
+            setup: |f| {
+                f.app.gui = true;
+                f.key(KeyCode::Char('?'));
+            },
+        },
+        Scene {
             name: "welcome",
             what: "the first launch in a home: banner, features, first keys and the docs link",
             setup: |f| {

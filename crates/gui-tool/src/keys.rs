@@ -8,50 +8,50 @@
 //! means a position on a US layout, as HID codes do: `a` is the key labelled
 //! A there, wherever the target's layout puts its letter.
 
-use devlanes_gui_proto::KeyCode;
+use devlanes_gui_proto::{KeyCode, keys};
 
 /// A modifier by its names, as the left-hand key.
-const MODIFIERS: &[(&[&str], u16)] = &[
-    (&["ctrl", "control"], 0xe0),
-    (&["shift"], 0xe1),
-    (&["alt", "option"], 0xe2),
-    (&["meta", "super", "cmd", "win"], 0xe3),
+const MODIFIERS: &[(&[&str], KeyCode)] = &[
+    (&["ctrl", "control"], keys::CONTROL_LEFT),
+    (&["shift"], keys::SHIFT_LEFT),
+    (&["alt", "option"], keys::ALT_LEFT),
+    (&["meta", "super", "cmd", "win"], keys::META_LEFT),
 ];
 
-/// Every other named key with its HID usage on the keyboard page. Letters,
-/// digits and `f1` to `f24` are computed in [`usage`].
-const NAMED: &[(&[&str], u16)] = &[
-    (&["enter", "return"], 0x28),
-    (&["escape", "esc"], 0x29),
-    (&["backspace"], 0x2a),
-    (&["tab"], 0x2b),
-    (&["space"], 0x2c),
-    (&["minus"], 0x2d),
-    (&["equal"], 0x2e),
-    (&["bracketleft"], 0x2f),
-    (&["bracketright"], 0x30),
-    (&["backslash"], 0x31),
-    (&["semicolon"], 0x33),
-    (&["quote"], 0x34),
-    (&["backquote"], 0x35),
-    (&["comma"], 0x36),
-    (&["period"], 0x37),
-    (&["slash"], 0x38),
-    (&["capslock"], 0x39),
-    (&["printscreen"], 0x46),
-    (&["scrolllock"], 0x47),
-    (&["pause"], 0x48),
-    (&["insert"], 0x49),
-    (&["home"], 0x4a),
-    (&["pageup"], 0x4b),
-    (&["delete"], 0x4c),
-    (&["end"], 0x4d),
-    (&["pagedown"], 0x4e),
-    (&["right"], 0x4f),
-    (&["left"], 0x50),
-    (&["down"], 0x51),
-    (&["up"], 0x52),
-    (&["menu"], 0x65),
+/// Every other named key. Letters, digits and `f1` to `f24` are computed in
+/// [`usage`].
+const NAMED: &[(&[&str], KeyCode)] = &[
+    (&["enter", "return"], keys::ENTER),
+    (&["escape", "esc"], keys::ESCAPE),
+    (&["backspace"], keys::BACKSPACE),
+    (&["tab"], keys::TAB),
+    (&["space"], keys::SPACE),
+    (&["minus"], keys::MINUS),
+    (&["equal"], keys::EQUAL),
+    (&["bracketleft"], keys::BRACKET_LEFT),
+    (&["bracketright"], keys::BRACKET_RIGHT),
+    (&["backslash"], keys::BACKSLASH),
+    (&["semicolon"], keys::SEMICOLON),
+    (&["quote"], keys::QUOTE),
+    (&["backquote"], keys::BACKQUOTE),
+    (&["comma"], keys::COMMA),
+    (&["period"], keys::PERIOD),
+    (&["slash"], keys::SLASH),
+    (&["capslock"], keys::CAPS_LOCK),
+    (&["printscreen"], keys::PRINT_SCREEN),
+    (&["scrolllock"], keys::SCROLL_LOCK),
+    (&["pause"], keys::PAUSE),
+    (&["insert"], keys::INSERT),
+    (&["home"], keys::HOME),
+    (&["pageup"], keys::PAGE_UP),
+    (&["delete"], keys::DELETE),
+    (&["end"], keys::END),
+    (&["pagedown"], keys::PAGE_DOWN),
+    (&["right"], keys::RIGHT),
+    (&["left"], keys::LEFT),
+    (&["down"], keys::DOWN),
+    (&["up"], keys::UP),
+    (&["menu"], keys::CONTEXT_MENU),
 ];
 
 /// One chord: the keys in the order they go down.
@@ -117,30 +117,24 @@ pub fn parse_chord(chord: &str) -> Result<Chord, KeyError> {
 
 /// The key code of `name` and whether it is a modifier.
 fn usage(name: &str) -> Option<(KeyCode, bool)> {
-    let find = |table: &[(&[&str], u16)]| {
+    let find = |table: &[(&[&str], KeyCode)]| {
         table
             .iter()
             .find(|(names, _)| names.contains(&name))
-            .map(|(_, usage)| *usage)
+            .map(|(_, code)| *code)
     };
-    if let Some(usage) = find(MODIFIERS) {
-        return Some((KeyCode::keyboard(usage), true));
+    if let Some(code) = find(MODIFIERS) {
+        return Some((code, true));
     }
-    let usage = match name.as_bytes() {
-        [letter @ b'a'..=b'z'] => 0x04 + u16::from(letter - b'a'),
-        [b'0'] => 0x27,
-        [digit @ b'1'..=b'9'] => 0x1e + u16::from(digit - b'1'),
+    let code = match name.as_bytes() {
+        [letter @ b'a'..=b'z'] => keys::letter(*letter)?,
+        [digit @ b'0'..=b'9'] => keys::digit(*digit)?,
         [b'f', rest @ ..] if !rest.is_empty() && rest[0] != b'0' => {
-            let number: u16 = std::str::from_utf8(rest).ok()?.parse().ok()?;
-            match number {
-                1..=12 => 0x3a + number - 1,
-                13..=24 => 0x68 + number - 13,
-                _ => return None,
-            }
+            keys::function(std::str::from_utf8(rest).ok()?.parse().ok()?)?
         }
         _ => find(NAMED)?,
     };
-    Some((KeyCode::keyboard(usage), false))
+    Some((code, false))
 }
 
 /// Every key name, for the error that lists them: modifiers, then the

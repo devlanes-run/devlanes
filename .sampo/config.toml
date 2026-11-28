@@ -36,6 +36,7 @@ linked = [[
   "cargo/devlanes-gui-host",
   "cargo/devlanes-gui-proto",
   "cargo/devlanes-gui-tool",
+  "cargo/devlanes-gui-viewer",
   "cargo/devlanes-infra-compose",
   "cargo/devlanes-infra-docker",
   "cargo/devlanes-ipc",

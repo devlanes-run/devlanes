@@ -100,6 +100,8 @@ fn editor_schema_metadata_is_complete() {
         ("registered", super::registered_schema()),
         ("project", devlanes_config::project_schema()),
         ("user", devlanes_config::user_schema()),
+        // The GUI settings, unpublished until GUI services are on for users.
+        ("user with gui", devlanes_config::user_schema_for(true)),
     ] {
         assert!(schema.get("title").is_none(), "{name}: root title");
         let description = schema["description"].as_str().unwrap_or_default();

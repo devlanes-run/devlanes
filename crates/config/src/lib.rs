@@ -179,9 +179,31 @@ fn rebase_schema_refs(schema: &mut serde_json::Value, base: &str) {
     }
 }
 
-/// Generate the separate machine configuration schema.
+/// Generate the separate machine configuration schema, as published: without
+/// the settings of GUI services, which stay unpublished while GUI services are
+/// off for users.
 pub fn user_schema() -> serde_json::Value {
+    user_schema_for(false)
+}
+
+/// The machine configuration schema, with the settings of GUI services
+/// (`gui`) when `gui_services` is set, for a build that has them on.
+pub fn user_schema_for(gui_services: bool) -> serde_json::Value {
     let mut schema = schemars::schema_for!(UserConfig);
+    if !gui_services {
+        if let Some(properties) = schema
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            properties.remove("gui");
+        }
+        if let Some(defs) = schema
+            .get_mut("$defs")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            defs.remove("GuiUserConfig");
+        }
+    }
     schema.insert(
         "$id".into(),
         "https://devlanes.run/v1/user-schema.json".into(),

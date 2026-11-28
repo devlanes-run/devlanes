@@ -270,8 +270,20 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
         "not_found" => {
             let options = list(data, "candidates");
             let name = reference();
+            // A box lane a `gui` command looked for, with boxes that are away.
+            let away: Vec<String> = list(data, "boxes_not_connected")
+                .iter()
+                .map(display_value)
+                .collect();
             // A typo of a listed name is the likeliest meaning.
-            let mut message = format!("{name} not found");
+            let mut message = if away.is_empty() {
+                format!("{name} not found")
+            } else {
+                format!(
+                    "{name} is not a lane of this machine or of a connected box (not connected: {})",
+                    away.join(", ")
+                )
+            };
             if let Some(guess) = did_you_mean(name.rsplit(':').next().unwrap_or(&name), options) {
                 message.push_str(&format!("; did you mean {}?", super::clean(guess)));
             }
@@ -291,6 +303,9 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             let lane = text(data, "names_lane");
             if !lane.is_empty() {
                 message.push_str(&format!("; {name} is lane {lane}"));
+            }
+            if !away.is_empty() {
+                return (message, Some(Hint::command(["remote", "ls"])));
             }
             (message, Some(Hint::command(["lane", "ls"])))
         }
@@ -2076,6 +2091,11 @@ const GUI_COMMAND_ERRORS: &[&str] = &[
     "gui_off_in_daemon",
     "gui_bad_reference",
     "gui_write_failed",
+    "gui_no_services",
+    "gui_no_display",
+    "gui_viewer_missing",
+    "gui_viewer_failed",
+    "gui_open_for_people",
 ];
 
 /// Why a box's GUI port cannot be reached here, from `{port, state,
@@ -2291,6 +2311,46 @@ fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
                 field(data, "message")
             ),
             None,
+        ),
+        "gui_no_services" => (
+            format!(
+                "{}{on_box} has no running GUI service to open",
+                field(data, "lane")
+            ),
+            Some(ls()),
+        ),
+        "gui_no_display" => (
+            "there is no display to open windows on here: neither WAYLAND_DISPLAY nor DISPLAY is set"
+                .into(),
+            Some(Hint(
+                "run it from a terminal of the desktop session; over SSH, use devlanes gui screenshot"
+                    .into(),
+            )),
+        ),
+        "gui_viewer_missing" => (
+            format!(
+                "devlanes-gui, which shows the windows, is not installed at {}",
+                field(data, "path")
+            ),
+            Some(Hint::command(["update"])),
+        ),
+        "gui_viewer_failed" => (
+            format!(
+                "the windows of {unit}{on_box} did not open: {}",
+                field(data, "message")
+            ),
+            None,
+        ),
+        "gui_open_for_people" => (
+            format!(
+                "devlanes gui open does not run for an agent: {}",
+                crate::args::GUI_OPEN_FOR_PEOPLE
+            ),
+            // A person whose terminal inherited an agent's variables.
+            Some(Hint(format!(
+                "a person can run it with DEVLANES_AGENT=0 {}",
+                Hint::command(["gui", "open", "UNIT"]).0
+            ))),
         ),
         _ => (
             format!(

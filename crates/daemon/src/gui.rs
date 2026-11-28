@@ -10,7 +10,7 @@
 //! opens a `control` connection, spawns the unit and, once the run is
 //! recorded with the host as one of its members (so orphan handling reaches
 //! it after a crash), tells the host the unit's process identity. The unit's
-//! handle is a [`GuiUnit`]: stopping or reaping the unit stops the host after
+//! handle is a `GuiUnit`: stopping or reaping the unit stops the host after
 //! it, freezing reaches the unit only and tells the host, and viewer input
 //! the host reports is lane activity.
 //!
@@ -19,6 +19,10 @@
 //! `debug why`, the daemon log and the unit's launch notes say so. A machine whose
 //! composition root names no backend runs GUI services without a host, as
 //! before, with a note.
+
+pub(crate) mod auto_open;
+pub mod lookup;
+pub mod viewer;
 
 use std::{
     net::{Ipv4Addr, SocketAddr},

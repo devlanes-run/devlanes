@@ -175,6 +175,8 @@ pub(crate) struct Inner {
     /// [`EngineOptions::resume`], taken out of the options so it can be
     /// dropped once [`Handler::on_ready`] used it.
     pub resume: Mutex<Option<devlanes_proto::ResumePlan>>,
+    /// The GUI viewers auto-open started and its bookkeeping.
+    pub gui_viewers: Mutex<crate::gui::auto_open::AutoOpen>,
 }
 
 /// Cheap handle implementing [`Handler`].
@@ -223,6 +225,7 @@ impl Engine {
                 route_publisher: crate::routes::RoutePublisher::default(),
                 watched: AtomicBool::new(false),
                 resume: Mutex::new(resume),
+                gui_viewers: Mutex::default(),
             }),
         };
         let inner = &engine.inner;
@@ -285,6 +288,13 @@ impl Handler for Engine {
         // Usually the server's token already fired; an embedder may call this
         // directly. Either way, new mutations and spawns are refused from here on.
         self.inner.shutdown.cancel();
+        // A stop for good ends the viewers auto-open started first: a box's
+        // would otherwise reconnect to a mirror that is gone with this
+        // daemon. A restart leaves them to the next daemon.
+        if !request.restart && self.inner.opts.gui.enabled {
+            let inner = self.inner.clone();
+            let _ = tokio::task::spawn_blocking(move || inner.end_viewers()).await;
+        }
         let steps = StopSteps::new(&self.inner.bus, request.reason, request.restart);
         self.inner.remote_shutdown(&steps).await;
         let hooks = (request.reason == ShutdownReason::Explicit).then_some(&request.interrupt);

@@ -778,6 +778,58 @@ fn daemon_env(
     vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
     remove: &[&str],
 ) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    let vars: Vec<_> = vars.collect();
+    // Set by this shell's own desktop only, never passed on as they are.
+    let mut kept: Vec<_> = allowed_env(vars.iter().cloned(), remove)
+        .into_iter()
+        .filter(|(name, _)| {
+            !devlanes_proto::VIEWER_DISPLAY_ENV
+                .iter()
+                .any(|(_, kept)| name.to_str().is_some_and(|name| same_name(name, kept)))
+        })
+        .collect();
+    kept.extend(viewer_display_env(&vars));
+    kept
+}
+
+/// The desktop variables of a Linux shell under the names a daemon keeps for
+/// the GUI viewers it starts ([`devlanes_proto::VIEWER_DISPLAY_ENV`]), so no
+/// other program it runs sees them. A shell of an SSH session gives none: its
+/// display is a forwarded one that ends with the session, and a box's daemon
+/// started that way must not open viewers through it.
+#[cfg(target_os = "linux")]
+fn viewer_display_env(
+    vars: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    let get = |name: &str| {
+        vars.iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    };
+    if get("SSH_CONNECTION").is_some() {
+        return Vec::new();
+    }
+    devlanes_proto::VIEWER_DISPLAY_ENV
+        .iter()
+        .filter_map(|(name, kept)| Some(((*kept).into(), get(name).filter(|v| !v.is_empty())?)))
+        .collect()
+}
+
+/// Only Linux viewers need the daemon to pass a desktop on.
+#[cfg(all(not(target_os = "linux"), not(target_family = "wasm")))]
+fn viewer_display_env(
+    _vars: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    Vec::new()
+}
+
+/// The allowlisted part of `vars`, minus `remove` and the variables of one
+/// `devlanes mcp` command.
+#[cfg(not(target_family = "wasm"))]
+fn allowed_env(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    remove: &[&str],
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
     vars.filter(|(name, _)| {
         let Some(name) = name.to_str() else {
             return false;
@@ -1809,6 +1861,48 @@ mod tests {
                 "CI"
             ]
         );
+    }
+
+    /// A Linux daemon gets the shell's desktop only under the viewer's names,
+    /// so the programs it runs do not see it, and none from an SSH session or
+    /// passed on from another shell under those names.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn daemon_env_keeps_the_desktop_for_viewers_only() {
+        let env = |vars: &[(&str, &str)]| {
+            let vars = vars
+                .iter()
+                .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+            daemon_env(vars, &[])
+                .into_iter()
+                .map(|(name, value)| {
+                    (
+                        name.into_string().expect("name"),
+                        value.into_string().expect("value"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let desktop = [
+            ("DISPLAY", ":0"),
+            ("WAYLAND_DISPLAY", "wayland-0"),
+            ("XAUTHORITY", "/run/user/1000/xauth"),
+            ("DEVLANES_VIEWER_DISPLAY", ":9"),
+        ];
+        assert_eq!(
+            env(&desktop),
+            [
+                ("DEVLANES_VIEWER_DISPLAY".into(), ":0".into()),
+                ("DEVLANES_VIEWER_WAYLAND_DISPLAY".into(), "wayland-0".into()),
+                (
+                    "DEVLANES_VIEWER_XAUTHORITY".into(),
+                    "/run/user/1000/xauth".into()
+                ),
+            ]
+        );
+        let mut ssh = desktop.to_vec();
+        ssh.push(("SSH_CONNECTION", "203.0.113.7 5000 192.0.2.1 22"));
+        assert_eq!(env(&ssh), Vec::<(String, String)>::new());
     }
 
     /// Windows keeps the system variables programs need and matches names

@@ -54,7 +54,7 @@ fn backend(requested: String) -> Option<String> {
 
 /// `devlanes-gui` next to the running `devlanes`, where every install puts
 /// it. Blocking: it resolves links.
-fn program() -> PathBuf {
+pub(crate) fn program() -> PathBuf {
     let exe = devlanes_update::running_exe().unwrap_or_else(|_| PathBuf::from("devlanes"));
     exe.with_file_name(devlanes_update::install::GUI_BINARY)
 }

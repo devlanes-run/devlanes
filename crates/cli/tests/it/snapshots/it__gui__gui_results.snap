@@ -32,6 +32,15 @@ no GUI services in acme@2
 no GUI services in acme@2
 --- ls_empty agent
 no GUI services in acme@2
+--- open human
+opened the windows of acme@2:desktop on box hetzner
+acme@2:settings on box hetzner is open already; its windows come to the front
+--- open plain
+opened the windows of acme@2:desktop on box hetzner
+acme@2:settings on box hetzner is open already; its windows come to the front
+--- open agent
+opened the windows of acme@2:desktop on box hetzner
+acme@2:settings on box hetzner is open already; its windows come to the front
 --- screenshot human
 wrote /home/ada/.devlanes/screenshots/acme@2-desktop-1.png (320x200, window 1 "Test pattern 1" of acme@2:desktop)
 --- screenshot plain

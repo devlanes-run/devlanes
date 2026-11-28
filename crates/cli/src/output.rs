@@ -84,10 +84,13 @@ impl<'a> Report<'a> {
 /// Which `devlanes gui` command a [`Reporter::gui`] result is from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuiOutput {
-    /// `gui ls`: `{lane, box, items: [{unit, state, host, address,
+    /// `gui ls`: `{lane, box, items: [{unit, state, host, runs, address,
     /// real_desktop, unmirrored, error, windows: [{id, title, app_id, width, height,
     /// kind, lock, parent}]}]}`.
     Ls,
+    /// `gui open`: `{lane, box, items: [{unit, address, viewer}]}`, where
+    /// `viewer` is `opened` or `already_open` (its windows came to the front).
+    Open,
     /// `gui screenshot`: `{lane, unit, box, window: {id, title}, path, width, height}`.
     Screenshot,
     /// The input commands: `{lane, unit, box, window: {id, title}, action,

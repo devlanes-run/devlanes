@@ -506,6 +506,22 @@ every key (?), this screen's first
 - 120x40: [txt](dialog-help-120x40.txt) · [png](dialog-help-120x40.png) · [ansi](dialog-help-120x40.ansi)
 - 80x24: [txt](dialog-help-80x24.txt) · [png](dialog-help-80x24.png) · [ansi](dialog-help-80x24.ansi)
 
+## gui-service
+
+a build with GUI services on: a running GUI service selected, w opens its windows
+
+- 200x60: [txt](gui-service-200x60.txt) · [png](gui-service-200x60.png) · [ansi](gui-service-200x60.ansi)
+- 120x40: [txt](gui-service-120x40.txt) · [png](gui-service-120x40.png) · [ansi](gui-service-120x40.ansi)
+- 80x24: [txt](gui-service-80x24.txt) · [png](gui-service-80x24.png) · [ansi](gui-service-80x24.ansi)
+
+## dialog-help-gui
+
+every key with GUI services on: w shares the line of o, so the list still fits
+
+- 200x60: [txt](dialog-help-gui-200x60.txt) · [png](dialog-help-gui-200x60.png) · [ansi](dialog-help-gui-200x60.ansi)
+- 120x40: [txt](dialog-help-gui-120x40.txt) · [png](dialog-help-gui-120x40.png) · [ansi](dialog-help-gui-120x40.ansi)
+- 80x24: [txt](dialog-help-gui-80x24.txt) · [png](dialog-help-gui-80x24.png) · [ansi](dialog-help-gui-80x24.ansi)
+
 ## welcome
 
 the first launch in a home: banner, features, first keys and the docs link

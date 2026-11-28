@@ -342,6 +342,17 @@ impl Remotes {
         count
     }
 
+    /// Whether any box connection exists, connected or reconnecting.
+    pub(crate) fn has_boxes(&self) -> bool {
+        !lock(&self.hosts).is_empty()
+    }
+
+    /// Whether a starting daemon is still reopening the boxes an earlier one
+    /// had connected, some of which may have no connection yet.
+    pub(crate) fn restoring(&self) -> bool {
+        self.restoring.load(Ordering::Relaxed)
+    }
+
     /// Every connection, in connect order.
     fn all(&self) -> Vec<Arc<HostConn>> {
         let mut all: Vec<Arc<HostConn>> = lock(&self.hosts).values().cloned().collect();
@@ -1563,11 +1574,27 @@ impl Inner {
     /// Every box lists its `chosen_lanes`, and `yielded_local_lanes` names this
     /// machine's stopped lanes whose hostnames a chosen box lane serves.
     pub(crate) async fn host_list(self: &Arc<Self>) -> Result<Value, RpcError> {
+        self.host_list_with(true).await
+    }
+
+    /// [`Inner::host_list`] of the connected boxes alone, from memory: no
+    /// `remote_hosts` read, for the daemon's own polls (GUI auto-open).
+    pub(crate) async fn live_host_list(self: &Arc<Self>) -> Result<Value, RpcError> {
+        self.host_list_with(false).await
+    }
+
+    /// `remote ls`, with the boxes of `remote_hosts` that are not connected
+    /// when `stored`.
+    async fn host_list_with(self: &Arc<Self>, stored: bool) -> Result<Value, RpcError> {
         self.load_choices().await;
         let https_port = self.https_port;
         let suffixes = mirror::route_suffixes(self);
         let open_ports = self.remote.box_ports.lock().await.open.clone();
-        let stored = self.store.remote_hosts().await.unwrap_or_default();
+        let stored = if stored {
+            self.store.remote_hosts().await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let restore_errors = lock(&self.remote.restore_errors).clone();
         let choices = lock(&self.remote.choices).clone();
         let chosen = |host: &str| -> Vec<&String> {

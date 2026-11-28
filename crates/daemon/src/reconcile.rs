@@ -229,6 +229,7 @@ impl Inner {
         tokio::spawn(self.clone().orphan_watch_loop());
         tokio::spawn(self.clone().update_check_loop());
         tokio::spawn(self.clone().idle_loop());
+        tokio::spawn(self.clone().auto_open_loop());
         if let Some(mut events) = self.integ.infra.events() {
             let engine = self.clone();
             tokio::spawn(async move {

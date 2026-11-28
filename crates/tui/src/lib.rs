@@ -130,6 +130,9 @@ pub struct Options {
     /// `start.restore: false` from the user config: `s` on a lane starts its
     /// default selection instead of the services it ran before.
     pub start_default: bool,
+    /// GUI services are on in this build: `w` on a GUI service opens its
+    /// windows (`devlanes gui open`), and the options page shows `gui.*`.
+    pub gui: bool,
     /// The per-user service definition as `devlanes doctor` reads it
     /// (`{manager, path, installed, stop_window_s, ...}`), for the daemon
     /// page's stop-window check; `None` leaves that check out.

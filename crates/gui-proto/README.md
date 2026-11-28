@@ -66,6 +66,7 @@ fn on_bytes(
 - `ClientMessage` and `HostMessage`: every message of each direction, with `encode` and `decode`; `ClientMessage::allowed_for` says which role may send it.
 - `Hello`, `Welcome`, `Refusal`: the handshake, read with `decode_hello` and `decode_answer`; a version mismatch decodes as `DecodeError::VersionMismatch` on both ends.
 - `WindowInfo`, `CodecOffer`, `CursorShape`, `LockState`: what the host describes.
+- `keys`: the USB HID key codes of the physical keys, by their US-layout names, which the viewer and `devlanes gui key` both send.
 - `Pacer`: per window and codec, decides when to encode, which viewers get the frame and at what bitrate, frame rate and quality.
 - `InputArbiter`: per display, decides whose input reaches the app and releases what a silent client holds.
 - `HostLock` and `ViewerLock`: per window, the lock state from its causes on each end (resizing, waiting for the app, reconnecting, frozen, closed).

@@ -34,6 +34,7 @@ mod driver;
 mod follow;
 mod gui;
 mod gui_commands;
+mod gui_open;
 mod lifecycle;
 mod local;
 mod local_doctor;

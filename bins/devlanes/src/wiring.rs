@@ -78,6 +78,7 @@ pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
         glyphs: Some(tui.glyphs.as_str().to_owned()),
         on_quit: Some(tui.on_quit.as_str().to_owned()),
         start_default: !user.start.restore,
+        gui: crate::gui::enabled(),
         service: Some(crate::daemon::service_report().await).filter(|report| !report.is_null()),
         // The process's environment, zone and directory.
         env: None,

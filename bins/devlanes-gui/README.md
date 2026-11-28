@@ -1,6 +1,6 @@
 # devlanes-gui
 
-The second devlanes binary, installed next to `devlanes`: it holds the GUI hosts, so `devlanes` itself never links the GUI libraries and keeps starting on a box without them. `devlanes-gui host` runs one GUI host for one GUI service and serves its windows with `devlanes-gui-host`.
+The second devlanes binary, installed next to `devlanes`: it holds the GUI hosts and the viewer, so `devlanes` itself never links the GUI libraries and keeps starting on a box without them. `devlanes-gui host` runs one GUI host for one GUI service and serves its windows with `devlanes-gui-host`; `devlanes-gui view` shows a GUI service's windows on this machine with `devlanes-gui-viewer`.
 
 ## Usage
 
@@ -15,6 +15,16 @@ DEVLANES_GUI_TOKEN=... devlanes-gui host --backend test-pattern --listen 127.0.0
 `version` prints the name and the devlanes release version first, then the build kind.
 
 `host` starts the backend, binds the address and prints one line on standard output once it listens, then serves the GUI protocol until it gets SIGINT, SIGTERM or SIGHUP (on Windows Ctrl-C, Ctrl-Break or the console closing) or the backend stops. Logs go to standard error, filtered by `DEVLANES_LOG` (default `info`). It exits with 0 after a stop, 1 when it cannot run (an unknown backend, an address that is not loopback, a port in use), 2 for a malformed command line and 3 when the backend cannot run on this machine, after printing an unready line instead of the ready line. It also ends with 0 once the daemon says the unit exited, after showing viewers its windows Closed. A host started with a token watches for its daemon going away: it exits with 1 when the control connection closes before the unit's identity came, or when no identity came within 60 seconds of the ready line (a daemon that could not tell it, or one that died without closing the connection; on Windows the clock keeps counting while the machine sleeps). Once it has the identity and the control connection closes, it checks the unit by pid and start time every 2 seconds and exits with 0 when the unit is gone.
+
+## Viewer
+
+```sh
+devlanes-gui view --address 127.0.0.1:26012 --service acme@2:desktop
+devlanes-gui view --address 127.0.0.1:26012 --service acme@2:desktop \
+  --instance-dir ~/.devlanes/run/gui-viewers --devlanes /usr/local/bin/devlanes --unit acme@2:desktop
+```
+
+`view` opens a local window for each window of the GUI host at `--address` and runs until the service is gone: 3 seconds after the host showed every window Closed, or after `--devlanes` says the unit stopped (it runs `devlanes gui ls UNIT --json` with `DEVLANES_NO_SPAWN=1` once the host has not answered for 30 seconds; a daemon that is not running counts only when it still is not 30 seconds later, so a daemon restart ends nothing). With `--box NAME`, the box the lane was found on, a lane found nowhere counts as gone only while that box is connected or no longer known (`devlanes remote ls --json`). `devlanes gui open` and the daemon's auto-open start it with `--instance-dir`, where it holds the lock that makes it the one viewer of the service on this machine; a second `view` of the same service asks the first for its windows and exits with 0. `--auto` is the daemon's: windows open without taking focus, and the daemon ends the viewer once its service stopped. It exits with 3 on a machine without a display (neither `WAYLAND_DISPLAY` nor `DISPLAY` set on Linux) and 1 when the first connection fails. `version` and `host` never start the windowing library.
 
 ## Ready line
 

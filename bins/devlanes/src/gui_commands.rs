@@ -2,22 +2,21 @@
 //! host from this process as a `tool` connection. The daemon only says where
 //! the host listens; screenshots and input never pass through it.
 //!
-//! A service of this machine's lanes is found in `status`: a unit with
-//! `gui` set, whose host listens on its `devlanes_gui` port. A box's lane is
-//! not in this machine's `status`, so a lane reference this machine does not
-//! have (`acme@2`) is looked up in `remote ls` instead: the box's registry
-//! names the unit's ports, and the mirror view says whether its
-//! `devlanes_gui` port is bound here, on loopback under the same number.
+//! A service of this machine's lanes is found in `status`, and a lane
+//! reference this machine does not have (`acme@2`) in `remote ls`, as
+//! [`devlanes_daemon::gui::lookup`] reads them; the daemon's auto-open uses
+//! the same reading.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use devlanes_cli::{GuiButton, GuiCommand, GuiOutput, Runtime, exit};
 use devlanes_core::refs::UnitRef;
+use devlanes_daemon::gui::lookup::{self, Found, Service};
 use devlanes_gui_codec::Frame;
 use devlanes_gui_proto::{Buttons, LockState, Point, Size, WindowInfo, WindowKind};
 use devlanes_gui_tool::{After, Chord, KeyError, Session, ToolError};
-use devlanes_proto::{Context, GUI_PORT, LaneSummary, Method, Request, RpcError};
+use devlanes_proto::{Context, LaneSummary, Method, Request, RpcError};
 use serde_json::{Value, json};
 
 use crate::output::emit;
@@ -28,37 +27,6 @@ const CLIENT_NAME: &str = "devlanes gui";
 /// Where screenshots go without `--to`: this folder of the devlanes home,
 /// private to the account as the home is.
 const SCREENSHOT_DIR: &str = "screenshots";
-
-/// One GUI service and where its host listens.
-#[derive(Debug, Clone)]
-struct Service {
-    /// The unit's name, such as `desktop` or `desktop.2`.
-    unit: String,
-    /// The unit's state.
-    state: String,
-    /// `running`, `stopped`, `exited` or `none`, as `status` says; for a box
-    /// unit `running` while it serves, else `stopped`.
-    host: String,
-    /// Where to connect while the host runs.
-    address: Option<SocketAddr>,
-    /// Why a running box unit's port cannot be reached from here: `{port,
-    /// state, message}` from the mirror view, which the CLI words.
-    unmirrored: Option<Value>,
-}
-
-/// The lane the units were found in.
-#[derive(Debug)]
-struct Found {
-    /// The lane's reference, such as `acme@2`.
-    lane: String,
-    /// The box the lane runs on, for a box's lane.
-    host_box: Option<String>,
-    /// The lane's GUI services.
-    services: Vec<Service>,
-    /// Every unit name of the lane, to tell a unit that is no GUI service
-    /// from one that does not exist.
-    units: Vec<String>,
-}
 
 /// Runs a `devlanes gui` command and prints its result.
 pub(crate) async fn run(
@@ -74,6 +42,12 @@ pub(crate) async fn run(
             json!({"feature": "devlanes gui"}),
             exit::FAILED,
         ));
+    }
+    // Windows on the desktop are for a person: an agent cannot use them, and
+    // they would take focus and send the local clipboard to the app. Decided
+    // on who runs the command, whatever output it asked for.
+    if matches!(command, GuiCommand::Open { .. }) && opened_by_agent(runtime) {
+        return Err(RpcError::new("gui_open_for_people", json!({}), exit::USAGE));
     }
     let chords = chords(&command)?;
     // Refused before anything connects, as the host would refuse it.
@@ -93,6 +67,11 @@ pub(crate) async fn run(
         let services = select(&found, &names, true)?;
         let data = ls(&found, &services).await;
         return report(runtime, GuiOutput::Ls, &data);
+    }
+    if let GuiCommand::Open { .. } = &command {
+        let services = select(&found, &names, true)?;
+        let data = crate::gui_open::open(&found, services, !names.is_empty()).await?;
+        return report(runtime, GuiOutput::Open, &data);
     }
     let service = select(&found, &names, false)?
         .into_iter()
@@ -114,6 +93,13 @@ pub(crate) async fn run(
         data["path"] = json!(save(frame, target).await?);
     }
     report(runtime, output, &data)
+}
+
+/// Whether an agent runs this command, by agent detection, which
+/// `DEVLANES_AGENT=0` turns off; `--json`, `--output` or `DEVLANES_OUTPUT`
+/// change only the output.
+fn opened_by_agent(runtime: &Runtime) -> bool {
+    runtime.actor.kind == devlanes_proto::ActorKind::Agent
 }
 
 /// The chords of `gui key`, checked before anything connects.
@@ -214,7 +200,7 @@ async fn drive(
                     json!(taken.map(|taken| json!({"width": taken.width, "height": taken.height})));
                 after
             }
-            GuiCommand::Ls { .. } => After::Open,
+            GuiCommand::Ls { .. } | GuiCommand::Open { .. } => After::Open,
         };
         // Said in the result: the input reached the app, and what became of
         // the window by then.
@@ -307,7 +293,7 @@ async fn find(mut context: Context, lane: Option<String>) -> Result<Found, RpcEr
     match status {
         Ok(data) => local_lane(&data, named.is_some()),
         Err(error) if gui_off_in_daemon(&error) => Err(daemon_off()),
-        Err(error) => {
+        Err(mut error) => {
             let Some(reference) = named.filter(|_| error.exit_code == exit::NOT_FOUND) else {
                 return Err(error);
             };
@@ -319,8 +305,28 @@ async fn find(mut context: Context, lane: Option<String>) -> Result<Found, RpcEr
             })
             .await
             .unwrap_or_default();
-            box_lane(&boxes, &reference).ok_or(error)
+            if let Some(found) = lookup::box_lane(&boxes, &reference) {
+                return Ok(found);
+            }
+            note_boxes_away(&mut error, &boxes);
+            Err(error)
         }
+    }
+}
+
+/// Adds to the `not_found` `error` of a lane found nowhere the boxes of
+/// `remote ls` (`boxes`) this machine knows but is not connected to, which
+/// may have it. The error keeps its code, exit code and lanes.
+fn note_boxes_away(error: &mut RpcError, boxes: &Value) {
+    let away: Vec<&str> = boxes["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|host| host["state"] != "connected")
+        .filter_map(|host| host["host"].as_str())
+        .collect();
+    if !away.is_empty() && error.data.is_object() {
+        error.data["boxes_not_connected"] = json!(away);
     }
 }
 
@@ -362,23 +368,7 @@ fn local_lane(data: &Value, named: bool) -> Result<Found, RpcError> {
             exit::NOT_FOUND,
         )
     })?;
-    let services = lane
-        .units
-        .iter()
-        .filter_map(|unit| {
-            let gui = unit.gui.as_ref()?;
-            let port = unit.ports.get(GUI_PORT).copied();
-            Some(Service {
-                unit: unit.name.clone(),
-                state: unit.state.clone(),
-                host: gui.host.clone(),
-                address: port
-                    .filter(|_| gui.host == devlanes_proto::GUI_HOST_RUNNING)
-                    .map(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port))),
-                unmirrored: None,
-            })
-        })
-        .collect::<Vec<_>>();
+    let services = lookup::lane_services(&lane);
     if services.is_empty() && lane.reason.as_ref().is_some_and(gui_off_in_daemon) {
         return Err(daemon_off());
     }
@@ -387,116 +377,6 @@ fn local_lane(data: &Value, named: bool) -> Result<Found, RpcError> {
         host_box: None,
         units: lane.units.iter().map(|unit| unit.name.clone()).collect(),
         services,
-    })
-}
-
-/// The box lane `reference` (`project@index`) from a `remote ls` answer. Of
-/// several boxes with that lane, the one whose ports this machine mirrors.
-fn box_lane(data: &Value, reference: &str) -> Option<Found> {
-    let (project, index) = reference.split_once('@')?;
-    let empty = Vec::new();
-    let mut candidates = Vec::new();
-    for host in data["items"].as_array().unwrap_or(&empty) {
-        let units: Vec<&Value> = host["registry"]["units"]
-            .as_array()
-            .unwrap_or(&empty)
-            .iter()
-            .filter(|unit| {
-                unit["key"]["lane"]["project"] == project && unit["key"]["lane"]["lane"] == index
-            })
-            .collect();
-        if units.is_empty() {
-            continue;
-        }
-        let services: Vec<Service> = units
-            .iter()
-            .filter(|unit| unit["key"]["kind"] == "service")
-            .filter_map(|unit| box_service(host, reference, unit))
-            .collect();
-        candidates.push(Found {
-            lane: reference.to_owned(),
-            host_box: host["host"].as_str().map(str::to_owned),
-            units: units
-                .iter()
-                .filter_map(|unit| unit["key"]["name"].as_str().map(str::to_owned))
-                .collect(),
-            services,
-        });
-    }
-    // The box this machine mirrors the lane from, else the one `remote use`
-    // chose for it, else the first.
-    let chosen = |found: &Found| {
-        data["items"]
-            .as_array()
-            .unwrap_or(&empty)
-            .iter()
-            .any(|host| {
-                host["host"].as_str() == found.host_box.as_deref()
-                    && host["chosen_lanes"]
-                        .as_array()
-                        .is_some_and(|lanes| lanes.iter().any(|lane| lane == reference))
-            })
-    };
-    let pick = candidates
-        .iter()
-        .position(|found| found.services.iter().any(|s| s.address.is_some()))
-        .or_else(|| candidates.iter().position(chosen))
-        .unwrap_or(0);
-    (pick < candidates.len()).then(|| candidates.swap_remove(pick))
-}
-
-/// A box unit with a `devlanes_gui` port, and the address its mirror has
-/// here when the port is bound.
-fn box_service(host: &Value, lane: &str, unit: &Value) -> Option<Service> {
-    let name = unit["key"]["name"].as_str()?;
-    let port = unit["ports"]
-        .as_array()?
-        .iter()
-        .find(|port| port["name"] == GUI_PORT)?["port"]
-        .as_u64()?;
-    let state = unit["state"].as_str().unwrap_or_default().to_owned();
-    let serving = devlanes_transport::serving(&state);
-    let mirror = host["ports"].as_array().and_then(|ports| {
-        ports
-            .iter()
-            .find(|entry| entry["port"] == port && entry["lane"] == lane && entry["unit"] == name)
-    });
-    // Only a loopback listener of the mirror, whatever else the list says.
-    let address = mirror
-        .filter(|entry| entry["state"] == "bound")
-        .and_then(|entry| {
-            let listed = |address: IpAddr| {
-                entry["addresses"].as_array().is_some_and(|addresses| {
-                    addresses
-                        .iter()
-                        .any(|listed| listed.as_str().and_then(|a| a.parse().ok()) == Some(address))
-                })
-            };
-            [
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                IpAddr::V6(Ipv6Addr::LOCALHOST),
-            ]
-            .into_iter()
-            .find(|loopback| listed(*loopback))
-        })
-        .zip(u16::try_from(port).ok())
-        .map(SocketAddr::from);
-    // Why the port is not reachable here, for the CLI to word: the mirror's
-    // own message when something holds the port, else its state.
-    let unmirrored = (serving && address.is_none()).then(|| {
-        json!({
-            "port": port,
-            "state": mirror.and_then(|entry| entry["state"].as_str()),
-            "message": mirror
-                .and_then(|entry| entry["conflicts"].as_array()?.first()?["message"].as_str()),
-        })
-    });
-    Some(Service {
-        unit: name.to_owned(),
-        state,
-        host: if serving { "running" } else { "stopped" }.to_owned(),
-        address,
-        unmirrored,
     })
 }
 
@@ -566,7 +446,7 @@ fn replica_of(unit: &str, name: &str) -> bool {
 }
 
 /// Where `service`'s host can be reached, or why not.
-fn reachable(base: &Value, service: &Service) -> Result<SocketAddr, RpcError> {
+pub(crate) fn reachable(base: &Value, service: &Service) -> Result<SocketAddr, RpcError> {
     if let Some(address) = service.address {
         return Ok(address);
     }
@@ -585,7 +465,7 @@ fn reachable(base: &Value, service: &Service) -> Result<SocketAddr, RpcError> {
 }
 
 /// `gui_unreachable` for a host whose port did not answer the hello.
-fn unreachable_error(base: &Value, address: SocketAddr, error: &ToolError) -> RpcError {
+pub(crate) fn unreachable_error(base: &Value, address: SocketAddr, error: &ToolError) -> RpcError {
     let mut data = base.clone();
     data["address"] = json!(address.to_string());
     data["message"] = json!(chain(error));
@@ -655,6 +535,7 @@ async fn ls(found: &Found, services: &[Service]) -> Value {
             "unit": service.unit,
             "state": service.state,
             "host": service.host,
+            "runs": service.runs,
             "address": service.address.map(|address| address.to_string()),
             "real_desktop": null,
             "unmirrored": service.unmirrored,
@@ -810,6 +691,7 @@ async fn save(frame: Frame, target: Target) -> Result<PathBuf, RpcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devlanes_daemon::gui::lookup::box_lane;
 
     /// A `remote ls` answer with one box lane `acme@2` whose `desktop` has a
     /// GUI port in `state`, mirrored when `bound`.
@@ -834,6 +716,80 @@ mod tests {
                  "hidden": false, "state": state, "ports": [{"name": "default", "port": 26011}], "hosts": []},
             ]},
         }]})
+    }
+
+    /// An agent cannot open windows by asking for another output: `--json`,
+    /// `--output plain` and `DEVLANES_OUTPUT` leave it an agent. With agent
+    /// detection off (`DEVLANES_AGENT=0`, as the TUI runs it) it is a person.
+    #[test]
+    fn gui_open_is_refused_to_an_agent_in_any_output() {
+        use devlanes_cli::clap::Parser;
+        use devlanes_cli::{Cli, Signals};
+        let agent = devlanes_proto::Actor {
+            kind: devlanes_proto::ActorKind::Agent,
+            agent_id: Some("codex".into()),
+            session_id: None,
+        };
+        let runtime = |args: &[&str], env_output: Option<&str>, disabled: bool| {
+            let line = ["devlanes", "gui", "open", "desktop"]
+                .into_iter()
+                .chain(args.iter().copied());
+            let signals = Signals {
+                env_output: env_output.map(str::to_owned),
+                agent_disabled: disabled,
+                detected_actor: (!disabled).then(|| agent.clone()),
+                ..Signals::default()
+            };
+            Runtime::resolve(&Cli::parse_from(line), signals).expect("runtime")
+        };
+        for (args, env) in [
+            (&[][..], None),
+            (&["--json"][..], None),
+            (&["--output", "plain"][..], None),
+            (&[][..], Some("json")),
+        ] {
+            assert!(
+                opened_by_agent(&runtime(args, env, false)),
+                "{args:?} {env:?}"
+            );
+        }
+        assert!(!opened_by_agent(&runtime(
+            &["--output", "plain"],
+            None,
+            true
+        )));
+    }
+
+    /// A typo such as `acme@9:desktop` stays `not_found` with exit 3 and its
+    /// lanes while a box is away, and names that box; with every box
+    /// connected nothing is added.
+    #[test]
+    fn a_lane_found_nowhere_stays_not_found_and_names_the_boxes_away() {
+        let not_found = || {
+            RpcError::new(
+                "not_found",
+                json!({"reference": "acme@9", "candidates": ["acme@1"]}),
+                exit::NOT_FOUND,
+            )
+        };
+        let mut away = boxes("running", true);
+        away["items"]
+            .as_array_mut()
+            .expect("items")
+            .push(json!({"host": "other", "state": "disconnected", "ports": []}));
+        assert!(box_lane(&away, "acme@9").is_none());
+        let mut error = not_found();
+        note_boxes_away(&mut error, &away);
+        assert_eq!(
+            (error.code.as_str(), error.exit_code),
+            ("not_found", exit::NOT_FOUND)
+        );
+        assert_eq!(error.data["candidates"], json!(["acme@1"]));
+        assert_eq!(error.data["boxes_not_connected"], json!(["other"]));
+
+        let mut error = not_found();
+        note_boxes_away(&mut error, &boxes("running", true));
+        assert!(error.data.get("boxes_not_connected").is_none());
     }
 
     /// The loader's error for a `gui: true` service with GUI services off, as

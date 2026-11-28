@@ -17,7 +17,7 @@ impl CompletionSource for DaemonCandidates {
     /// Builds a tiny runtime per call because completion runs before main's runtime exists.
     fn existing_daemon_candidates(&self, kind: CompletionKind, _prefix: &str) -> Vec<String> {
         if kind == CompletionKind::Setting {
-            return devlanes_config::user_keys();
+            return devlanes_config::user_keys(crate::gui::enabled());
         }
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()

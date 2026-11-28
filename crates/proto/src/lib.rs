@@ -943,6 +943,20 @@ pub struct UnitSummary {
 /// the protocol crate has no dependency on core to share it from.
 pub const GUI_PORT: &str = "devlanes_gui";
 
+/// The variables a Linux viewer needs to reach the desktop and show its
+/// cursor theme, each with the name the CLI hands it to a daemon it spawns
+/// under. The daemon passes them to the viewers it starts and to nothing
+/// else: under their own names every program the daemon runs (`ssh`, `git`)
+/// would see the desktop of whoever started the daemon, where OpenSSH may
+/// forward X11 or open its password prompt in a window.
+pub const VIEWER_DISPLAY_ENV: [(&str, &str); 5] = [
+    ("DISPLAY", "DEVLANES_VIEWER_DISPLAY"),
+    ("WAYLAND_DISPLAY", "DEVLANES_VIEWER_WAYLAND_DISPLAY"),
+    ("XAUTHORITY", "DEVLANES_VIEWER_XAUTHORITY"),
+    ("XCURSOR_THEME", "DEVLANES_VIEWER_XCURSOR_THEME"),
+    ("XCURSOR_SIZE", "DEVLANES_VIEWER_XCURSOR_SIZE"),
+];
+
 /// A GUI service's host as [`UnitSummary::gui`] reports it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GuiStatus {

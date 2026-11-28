@@ -169,6 +169,35 @@ async fn a_frame_that_fails_to_decode_is_acknowledged_and_a_keyframe_requested()
     );
 }
 
+/// A message that arrives in slow pieces (a large keyframe over a slow box
+/// link) keeps the connection alive: silence counts from the last bytes,
+/// not the last whole message.
+#[tokio::test(start_paused = true)]
+async fn a_message_arriving_in_slow_pieces_is_not_silence() {
+    let (client, mut host) = connect(Role::Viewer, bytes(&welcome())).await;
+    let (client, _events) = client.expect("welcomed");
+    let frame = bytes(&raw_frame(1, Bytes::from(vec![0u8; 4096])));
+    let step = Duration::from_secs(5);
+    for piece in frame.chunks(frame.len() / 8 + 1) {
+        tokio::time::sleep(step).await;
+        host.stream.write_all(piece).await.expect("writes");
+        // Let the client's reader take the bytes in.
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            client.silent_for() < step,
+            "silent for {:?} with bytes just in",
+            client.silent_for()
+        );
+    }
+    tokio::time::sleep(step).await;
+    assert!(
+        client.silent_for() >= step,
+        "silence counts again once bytes stop"
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn keep_alives_go_out_only_while_input_is_held() {
     let (client, mut host) = connect(Role::Tool, bytes(&welcome())).await;
