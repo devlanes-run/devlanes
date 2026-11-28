@@ -73,6 +73,8 @@ Publish changes with `registry.publish(event)`. A daemon that only has full snap
 - `PairingClient` and `PairingGate`: the client's stored token and code, and the box's check of a token and trade of a code.
 - `memory::memory_transport`: in-process transport with freeze and sever controls for tests.
 - `PeerEndpoint`: a daemon's peer-to-peer endpoint, which dials boxes by `PeerAddr` and lets clients in through an `Admission` during the handshake, for `TUNNEL_ALPN` sessions and `PAIR_ALPN` pairing; `devlanes-transport-iroh` implements it.
+- `Ticket`: a box's `PeerAddr` and a one-time `TicketSecret` as `dlp1` text, with `encode` and `parse` (a checksum catches typing mistakes).
+- `request_pairing` and `answer_pairing`: the client's and the box's side of the one-request pairing exchange on a `PAIR_ALPN` connection; the box decides with a `PairDesk`.
 - `PeerError`: why a peer operation failed, classified as transient or permanent when it becomes a `TransportError`.
 - `memory::MemoryPeers`: in-memory peer endpoints for tests; `set_reachable` makes dials fail for lack of a direct path.
 - `conformance`, with the `test-support` feature: the checks every connection type and peer endpoint passes, for transport crates' tests.

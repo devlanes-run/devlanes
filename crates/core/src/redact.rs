@@ -199,13 +199,14 @@ impl Redactor {
         hide_assignments(&self.hide_known(text))
     }
 
-    /// `text` with known secret values, URL passwords and the home hidden.
+    /// `text` with known secret values, URL passwords, pairing tickets and
+    /// the home hidden.
     fn hide_known(&self, text: &str) -> String {
         let mut out = text.to_owned();
         for value in &self.values {
             out = out.replace(value.as_str(), REDACTED);
         }
-        let mut out = hide_url_passwords(&out);
+        let mut out = hide_tickets(&hide_url_passwords(&out));
         for home in &self.homes {
             out = hide_home(&out, home);
         }
@@ -236,6 +237,43 @@ fn hide_url_passwords(text: &str) -> String {
         rest = &after[end..];
     }
     out.push_str(rest);
+    out
+}
+
+/// How a peer-to-peer pairing ticket starts (`devlanes_proto::remote::TICKET_PREFIX`).
+const TICKET_PREFIX: &[u8] = b"dlp1";
+/// Base32 characters after the prefix from which a run is taken for a
+/// ticket; the shortest real ticket, with no relay and no address, is 55
+/// bytes, which is 88 characters.
+const TICKET_MIN_BODY: usize = 60;
+
+/// `text` with every pairing ticket replaced by [`REDACTED`]: `dlp1` and at
+/// least [`TICKET_MIN_BODY`] base32 characters, in any case. A ticket lets
+/// whoever holds it pair with the box until it is used or expires.
+fn hide_tickets(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let base32 = |byte: &u8| byte.is_ascii_alphabetic() || (b'2'..=b'7').contains(byte);
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut at = 0;
+    while let Some(found) = bytes[at..]
+        .windows(TICKET_PREFIX.len())
+        .position(|window| window.eq_ignore_ascii_case(TICKET_PREFIX))
+    {
+        let start = at + found;
+        let body = start + TICKET_PREFIX.len();
+        let run = bytes[body..].iter().take_while(|byte| base32(byte)).count();
+        if run >= TICKET_MIN_BODY {
+            // Prefix and run are ASCII, so both ends are character boundaries.
+            out.push_str(&text[copied..start]);
+            out.push_str(REDACTED);
+            copied = body + run;
+            at = copied;
+        } else {
+            at = body;
+        }
+    }
+    out.push_str(&text[copied..]);
     out
 }
 
@@ -516,6 +554,15 @@ mod tests {
                 json!("postgres://u:[redacted]@h/app"),
             ),
             (Call::Value("RETRIES", "1"), json!("1"), json!("1")),
+            // Pairing tickets in any case; a short `dlp1` word stays.
+            both(
+                &format!("run devlanes remote connect dlp1{} here", "ab2c".repeat(33)),
+                "run devlanes remote connect [redacted] here",
+            ),
+            both(
+                &format!("pasted DLP1{}; dlp1-box", "AB7Z".repeat(16)),
+                "pasted [redacted]; dlp1-box",
+            ),
             // Variable and field names disagree on `KEY`.
             (
                 text("env_keys=ACME_KEY,PORT ACME_KEY=k-1 token=abc PORT=3000"),

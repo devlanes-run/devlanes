@@ -705,6 +705,7 @@ impl Store {
                 diesel::delete(remote_hosts::table).execute(c)?;
                 diesel::delete(remote_pairings::table).execute(c)?;
                 diesel::delete(remote_tokens::table).execute(c)?;
+                diesel::delete(p2p_clients::table).execute(c)?;
                 diesel::delete(remote_lane_choices::table).execute(c)?;
                 diesel::delete(lane_setup::table).execute(c)?;
                 diesel::delete(task_completions::table).execute(c)?;

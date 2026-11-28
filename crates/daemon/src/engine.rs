@@ -602,7 +602,7 @@ impl Inner {
             Method::Subscribe => self.subscribe_method(params, &session).await,
             Method::RemoteRegistry => self.remote_registry(params, &session).await,
             Method::RemoteReport => self.remote_report(params),
-            Method::RemotePair => self.pair_method().await,
+            Method::RemotePair => self.pair_method(params).await,
             Method::RemotePairingVerify => self.verify_pairing(params).await,
             Method::RemotePairingClaim => self.claim_pairing(params).await,
             Method::RemoteClients => self.clients_method().await,

@@ -69,6 +69,111 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
 }
 
 #[tokio::test]
+/// Migration 016 adds `p2p_clients` to a version 15 database: one row per
+/// key, a pairing never replaces another key's row, a client keeps its
+/// newest keys up to the limit, and a revoke or a state reset deletes them.
+/// Its down script drops the table.
+async fn migration_adds_p2p_clients_and_down_drops_them() {
+    use devlanes_state::P2pClient;
+    use diesel::{migration::MigrationSource, prelude::*};
+    use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+    const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+    let dir = tempfile::tempdir().expect("directory");
+    let path = dir.path().join("peers.db");
+    let mut c = SqliteConnection::establish(path.to_str().expect("path")).expect("connection");
+    c.applied_migrations().expect("ledger");
+    let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
+        .expect("migrations");
+    c.run_migrations(&migrations[..15]).expect("v15");
+    let store = Store::open(&path).await.expect("upgrade");
+    assert_eq!(
+        store.schema_version().await.expect("version"),
+        SCHEMA_VERSION
+    );
+    let client = |key: &str, id: &str, name: &str| P2pClient {
+        peer_key: key.repeat(64),
+        client_id: format!("dl_cid_{id}"),
+        name: name.into(),
+        paired_at: 1,
+        last_seen: None,
+    };
+    // Two keys per client here; pairings in one millisecond unless set.
+    let pin = |client: P2pClient| {
+        let store = store.clone();
+        async move { store.add_p2p_client(client, 2).await.expect("pin") }
+    };
+    assert!(pin(client("a", "laptop", "laptop")).await.is_empty());
+    assert!(pin(client("b", "desk", "desk")).await.is_empty());
+    // A second key of the laptop keeps the first, and the desk's key is
+    // left alone: a pairing never replaces another key's row.
+    assert!(pin(client("c", "laptop", "laptop")).await.is_empty());
+    // A third key goes over the limit and drops the laptop's oldest.
+    assert_eq!(pin(client("d", "laptop", "laptop")).await, ["a".repeat(64)]);
+    // The desk's key paired again under another id replaces its own row.
+    assert!(pin(client("b", "other", "other")).await.is_empty());
+    // After the clock stepped back, the key just paired is still the newest.
+    let stepped_back = P2pClient {
+        paired_at: 0,
+        ..client("e", "laptop", "laptop")
+    };
+    assert_eq!(pin(stepped_back).await, ["c".repeat(64)]);
+    assert!(
+        store
+            .touch_p2p_client("d".repeat(64), "laptop-2".into(), 9)
+            .await
+            .expect("touch")
+    );
+    let pinned: Vec<(String, String, Option<i64>)> = store
+        .p2p_clients()
+        .await
+        .expect("clients")
+        .into_iter()
+        .map(|client| (client.peer_key, client.client_id, client.last_seen))
+        .collect();
+    assert_eq!(
+        pinned,
+        [
+            ("e".repeat(64), "dl_cid_laptop".into(), None),
+            ("d".repeat(64), "dl_cid_laptop".into(), Some(9)),
+            ("b".repeat(64), "dl_cid_other".into(), None),
+        ]
+    );
+    // A revoke deletes a client's pairings of both kinds together.
+    store
+        .add_remote_pairing(
+            devlanes_state::RemotePairing {
+                client_id: "dl_cid_laptop".into(),
+                name: "laptop".into(),
+                token_sha256: "0".repeat(64),
+                paired_at: 1,
+                last_seen: None,
+            },
+            8,
+        )
+        .await
+        .expect("token pairing");
+    assert_eq!(
+        store
+            .delete_client_pairings(vec!["dl_cid_laptop".into()])
+            .await
+            .expect("revoke"),
+        (1, 2)
+    );
+    // `daemon reset-state` forgets every pinned key with the other pairings.
+    store.reset().await.expect("reset");
+    assert!(store.p2p_clients().await.expect("clients").is_empty());
+    store.close().await.expect("close");
+    while c.applied_migrations().expect("ledger").len() > 16 {
+        c.revert_last_migration(MIGRATIONS)
+            .expect("down a later migration");
+    }
+    c.revert_last_migration(MIGRATIONS).expect("down 016");
+    let gone = diesel::sql_query("SELECT peer_key FROM p2p_clients").execute(&mut c);
+    assert!(gone.is_err(), "down drops p2p_clients");
+    c.run_pending_migrations(MIGRATIONS).expect("redo 016");
+}
+
+#[tokio::test]
 /// Migration `task_run_state` names how earlier task runs ended from their exit
 /// code: 0 `exited`, another code `failed`, none `stopped`; a run still going
 /// has none.

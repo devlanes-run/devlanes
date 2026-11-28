@@ -1472,6 +1472,7 @@ dependencies = [
  "devlanes-testing",
  "devlanes-transport",
  "devlanes-transport-command",
+ "devlanes-transport-iroh",
  "devlanes-transport-ssh",
  "devlanes-trust",
  "devlanes-trust-linux",
@@ -1657,8 +1658,10 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "unicode-general-category",
  "unicode-width 0.2.3",
  "vt100",
+ "zeroize",
 ]
 
 [[package]]
@@ -2463,16 +2466,20 @@ version = "0.6.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "data-encoding",
  "devlanes-loopback",
+ "devlanes-proto",
  "devlanes-transport",
  "futures-util",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "tracing",
  "yamux",
+ "zeroize",
  "zstd",
 ]
 

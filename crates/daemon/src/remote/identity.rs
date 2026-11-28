@@ -112,7 +112,7 @@ fn random_id() -> io::Result<String> {
 
 /// The machine's host name, empty when unknown.
 #[cfg(unix)]
-fn host_name() -> String {
+pub(crate) fn host_name() -> String {
     rustix::system::uname()
         .nodename()
         .to_string_lossy()
@@ -122,7 +122,7 @@ fn host_name() -> String {
 /// The machine's host name, empty when unknown. Asked from the system: a
 /// daemon the CLI starts has no `COMPUTERNAME`.
 #[cfg(windows)]
-fn host_name() -> String {
+pub(crate) fn host_name() -> String {
     devlanes_sys_windows::system::computer_name().unwrap_or_default()
 }
 

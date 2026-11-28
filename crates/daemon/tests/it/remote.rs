@@ -38,8 +38,8 @@ use std::{
 use devlanes_daemon::{
     Engine, EngineOptions, Handler, Options, Server, Session,
     integrations::{
-        Integrations, RemoteConnector, RemotePrompt, RemotePrompter, RemoteTransport, RouteEntry,
-        RouteSink, RouteStatus,
+        BoxServing, Integrations, RemoteConnector, RemotePrompt, RemotePrompter, RemoteTransport,
+        RouteEntry, RouteSink, RouteStatus,
     },
 };
 use devlanes_ipc::Frame;
@@ -50,8 +50,8 @@ use devlanes_proto::{
 };
 use devlanes_state::Store;
 use devlanes_transport::{
-    AuthorizedTarget, Backoff, BoxConnection, BoxDuplex, Dialer, LoopbackDialer, ServeOptions,
-    SessionOptions, Transport,
+    AuthorizedTarget, Backoff, BoxConnection, BoxDuplex, Dialer, LoopbackDialer, PeerEndpoint,
+    ServeOptions, SessionOptions, Transport,
     memory::{MemoryTransport, memory_transport},
     mux_client, serve,
 };
@@ -98,6 +98,17 @@ async fn engine_with(
     remote: Option<Arc<dyn RemoteConnector>>,
     routes: Option<Arc<dyn RouteSink>>,
 ) -> Harness {
+    engine_with_peer(home, ports, remote, routes, None).await
+}
+
+/// [`engine_with`], serving clients paired by ticket over `peer` when set.
+async fn engine_with_peer(
+    home: &Path,
+    ports: &str,
+    remote: Option<Arc<dyn RemoteConnector>>,
+    routes: Option<Arc<dyn RouteSink>>,
+    peer: Option<(Arc<dyn PeerEndpoint>, Arc<dyn BoxServing>)>,
+) -> Harness {
     let runner = FakeRunner::default();
     let processes = FakeProcesses::default();
     let infra = FakeInfra::default();
@@ -110,6 +121,10 @@ async fn engine_with(
     }
     if let Some(routes) = routes {
         integ.routes = routes;
+    }
+    if let Some((peer, serving)) = peer {
+        integ.peer = Some(peer);
+        integ.box_serving = Some(serving);
     }
     std::fs::create_dir_all(home).expect("home");
     let store = Store::open(home.join("state.db")).await.expect("store");
@@ -130,6 +145,23 @@ async fn engine_with(
         home: home.to_path_buf(),
         idle,
         next_id: AtomicU64::new(1),
+    }
+}
+
+/// What the binary's `TunnelServing` does for a box daemon: the tunnel's
+/// services, answered over the box daemon's socket at these paths.
+struct TunnelServing(devlanes_client::Paths);
+
+impl BoxServing for TunnelServing {
+    /// The tunnel's services without its own pairing check, which the
+    /// daemon replaces.
+    fn services(&self, client: RemoteClient) -> devlanes_transport::BoxServices {
+        devlanes_tunnel::services(self.0.clone(), client, false)
+    }
+
+    /// The label the memory tunnel sends too.
+    fn label(&self) -> String {
+        "devlanes test-box".into()
     }
 }
 
@@ -155,30 +187,47 @@ impl BoxSide {
         ports: &str,
         dialer: Option<Arc<dyn Dialer>>,
     ) -> Self {
-        Self::start_full(tmp, name, ports, dialer, None, true, None).await
+        Self::start_full(tmp, name, ports, dialer, None, true, None, None).await
     }
 
     /// [`BoxSide::start`] for a box whose proxy reports `https_port`.
     async fn start_on_https(tmp: &Temp, name: &str, ports: &str, https_port: u16) -> Self {
-        Self::start_full(tmp, name, ports, None, Some(https_port), true, None).await
+        Self::start_full(tmp, name, ports, None, Some(https_port), true, None, None).await
     }
 
     /// [`BoxSide::start`] for a box with `remote.require_pairing: false`,
     /// which serves every client.
     async fn start_unpaired(tmp: &Temp, name: &str, ports: &str) -> Self {
-        Self::start_full(tmp, name, ports, None, None, false, None).await
+        Self::start_full(tmp, name, ports, None, None, false, None, None).await
     }
 
     /// [`BoxSide::start`] for a box with `remote.allow_connections: false`,
     /// whose tunnel turns every client away with `reason`.
     async fn start_refusing(tmp: &Temp, name: &str, ports: &str, reason: &str) -> Self {
-        Self::start_full(tmp, name, ports, None, None, true, Some(reason.to_owned())).await
+        Self::start_full(
+            tmp,
+            name,
+            ports,
+            None,
+            None,
+            true,
+            Some(reason.to_owned()),
+            None,
+        )
+        .await
+    }
+
+    /// [`BoxSide::start`] for a box that also pairs by ticket and serves
+    /// the clients paired that way over `peer`, as the binary wires it.
+    async fn start_peer(tmp: &Temp, name: &str, ports: &str, peer: Arc<dyn PeerEndpoint>) -> Self {
+        Self::start_full(tmp, name, ports, None, None, true, None, Some(peer)).await
     }
 
     /// [`BoxSide::start_with`], with the HTTPS port the box reports in the
     /// handshake when `https_port` is set, serving only paired clients with
     /// `require_pairing`, as a box does by default, or no client at all with
-    /// a `refusal`.
+    /// a `refusal`, and clients paired by ticket over `peer`.
+    #[allow(clippy::too_many_arguments)]
     async fn start_full(
         tmp: &Temp,
         name: &str,
@@ -187,8 +236,8 @@ impl BoxSide {
         https_port: Option<u16>,
         require_pairing: bool,
         refusal: Option<String>,
+        peer: Option<Arc<dyn PeerEndpoint>>,
     ) -> Self {
-        let h = engine_with(&tmp.path.join(name), ports, None, None).await;
         let home = tmp.path.join(format!("{name}-srv"));
         let options = Options {
             home: home.clone(),
@@ -201,6 +250,9 @@ impl BoxSide {
             logs: home.join("logs"),
             home,
         };
+        let serving: Arc<dyn BoxServing> = Arc::new(TunnelServing(paths.clone()));
+        let peer = peer.map(|peer| (peer, serving));
+        let h = engine_with_peer(&tmp.path.join(name), ports, None, None, peer).await;
         let server = Server::bind(options).await.expect("bind");
         let token = server.shutdown_token();
         let handler: Arc<dyn Handler> = Arc::new(h.engine.clone());

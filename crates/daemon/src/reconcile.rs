@@ -97,6 +97,7 @@ impl Inner {
         self.start_dns().await;
         self.start_background();
         self.restore_remotes();
+        self.start_peer_listener();
         Ok(())
     }
 

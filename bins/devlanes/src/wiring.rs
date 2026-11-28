@@ -19,7 +19,7 @@ use devlanes_core::{
 };
 use devlanes_daemon::integrations::ExitDetails;
 use devlanes_daemon::integrations::{
-    RemoteConnector, RemotePrompt, RemotePrompter, RemoteTransport,
+    BoxServing, RemoteConnector, RemotePrompt, RemotePrompter, RemoteTransport,
 };
 use devlanes_daemon::{
     Engine, EngineOptions, Handler,
@@ -244,6 +244,11 @@ pub async fn engine(
         home: paths.home.clone(),
         exe: std::env::current_exe().ok(),
     });
+    integ.peer = Some(peer_endpoint(&paths.home));
+    integ.box_serving = Some(Arc::new(TunnelServing {
+        paths: paths.clone(),
+        label: std::sync::OnceLock::new(),
+    }));
     step("hosts");
     #[cfg(unix)]
     {
@@ -1139,6 +1144,58 @@ impl RemoteConnector for BoxConnector {
             transport: Arc::new(devlanes_transport_ssh::SshTransport::new(host, options)),
             kind: "ssh",
         })
+    }
+}
+
+/// The relays a peer-to-peer endpoint uses until `remote.relays` exists.
+/// Two, because iroh tells whether a NAT changes ports per destination only
+/// from the answers of two relays. Numbered, with no region in the name,
+/// because the list is compiled into released binaries and a server may
+/// move without its name changing.
+const DEFAULT_RELAYS: [&str; 2] = ["https://relay1.devlanes.run", "https://relay2.devlanes.run"];
+
+/// This machine's peer-to-peer endpoint. Building it binds nothing and
+/// reads no key: the daemon binds it only once a ticket is minted or a
+/// client paired by ticket exists.
+fn peer_endpoint(home: &std::path::Path) -> Arc<dyn devlanes_transport::PeerEndpoint> {
+    Arc::new(devlanes_transport_iroh::IrohEndpoint::new(
+        devlanes_transport_iroh::IrohOptions {
+            key_file: home.join("p2p-key"),
+            relays: DEFAULT_RELAYS.map(str::to_owned).to_vec(),
+            // n0's DNS (dns.iroh.link), whose docs allow production use "if
+            // you find performance acceptable"; a ticket carries the relay
+            // and addresses, so pairing does not wait for it.
+            address_lookup: true,
+            port_mapping: true,
+        },
+    ))
+}
+
+/// Serves clients paired by ticket from inside the daemon with the same
+/// services as `devlanes tunnel --stdio`, answered by this daemon over its
+/// own socket.
+struct TunnelServing {
+    paths: Paths,
+    /// [`devlanes_tunnel::server_label`], read the first time a session
+    /// needs it, since on Linux it runs `loginctl`.
+    label: std::sync::OnceLock<String>,
+}
+
+impl BoxServing for TunnelServing {
+    /// The tunnel's services without its pairing check: the daemon checked
+    /// the client's key in the handshake and puts its own check in.
+    fn services(
+        &self,
+        client: devlanes_proto::remote::RemoteClient,
+    ) -> devlanes_transport::BoxServices {
+        devlanes_tunnel::services(self.paths.clone(), client, false)
+    }
+
+    /// The tunnel's label; blocks the first time.
+    fn label(&self) -> String {
+        self.label
+            .get_or_init(devlanes_tunnel::server_label)
+            .clone()
     }
 }
 

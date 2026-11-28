@@ -376,11 +376,22 @@ pub enum Method {
     #[serde(rename = "remote.report")]
     RemoteReport,
     /// Box side, for `devlanes daemon pair`: a one-time pairing code, valid
-    /// once for [`remote::PAIRING_CODE_TTL_MS`] and kept in memory. Reply
-    /// `{code, expires_at_ms, valid_ms}`: `valid_ms` is how long the code is
-    /// valid from the reply, for a countdown that needs no clock. Error
-    /// `pairing_paused` with `retry_after_ms` while failed attempts keep every
-    /// code refused, `connections_off` while `remote.allow_connections` is off.
+    /// once for [`remote::PAIRING_CODE_TTL_MS`] and kept in memory. Params
+    /// `{ticket?, ephemeral?}`, both false by default: with `ticket` the
+    /// reply also has `ticket`, a peer-to-peer pairing ticket
+    /// ([`remote::TICKET_PREFIX`]) valid once for as long as the code, and
+    /// the box listens for peers until it is used or expires; `ephemeral`
+    /// marks the ticket for a client that forgets the box once it stays
+    /// away. Reply `{code, expires_at_ms, valid_ms, ticket?}`: `valid_ms` is
+    /// how long the code is valid from the reply, for a countdown that needs
+    /// no clock. Error `pairing_paused` with `retry_after_ms` while wrong
+    /// codes keep every code refused, `connections_off` while
+    /// `remote.allow_connections` is off. With `ticket`: wrong codes do not
+    /// stop the ticket, whose reply then has no `code` and has
+    /// `code_paused_ms` instead; error `p2p_unavailable` (`{message}`) when
+    /// the box cannot listen for peers, tell its address or fit its relay
+    /// URL in a ticket, and `not_supported_yet` (`{feature}`) from a daemon
+    /// built without a peer-to-peer endpoint.
     #[serde(rename = "remote.pair")]
     RemotePair,
     /// Box side, for `devlanes tunnel`: whether a client's remote token is
@@ -400,13 +411,18 @@ pub enum Method {
     /// paired_at_ms, last_seen_ms, connections: [{address, since_ms, version,
     /// mirror}]}], now_ms}`; a client connected without pairing
     /// (`remote.require_pairing: false`) has `paired: false` and no times.
+    /// `pairings` counts each token pairing and each key paired by ticket. A
+    /// client with a key also has `transport: "p2p"` and `key`, the first 8
+    /// hex digits of the key it used last.
     /// `now_ms` is the daemon's clock, which the times are measured against.
     /// [`remote::CLIENTS_EVENT`] announces changes.
     #[serde(rename = "remote.clients")]
     RemoteClients,
-    /// Box side, for `devlanes daemon revoke`: deletes the pairing of the
+    /// Box side, for `devlanes daemon revoke`: deletes the pairings of the
     /// client named by `{client}` (its name, its id or a unique start of the
-    /// id) and ends its sessions. Reply `{revoked: [{id, name}], ended}`.
+    /// id) and ends its sessions; a client paired by ticket loses every
+    /// pinned key, so the box no longer lets it connect. Reply
+    /// `{revoked: [{id, name}], ended}`.
     /// Errors `client_not_found` (`{client, candidates}`) and
     /// `client_ambiguous` (`{client, candidates}`).
     #[serde(rename = "remote.revoke")]
@@ -1431,6 +1447,9 @@ pub mod remote {
     pub const TOKEN_PREFIX: &str = "dl_rt_";
     /// How long a pairing code from `remote.pair` stays valid: 10 minutes.
     pub const PAIRING_CODE_TTL_MS: u64 = 10 * 60 * 1000;
+    /// How a peer-to-peer pairing ticket starts, in either case; base32
+    /// follows, so a ticket is always longer than 64 characters.
+    pub const TICKET_PREFIX: &str = "dlp1";
 
     /// Whether `text` is `prefix` followed by 64 lowercase hex digits, the
     /// shape of client ids and remote tokens.
