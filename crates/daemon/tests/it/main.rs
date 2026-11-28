@@ -218,6 +218,8 @@ pub struct Setup {
 pub fn pool(range: &str) -> Option<devlanes_config::UserConfig> {
     let mut user = devlanes_config::UserConfig::default();
     user.ports.range = range.into();
+    // No test opens a viewer window.
+    user.gui.auto_open = false;
     Some(user)
 }
 

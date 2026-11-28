@@ -11,6 +11,8 @@
 mod boxes;
 #[path = "remote_choice.rs"]
 mod choice;
+#[path = "remote_gui.rs"]
+mod gui;
 #[path = "remote_sync.rs"]
 mod large_sync;
 #[path = "remote_lifecycle.rs"]
@@ -98,6 +100,17 @@ async fn engine_with(
     remote: Option<Arc<dyn RemoteConnector>>,
     routes: Option<Arc<dyn RouteSink>>,
 ) -> Harness {
+    engine_full(home, ports, remote, routes, None).await
+}
+
+/// [`engine_with`], with GUI services set up as `gui` says.
+async fn engine_full(
+    home: &Path,
+    ports: &str,
+    remote: Option<Arc<dyn RemoteConnector>>,
+    routes: Option<Arc<dyn RouteSink>>,
+    gui: Option<devlanes_daemon::gui::GuiOptions>,
+) -> Harness {
     let runner = FakeRunner::default();
     let processes = FakeProcesses::default();
     let infra = FakeInfra::default();
@@ -117,6 +130,11 @@ async fn engine_with(
     options.watch = false;
     options.start_timeout = Duration::from_secs(10);
     options.user.ports.range = ports.into();
+    // No test opens a viewer window.
+    options.user.gui.auto_open = false;
+    if let Some(gui) = gui {
+        options.gui = gui;
+    }
     options.idle =
         Arc::new(devlanes_daemon::idle::IdleBoard::default().without_connection_checks());
     let idle = options.idle.clone();
@@ -189,6 +207,34 @@ impl BoxSide {
         refusal: Option<String>,
     ) -> Self {
         let h = engine_with(&tmp.path.join(name), ports, None, None).await;
+        Self::around(tmp, name, h, dialer, https_port, require_pairing, refusal).await
+    }
+
+    /// A box with GUI services on, whose GUI hosts serve the test pattern
+    /// in-process (the fake runner's).
+    async fn start_gui(tmp: &Temp, name: &str, ports: &str) -> Self {
+        let gui = devlanes_daemon::gui::GuiOptions {
+            enabled: true,
+            backend: Some("test-pattern".into()),
+            program: tmp.path.join("bin").join("devlanes-gui"),
+        };
+        std::fs::create_dir_all(tmp.path.join("bin")).expect("bin");
+        std::fs::write(&gui.program, "").expect("devlanes-gui");
+        let h = engine_full(&tmp.path.join(name), ports, None, None, Some(gui)).await;
+        Self::around(tmp, name, h, None, None, true, None).await
+    }
+
+    /// The daemon socket and the tunnel services around the box engine `h`;
+    /// see [`BoxSide::start_full`].
+    async fn around(
+        tmp: &Temp,
+        name: &str,
+        h: Harness,
+        dialer: Option<Arc<dyn Dialer>>,
+        https_port: Option<u16>,
+        require_pairing: bool,
+        refusal: Option<String>,
+    ) -> Self {
         let home = tmp.path.join(format!("{name}-srv"));
         let options = Options {
             home: home.clone(),
