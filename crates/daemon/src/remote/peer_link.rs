@@ -600,8 +600,12 @@ pub(super) fn ticket_as_host(host: &str) -> Option<RpcError> {
              connect <ticket>`",
         ));
     }
-    (host.len() > MAX_HOST)
-        .then(|| bad_ticket("this is longer than any box name or SSH destination"))
+    (host.len() > MAX_HOST).then(|| {
+        bad_ticket(
+            "this is longer than any box name or SSH destination; give the box's name or SSH \
+                 host",
+        )
+    })
 }
 
 /// `bad_ticket`: text that is not a usable ticket.

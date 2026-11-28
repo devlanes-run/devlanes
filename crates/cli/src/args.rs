@@ -2131,12 +2131,13 @@ pub fn is_ticket(host: &str) -> bool {
 }
 
 /// Whether a `remote connect` argument is the start of a ticket cut short:
-/// the prefix, only base32 after it, longer than 16 characters, and not a
-/// whole ticket. Sent as a host, it would reach `ssh` and `remote ls` with
-/// the box's key in it. Short names such as `dlp1box` stay names.
+/// the prefix, then 40 or more base32 characters and nothing else, and not
+/// a whole ticket. Sent as a host, it would reach `ssh` and `remote ls`
+/// with the box's key in it. Names that start like one, such as SSH aliases
+/// like `dlp1productionbox`, are far shorter and stay names.
 fn cut_ticket(host: &str) -> bool {
     let prefix = devlanes_proto::remote::TICKET_PREFIX;
-    host.len() > 16
+    host.len() >= prefix.len() + 40
         && !is_ticket(host)
         && host
             .get(..prefix.len())
@@ -2197,11 +2198,14 @@ pub fn usage_error(message: &str, args: &[String]) -> String {
     let mut text = message.trim_end().to_owned();
     // A ticket split by a paste is two arguments, and clap quotes the one it
     // did not expect: this text reaches the terminal and, through `devlanes
-    // mcp`, the model.
-    for arg in args {
-        let arg = pasted(arg);
-        if devlanes_proto::remote::is_ticket_text(arg) {
-            text = text.replace(arg, "<ticket>");
+    // mcp`, the model. Only `remote` commands take tickets; any other
+    // command's error shows its arguments as they are.
+    if names.first() == Some(&"remote") {
+        for arg in args {
+            let arg = pasted(arg);
+            if devlanes_proto::remote::is_ticket_text(arg) {
+                text = text.replace(arg, "<ticket>");
+            }
         }
     }
     if !path.is_empty() && !about.is_empty() {

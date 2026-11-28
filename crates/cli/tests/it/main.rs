@@ -358,8 +358,10 @@ fn remote_connect_tells_a_ticket_from_a_box_name() {
     assert!(sent(&[&ticket, "--code", "K7QM-3XWD"]).is_err());
     assert!(sent(&["acme", "--name", "other"]).is_err());
     // A ticket cut short never becomes an SSH host.
-    let cut = format!("dlp1{}", "a2b3".repeat(8));
+    let cut = format!("dlp1{}", "a2b3".repeat(10));
     assert!(sent(&[&cut]).is_err(), "{cut}");
+    // An SSH alias or remote.boxes key that starts like one is a name.
+    assert_eq!(params(&["dlp1productionbox"])["host"], "dlp1productionbox");
     // A ticket split by a paste: clap quotes the second half, shown as
     // `<ticket>` in the error.
     let half = "example".repeat(10);
@@ -374,6 +376,13 @@ fn remote_connect_tells_a_ticket_from_a_box_name() {
         !usage.contains(&half) && usage.contains("<ticket>"),
         "{usage}"
     );
+    // Any other command's error names its arguments as they are.
+    let lane = "b".repeat(64);
+    let args: Vec<String> = ["lane", "clean", lane.as_str(), "extra"]
+        .map(str::to_owned)
+        .to_vec();
+    let quoted = devlanes_cli::usage_error(&format!("error: no lane {lane}"), &args);
+    assert!(quoted.contains(&lane), "{quoted}");
 }
 
 #[test]
