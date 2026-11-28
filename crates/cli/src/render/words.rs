@@ -1715,16 +1715,21 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
     }
 }
 
-/// Whether `code` has its own wording as an error, lane warning or remote
-/// warning, rather than the generic `code: message` fallback.
+/// Whether `code` has its own wording as an error, lane warning, remote
+/// warning or `why` reason, rather than the generic `code: message` fallback.
 pub(crate) fn has_wording(code: &str) -> bool {
     const PROBE: &str = "zz-probe";
     let data = json!({"message": PROBE});
     let (error, _) = error_message(&RpcError::new(code, data.clone(), 1));
     let fallback = format!("{code}: {PROBE}");
+    // A `why` reason falls back to its code's words and the data's fields.
+    let (unknown, _) = reason("zz_probe_code", &data, "lane", "unit");
+    let fields = unknown.strip_prefix("zz probe code").unwrap_or_default();
+    let (why, _) = reason(code, &data, "lane", "unit");
     error != fallback
         || lane_warning(code, &data) != PROBE
         || remote_warning(code, &data) != format!("unknown: {PROBE}")
+        || why != format!("{}{fields}", code.replace('_', " "))
 }
 
 /// `unsafe_home` (`{path, problem, owner?, mode?, fix?}`): the daemon refuses a

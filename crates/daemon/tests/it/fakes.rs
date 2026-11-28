@@ -22,6 +22,10 @@
 //! `<text>` at the start of `<row>` with a cursor move and no line break, as a
 //! pseudo console does), `nospawn` (the spawn fails with `NotFound`, as for a
 //! missing program).
+//!
+//! A spawn of `devlanes-gui host ...` (first argument `host`) is a GUI host
+//! that follows [`FakeRunner::gui`]: by default it serves the test pattern
+//! in-process on its `--listen` address, as the real one does.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -146,6 +150,38 @@ pub struct FakeRunner {
     pub powers: Journal,
     /// Units answer `Unsupported` to throttling, as on Linux.
     pub no_throttle: Arc<AtomicBool>,
+    /// What the next GUI hosts do.
+    pub gui: Arc<Mutex<GuiHost>>,
+    /// Every GUI host spawned, in order, with its pattern while it serves one.
+    pub gui_hosts: Arc<Mutex<Vec<SpawnedHost>>>,
+}
+
+/// What a fake GUI host does once spawned.
+#[derive(Debug, Clone, Default)]
+pub enum GuiHost {
+    /// Serves the test pattern on its `--listen` address, announcing
+    /// `WAYLAND_DISPLAY=devlanes-test` and the removal of `DISPLAY`.
+    #[default]
+    Serve,
+    /// Prints this line instead of a ready line, then runs until stopped.
+    Line(String),
+    /// Writes this on standard error and exits with the code, printing nothing.
+    Exit(i32, String),
+}
+
+/// A GUI host the fake runner spawned.
+#[derive(Clone)]
+pub struct SpawnedHost {
+    pub unit: Arc<FakeUnit>,
+    /// The pattern it serves, in [`GuiHost::Serve`].
+    pub pattern: Option<devlanes_gui_host::TestPatternHandle>,
+}
+
+impl FakeRunner {
+    /// The GUI hosts spawned so far.
+    pub fn hosts(&self) -> Vec<SpawnedHost> {
+        self.gui_hosts.lock().map(|h| h.clone()).unwrap_or_default()
+    }
 }
 
 /// What `hold` waits on: a test opens it once it has seen what it waits for, so
@@ -231,9 +267,16 @@ impl UnitRunner for FakeRunner {
             gate: self.gate.0.subscribe(),
             powers: self.powers.clone(),
             no_throttle: self.no_throttle.clone(),
+            lingers: AtomicBool::new(false),
         });
         let runner = unit.clone();
-        tokio::spawn(async move { runner.run(script, spec.env).await });
+        if spec.args.first().is_some_and(|arg| arg == "host") {
+            let mode = self.gui.lock().map(|m| m.clone()).unwrap_or_default();
+            let hosts = self.gui_hosts.clone();
+            tokio::spawn(async move { runner.run_gui(spec.args, spec.env, mode, hosts).await });
+        } else {
+            tokio::spawn(async move { runner.run(script, spec.env).await });
+        }
         Ok(unit)
     }
 }
@@ -262,6 +305,8 @@ pub struct FakeUnit {
     powers: Journal,
     /// The runner's [`FakeRunner::no_throttle`].
     no_throttle: Arc<AtomicBool>,
+    /// A serving GUI host: a stop ends it only once its port closed.
+    lingers: AtomicBool,
 }
 
 impl FakeUnit {
@@ -436,6 +481,128 @@ impl FakeUnit {
 }
 
 impl FakeUnit {
+    /// Writes `text` on `stream` as one chunk.
+    fn write_on(&self, stream: OutputStream, text: &str) {
+        if let Ok(sender) = self.sender.lock()
+            && let Some(sender) = sender.as_ref()
+        {
+            let _ = sender.send(OutputChunk {
+                stream,
+                bytes: Bytes::from(text.to_owned()),
+            });
+        }
+    }
+
+    /// Ends the unit on its own with exit `code`, as a crash would.
+    pub fn crash(&self, code: i32) {
+        self.stop.send_replace(true);
+        self.end(ExitOutcome {
+            code: Some(code),
+            signal: None,
+        });
+    }
+
+    /// Whether the unit ended.
+    pub fn ended(&self) -> bool {
+        self.exit.borrow().is_some()
+    }
+
+    /// The unit's identity.
+    pub fn pid(&self) -> u32 {
+        self.identity.pid
+    }
+
+    /// Runs as a GUI host started with `args` and `env`, doing what `mode`
+    /// says, and records itself in `hosts`.
+    async fn run_gui(
+        self: Arc<Self>,
+        args: Vec<String>,
+        env: BTreeMap<String, String>,
+        mode: GuiHost,
+        hosts: Arc<Mutex<Vec<SpawnedHost>>>,
+    ) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let mut stopped = self.stop.subscribe();
+        let record = |pattern| {
+            if let Ok(mut hosts) = hosts.lock() {
+                hosts.push(SpawnedHost {
+                    unit: self.clone(),
+                    pattern,
+                });
+            }
+        };
+        let arg = |name: &str| {
+            args.iter()
+                .position(|arg| arg == name)
+                .and_then(|at| args.get(at + 1))
+                .cloned()
+                .unwrap_or_default()
+        };
+        match mode {
+            GuiHost::Exit(code, stderr) => {
+                record(None);
+                self.write_on(OutputStream::Stderr, &format!("{stderr}\n"));
+                self.end(ExitOutcome {
+                    code: Some(code),
+                    signal: None,
+                });
+            }
+            GuiHost::Line(line) => {
+                record(None);
+                self.write_on(OutputStream::Stdout, &format!("{line}\n"));
+                let _ = stopped.wait_for(|s| *s).await;
+            }
+            GuiHost::Serve => {
+                let Ok(listener) = tokio::net::TcpListener::bind(arg("--listen")).await else {
+                    record(None);
+                    self.write_on(OutputStream::Stderr, "cannot listen\n");
+                    self.end(ExitOutcome {
+                        code: Some(1),
+                        signal: None,
+                    });
+                    return;
+                };
+                let (backend, pattern) = devlanes_gui_host::TestPattern::new(Default::default());
+                let Ok(running) = devlanes_gui_host::start_backend(backend).await else {
+                    return;
+                };
+                let address = listener.local_addr().expect("bound");
+                self.lingers.store(true, Ordering::SeqCst);
+                let env_out = [
+                    ("WAYLAND_DISPLAY".to_owned(), Some("devlanes-test".to_owned())),
+                    ("DISPLAY".to_owned(), None),
+                ];
+                let ready = devlanes_gui_proto::ready::Ready::new(
+                    address,
+                    devlanes_version::VERSION,
+                    &env_out,
+                    false,
+                );
+                record(Some(pattern));
+                self.write_on(OutputStream::Stdout, &format!("{}\n", ready.to_line()));
+                let mut options = devlanes_gui_host::ServeOptions::new(arg("--service"));
+                options.control_token = env
+                    .get("DEVLANES_GUI_TOKEN")
+                    .map(|token| devlanes_gui_proto::Token::new(token.clone()));
+                let shutdown = options.shutdown.clone();
+                let serve = devlanes_gui_host::serve(listener, running, options);
+                tokio::pin!(serve);
+                let asked = tokio::select! {
+                    _ = stopped.wait_for(|s| *s) => true,
+                    _ = &mut serve => false,
+                };
+                if asked {
+                    shutdown.cancel();
+                    let _ = serve.await;
+                }
+                self.end(ExitOutcome {
+                    code: Some(0),
+                    signal: None,
+                });
+            }
+        }
+    }
+
     /// Exits like a server whose port is taken.
     fn fail_bind(&self, port: u16) {
         self.print(&format!("port {port} in use"));
@@ -541,6 +708,11 @@ impl Unit for FakeUnit {
             return Ok(());
         }
         self.stop.send_replace(true);
+        // A GUI host ends once it closed its port, as a process exits after
+        // its listener closed.
+        if self.lingers.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         self.end(ExitOutcome {
             code: self.stop_code,
             signal: self

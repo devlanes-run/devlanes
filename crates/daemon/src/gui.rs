@@ -620,17 +620,19 @@ impl GuiUnit {
         (outcome, stderr)
     }
 
-    /// Stops the host after the unit ended with `code`, once.
+    /// Stops the host after the unit ended with `code`, once. The exit notice
+    /// has no answer to wait for; the host reports its windows Closed when it
+    /// stops either way.
     async fn finish(&self, code: Option<i32>) {
         self.finished
             .get_or_init(|| async {
                 let _ = self.control.unit_exited(code);
-                self.control.close();
                 self.state.stopped();
                 if let Err(error) = self.host.stop(HOST_STOP).await {
                     tracing::warn!(%error, "the GUI host did not stop");
                 }
                 let _ = tokio::time::timeout(HOST_STOP.timeout, self.host.wait()).await;
+                self.control.close();
             })
             .await;
     }

@@ -303,7 +303,9 @@ impl Hub {
             };
             tokio::select! {
                 _ = shutdown.cancelled() => {
-                    self.close_all();
+                    // A host stops with its service, so viewers show Closed,
+                    // whether or not the daemon's exit notice came first.
+                    self.service_ended();
                     return Ok(());
                 }
                 event = events.recv() => match event {
@@ -1698,6 +1700,12 @@ impl Hub {
     /// The backend stopped: every window is Closed, and connections send what
     /// is queued and close.
     fn backend_gone(&mut self) {
+        self.service_ended();
+    }
+
+    /// Reports every window Closed, then closes every connection after what
+    /// is queued for it.
+    fn service_ended(&mut self) {
         self.stopped = true;
         for window in self.windows.values_mut() {
             window.lock.service_stopped();

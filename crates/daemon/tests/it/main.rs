@@ -11,6 +11,7 @@ mod external;
 mod failures;
 mod fakes;
 mod folders;
+mod gui;
 mod hosts;
 mod idle;
 mod lanes;
@@ -196,6 +197,8 @@ pub struct Setup {
     pub resolver_files: Option<Arc<dyn devlanes_daemon::integrations::ResolverFiles>>,
     /// CA trust variables (`DEVLANES_CA_CERT`, `DEVLANES_CA_BUNDLE`); none by default.
     pub ca_env: BTreeMap<String, String>,
+    /// `EngineOptions::gui`; off by default.
+    pub gui: Option<devlanes_daemon::gui::GuiOptions>,
 }
 
 /// A user config whose port pool is `range`, for [`Setup::user`]. A restart
@@ -211,6 +214,7 @@ pub struct Setup {
 /// `pacing.rs` 12500-12999. No other test in this binary uses 12000-12999.
 /// `profiles.rs` takes 15000-15249 for a port nothing may listen on, between
 /// `remote_choice.rs`'s 13000-14999 and `remote_pairing.rs`'s 15400-15799.
+/// `gui.rs` takes 17000-17499 in blocks of 50.
 pub fn pool(range: &str) -> Option<devlanes_config::UserConfig> {
     let mut user = devlanes_config::UserConfig::default();
     user.ports.range = range.into();
@@ -257,6 +261,9 @@ pub async fn harness(home: &Path, setup: Setup) -> Harness {
     options.idle_exit = setup.idle_exit;
     options.resume = setup.resume;
     options.ci = setup.ci;
+    if let Some(gui) = setup.gui {
+        options.gui = gui;
+    }
     if let Some(logs) = setup.logs {
         options.logs = logs;
     }

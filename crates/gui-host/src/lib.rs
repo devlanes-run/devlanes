@@ -290,7 +290,8 @@ pub async fn start_backend<B: Backend>(backend: B) -> Result<RunningBackend, Ser
 /// connection past [`MAX_PENDING_HELLOS`] closes the oldest one still
 /// without a hello, and one past [`MAX_CONNECTIONS`] is refused once its
 /// hello is read. On the
-/// way out the connections get two seconds to send what is queued, and the
+/// way out every window is reported Closed, since a host stops with its
+/// service, the connections get two seconds to send what is queued, and the
 /// backend is dropped, which stops it.
 pub async fn serve<L: Listener>(
     mut listener: L,
