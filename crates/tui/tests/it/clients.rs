@@ -231,7 +231,7 @@ async fn this_machine_at_58_columns_drops_the_pairing_and_the_id() -> TestResult
 /// why when invalid remote settings turned them off.
 #[tokio::test]
 async fn no_clients_says_how_to_pair_one() -> TestResult {
-    let empty = "No other machine connects here yet. Press p for a pairing code.";
+    let empty = "No other machine connects here yet. Press p for a ticket and a code.";
     let off = "Connections to this machine are off";
     for (value, expected, absent) in [
         (list(true, Vec::new()), empty, off),
@@ -281,7 +281,7 @@ async fn a_daemon_without_remote_clients_lists_none() -> TestResult {
     );
     let text = screen(&render(&app)?);
     assert!(!text.contains("laptop"), "{text}");
-    assert!(text.contains("Press p for a pairing code."), "{text}");
+    assert!(text.contains("Press p for a ticket and a code."), "{text}");
     Ok(())
 }
 

@@ -1017,7 +1017,7 @@ async fn help_lists_clean_and_the_daemon_page() -> TestResult {
         "copy mode: v select, y copy, Y whole entries as in the file",
         "restart or stop the daemon; s starts it again",
         "clean the lanes whose worktree is gone",
-        "connect, sign in, type a code or disconnect",
+        "connect, sign in, pair again or disconnect",
         "revoke the selected client",
         "update as the header offers",
         "monitor, daemon, boxes; again or esc returns",

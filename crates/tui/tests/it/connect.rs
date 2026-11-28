@@ -472,6 +472,42 @@ async fn esc_detaches_and_leaves_the_connection_to_the_daemon() -> TestResult {
     Ok(())
 }
 
+/// A box paired by ticket that needs pairing again opens the form for a new
+/// ticket instead of dialing; `f` forgets only a box paired by ticket, and
+/// only after asking.
+#[tokio::test]
+async fn a_box_paired_by_ticket_pairs_again_and_is_forgotten_by_ticket() -> TestResult {
+    let hosts = json!([
+        {"host": "acme", "state": "needs_pairing", "transport": "p2p"},
+        {"host": "hetzner", "state": "disconnected", "transport": "ssh"},
+    ]);
+    let mut app = boxes_app(100, 30, hosts).await;
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(opened(&effects).is_none(), "{effects:?}");
+    assert!(matches!(step(&app), Some(Step::Form)));
+    app.update(key(KeyCode::Esc));
+    app.update(key(KeyCode::Char('f')));
+    assert!(
+        matches!(&app.dialog, Some(Dialog::Confirm { prompt, .. }) if prompt == "Forget acme?")
+    );
+    let effects = app.update(key(KeyCode::Char('y')));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Forget { host } if host == "acme")),
+        "{effects:?}"
+    );
+    app.update(key(KeyCode::Char('j')));
+    let effects = app.update(key(KeyCode::Char('f')));
+    assert!(app.dialog.is_none(), "{:?}", app.dialog);
+    assert!(effects.is_empty(), "{effects:?}");
+    assert_eq!(
+        notice(&app),
+        "hetzner is not paired by ticket; d disconnects it"
+    );
+    Ok(())
+}
+
 /// Enter acts on the selected box by its state: a box waiting for a sign-in
 /// or a pairing code opens the same flow, a connected one asks before it
 /// disconnects; `d` on a box that is not connected says so.

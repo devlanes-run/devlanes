@@ -4332,8 +4332,9 @@ impl App {
     /// Keys on the boxes view: `j k` and the like move one selection through
     /// the boxes, then this machine's clients; Enter connects, signs in,
     /// pairs or disconnects the selected box by its state, `d` disconnects
-    /// it, `x` revokes the selected client, `n` connects a new box and `p`
-    /// shows a pairing code for another machine.
+    /// it, `f` forgets a box paired by ticket, `x` revokes the selected
+    /// client, `n` connects a new box and `p` shows a pairing ticket and
+    /// code for another machine.
     fn boxes_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) {
         let plain = !key
             .modifiers
@@ -4348,18 +4349,7 @@ impl App {
             KeyCode::Enter if self.boxes.selected_skipped().is_some() => self.box_use_lane(effects),
             KeyCode::Enter => self.box_enter(effects),
             KeyCode::Char('m') if plain => self.box_use_lane(effects),
-            KeyCode::Char('n') if plain => {
-                let mut dialog = Box::<crate::connect::ConnectDialog>::default();
-                dialog.form.live = self
-                    .boxes
-                    .hosts
-                    .iter()
-                    .filter(|host| !matches!(host.state.as_str(), "disconnected" | "stopped"))
-                    .map(|host| host.host.clone())
-                    .collect();
-                self.dialog = Some(Dialog::Connect(dialog));
-                effects.push(Effect::LoadBoxCommands);
-            }
+            KeyCode::Char('n') if plain => self.new_box(effects),
             KeyCode::Char('p') if plain => self.pair(effects),
             KeyCode::Char('o') if plain => self.open_options("remote.allow_connections", effects),
             KeyCode::Char('d') if plain => self.disconnect_prompt(),
@@ -4449,9 +4439,11 @@ impl App {
         }
     }
 
-    /// Enter on the boxes view: a connected box asks before disconnecting;
-    /// any other one opens the connect modal, which resumes a box waiting
-    /// for a sign-in, a pairing code or its next try and asks its questions.
+    /// Enter on the boxes view: a connected box asks before disconnecting; a
+    /// box paired by ticket that needs pairing again opens the form for its
+    /// new ticket; any other one opens the connect modal, which resumes a
+    /// box waiting for a sign-in, a pairing code or its next try and asks
+    /// its questions.
     fn box_enter(&mut self, effects: &mut Vec<Effect>) {
         let Some(host) = self.boxes.selected_host() else {
             if self.boxes.part == BoxPart::Clients && self.boxes.clients.current().is_some() {
@@ -4463,11 +4455,32 @@ impl App {
             self.disconnect_prompt();
             return;
         }
+        // A box paired by ticket pairs again only with a new ticket, which
+        // the form takes; the box keeps its name here.
+        if host.by_ticket() && host.state == "needs_pairing" {
+            self.new_box(effects);
+            return;
+        }
         let host = host.host.clone();
         self.connect_box(
             Box::new(crate::connect::ConnectDialog::following(&host)),
             effects,
         );
+    }
+
+    /// Opens the new connection form on its ticket row, knowing the boxes
+    /// with a link and, once read, the commands config.yaml has.
+    fn new_box(&mut self, effects: &mut Vec<Effect>) {
+        let mut dialog = Box::<crate::connect::ConnectDialog>::default();
+        dialog.form.live = self
+            .boxes
+            .hosts
+            .iter()
+            .filter(|host| !matches!(host.state.as_str(), "disconnected" | "stopped"))
+            .map(|host| host.host.clone())
+            .collect();
+        self.dialog = Some(Dialog::Connect(dialog));
+        effects.push(Effect::LoadBoxCommands);
     }
 
     /// Opens `dialog` on a new `connect` to its host, which follows that one.
@@ -4885,7 +4898,11 @@ impl App {
             .as_ref()
             .and_then(|list| list.require_pairing)
             != Some(false);
-        let again = if required {
+        // A machine paired by ticket comes back only with a new ticket,
+        // whatever remote.require_pairing says.
+        let again = if client.transport.as_deref() == Some("p2p") {
+            "It needs a new ticket to connect again."
+        } else if required {
             "It needs a new pairing code to connect again."
         } else {
             "remote.require_pairing is false here, so it can reconnect without a code."

@@ -103,9 +103,12 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
     (
         "boxes (B)",
         &[
-            ("enter", "connect, sign in, type a code or disconnect"),
-            ("d", "disconnect the selected box"),
-            ("n  p", "connect a new box, show a pairing code"),
+            ("enter", "connect, sign in, pair again or disconnect"),
+            (
+                "d  f",
+                "disconnect the selected box, forget one paired by ticket",
+            ),
+            ("n  p", "connect a new box, show a ticket and a code"),
             ("x", "revoke the selected client"),
         ],
     ),

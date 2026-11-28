@@ -29,6 +29,6 @@ expression: draw(&app)?.backend()
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
 "┌ this machine ────────────────────────────────────────────────────────────────────────────────────┐"
-"│ No other machine connects here yet. Press p for a pairing code.                                  │"
+"│ No other machine connects here yet. Press p for a ticket and a code.                             │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" enter disconnect   n new box   p pairing code   j k select   esc back        ? all keys   q quit   "
+" enter disconnect   n new box   p pair   j k select   esc back                ? all keys   q quit   "
