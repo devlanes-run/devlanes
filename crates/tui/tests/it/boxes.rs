@@ -337,11 +337,11 @@ async fn the_boxes_view_says_what_connecting_does_without_boxes() -> TestResult 
     let text = screen_text(&draw(&app)?);
     assert!(text.contains("no boxes yet"), "{text}");
     assert!(
-        text.contains("n   connect to a box by its SSH name or a command"),
+        text.contains("n   connect to a box by a ticket, its SSH name or a command"),
         "{text}"
     );
     assert!(
-        text.contains("No other machine connects here yet. Press p for a pairing code."),
+        text.contains("No other machine connects here yet. Press p for a ticket and a code."),
         "{text}"
     );
     Ok(())

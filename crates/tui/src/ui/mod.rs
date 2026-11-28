@@ -1440,6 +1440,7 @@ fn hints(app: &App) -> Vec<Hint> {
                 let enter = match host.state.as_str() {
                     "connected" => "disconnect",
                     "needs_auth" => "sign in",
+                    "needs_pairing" if host.by_ticket() => "paste ticket",
                     "needs_pairing" => "type code",
                     "reconnecting" => "retry",
                     "connecting" => "show",
@@ -1452,11 +1453,14 @@ fn hints(app: &App) -> Vec<Hint> {
                 ) {
                     hints.push(("d", "disconnect", ch('d')));
                 }
+                if host.by_ticket() {
+                    hints.push(("f", "forget", ch('f')));
+                }
             }
             if app.boxes.selected_client().is_some() {
                 hints.push(("x", "revoke", ch('x')));
             }
-            hints.extend([("n", "new box", ch('n')), ("p", "pairing code", ch('p'))]);
+            hints.extend([("n", "new box", ch('n')), ("p", "pair", ch('p'))]);
             let clients = app.boxes.clients.list.as_ref();
             if clients.and_then(|list| list.allow_connections) == Some(false) {
                 hints.push(("o", "options", ch('o')));

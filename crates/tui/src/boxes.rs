@@ -26,7 +26,7 @@ pub struct BoxHost {
     pub error: Option<String>,
     /// While reconnecting: how long the link waits before the next attempt.
     pub retry_in_ms: Option<u64>,
-    /// `ssh` or `command`.
+    /// `ssh`, `command` or `p2p` for a box paired by ticket.
     pub transport: Option<String>,
     pub last_connected_ms: Option<u64>,
     pub connected_since_ms: Option<u64>,
@@ -376,6 +376,12 @@ impl BoxHost {
     /// Reached over ssh, so `ssh <box>` opens a shell there.
     pub fn over_ssh(&self) -> bool {
         self.transport.as_deref().is_none_or(|t| t == "ssh")
+    }
+
+    /// Paired by ticket and reached peer to peer, so pairing it again takes
+    /// a new ticket rather than a code.
+    pub fn by_ticket(&self) -> bool {
+        self.transport.as_deref() == Some("p2p")
     }
 
     /// The box's devlanes version from its last handshake.

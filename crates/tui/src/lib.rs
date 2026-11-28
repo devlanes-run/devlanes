@@ -242,6 +242,7 @@ async fn open(
         events,
         Box::new(std::io::stdout()),
         start,
+        runtime::PASTES_ARE_KEYS,
     )
     .await;
     drop(guard);

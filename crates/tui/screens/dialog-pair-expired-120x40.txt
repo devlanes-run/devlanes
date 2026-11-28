@@ -2,7 +2,7 @@
 ┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ no boxes yet                                                                                                         │
 │                                                                                                                      │
-│   n   connect to a box by its SSH name or a command                                                                  │
+│   n   connect to a box by a ticket, its SSH name or a command                                                        │
 │                                                                                                                      │
 │ A box is another machine that runs devlanes. Its projects show up in the top bar. Their ports and hostnames work on  │
 │ this machine.                                                                                                        │
@@ -15,11 +15,11 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-│                                              ┌ pairing code ──────────┐                                              │
-│                                              │ This code expired.     │                                              │
-│                                              │                        │                                              │
-│                                              │ p new code   esc close │                                              │
-│                                              └────────────────────────┘                                              │
+│                                          ┌ pair another machine ─────────┐                                           │
+│                                          │ This ticket and code expired. │                                           │
+│                                          │                               │                                           │
+│                                          │ p new ticket   esc close      │                                           │
+│                                          └───────────────────────────────┘                                           │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -35,16 +35,16 @@
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ No other machine connects here yet. Press p for a pairing code.                                                      │
+│ No other machine connects here yet. Press p for a ticket and a code.                                                 │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- n new box   p pairing code   esc back                                                            ? all keys   q quit
+ n new box   p pair   esc back                                                                    ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 101-111 red, 114 bold underlined, 115-118 bold underlined yellow
 1: 0 darkgray, 1-7 bold, 8-119 darkgray
 2: 0 darkgray, 2-13 bold, 119 darkgray
 3: 0 darkgray, 119 darkgray
-4: 0 darkgray, 4 bold, 8-52 dim, 119 darkgray
+4: 0 darkgray, 4 bold, 8-62 dim, 119 darkgray
 5: 0 darkgray, 119 darkgray
 6: 0 darkgray, 2-116 dim, 119 darkgray
 7: 0 darkgray, 2-14 dim, 119 darkgray
@@ -57,11 +57,11 @@
 14: 0 darkgray, 119 darkgray
 15: 0 darkgray, 119 darkgray
 16: 0 darkgray, 119 darkgray
-17: 0 darkgray, 47-72 bold yellow, 119 darkgray
-18: 0 darkgray, 47 bold yellow, 49-66 bold, 72 bold yellow, 119 darkgray
-19: 0 darkgray, 47 bold yellow, 72 bold yellow, 119 darkgray
-20: 0 darkgray, 47 bold yellow, 49 bold, 50-58 dim, 62-64 bold, 65-70 dim, 72 bold yellow, 119 darkgray
-21: 0 darkgray, 47-72 bold yellow, 119 darkgray
+17: 0 darkgray, 43-75 bold yellow, 119 darkgray
+18: 0 darkgray, 43 bold yellow, 45-73 bold, 75 bold yellow, 119 darkgray
+19: 0 darkgray, 43 bold yellow, 75 bold yellow, 119 darkgray
+20: 0 darkgray, 43 bold yellow, 45 bold, 46-56 dim, 60-62 bold, 63-68 dim, 75 bold yellow, 119 darkgray
+21: 0 darkgray, 43-75 bold yellow, 119 darkgray
 22: 0 darkgray, 119 darkgray
 23: 0 darkgray, 119 darkgray
 24: 0 darkgray, 119 darkgray
@@ -77,6 +77,6 @@
 34: 0 darkgray, 119 darkgray
 35: 0-119 darkgray
 36: 0 darkgray, 1-14 bold, 15-119 darkgray
-37: 0 darkgray, 2-64 dim, 119 darkgray
+37: 0 darkgray, 2-69 dim, 119 darkgray
 38: 0-119 darkgray
-39: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-32 bold, 33-40 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim
+39: 1 bold, 2-12 dim, 13 bold, 14-21 dim, 22-24 bold, 25-32 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

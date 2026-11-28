@@ -1,0 +1,82 @@
+ devlanes  1 acme   2 billing   3 shop                     starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
+┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ no boxes yet                                                                                                         │
+│                                                                                                                      │
+│   n   connect to a box by a ticket, its SSH name or a command                                                        │
+│                                                                                                                      │
+│ A box is another machine that runs devlanes. Its projects show up in the top bar. Their ports and hostnames work on  │
+│ this machine.                                                                                                        │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                         ┌ pairing code ───────────────────────────────────────────────────┐                          │
+│                         │ No ticket: the devlanes daemon running here is older than this  │                          │
+│                         │ devlanes and makes no tickets. Close this, then press D, then R │                          │
+│                         │ to restart it.                                                  │                          │
+│                         │                                                                 │                          │
+│                         │                            K7QM-3XWD                            │                          │
+│                         │                It works once and expires in 10m.                │                          │
+│                         │                                                                 │                          │
+│                         │ On the other machine, run                                       │                          │
+│                         │   devlanes remote connect <box> --code K7QM-3XWD                │                          │
+│                         │ <box> is this machine's SSH name there.                         │                          │
+│                         │ Or press n in its Boxes view and type the code.                 │                          │
+│                         │                                                                 │                          │
+│                         │ y copy code   p new code   esc close                            │                          │
+│                         └─────────────────────────────────────────────────────────────────┘                          │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ No other machine connects here yet. Press p for a ticket and a code.                                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ n new box   p pair   esc back                                                                    ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold underlined, 115-118 bold underlined yellow
+1: 0 darkgray, 1-7 bold, 8-119 darkgray
+2: 0 darkgray, 2-13 bold, 119 darkgray
+3: 0 darkgray, 119 darkgray
+4: 0 darkgray, 4 bold, 8-62 dim, 119 darkgray
+5: 0 darkgray, 119 darkgray
+6: 0 darkgray, 2-116 dim, 119 darkgray
+7: 0 darkgray, 2-14 dim, 119 darkgray
+8: 0 darkgray, 119 darkgray
+9: 0 darkgray, 119 darkgray
+10: 0 darkgray, 119 darkgray
+11: 0 darkgray, 119 darkgray
+12: 0 darkgray, 26-92 bold yellow, 119 darkgray
+13: 0 darkgray, 26 bold yellow, 28-89 yellow, 92 bold yellow, 119 darkgray
+14: 0 darkgray, 26 bold yellow, 28-90 yellow, 92 bold yellow, 119 darkgray
+15: 0 darkgray, 26 bold yellow, 28-41 yellow, 92 bold yellow, 119 darkgray
+16: 0 darkgray, 26 bold yellow, 92 bold yellow, 119 darkgray
+17: 0 darkgray, 26 bold yellow, 55-63 bold yellow, 92 bold yellow, 119 darkgray
+18: 0 darkgray, 26 bold yellow, 43-75 dim, 92 bold yellow, 119 darkgray
+19: 0 darkgray, 26 bold yellow, 92 bold yellow, 119 darkgray
+20: 0 darkgray, 26 bold yellow, 92 bold yellow, 119 darkgray
+21: 0 darkgray, 26 bold yellow, 28-75 bold, 92 bold yellow, 119 darkgray
+22: 0 darkgray, 26 bold yellow, 28-66 dim, 92 bold yellow, 119 darkgray
+23: 0 darkgray, 26 bold yellow, 28-74 dim, 92 bold yellow, 119 darkgray
+24: 0 darkgray, 26 bold yellow, 92 bold yellow, 119 darkgray
+25: 0 darkgray, 26 bold yellow, 28 bold, 29-38 dim, 42 bold, 43-51 dim, 55-57 bold, 58-63 dim, 92 bold yellow, 119 darkgray
+26: 0 darkgray, 26-92 bold yellow, 119 darkgray
+27: 0 darkgray, 119 darkgray
+28: 0 darkgray, 119 darkgray
+29: 0 darkgray, 119 darkgray
+30: 0 darkgray, 119 darkgray
+31: 0 darkgray, 119 darkgray
+32: 0 darkgray, 119 darkgray
+33: 0 darkgray, 119 darkgray
+34: 0 darkgray, 119 darkgray
+35: 0-119 darkgray
+36: 0 darkgray, 1-14 bold, 15-119 darkgray
+37: 0 darkgray, 2-69 dim, 119 darkgray
+38: 0-119 darkgray
+39: 1 bold, 2-12 dim, 13 bold, 14-21 dim, 22-24 bold, 25-32 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

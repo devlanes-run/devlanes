@@ -1,5 +1,5 @@
- devlanes  1 acme   2 billing   3 shop          starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
-┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────── 0 of 3 connected ┐
+ devlanes  1 acme   2 billing   3 shop          starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 4 issues
+┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────── 0 of 4 connected ┐
 │ ! hetzner                                                                       needs pairing · ssh · devlanes 0.9.2 │
 │   link      waiting for a new pairing code, with ports and hostnames kept                                            │
 │   error     the box no longer accepts this machine's pairing and needs a new code from devlanes daemon pair on the   │
@@ -26,21 +26,21 @@
 │   error     ssh to gpu failed (255): Permission denied (publickey).                                                  │
 │   fix       enter signs in again                                                                                     │
 │                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
-│                                                                                                                      │
+│ ✕ studio                                                                                                failed · p2p │
+│   link      failed, so nothing is mirrored                                                                           │
+│   error     box studio has not been reachable for 24 hours, so devlanes stopped trying. Run devlanes remote connect  │
+│             studio once it is back.                                                                                  │
+│   fix       enter connects again; if the box no longer accepts this machine, n pairs it with a new ticket            │
 │                                                                                                                      │
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ No other machine connects here yet. Press p for a pairing code.                                                      │
+│ No other machine connects here yet. Press p for a ticket and a code.                                                 │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- enter type code   d disconnect   n new box   p pairing code   j k select   esc back              ? all keys   q quit
+ enter type code   d disconnect   n new box   p pair   j k select   esc back                      ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103 bold underlined, 104-107 bold underlined yellow, 108-118 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103 bold underlined, 104-107 bold underlined yellow, 108-118 red
 1: 0 bold yellow, 1-7 bold, 8-100 bold yellow, 101-118 bold dim, 119 bold yellow
 2: 0 bold yellow, 2-3 reversed, 4-10 bold reversed, 11-117 reversed, 119 bold yellow
 3: 0 bold yellow, 4-13 dim, 14-74 yellow, 119 bold yellow
@@ -68,15 +68,15 @@
 25: 0 bold yellow, 4-13 dim, 14-68 yellow, 119 bold yellow
 26: 0 bold yellow, 4-13 dim, 14-33 bold, 119 bold yellow
 27: 0 bold yellow, 119 bold yellow
-28: 0 bold yellow, 119 bold yellow
-29: 0 bold yellow, 119 bold yellow
-30: 0 bold yellow, 119 bold yellow
-31: 0 bold yellow, 119 bold yellow
-32: 0 bold yellow, 119 bold yellow
+28: 0 bold yellow, 2-3 red, 4-9 bold, 106-111 red, 112-117 dim, 119 bold yellow
+29: 0 bold yellow, 4-13 dim, 14-43 red, 119 bold yellow
+30: 0 bold yellow, 4-13 dim, 14-116 red, 119 bold yellow
+31: 0 bold yellow, 4-13 dim, 14-36 red, 119 bold yellow
+32: 0 bold yellow, 4-13 dim, 14-106 bold, 119 bold yellow
 33: 0 bold yellow, 119 bold yellow
 34: 0 bold yellow, 119 bold yellow
 35: 0-119 bold yellow
 36: 0 darkgray, 1-14 bold, 15-119 darkgray
-37: 0 darkgray, 2-64 dim, 119 darkgray
+37: 0 darkgray, 2-69 dim, 119 darkgray
 38: 0-119 darkgray
-39: 1-5 bold, 6-18 dim, 19 bold, 20-33 dim, 34 bold, 35-45 dim, 46 bold, 47-62 dim, 63-65 bold, 66-75 dim, 76-78 bold, 79-86 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim
+39: 1-5 bold, 6-18 dim, 19 bold, 20-33 dim, 34 bold, 35-45 dim, 46 bold, 47-54 dim, 55-57 bold, 58-67 dim, 68-70 bold, 71-78 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

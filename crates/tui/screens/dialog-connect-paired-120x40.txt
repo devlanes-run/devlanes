@@ -1,0 +1,82 @@
+ devlanes  1 acme   2 billing   3 shop          starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 4 issues
+┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────── 1 of 4 connected ┐
+│ ● hetzner                                                                           connected · ssh · devlanes 0.9.2 │
+│   link      connected since 2026-10-14 15:32                                                                         │
+│   box       proxy on 443 · ports.range 24000-29999                                                                   │
+│   mirror    1 lane · 4 of 5 ports bound here · 3 hostnames routed                                                    │
+│   skipped   acme@0 also runs on this machine. Press m to stop it and use this one.                                   │
+│             ext.example.com (acme@4:ext-build): not under .localhost                                                 │
+│   syncs     acme@4:ext-build  up to date, following changes                                                          │
+│   ! the box runs devlanes 0.9.2 and this machine 1.0.0. Install the same release on both.                            │
+│   ! the box stops your processes at logout. Run sudo loginctl enable-linger "$USER" there.                           │
+│   ! this machine cannot use the box's HTTPS port 443 (permission denied). Open its hostnames on port 8443.           │
+│                                                                                                                      │
+│ ⠋ devbox                                                                     reconnecting · command · devlanes 1.0.0 │
+│   link      next try in 8s                                                                                           │
+│   error     docker exec e┌ connect studio ────────────────────────────────────────────────┐ng                        │
+│   box       proxy on 9443│ ⠋ connecting…                                                  │                          │
+│   proxy     this machine │ This machine was paired with the box before and keeps its name │                          │
+│   mirror    1 lane · no p│ studio, so the name you typed was ignored.                     │                          │
+│                          │                                                                │                          │
+│ ! gpu                    │ The daemon keeps connecting if you close this.                 │    needs a sign-in · ssh │
+│   link      waiting for y│                                                                │                          │
+│   error     ssh to gpu fa│ esc close                                                      │                          │
+│   fix       enter signs i└────────────────────────────────────────────────────────────────┘                          │
+│                                                                                                                      │
+│ ✕ studio                                                                                                failed · p2p │
+│   link      failed, so nothing is mirrored                                                                           │
+│   error     box studio has not been reachable for 24 hours, so devlanes stopped trying. Run devlanes remote connect  │
+│             studio once it is back.                                                                                  │
+│   fix       enter connects again; if the box no longer accepts this machine, n pairs it with a new ticket            │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ No other machine connects here yet. Press p for a ticket and a code.                                                 │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ enter disconnect   n new box   p pair   j k select   esc back                                    ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103 bold underlined, 104-107 bold underlined yellow, 108-118 red
+1: 0 bold yellow, 1-7 bold, 8-100 bold yellow, 101-118 bold dim, 119 bold yellow
+2: 0 bold yellow, 2-3 reversed, 4-10 bold reversed, 11-117 reversed, 119 bold yellow
+3: 0 bold yellow, 4-13 dim, 119 bold yellow
+4: 0 bold yellow, 4-13 dim, 119 bold yellow
+5: 0 bold yellow, 4-13 dim, 119 bold yellow
+6: 0 bold yellow, 4-13 dim, 14-83 yellow, 119 bold yellow
+7: 0 bold yellow, 4-13 dim, 14-69 yellow, 119 bold yellow
+8: 0 bold yellow, 4-13 dim, 14-60 green, 119 bold yellow
+9: 0 bold yellow, 4-90 yellow, 119 bold yellow
+10: 0 bold yellow, 4-91 yellow, 119 bold yellow
+11: 0 bold yellow, 4-107 yellow, 119 bold yellow
+12: 0 bold yellow, 119 bold yellow
+13: 0 bold yellow, 4-9 bold, 91-117 dim, 119 bold yellow
+14: 0 bold yellow, 4-13 dim, 14-27 yellow, 119 bold yellow
+15: 0 bold yellow, 4-13 dim, 14-26 yellow, 27-92 bold yellow, 93-94 yellow, 119 bold yellow
+16: 0 bold yellow, 4-13 dim, 27 bold yellow, 92 bold yellow, 119 bold yellow
+17: 0 bold yellow, 4-13 dim, 27 bold yellow, 92 bold yellow, 119 bold yellow
+18: 0 bold yellow, 4-13 dim, 27 bold yellow, 92 bold yellow, 119 bold yellow
+19: 0 bold yellow, 27 bold yellow, 92 bold yellow, 119 bold yellow
+20: 0 bold yellow, 2-3 yellow, 4-6 bold, 27 bold yellow, 29-74 dim, 92 bold yellow, 97-111 yellow, 112-117 dim, 119 bold yellow
+21: 0 bold yellow, 4-13 dim, 14-26 yellow, 27 bold yellow, 92 bold yellow, 119 bold yellow
+22: 0 bold yellow, 4-13 dim, 14-26 yellow, 27 bold yellow, 29-31 bold, 32-37 dim, 92 bold yellow, 119 bold yellow
+23: 0 bold yellow, 4-13 dim, 14-26 bold, 27-92 bold yellow, 119 bold yellow
+24: 0 bold yellow, 119 bold yellow
+25: 0 bold yellow, 2-3 red, 4-9 bold, 106-111 red, 112-117 dim, 119 bold yellow
+26: 0 bold yellow, 4-13 dim, 14-43 red, 119 bold yellow
+27: 0 bold yellow, 4-13 dim, 14-116 red, 119 bold yellow
+28: 0 bold yellow, 4-13 dim, 14-36 red, 119 bold yellow
+29: 0 bold yellow, 4-13 dim, 14-106 bold, 119 bold yellow
+30: 0 bold yellow, 119 bold yellow
+31: 0 bold yellow, 119 bold yellow
+32: 0 bold yellow, 119 bold yellow
+33: 0 bold yellow, 119 bold yellow
+34: 0 bold yellow, 119 bold yellow
+35: 0-119 bold yellow
+36: 0 darkgray, 1-14 bold, 15-119 darkgray
+37: 0 darkgray, 2-69 dim, 119 darkgray
+38: 0-119 darkgray
+39: 1-5 bold, 6-19 dim, 20 bold, 21-31 dim, 32 bold, 33-40 dim, 41-43 bold, 44-53 dim, 54-56 bold, 57-64 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

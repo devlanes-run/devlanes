@@ -2,7 +2,7 @@
 ┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ no boxes yet                                                                                                                                                                                         │
 │                                                                                                                                                                                                      │
-│   n   connect to a box by its SSH name or a command                                                                                                                                                  │
+│   n   connect to a box by a ticket, its SSH name or a command                                                                                                                                        │
 │                                                                                                                                                                                                      │
 │ A box is another machine that runs devlanes. Its projects show up in the top bar. Their ports and hostnames work on this machine.                                                                    │
 │                                                                                                                                                                                                      │
@@ -22,18 +22,18 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
 │                                                                 ┌ connect a box ───────────────────────────────────────────────────┐                                                                 │
-│                                                                 │ ▌ Reach by   (•) SSH name    ( ) command                         │                                                                 │
-│                                                                 │   Name       hetzner or me@203.0.113.4                           │                                                                 │
+│                                                                 │ ▌ Reach by   (•) ticket    ( ) SSH name    ( ) command           │                                                                 │
+│                                                                 │   Ticket     paste it here                                       │                                                                 │
+│                                                                 │   Name       optional, the box's own name if empty               │                                                                 │
 │                                                                 │                                                                  │                                                                 │
-│                                                                 │ devlanes runs ssh <name>, so your SSH config applies.            │                                                                 │
+│                                                                 │ Get a ticket on the box: press p in its Boxes view, or run       │                                                                 │
+│                                                                 │ devlanes daemon pair there.                                      │                                                                 │
+│                                                                 │ devlanes pairs with the box and reaches it peer to peer, without │                                                                 │
+│                                                                 │ SSH.                                                             │                                                                 │
 │                                                                 │                                                                  │                                                                 │
-│                                                                 │ tab next field   space switch   enter connect   esc cancel       │                                                                 │
+│                                                                 │ tab next field   space switch   enter pair   esc cancel          │                                                                 │
 │                                                                 └──────────────────────────────────────────────────────────────────┘                                                                 │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -55,16 +55,16 @@
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ No other machine connects here yet. Press p for a pairing code.                                                                                                                                      │
+│ No other machine connects here yet. Press p for a ticket and a code.                                                                                                                                 │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- n new box   p pairing code   esc back                                                                                                                                            ? all keys   q quit
+ n new box   p pair   esc back                                                                                                                                                    ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold underlined, 195-198 bold underlined yellow
 1: 0 darkgray, 1-7 bold, 8-199 darkgray
 2: 0 darkgray, 2-13 bold, 199 darkgray
 3: 0 darkgray, 199 darkgray
-4: 0 darkgray, 4 bold, 8-52 dim, 199 darkgray
+4: 0 darkgray, 4 bold, 8-62 dim, 199 darkgray
 5: 0 darkgray, 199 darkgray
 6: 0 darkgray, 2-130 dim, 199 darkgray
 7: 0 darkgray, 199 darkgray
@@ -84,18 +84,18 @@
 21: 0 darkgray, 199 darkgray
 22: 0 darkgray, 199 darkgray
 23: 0 darkgray, 199 darkgray
-24: 0 darkgray, 199 darkgray
-25: 0 darkgray, 199 darkgray
-26: 0 darkgray, 66-133 bold yellow, 199 darkgray
-27: 0 darkgray, 66 bold yellow, 68 bold reversed yellow, 69-79 reversed, 80-93 bold yellow, 94-131 reversed, 133 bold yellow, 199 darkgray
-28: 0 darkgray, 66 bold yellow, 68 bold yellow, 81-105 dim italic, 133 bold yellow, 199 darkgray
-29: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
-30: 0 darkgray, 66 bold yellow, 68-120 dim, 133 bold yellow, 199 darkgray
-31: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
-32: 0 darkgray, 66 bold yellow, 68-70 bold, 71-81 dim, 85-89 bold, 90-96 dim, 100-104 bold, 105-112 dim, 116-118 bold, 119-125 dim, 133 bold yellow, 199 darkgray
-33: 0 darkgray, 66-133 bold yellow, 199 darkgray
-34: 0 darkgray, 199 darkgray
-35: 0 darkgray, 199 darkgray
+24: 0 darkgray, 66-133 bold yellow, 199 darkgray
+25: 0 darkgray, 66 bold yellow, 68 bold reversed yellow, 69-79 reversed, 80-91 bold yellow, 92-131 reversed, 133 bold yellow, 199 darkgray
+26: 0 darkgray, 66 bold yellow, 68 bold yellow, 81-93 dim italic, 133 bold yellow, 199 darkgray
+27: 0 darkgray, 66 bold yellow, 68 bold yellow, 81-117 dim italic, 133 bold yellow, 199 darkgray
+28: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
+29: 0 darkgray, 66 bold yellow, 68-125 dim, 133 bold yellow, 199 darkgray
+30: 0 darkgray, 66 bold yellow, 68-94 dim, 133 bold yellow, 199 darkgray
+31: 0 darkgray, 66 bold yellow, 68-131 dim, 133 bold yellow, 199 darkgray
+32: 0 darkgray, 66 bold yellow, 68-71 dim, 133 bold yellow, 199 darkgray
+33: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
+34: 0 darkgray, 66 bold yellow, 68-70 bold, 71-81 dim, 85-89 bold, 90-96 dim, 100-104 bold, 105-109 dim, 113-115 bold, 116-122 dim, 133 bold yellow, 199 darkgray
+35: 0 darkgray, 66-133 bold yellow, 199 darkgray
 36: 0 darkgray, 199 darkgray
 37: 0 darkgray, 199 darkgray
 38: 0 darkgray, 199 darkgray
@@ -117,6 +117,6 @@
 54: 0 darkgray, 199 darkgray
 55: 0-199 darkgray
 56: 0 darkgray, 1-14 bold, 15-199 darkgray
-57: 0 darkgray, 2-64 dim, 199 darkgray
+57: 0 darkgray, 2-69 dim, 199 darkgray
 58: 0-199 darkgray
-59: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-32 bold, 33-40 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim
+59: 1 bold, 2-12 dim, 13 bold, 14-21 dim, 22-24 bold, 25-32 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

@@ -163,7 +163,10 @@ cargo build -p devlanes -p devlanes-testing
 export DEVLANES_E2E_BIN_DIR="$PWD/target/debug"
 cargo nextest run --profile e2e
 cargo nextest run --profile e2e --run-ignored only -E 'test(/^docker_/)'   # needs Docker
+cargo nextest run --profile e2e --run-ignored only -E 'test(a_pasted_ticket_answers_no_question)'   # needs a Windows console
 ```
+
+The last one pastes a ticket into the TUI through ConPTY and checks that the paste answers no question. It depends on timing, so it is not run in CI: run it by hand when the TUI's input code changes.
 
 `e2e/README.md` covers isolation, port slots and debugging.
 

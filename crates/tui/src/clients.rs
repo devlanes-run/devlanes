@@ -36,6 +36,8 @@ pub struct Client {
     pub paired_at_ms: Option<u64>,
     pub last_seen_ms: Option<u64>,
     pub connections: Vec<Connection>,
+    /// `p2p` when one of its pairings is by ticket.
+    pub transport: Option<String>,
 }
 
 /// A tunnel serving the client now.

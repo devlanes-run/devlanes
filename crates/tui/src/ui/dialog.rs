@@ -103,9 +103,12 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
     (
         "boxes (B)",
         &[
-            ("enter", "connect, sign in, type a code or disconnect"),
-            ("d", "disconnect the selected box"),
-            ("n  p", "connect a new box, show a pairing code"),
+            ("enter", "connect, sign in, pair again or disconnect"),
+            (
+                "d  f",
+                "disconnect the selected box, forget one paired by ticket",
+            ),
+            ("n  p", "connect a new box, show a ticket and a code"),
             ("x", "revoke the selected client"),
         ],
     ),
@@ -350,6 +353,11 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
             strict,
             ..
         } => {
+            // A question takes an answer only a while after a person could
+            // first see it.
+            if app.paste.drawn_at.get().is_none() {
+                app.paste.drawn_at.set(Some(app.now()));
+            }
             let mut body = wrapped(prompt, narrow, Style::new().add_modifier(Modifier::BOLD));
             if !detail.is_empty() {
                 body.push(Line::from(""));

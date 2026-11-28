@@ -8,6 +8,8 @@ kind: reference
 
 In every list, `j` and `k` or the arrow keys move, `g` and `G` jump to the top and bottom, and `PgUp` and `PgDn` scroll.
 
+On Windows, keys that arrive almost at once are taken as a paste. Pasted text goes only into a text field, such as the ticket row of the form `n` opens in the Boxes view. A question, such as the one `d` asks, takes no answer during its first third of a second, and none from a key that comes within a third of a second of the key before.
+
 ## Everywhere
 
 | Key | Action |
@@ -79,5 +81,6 @@ The boxes this machine connects to, and the machines connected to this one.
 | `n` | Connect to a new box |
 | `Enter` | Connect, sign in or pair the selected box |
 | `d` | Disconnect the selected box |
-| `p` | Show a pairing code for another machine |
+| `f` | Forget the selected box paired by ticket |
+| `p` | Show a pairing ticket and code for another machine |
 | `x` | Revoke the selected machine |

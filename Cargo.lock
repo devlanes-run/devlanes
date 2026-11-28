@@ -2096,9 +2096,11 @@ dependencies = [
 name = "devlanes-proto"
 version = "0.13.1"
 dependencies = [
+ "data-encoding",
  "devlanes-version",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -2610,10 +2612,12 @@ dependencies = [
  "devlanes-client",
  "devlanes-config",
  "devlanes-core",
+ "devlanes-ipc",
  "devlanes-proto",
  "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-term",
+ "devlanes-transport",
  "devlanes-update",
  "devlanes-version",
  "futures-util",

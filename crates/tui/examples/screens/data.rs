@@ -439,10 +439,11 @@ pub fn idle_lanes() -> Vec<LaneSummary> {
     lanes
 }
 
-/// `host.list` with three boxes: `hetzner` connected with two `acme` lanes
+/// `host.list` with four boxes: `hetzner` connected with two `acme` lanes
 /// (lane 0 skipped, since this machine serves its hostnames), `devbox`
-/// reconnecting through a command with a `shop` lane, and `gpu` waiting for
-/// a sign-in. Ports sit in the box's range, clear of this machine's blocks.
+/// reconnecting through a command with a `shop` lane, `gpu` waiting for a
+/// sign-in, and `studio`, paired by ticket, failed after a day away. Ports
+/// sit in the box's range, clear of this machine's blocks.
 pub fn boxes() -> Value {
     let key = |project: &str, lane: u32| json!({"project": project, "lane": lane.to_string()});
     let unit = |project: &str,
@@ -578,7 +579,79 @@ pub fn boxes() -> Value {
             "registry": {"lanes": [], "units": []},
             "suffixes": ["localhost"],
         },
+        {
+            "host": "studio", "state": "failed", "transport": "p2p",
+            "error": "box studio has not been reachable for 24 hours, so devlanes stopped trying. Run `devlanes remote connect studio` once it is back.",
+            "last_connected_ms": NOW_MS - 90_000_000,
+            "daemon_version": format!("devlanes {VERSION}"),
+            "ports": [], "routes": [], "skipped_lanes": [], "skipped_hosts": [], "syncs": [], "warnings": [],
+            "registry": {"lanes": [], "units": []},
+            "suffixes": ["localhost"],
+        },
     ], "truncated": false, "next_cursor": null})
+}
+
+/// A ticket's shape for the screens, which no daemon would parse: `dlp1`
+/// and base32 with `example` in it, `len` characters in all. Real tickets
+/// are 177 to 184 characters with one relay and two addresses.
+pub fn sample_ticket(len: usize) -> String {
+    let body: String = "q7xkexamplem2vz4h3dexamplew6yr5jtnexamplep"
+        .chars()
+        .cycle()
+        .take(len.saturating_sub(4))
+        .collect();
+    format!("dlp1{body}")
+}
+
+/// A ticket the connect form takes whole, which is never shown: a fixed key
+/// and secret, the relay and an address on documentation networks.
+pub fn whole_ticket() -> String {
+    devlanes_transport::Ticket {
+        addr: devlanes_transport::PeerAddr {
+            id: devlanes_transport::PeerId([7; 32]),
+            relay: Some("https://relay.example.invalid".into()),
+            direct: vec![std::net::SocketAddr::from(([192, 0, 2, 4], 4242))],
+        },
+        secret: devlanes_transport::TicketSecret([9; 16]),
+        ephemeral: false,
+    }
+    .encode()
+}
+
+/// [`boxes`] with `studio` under the longest name a box paired by ticket
+/// can have, 63 characters.
+pub fn boxes_long_name() -> Value {
+    let mut list = boxes();
+    for item in list["items"].as_array_mut().into_iter().flatten() {
+        if item["host"] == "studio" {
+            let name = "acme-gpu-builder-eu-west-1-a-very-long-box-name-for-the-screens";
+            let error = item["error"]
+                .as_str()
+                .unwrap_or_default()
+                .replace("studio", name);
+            item["host"] = json!(name);
+            item["error"] = json!(error);
+        }
+    }
+    list
+}
+
+/// [`boxes`] after `studio`, paired by ticket, revoked this machine: its
+/// link waits for a new ticket, in the daemon's words.
+pub fn boxes_ticket_pairing() -> Value {
+    let mut list = boxes();
+    let studio = list["items"]
+        .as_array_mut()
+        .and_then(|items| items.iter_mut().find(|item| item["host"] == "studio"));
+    if let Some(studio) = studio {
+        studio["state"] = json!("needs_pairing");
+        studio["error"] = json!(
+            "box studio no longer accepts this machine's pairing. Run `devlanes daemon pair` on the box, then `devlanes remote connect <ticket>` here."
+        );
+        studio["fix"] =
+            json!("devlanes daemon pair on studio, then devlanes remote connect <ticket>");
+    }
+    list
 }
 
 /// [`lanes`] with `shop@0` stopped, so a box lane chosen for it can take
@@ -802,10 +875,49 @@ pub fn no_clients_off() -> Value {
     json!({"items": [], "now_ms": NOW_MS, "require_pairing": true, "allow_connections": false})
 }
 
-/// `remote.pair`'s code, valid for 10 minutes, as the daemon answers.
+/// `remote.pair`'s ticket and code, valid for 10 minutes, as the daemon
+/// answers.
 pub fn pair_code() -> Value {
+    let mut answer = pair_code_alone();
+    answer["ticket"] = json!(sample_ticket(180));
+    answer
+}
+
+/// [`pair_code`] with a 250-character ticket, as a box with more addresses
+/// gives.
+pub fn pair_long_ticket() -> Value {
+    let mut answer = pair_code_alone();
+    answer["ticket"] = json!(sample_ticket(250));
+    answer
+}
+
+/// `remote.pair`'s code without a ticket, as a daemon older than tickets
+/// answers.
+pub fn pair_code_alone() -> Value {
     let valid = devlanes_proto::remote::PAIRING_CODE_TTL_MS;
     json!({"code": "K7QM-3XWD", "expires_at_ms": NOW_MS + valid, "valid_ms": valid})
+}
+
+/// `remote.pair`'s code with the ticket not ready yet, as after the
+/// peer-to-peer networking stopped while idle.
+pub fn pair_ticket_not_ready() -> Value {
+    let mut answer = pair_code_alone();
+    answer["ticket_error"] = json!({"code": "ticket_not_ready",
+        "message": "this machine was still reaching its relay; run devlanes daemon pair again in a few seconds, or devlanes daemon pair --ticket to wait for it"});
+    answer
+}
+
+/// `remote.pair`'s answer to a request for the ticket alone.
+pub fn ticket_alone() -> Value {
+    let valid = devlanes_proto::remote::PAIRING_CODE_TTL_MS;
+    json!({"ticket": sample_ticket(180), "expires_at_ms": NOW_MS + valid, "valid_ms": valid})
+}
+
+/// `remote.pair`'s ticket while 5 wrong codes keep codes paused 4m 12s more.
+pub fn pair_codes_paused() -> Value {
+    let mut answer = ticket_alone();
+    answer["code_paused_ms"] = json!(252_000);
+    answer
 }
 
 /// `remote.pair` while 5 wrong codes keep pairing paused for 4m 12s more.
@@ -836,6 +948,17 @@ pub fn connect_refused(host: &str) -> RpcError {
                "message": "the box does not accept connections. Set remote.allow_connections to true there"}),
         4,
     )
+}
+
+/// [`clients`] with the laptop paired by ticket, as `remote.clients` marks
+/// a client with a ticket pairing.
+pub fn clients_ticket() -> Value {
+    let mut list = clients();
+    if let Some(laptop) = list["items"].get_mut(0) {
+        laptop["transport"] = json!("p2p");
+        laptop["key"] = json!("1a2b3c4d");
+    }
+    list
 }
 
 /// `remote.clients` on this machine as a box, connected clients first as the

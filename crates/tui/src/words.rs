@@ -513,6 +513,46 @@ pub fn rpc(error: &RpcError) -> Worded {
                 Some("devlanes daemon logs".into()),
             )
         }
+        // A pairing by ticket that failed, before the box had a name here
+        // (`p2p:` and its key's start) or marked `pairing`: its text is
+        // about the box in the ticket and says what to do.
+        "remote_failed"
+            if data.get("pairing").and_then(Value::as_bool) == Some(true)
+                || field(data, "host").starts_with("p2p:") =>
+        {
+            (message.replace('`', ""), rest, None)
+        }
+        // Pairing by ticket and boxes paired by ticket: each text says what
+        // to run, so none gets a hint.
+        "bad_ticket"
+        | "box_name_taken"
+        | "box_name_ambiguous"
+        | "box_pairing_missing"
+        | "box_not_paired_by_ticket"
+            if !message.is_empty() =>
+        {
+            (message.replace('`', ""), rest, None)
+        }
+        // Some refusals of a ticket leave it usable, and each says so.
+        "pairing_refused" if !message.is_empty() => (message.replace('`', ""), rest, None),
+        "not_supported_yet" => (
+            match field(data, "feature") {
+                feature if feature.is_empty() => "this is not supported yet".to_owned(),
+                feature => format!("{feature} is not supported yet"),
+            },
+            Vec::new(),
+            None,
+        ),
+        // A box name the daemon refused, in its words.
+        "bad_request" if !field(data, "name").is_empty() => (
+            format!(
+                "{} cannot be a box name: {}",
+                field(data, "name"),
+                message.replace('`', "")
+            ),
+            rest,
+            None,
+        ),
         // A box's reasons mostly start with "the box", which the TUI names.
         "remote_failed" | "remote_needs_pairing" | "remote_needs_auth" => {
             let host = field(data, "host");
@@ -810,6 +850,40 @@ mod tests {
         assert_eq!(
             worded.hint.as_deref(),
             Some("devlanes config set remote.allow_connections true")
+        );
+    }
+
+    /// Refusals of a ticket pairing keep the daemon's words, which say what
+    /// to do, with no hint and no backticks; a name the daemon refused is
+    /// named.
+    #[test]
+    fn ticket_errors_keep_the_daemons_words() {
+        let worded = |code: &str, data| rpc(&RpcError::new(code, data, 2));
+        let bad = worded(
+            "bad_ticket",
+            json!({"message": "the pairing ticket does not match its checksum; copy it again from `devlanes daemon pair` on the box"}),
+        );
+        assert_eq!(
+            bad.summary,
+            "the pairing ticket does not match its checksum; copy it again from devlanes daemon pair on the box"
+        );
+        assert_eq!(bad.hint, None);
+        let taken = worded(
+            "box_name_taken",
+            json!({"name": "acme", "taken_by": "user_config",
+                   "message": "acme is a box in remote.boxes already; pass another name"}),
+        );
+        assert_eq!(
+            taken.summary,
+            "acme is a box in remote.boxes already; pass another name"
+        );
+        let refused = worded(
+            "bad_request",
+            json!({"name": "dlp1x", "message": "a box name cannot start with dlp1"}),
+        );
+        assert_eq!(
+            refused.summary,
+            "dlp1x cannot be a box name: a box name cannot start with dlp1"
         );
     }
 

@@ -159,6 +159,13 @@ fn notes(
             format!("{name} needs you to sign in again, so this is its last known state."),
             vec![format!("Press B, then enter on {name} to sign in.")],
         )),
+        "needs_pairing" if host.by_ticket() => Some((
+            format!("{name} needs a new ticket, so this is its last known state."),
+            vec![format!(
+                "On {name}, press p in its Boxes view or run devlanes daemon pair. Then press B, \
+                 enter on {name} and paste the ticket."
+            )],
+        )),
         "needs_pairing" => Some((
             format!("{name} needs a new pairing code, so this is its last known state."),
             vec![format!(
@@ -908,7 +915,7 @@ fn empty_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
         Line::from(""),
     ];
     lines.extend(sentence(
-        "connect to a box by its SSH name or a command",
+        "connect to a box by a ticket, its SSH name or a command",
         width,
         vec![
             Span::raw("  "),
@@ -982,7 +989,7 @@ fn clients_content(app: &App, width: usize) -> ClientLines {
         }
         _ if off => {}
         _ => lines.empty.extend(note(
-            "No other machine connects here yet. Press p for a pairing code.",
+            "No other machine connects here yet. Press p for a ticket and a code.",
             width,
             theme.quiet(),
         )),
@@ -1333,11 +1340,12 @@ fn host_lines(
             ));
         }
         "needs_pairing" => {
-            lines.extend(fact(
-                "link",
-                "waiting for a new pairing code, with ports and hostnames kept",
-                theme.tone(Tone::Attention),
-            ));
+            let link = if host.by_ticket() {
+                "waiting for a new ticket, with ports and hostnames kept"
+            } else {
+                "waiting for a new pairing code, with ports and hostnames kept"
+            };
+            lines.extend(fact("link", link, theme.tone(Tone::Attention)));
         }
         "failed" => lines.extend(fact(
             "link",
@@ -1366,9 +1374,20 @@ fn host_lines(
     let fix = match host.state.as_str() {
         "connected" | "connecting" | "reconnecting" => None,
         "needs_auth" => Some("enter signs in again".to_owned()),
+        "needs_pairing" if host.by_ticket() => Some(format!(
+            "on {name}, press p in its Boxes view or run devlanes daemon pair; then press enter \
+             here and paste the ticket"
+        )),
         "needs_pairing" => Some(format!(
             "run devlanes daemon pair on {name}, then press enter here"
         )),
+        // The link's own error says which: back after an absence, or no
+        // longer accepting this machine.
+        "failed" if host.by_ticket() => Some(
+            "enter connects again; if the box no longer accepts this machine, n pairs it with a \
+             new ticket"
+                .to_owned(),
+        ),
         _ => Some("enter connects again".to_owned()),
     };
     if let Some(fix) = fix {

@@ -2134,8 +2134,9 @@ pub fn is_ticket(host: &str) -> bool {
 /// the prefix, then 40 or more base32 characters and nothing else, and not
 /// a whole ticket. Sent as a host, it would reach `ssh` and `remote ls`
 /// with the box's key in it. Names that start like one, such as SSH aliases
-/// like `dlp1productionbox`, are far shorter and stay names.
-fn cut_ticket(host: &str) -> bool {
+/// like `dlp1productionbox`, are far shorter and stay names. The TUI's
+/// connect form refuses the same text.
+pub fn cut_ticket(host: &str) -> bool {
     let prefix = devlanes_proto::remote::TICKET_PREFIX;
     host.len() >= prefix.len() + 40
         && !is_ticket(host)

@@ -210,6 +210,11 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Whether a value is being typed, so a pasted character is text.
+    pub fn takes_text(&self) -> bool {
+        self.edit.as_ref().is_some_and(|edit| edit.text.is_some())
+    }
+
     /// Every setting of the user config schema, waiting for the file.
     pub fn new() -> Self {
         Self {
@@ -910,6 +915,18 @@ fn pointer(file: &Value, key: &str) -> Option<Value> {
 
 /// Typed text as the setting's type; empty restores the default.
 fn parse_typed(kind: &Kind, text: &str) -> Result<Option<Value>, String> {
+    // An empty `remote.relays` turns relays off, so only `none` writes one:
+    // a cleared field, stray commas or spaces do not, and del restores the
+    // default.
+    let free_list = matches!(kind, Kind::List(choices) if choices.is_empty());
+    let no_entries = text.split([',', ' ']).all(str::is_empty);
+    if free_list && no_entries {
+        return Err(
+            "Type the relays separated by commas, none for no relay, or press del for the \
+             default."
+                .into(),
+        );
+    }
     if text.is_empty() {
         return Ok(None);
     }
@@ -918,6 +935,8 @@ fn parse_typed(kind: &Kind, text: &str) -> Result<Option<Value>, String> {
             .parse::<i64>()
             .map(Value::from)
             .map_err(|_| "Enter a whole number.".to_owned())?,
+        // `none` is how an empty list shows, so it types as one.
+        Kind::List(_) if text.trim() == "none" => Value::Array(Vec::new()),
         Kind::List(_) => Value::Array(
             text.split([',', ' '])
                 .filter(|part| !part.is_empty())
@@ -1196,8 +1215,14 @@ fn walk(node: &Value, root: &Value, prefix: &str, out: &mut Vec<Item>) {
             }
         } else if has_type(first, "array") {
             let items = first.get("items").map(|items| resolve(items, root));
-            match items.and_then(choices) {
-                Some(choices) => Kind::List(choices),
+            match items {
+                Some(items) => match choices(items) {
+                    Some(choices) => Kind::List(choices),
+                    // Free text, such as `remote.relays`; the config checks
+                    // each entry when the edit is staged.
+                    None if has_type(items, "string") => Kind::List(Vec::new()),
+                    None => continue,
+                },
                 None => continue,
             }
         } else if has_type(first, "string") {
@@ -1318,11 +1343,14 @@ pub fn render(theme: &Theme, settings: &Settings, frame: &mut Frame, area: Rect)
     }
     let wide = body.width >= 70;
     let (list, about) = if wide {
-        // As wide as the longest row of any tab, so it does not jump with the tab.
+        // As wide as the longest row of any tab, so it does not jump with the
+        // tab. A free-text list such as `remote.relays` is left out: its
+        // URLs would widen every tab, and its row clips them.
         let longest = settings
             .categories
             .iter()
             .flat_map(|category| &category.items)
+            .filter(|item| item.kind != Kind::List(Vec::new()))
             .map(|item| 2 + text::width(&item.key) + 3 + text::width(&settings.shown(item)) + 6)
             .max()
             .unwrap_or(0);
@@ -1488,10 +1516,12 @@ fn render_list(
     let page = settings.index / rows;
     let width = usize::from(area.width);
     // Names give way to values only when both do not fit; the 6 is ◂ ▸ and
-    // the changed mark.
+    // the changed mark. A free-text list's value is clipped instead, so its
+    // URLs never cut the names short.
     let longest_value = category
         .items
         .iter()
+        .filter(|item| item.kind != Kind::List(Vec::new()))
         .map(|item| text::width(&settings.shown(item)) + 6)
         .max()
         .unwrap_or(0)
@@ -1656,9 +1686,16 @@ fn render_about(
         Style::new().add_modifier(Modifier::BOLD),
     ));
     lines.extend(wrapped(&item.about, Style::new()));
+    if item.kind == Kind::List(Vec::new()) {
+        lines.extend(wrapped(
+            "Separate the relays with commas. Type none for no relay: boxes are then reached \
+             only at the addresses in their tickets.",
+            theme.quiet(),
+        ));
+    }
     let current = settings.current(item);
     let options = match &item.kind {
-        Kind::Choice(choices) | Kind::List(choices) => Some(choices),
+        Kind::Choice(choices) | Kind::List(choices) if !choices.is_empty() => Some(choices),
         _ => None,
     };
     if let Some(choices) = options {
@@ -2468,5 +2505,29 @@ mod tests {
         assert_eq!(humanize(&json!("5368709120B")), "5GiB");
         assert_eq!(humanize(&json!("75%")), "75%");
         assert_eq!(humanize(&json!(null)), "default");
+    }
+
+    /// `remote.relays` is listed as free text; only `none` writes the empty
+    /// list that turns relays off, and typed URLs split into entries.
+    #[test]
+    fn relays_type_as_a_list_and_empty_only_as_none() {
+        let categories = catalog();
+        let relays = categories
+            .iter()
+            .flat_map(|category| &category.items)
+            .find(|item| item.key == "remote.relays")
+            .expect("remote.relays is listed");
+        let typed = |text: &str| parse_typed(&relays.kind, text);
+        assert_eq!(typed("none"), Ok(Some(json!([]))));
+        for empty in ["", "   ", ",", " , "] {
+            assert!(typed(empty).is_err(), "{empty:?}");
+        }
+        assert_eq!(
+            typed("https://a.example.invalid, https://b.example.invalid"),
+            Ok(Some(json!([
+                "https://a.example.invalid",
+                "https://b.example.invalid"
+            ])))
+        );
     }
 }

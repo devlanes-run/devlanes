@@ -177,6 +177,18 @@ impl Fake {
         }));
     }
 
+    /// `n` in the boxes view, then SSH name at "Reach by", with the name
+    /// row taking keys: the new form opens on the ticket row.
+    fn new_ssh_box(&mut self) {
+        self.key(KeyCode::Char('n'));
+        self.send(Msg::Key(KeyEvent::new(
+            KeyCode::BackTab,
+            KeyModifiers::SHIFT,
+        )));
+        self.key(KeyCode::Char(' '));
+        self.key(KeyCode::Tab);
+    }
+
     /// Types `text` one key at a time.
     fn type_text(&mut self, text: &str) {
         for c in text.chars() {
@@ -287,8 +299,22 @@ impl Fake {
             }],
             Effect::FetchBoxes => vec![Msg::Boxes(Ok(self.boxes.clone()))],
             Effect::FetchClients => vec![Msg::Clients(Ok(self.clients.clone()))],
-            Effect::Pair => vec![Msg::Paired(self.pairing.clone().map_err(ApiError::Rpc))],
+            Effect::Pair { generation } => vec![Msg::Paired {
+                generation,
+                result: self.pairing.clone().map_err(ApiError::Rpc),
+            }],
             Effect::Connect { generation, host } => (self.connect)(generation, &host),
+            // The box in the ticket was paired before and keeps its name.
+            Effect::ConnectTicket { generation, .. } => vec![connect_event(
+                generation,
+                devlanes_proto::remote::STATE_EVENT,
+                json!({"host": "studio", "state": "connecting", "attempt": 1,
+                       "paired": {"name": "studio", "kept": true, "name_ignored": true}}),
+            )],
+            Effect::MintTicket { generation } => vec![Msg::TicketMinted {
+                generation,
+                result: Ok(data::ticket_alone()),
+            }],
             Effect::SaveBoxCommand { generation, .. } => vec![Msg::BoxSaved {
                 generation,
                 result: Ok(()),
@@ -753,8 +779,8 @@ fn scenes() -> Vec<Scene> {
                 f.clients = data::clients();
                 f.connect_boxes();
                 f.shifted('B');
-                // hetzner, its skipped lane, devbox and gpu come first.
-                for _ in 0..4 {
+                // hetzner, its skipped lane, devbox, gpu and studio come first.
+                for _ in 0..5 {
                     f.key(KeyCode::Char('j'));
                 }
             },
@@ -786,6 +812,42 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "boxes-ticket-pairing",
+            what: "the boxes view on studio, paired by ticket, which no longer accepts this machine's pairing: the daemon's reason, what to do on the box and here, and enter pastes a ticket",
+            setup: |f| {
+                f.show_boxes(data::boxes_ticket_pairing());
+                f.shifted('B');
+                // Past hetzner, its skipped lane, devbox and gpu.
+                for _ in 0..4 {
+                    f.key(KeyCode::Char('j'));
+                }
+            },
+        },
+        Scene {
+            name: "boxes-long-name",
+            what: "the boxes view with a box paired by ticket under the longest name it can have, 63 characters",
+            setup: |f| {
+                f.show_boxes(data::boxes_long_name());
+                f.shifted('B');
+                for _ in 0..4 {
+                    f.key(KeyCode::Char('j'));
+                }
+            },
+        },
+        Scene {
+            name: "dialog-forget",
+            what: "f on studio, paired by ticket: asks before forgetting it",
+            setup: |f| {
+                f.connect_boxes();
+                f.shifted('B');
+                // Past hetzner, its skipped lane, devbox and gpu.
+                for _ in 0..4 {
+                    f.key(KeyCode::Char('j'));
+                }
+                f.key(KeyCode::Char('f'));
+            },
+        },
+        Scene {
             name: "box-pairing",
             what: "a service of a box that waits for pairing: the last known state, and what to run on the box and here",
             setup: |f| {
@@ -800,16 +862,40 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "dialog-connect",
-            what: "a new connection (n): a box reached by its SSH name",
+            what: "a new connection (n, then SSH name at Reach by): a box reached by its SSH name",
             setup: |f| {
                 f.shifted('B');
-                f.key(KeyCode::Char('n'));
+                f.new_ssh_box();
                 f.type_text("hetzner");
             },
         },
         Scene {
+            name: "dialog-connect-ticket",
+            what: "a new connection (n) with a ticket pasted, shown by its start and length only, and a name typed",
+            setup: |f| {
+                f.shifted('B');
+                f.key(KeyCode::Char('n'));
+                f.send(Msg::Paste(format!("{}\n", data::whole_ticket())));
+                f.key(KeyCode::Tab);
+                f.type_text("studio");
+            },
+        },
+        Scene {
+            name: "dialog-connect-paired",
+            what: "enter on a pasted ticket of studio, listed already: it was paired before, so it keeps its name and the typed one is ignored; the ticket is gone from the screen",
+            setup: |f| {
+                f.connect_boxes();
+                f.shifted('B');
+                f.key(KeyCode::Char('n'));
+                f.send(Msg::Paste(data::whole_ticket()));
+                f.key(KeyCode::Tab);
+                f.type_text("work");
+                f.key(KeyCode::Enter);
+            },
+        },
+        Scene {
             name: "dialog-connect-empty",
-            what: "the new connection form before anything is typed, with the keys on how the box is reached (shift+tab): the name's placeholder",
+            what: "the new connection form before anything is typed, with the keys on how the box is reached (shift+tab): the ticket and name placeholders",
             setup: |f| {
                 f.shifted('B');
                 f.key(KeyCode::Char('n'));
@@ -821,17 +907,17 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "dialog-connect-command",
-            what: "a new connection reached by a command (shift+tab, space, tab, tab): saved as remote.boxes.acme.command",
+            what: "a new connection reached by a command (shift+tab, left, tab, then tab to the command): saved as remote.boxes.acme.command",
             setup: |f| {
                 f.shifted('B');
                 f.key(KeyCode::Char('n'));
-                f.type_text("acme");
                 f.send(Msg::Key(KeyEvent::new(
                     KeyCode::BackTab,
                     KeyModifiers::SHIFT,
                 )));
-                f.key(KeyCode::Char(' '));
+                f.key(KeyCode::Left);
                 f.key(KeyCode::Tab);
+                f.type_text("acme");
                 f.key(KeyCode::Tab);
                 f.type_text("docker exec -i acme devlanes tunnel --stdio");
             },
@@ -851,7 +937,7 @@ fn scenes() -> Vec<Scene> {
                     msgs
                 };
                 f.shifted('B');
-                f.key(KeyCode::Char('n'));
+                f.new_ssh_box();
                 f.type_text("hetzner");
                 f.key(KeyCode::Enter);
                 f.type_text("K7QM-3X");
@@ -912,7 +998,7 @@ fn scenes() -> Vec<Scene> {
                     }]
                 };
                 f.shifted('B');
-                f.key(KeyCode::Char('n'));
+                f.new_ssh_box();
                 f.type_text("hetzner");
                 f.key(KeyCode::Enter);
             },
@@ -928,7 +1014,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "dialog-pair",
-            what: "a pairing code for another machine (p): the code, its countdown and what to run there",
+            what: "pairing another machine (p): the ticket first with its countdown and what to do there, then the code for SSH and command boxes",
             setup: |f| {
                 f.shifted('B');
                 f.key(KeyCode::Char('p'));
@@ -936,8 +1022,55 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "dialog-pair-long",
+            what: "pairing another machine with a 250-character ticket, as a box with more addresses gives: the code and the keys stay on the modal",
+            setup: |f| {
+                f.pairing = Ok(data::pair_long_ticket());
+                f.shifted('B');
+                f.key(KeyCode::Char('p'));
+            },
+        },
+        Scene {
+            name: "dialog-pair-not-ready",
+            what: "p while this machine's peer-to-peer networking is still starting, as after an idle stop: the code, and t gets the ticket alone",
+            setup: |f| {
+                f.pairing = Ok(data::pair_ticket_not_ready());
+                f.shifted('B');
+                f.key(KeyCode::Char('p'));
+            },
+        },
+        Scene {
+            name: "dialog-pair-fetched",
+            what: "t after a ticket that was not ready: the ticket alone arrived next to the code",
+            setup: |f| {
+                f.pairing = Ok(data::pair_ticket_not_ready());
+                f.shifted('B');
+                f.key(KeyCode::Char('p'));
+                f.send(Msg::Tick);
+                f.key(KeyCode::Char('t'));
+            },
+        },
+        Scene {
+            name: "dialog-pair-codes-paused",
+            what: "p while 5 wrong codes keep codes paused: the ticket alone, and how long codes stay paused",
+            setup: |f| {
+                f.pairing = Ok(data::pair_codes_paused());
+                f.shifted('B');
+                f.key(KeyCode::Char('p'));
+            },
+        },
+        Scene {
+            name: "dialog-pair-old-daemon",
+            what: "p with a daemon older than tickets: the code alone, and how to start this release's daemon",
+            setup: |f| {
+                f.pairing = Ok(data::pair_code_alone());
+                f.shifted('B');
+                f.key(KeyCode::Char('p'));
+            },
+        },
+        Scene {
             name: "dialog-pair-expired",
-            what: "the pairing code modal once its code expired: p gets a new one",
+            what: "the pairing modal once its ticket and code expired: p gets new ones",
             setup: |f| {
                 f.shifted('B');
                 f.key(KeyCode::Char('p'));
@@ -948,7 +1081,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "dialog-pair-paused",
-            what: "p while 5 wrong codes keep pairing paused: how long it stays paused",
+            what: "p while 5 wrong codes keep pairing paused, from a daemon older than tickets: how long it stays paused",
             setup: |f| {
                 f.pairing = Err(data::pairing_paused());
                 f.shifted('B');
@@ -1197,10 +1330,19 @@ fn scenes() -> Vec<Scene> {
                 f.clients = data::clients();
                 f.connect_boxes();
                 f.shifted('B');
-                // hetzner, its skipped lane, devbox and gpu come first.
-                for _ in 0..4 {
+                // hetzner, its skipped lane, devbox, gpu and studio come first.
+                for _ in 0..5 {
                     f.key(KeyCode::Char('j'));
                 }
+                f.key(KeyCode::Char('x'));
+            },
+        },
+        Scene {
+            name: "dialog-revoke-ticket",
+            what: "revoking laptop, paired by ticket: it needs a new ticket to connect again",
+            setup: |f| {
+                f.clients = data::clients_ticket();
+                f.shifted('B');
                 f.key(KeyCode::Char('x'));
             },
         },
@@ -1395,6 +1537,22 @@ fn scenes() -> Vec<Scene> {
                     KeyModifiers::CONTROL,
                 )));
                 f.type_text("8080");
+                f.key(KeyCode::Enter);
+            },
+        },
+        Scene {
+            name: "options-relays",
+            what: "remote.relays typed as a list the config refuses: the relay that is not an http or https URL, in the config's words",
+            setup: |f| {
+                options(f);
+                f.key(KeyCode::Tab);
+                option(f, "remote.relays");
+                f.key(KeyCode::Enter);
+                f.send(Msg::Key(KeyEvent::new(
+                    KeyCode::Char('u'),
+                    KeyModifiers::CONTROL,
+                )));
+                f.type_text("https://relay.example.invalid, ftp://relay.example.invalid");
                 f.key(KeyCode::Enter);
             },
         },

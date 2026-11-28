@@ -1,0 +1,50 @@
+ devlanes  1 acme   2 billing   3 shop   starting feat…  M  D  Boxes · 4 issues
+┌ boxes ────────────────────────────────────── 1 of 4 connected · j k for more ┐
+│ ! gpu                                                  needs a sign-in · ssh │
+│   link      waiting for you to sign in again, with ports and hostnames kept  │
+│   error     ssh to gpu failed (255): Permission denied (publickey).          │
+│   fix       enter signs in again                                             │
+│                                                                              │
+│ ✕ stu┌───────────────────────────────────────────────────────────────┐ · p2p │
+│   lin│ Forget studio?                                                │       │
+│   err│                                                               │s      │
+│      │ To connect to it again, you need a new ticket from the box.   │ is    │
+│      │ Its lanes keep running on the box, and folders synced from it │       │
+│   fix│ stay here.                                                    │chine, │
+│      │                                                               │       │
+│      │ y forget   n cancel                                           │       │
+│      └───────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ────────────────────────────────────────────────────────────────┐
+│ No other machine connects here yet. Press p for a ticket and a code.         │
+└──────────────────────────────────────────────────────────────────────────────┘
+ enter connect   d disconnect   f forget   n new box      ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 57 bold, 60 bold, 63 bold underlined, 64-67 bold underlined yellow, 68-78 red
+1: 0 bold yellow, 1-7 bold, 8-45 bold yellow, 46-78 bold dim, 79 bold yellow
+2: 0 bold yellow, 2-3 yellow, 4-6 bold, 57-71 yellow, 72-77 dim, 79 bold yellow
+3: 0 bold yellow, 4-13 dim, 14-76 yellow, 79 bold yellow
+4: 0 bold yellow, 4-13 dim, 14-68 yellow, 79 bold yellow
+5: 0 bold yellow, 4-13 dim, 14-33 bold, 79 bold yellow
+6: 0 bold yellow, 79 bold yellow
+7: 0 bold yellow, 2-3 reversed, 4-6 bold reversed, 7-71 bold yellow, 72-77 reversed, 79 bold yellow
+8: 0 bold yellow, 4-6 dim, 7 bold yellow, 9-22 bold, 71 bold yellow, 79 bold yellow
+9: 0 bold yellow, 4-6 dim, 7 bold yellow, 71 bold yellow, 72 red, 79 bold yellow
+10: 0 bold yellow, 4-6 dim, 7 bold yellow, 71 bold yellow, 72-74 red, 79 bold yellow
+11: 0 bold yellow, 4-6 dim, 7 bold yellow, 71 bold yellow, 79 bold yellow
+12: 0 bold yellow, 4-6 dim, 7 bold yellow, 71 bold yellow, 72-77 bold, 79 bold yellow
+13: 0 bold yellow, 4-6 dim, 7 bold yellow, 71 bold yellow, 79 bold yellow
+14: 0 bold yellow, 7 bold yellow, 9 bold, 10-16 dim, 20 bold, 21-27 dim, 71 bold yellow, 79 bold yellow
+15: 0 bold yellow, 7-71 bold yellow, 79 bold yellow
+16: 0 bold yellow, 79 bold yellow
+17: 0 bold yellow, 79 bold yellow
+18: 0 bold yellow, 79 bold yellow
+19: 0-79 bold yellow
+20: 0 darkgray, 1-14 bold, 15-79 darkgray
+21: 0 darkgray, 2-69 dim, 79 darkgray
+22: 0-79 darkgray
+23: 1-5 bold, 6-16 dim, 17 bold, 18-31 dim, 32 bold, 33-42 dim, 43 bold, 44-54 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

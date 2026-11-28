@@ -721,6 +721,11 @@ pub enum Msg {
         error: Option<String>,
     },
     Key(KeyEvent),
+    /// A key that came as part of a paste, as on Windows, where a paste is
+    /// key presses ([`crate::keys::in_paste`]): text for the field that
+    /// takes typing, and nothing else, so a pasted ticket never runs key
+    /// bindings or confirms a dialog.
+    PastedKey(KeyEvent),
     Mouse(MouseEvent),
     Paste(String),
     /// A frame of the start this TUI was opened for (`devlanes start`).
@@ -883,8 +888,21 @@ pub enum Msg {
         host: String,
         result: Result<Value, ApiError>,
     },
+    /// [`Effect::Forget`] is done.
+    Forgotten {
+        host: String,
+        result: Result<Value, ApiError>,
+    },
     /// [`Effect::Pair`] is done.
-    Paired(Result<Value, ApiError>),
+    Paired {
+        generation: u64,
+        result: Result<Value, ApiError>,
+    },
+    /// [`Effect::MintTicket`] is done.
+    TicketMinted {
+        generation: u64,
+        result: Result<Value, ApiError>,
+    },
     /// [`Effect::UseLane`] is done.
     LaneUsed {
         lane: String,
@@ -988,6 +1006,13 @@ pub enum Effect {
         generation: u64,
         host: String,
     },
+    /// `connect` with `ticket` and `name`, attached and answered as
+    /// [`Effect::Connect`] is; the box's name comes with its first state.
+    ConnectTicket {
+        generation: u64,
+        ticket: crate::connect::TicketText,
+        name: Option<String>,
+    },
     /// The answer to the prompt on `stream_id` of the attached `connect`.
     ConnectAnswer {
         stream_id: u64,
@@ -1010,8 +1035,21 @@ pub enum Effect {
     Disconnect {
         host: String,
     },
-    /// `remote.pair`, answered with [`Msg::Paired`].
-    Pair,
+    /// `disconnect` with `forget` for `host`, answered with
+    /// [`Msg::Forgotten`]; only produced by a confirmed dialog.
+    Forget {
+        host: String,
+    },
+    /// `remote.pair` for a ticket and a code for the pairing modal
+    /// `generation`, answered with [`Msg::Paired`].
+    Pair {
+        generation: u64,
+    },
+    /// `remote.pair` for the ticket alone for the pairing modal
+    /// `generation`, answered with [`Msg::TicketMinted`].
+    MintTicket {
+        generation: u64,
+    },
     /// `remote.use` for lane `lane` (`acme@0`) of box `host`, or of this
     /// machine when `host` is `None`, answered with [`Msg::LaneUsed`].
     UseLane {
@@ -1182,6 +1220,8 @@ pub struct BoxesView {
     ticks: u8,
     /// The newest [`Effect::Connect`]; older ones' messages are stale.
     connects: u64,
+    /// The newest pairing modal; answers for an older one are dropped.
+    pairs: u64,
 }
 
 impl BoxesView {
@@ -1305,6 +1345,8 @@ pub struct App {
     /// The time step rows count from; `None` is the real clock. Tests and
     /// the screens example pin it so drawn times do not change.
     pub clock: Option<web_time::Instant>,
+    /// The guards against a paste that arrives as key presses.
+    pub paste: PasteGuard,
     pub dialog: Option<Dialog>,
     pub attached: Option<Attached>,
     /// The latest `metrics` reply; `None` until one arrives or after an error.
@@ -1491,6 +1533,7 @@ impl App {
             daemon_state: DaemonState::Online,
             starting_since: None,
             clock: None,
+            paste: PasteGuard::default(),
             dialog: None,
             attached: None,
             metrics: None,
@@ -1846,7 +1889,16 @@ impl App {
                 // Asked once; the next q closes without asking again.
                 self.on_quit = OnQuit::Keep;
             }
-            Msg::Key(key) => self.key(key, &mut effects),
+            Msg::Key(key) => {
+                let now = self.now();
+                self.paste.key(now, true);
+                self.key(key, &mut effects);
+            }
+            Msg::PastedKey(key) => {
+                let now = self.now();
+                self.paste.key(now, false);
+                self.pasted_key(key, &mut effects);
+            }
             Msg::Mouse(mouse) => self.mouse(mouse, &mut effects),
             Msg::Paste(text) => self.paste(&text, &mut effects),
             Msg::Resize(width, height) => {
@@ -2404,9 +2456,36 @@ impl App {
                 }
                 self.fetch_boxes(&mut effects);
             }
-            Msg::Paired(result) => {
-                if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut() {
+            Msg::Forgotten { host, result } => {
+                let host = text::clean(&host);
+                match result {
+                    Ok(_) => self.set_notice(format!(
+                        "forgot {host}; connecting to it again needs a new ticket"
+                    )),
+                    Err(error) => {
+                        self.api_error(&format!("forget {host}"), None, error, &mut effects);
+                    }
+                }
+                self.fetch_boxes(&mut effects);
+            }
+            // An answer for a modal that closed or was replaced is dropped:
+            // only the open one's ticket and code are still shown as valid.
+            Msg::Paired { generation, result } => {
+                let now = self.now();
+                if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut()
+                    && dialog.generation == generation
+                {
                     dialog.answered(result);
+                    dialog.answered_at = Some(now);
+                }
+            }
+            Msg::TicketMinted { generation, result } => {
+                let now = self.now();
+                if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut()
+                    && dialog.generation == generation
+                {
+                    dialog.ticket_answered(result);
+                    dialog.answered_at = Some(now);
                 }
             }
             Msg::LaneUsed { lane, host, result } => {
@@ -2416,7 +2495,53 @@ impl App {
             Msg::DaemonRestarted(result) => self.daemon_answered("restart", result, &mut effects),
             Msg::DaemonStarted(result) => self.daemon_answered("start", result, &mut effects),
         }
+        self.track_question();
         effects
+    }
+
+    /// Notes when a question appeared and which key opened it, for
+    /// [`App::question_settled`].
+    fn track_question(&mut self) {
+        let prompt = match &self.dialog {
+            Some(Dialog::Confirm { prompt, .. }) => Some(prompt),
+            _ => None,
+        };
+        // A question replaced by another one starts over, so the new one
+        // waits as long as a question opened from nothing.
+        let same = self
+            .paste
+            .question
+            .as_ref()
+            .zip(prompt)
+            .is_some_and(|(question, prompt)| question.prompt == *prompt);
+        match prompt {
+            Some(prompt) if !same => {
+                self.paste.question = Some(Question {
+                    by: self.paste.keys,
+                    prompt: prompt.clone(),
+                });
+                self.paste.drawn_at.set(None);
+            }
+            Some(_) => {}
+            None => self.paste.question = None,
+        }
+    }
+
+    /// Whether the open question takes an answer. Where pastes arrive as
+    /// keys, a paste split across reads can start a batch with a `y` that
+    /// reads as typed, so a question answers only once it has been on
+    /// screen for [`QUESTION_SETTLE`] and the key before the answer came at
+    /// least that long before it. Elsewhere it always does.
+    fn question_settled(&self) -> bool {
+        if !self.paste.on {
+            return true;
+        }
+        self.paste.question.is_some()
+            && question_settled(
+                self.paste.drawn_at.get(),
+                self.paste.previous_key_at,
+                self.now(),
+            )
     }
 
     /// This TUI's restart or start (`verb`) ended. A new daemon answers:
@@ -4293,8 +4418,9 @@ impl App {
     /// Keys on the boxes view: `j k` and the like move one selection through
     /// the boxes, then this machine's clients; Enter connects, signs in,
     /// pairs or disconnects the selected box by its state, `d` disconnects
-    /// it, `x` revokes the selected client, `n` connects a new box and `p`
-    /// shows a pairing code for another machine.
+    /// it, `f` forgets a box paired by ticket, `x` revokes the selected
+    /// client, `n` connects a new box and `p` shows a pairing ticket and
+    /// code for another machine.
     fn boxes_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) {
         let plain = !key
             .modifiers
@@ -4309,21 +4435,13 @@ impl App {
             KeyCode::Enter if self.boxes.selected_skipped().is_some() => self.box_use_lane(effects),
             KeyCode::Enter => self.box_enter(effects),
             KeyCode::Char('m') if plain => self.box_use_lane(effects),
-            KeyCode::Char('n') if plain => {
-                let mut dialog = Box::<crate::connect::ConnectDialog>::default();
-                dialog.form.live = self
-                    .boxes
-                    .hosts
-                    .iter()
-                    .filter(|host| !matches!(host.state.as_str(), "disconnected" | "stopped"))
-                    .map(|host| host.host.clone())
-                    .collect();
-                self.dialog = Some(Dialog::Connect(dialog));
-                effects.push(Effect::LoadBoxCommands);
+            KeyCode::Char('n') if plain => self.new_box(effects),
+            KeyCode::Char('p') if plain && key.kind != crate::keys::KeyEventKind::Repeat => {
+                self.pair(effects);
             }
-            KeyCode::Char('p') if plain => self.pair(effects),
             KeyCode::Char('o') if plain => self.open_options("remote.allow_connections", effects),
             KeyCode::Char('d') if plain => self.disconnect_prompt(),
+            KeyCode::Char('f') if plain => self.forget_prompt(),
             KeyCode::Char('x') if plain => {
                 if self.boxes.part == BoxPart::Clients {
                     self.revoke_prompt();
@@ -4409,9 +4527,11 @@ impl App {
         }
     }
 
-    /// Enter on the boxes view: a connected box asks before disconnecting;
-    /// any other one opens the connect modal, which resumes a box waiting
-    /// for a sign-in, a pairing code or its next try and asks its questions.
+    /// Enter on the boxes view: a connected box asks before disconnecting; a
+    /// box paired by ticket that needs pairing again opens the form for its
+    /// new ticket; any other one opens the connect modal, which resumes a
+    /// box waiting for a sign-in, a pairing code or its next try and asks
+    /// its questions.
     fn box_enter(&mut self, effects: &mut Vec<Effect>) {
         let Some(host) = self.boxes.selected_host() else {
             if self.boxes.part == BoxPart::Clients && self.boxes.clients.current().is_some() {
@@ -4423,11 +4543,32 @@ impl App {
             self.disconnect_prompt();
             return;
         }
+        // A box paired by ticket pairs again only with a new ticket, which
+        // the form takes; the box keeps its name here.
+        if host.by_ticket() && host.state == "needs_pairing" {
+            self.new_box(effects);
+            return;
+        }
         let host = host.host.clone();
         self.connect_box(
             Box::new(crate::connect::ConnectDialog::following(&host)),
             effects,
         );
+    }
+
+    /// Opens the new connection form on its ticket row, knowing the boxes
+    /// with a link and, once read, the commands config.yaml has.
+    fn new_box(&mut self, effects: &mut Vec<Effect>) {
+        let mut dialog = Box::<crate::connect::ConnectDialog>::default();
+        dialog.form.live = self
+            .boxes
+            .hosts
+            .iter()
+            .filter(|host| !matches!(host.state.as_str(), "disconnected" | "stopped"))
+            .map(|host| host.host.clone())
+            .collect();
+        self.dialog = Some(Dialog::Connect(dialog));
+        effects.push(Effect::LoadBoxCommands);
     }
 
     /// Opens `dialog` on a new `connect` to its host, which follows that one.
@@ -4473,10 +4614,41 @@ impl App {
         });
     }
 
+    /// The confirm dialog for forgetting the selected box paired by ticket,
+    /// or why it cannot be forgotten. A box that is not connected can be
+    /// forgotten too: that is the usual state of a pairing nobody wants.
+    fn forget_prompt(&mut self) {
+        let Some(host) = self.boxes.selected_host() else {
+            self.set_notice("select a box paired by ticket to forget it".into());
+            return;
+        };
+        let name = text::clean(&host.host);
+        if !host.by_ticket() {
+            self.set_notice(format!("{name} is not paired by ticket; d disconnects it"));
+            return;
+        }
+        self.dialog = Some(Dialog::Confirm {
+            prompt: format!("Forget {name}?"),
+            detail: vec![
+                "To connect to it again, you need a new ticket from the box.".into(),
+                "Its lanes keep running on the box, and folders synced from it stay here.".into(),
+            ],
+            action: "forget",
+            strict: true,
+            effect: Box::new(Effect::Forget {
+                host: host.host.clone(),
+            }),
+        });
+    }
+
     /// Opens the pairing code modal and asks for a code.
     fn pair(&mut self, effects: &mut Vec<Effect>) {
-        self.dialog = Some(Dialog::Pair(crate::connect::PairDialog::loading()));
-        effects.push(Effect::Pair);
+        self.boxes.pairs += 1;
+        let generation = self.boxes.pairs;
+        let mut dialog = crate::connect::PairDialog::loading();
+        dialog.generation = generation;
+        self.dialog = Some(Dialog::Pair(dialog));
+        effects.push(Effect::Pair { generation });
     }
 
     /// Takes an event of the attached `connect`: a link state, which closes
@@ -4488,7 +4660,6 @@ impl App {
         if dialog.generation != generation {
             return;
         }
-        let host = event.data.get("host").and_then(Value::as_str);
         match event.event.as_str() {
             devlanes_proto::remote::PROMPT_EVENT => {
                 // A notice needs no answer, but ssh waits for one.
@@ -4499,13 +4670,13 @@ impl App {
                     });
                 }
             }
-            devlanes_proto::remote::STATE_EVENT if host == Some(dialog.host.as_str()) => {
+            devlanes_proto::remote::STATE_EVENT if dialog.follows(&event.data) => {
                 dialog.state(&event.data);
                 if dialog.link.state == "connected" {
-                    let name = text::clean(&dialog.host);
+                    let notice = connected_notice(dialog);
                     self.dialog = None;
                     effects.push(Effect::ConnectDetach);
-                    self.set_notice(format!("connected to {name}"));
+                    self.set_notice(notice);
                     self.fetch_boxes(effects);
                 }
             }
@@ -4527,19 +4698,31 @@ impl App {
         if dialog.generation != generation {
             return;
         }
-        let name = text::clean(&dialog.host);
         match result {
             Ok(status) => {
+                // A pairing that ends before its first state names the box here.
+                dialog.follows(&status);
                 let state = status.get("state").and_then(Value::as_str).unwrap_or("");
-                self.dialog = None;
-                self.set_notice(if state == "connected" {
-                    format!("connected to {name}")
+                let notice = if state == "connected" {
+                    connected_notice(dialog)
                 } else {
-                    format!("{name} is not connected")
-                });
+                    format!("{} is not connected", text::clean(&dialog.host))
+                };
+                self.dialog = None;
+                self.set_notice(notice);
             }
             Err(error) => {
-                dialog.step = crate::connect::Step::Failed(words::api(&error));
+                let mut worded = words::api(&error);
+                // The connection broke before the answer: the box may have
+                // paired and used up the ticket, so the list says first.
+                if dialog.pastes_again() && !matches!(error, ApiError::Rpc(_)) {
+                    worded.detail.push(
+                        "The pairing may have gone through. Look for the box in the Boxes list \
+                         before you paste the ticket again."
+                            .into(),
+                    );
+                }
+                dialog.step = crate::connect::Step::Failed(worded);
                 if error.is_disconnect() {
                     self.lost_connection(Some(&error), effects);
                 }
@@ -4817,7 +5000,11 @@ impl App {
             .as_ref()
             .and_then(|list| list.require_pairing)
             != Some(false);
-        let again = if required {
+        // A machine paired by ticket comes back only with a new ticket,
+        // whatever remote.require_pairing says.
+        let again = if client.transport.as_deref() == Some("p2p") {
+            "It needs a new ticket to connect again."
+        } else if required {
             "It needs a new pairing code to connect again."
         } else {
             "remote.require_pairing is false here, so it can reconnect without a code."
@@ -5416,6 +5603,9 @@ impl App {
             Effect::RevokeClient { name, .. } => self.set_notice(format!("revoking {name}…")),
             Effect::Disconnect { host } => {
                 self.set_notice(format!("disconnecting {}…", text::clean(host)));
+            }
+            Effect::Forget { host } => {
+                self.set_notice(format!("forgetting {}…", text::clean(host)));
             }
             _ => {}
         }
@@ -6143,6 +6333,64 @@ impl App {
         }
     }
 
+    /// A key of a paste: a character for the text field that takes typing,
+    /// as typed; anything else, and every key where no text field has the
+    /// keys, is dropped, so a paste never submits, moves the focus, closes
+    /// or confirms anything. A unit being typed into gets the paste whole,
+    /// line breaks included, as a terminal passes one on.
+    fn pasted_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) {
+        if self.dialog.is_none() && self.focus == Focus::Terminal && self.view == View::Project {
+            self.key(key, effects);
+            return;
+        }
+        let text = matches!(key.code, KeyCode::Char(_))
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        let takes_text = self.takes_text();
+        if text && takes_text {
+            self.key(key, effects);
+            return;
+        }
+        if takes_text || self.paste.told {
+            return;
+        }
+        // Once per paste: say where pasted text goes, and close a question
+        // its first key opened, which came as a typed key.
+        self.paste.told = true;
+        let opened_by_paste = self
+            .paste
+            .question
+            .as_ref()
+            .is_some_and(|question| question.by + 1 == self.paste.keys);
+        if opened_by_paste && matches!(self.dialog, Some(Dialog::Confirm { .. })) {
+            self.dialog = None;
+        }
+        // `n` opens the form with the ticket row only in the Boxes view.
+        let notice = if self.view == View::Boxes {
+            "Pasted text goes only into a text field. To pair with a ticket, press n, then paste it."
+        } else {
+            "Pasted text goes only into a text field."
+        };
+        self.set_notice(notice.into());
+    }
+
+    /// Whether a text field has the keys: a row of the connect form or a
+    /// question it asks, an option being typed, or a filter.
+    fn takes_text(&self) -> bool {
+        match &self.dialog {
+            Some(Dialog::Connect(dialog)) => dialog.takes_text(),
+            Some(Dialog::Settings(settings)) => settings.takes_text(),
+            Some(_) => false,
+            None => match self.view {
+                View::Project => self.filter.as_ref().is_some_and(|f| f.editing),
+                View::Daemon => self.daemon.filter_editing,
+                View::Monitor => self.monitor.editing,
+                View::Boxes => false,
+            },
+        }
+    }
+
     /// Keys while a dialog is open.
     fn dialog_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) {
         let Some(dialog) = self.dialog.take() else {
@@ -6150,6 +6398,15 @@ impl App {
         };
         match dialog {
             Dialog::Help => {}
+            // An answer that may be part of a paste waits; see
+            // `question_settled`.
+            dialog @ Dialog::Confirm { strict, .. }
+                if (matches!(key.code, KeyCode::Char('y' | 'Y'))
+                    || (key.code == KeyCode::Enter && !strict))
+                    && !self.question_settled() =>
+            {
+                self.dialog = Some(dialog);
+            }
             // A stray Enter must not stop or remove anything.
             Dialog::Confirm { strict, effect, .. }
                 if matches!(key.code, KeyCode::Char('y' | 'Y'))
@@ -6205,14 +6462,32 @@ impl App {
             Action::Close => {
                 if dialog.attached() {
                     effects.push(Effect::ConnectDetach);
-                    self.set_notice(format!(
-                        "{} keeps connecting in the daemon",
-                        text::clean(&dialog.host)
-                    ));
+                    // Before the box is named, the daemon may still be
+                    // pairing; it goes on without this modal.
+                    self.set_notice(if dialog.host.is_empty() {
+                        "the daemon keeps pairing with the box in the ticket".to_owned()
+                    } else {
+                        format!(
+                            "{} keeps connecting in the daemon",
+                            text::clean(&dialog.host)
+                        )
+                    });
                     self.fetch_boxes(effects);
                 }
             }
             Action::Connect => self.connect_box(dialog, effects),
+            Action::Pair { ticket, name } => {
+                self.boxes.connects += 1;
+                dialog.generation = self.boxes.connects;
+                dialog.link = crate::connect::Link::default();
+                dialog.step = Step::Waiting;
+                effects.push(Effect::ConnectTicket {
+                    generation: dialog.generation,
+                    ticket,
+                    name,
+                });
+                self.dialog = Some(Dialog::Connect(dialog));
+            }
             Action::Save(command) => {
                 self.boxes.connects += 1;
                 dialog.generation = self.boxes.connects;
@@ -6232,20 +6507,45 @@ impl App {
         }
     }
 
-    /// Keys in the pairing code modal: `p` gets a new code, `y` copies it,
-    /// `o` opens the options while connections are off, the rest closes it.
+    /// Keys in the pairing modal: `p` gets a new ticket and code, `t` the
+    /// ticket alone when it was not ready, `y` copies the ticket, or the
+    /// code when there is no ticket, `c` the code next to a ticket, `o`
+    /// opens the options while connections are off, the rest closes it.
+    /// Each key sends at most one request; drawing and ticks send none.
     fn pair_key(
         &mut self,
         key: KeyEvent,
-        dialog: crate::connect::PairDialog,
+        mut dialog: crate::connect::PairDialog,
         effects: &mut Vec<Effect>,
     ) {
+        let copied = match key.code {
+            KeyCode::Char('y') => dialog.ticket().or_else(|| dialog.code()),
+            KeyCode::Char('c') if dialog.ticket().is_some() => dialog.code(),
+            _ => None,
+        };
+        // Each request mints a ticket and a code and starts this machine's
+        // networking, so a held key or a press while one is out asks nothing.
+        let repeat = key.kind == crate::keys::KeyEventKind::Repeat;
         match key.code {
+            KeyCode::Char('p' | 't') if repeat || dialog.asking() => {
+                self.dialog = Some(Dialog::Pair(dialog));
+            }
+            KeyCode::Char('p') if dialog.too_soon(self.now()) => {
+                self.dialog = Some(Dialog::Pair(dialog));
+            }
             KeyCode::Char('p') => self.pair(effects),
-            KeyCode::Char('y') => {
-                if let Some(code) = dialog.code() {
-                    effects.push(Effect::Copy(code.to_owned()));
+            KeyCode::Char('y' | 'c') => {
+                if let Some(text) = copied {
+                    effects.push(Effect::Copy(text.to_owned()));
                     self.set_notice("copied with OSC 52. Some terminals block it.".into());
+                }
+                self.dialog = Some(Dialog::Pair(dialog));
+            }
+            KeyCode::Char('t') => {
+                if dialog.fetch_ticket() {
+                    effects.push(Effect::MintTicket {
+                        generation: dialog.generation,
+                    });
                 }
                 self.dialog = Some(Dialog::Pair(dialog));
             }
@@ -8281,6 +8581,83 @@ fn done_notice(label: &str, value: &Value) -> String {
         other => return format!("{other} {rest}: done"),
     };
     format!("{done} {rest}")
+}
+
+/// How long a question must be on screen, and how long the key before an
+/// answer must come before it, where pastes arrive as key presses. A paste
+/// read in pieces (conhost still parsing it, ConPTY writing it in parts, a
+/// slow frame) starts each piece with a key that reads as typed; a third of
+/// a second is far longer than any of those gaps and short enough that a
+/// person who reads the question does not notice it.
+pub const QUESTION_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Whether a question first drawn at `drawn_at` (`None` while it has not
+/// been) takes an answer at `now`, when the key before that answer came at
+/// `previous_key`.
+pub fn question_settled(
+    drawn_at: Option<web_time::Instant>,
+    previous_key: Option<web_time::Instant>,
+    now: web_time::Instant,
+) -> bool {
+    let long_enough =
+        |since: web_time::Instant| now.saturating_duration_since(since) >= QUESTION_SETTLE;
+    drawn_at.is_some_and(long_enough) && previous_key.is_none_or(long_enough)
+}
+
+/// The question on screen, for the paste guards.
+#[derive(Debug)]
+struct Question {
+    /// The key count when it opened: the key that opened it.
+    by: u64,
+    /// What it asks, which tells it from a question that replaced it.
+    prompt: String,
+}
+
+/// What the paste guards remember where pastes arrive as key presses.
+#[derive(Debug, Default)]
+pub struct PasteGuard {
+    /// Pastes arrive as key presses here (Windows), so the guards are on.
+    pub on: bool,
+    /// Keys taken so far, typed or pasted.
+    keys: u64,
+    last_key_at: Option<web_time::Instant>,
+    /// When the key before the one being handled came.
+    previous_key_at: Option<web_time::Instant>,
+    /// The open question.
+    question: Option<Question>,
+    /// When the open question was first drawn, which the wait counts from.
+    pub drawn_at: std::cell::Cell<Option<web_time::Instant>>,
+    /// The paste whose keys are being dropped was told about.
+    told: bool,
+}
+
+impl PasteGuard {
+    /// Counts a key that arrived at `now`; a typed one starts a new paste.
+    fn key(&mut self, now: web_time::Instant, typed: bool) {
+        self.keys += 1;
+        self.previous_key_at = self.last_key_at;
+        self.last_key_at = Some(now);
+        if typed {
+            self.told = false;
+        }
+    }
+}
+
+/// The notice once the connect modal's box connected: `connected to acme`,
+/// or for a pairing by ticket the name the box is kept under, since the box
+/// chose it and it may differ from what was typed.
+fn connected_notice(dialog: &crate::connect::ConnectDialog) -> String {
+    let name = text::clean(&dialog.host);
+    match &dialog.paired {
+        Some(paired) if paired.name_ignored => format!(
+            "connected to {name}, its name from an earlier pairing; the name you typed was ignored"
+        ),
+        Some(paired) if paired.kept => {
+            format!("connected to {name}, its name from an earlier pairing")
+        }
+        Some(_) => format!("paired and connected to {name}"),
+        None => format!("connected to {name}"),
+    }
 }
 
 /// Plain verb for notices.

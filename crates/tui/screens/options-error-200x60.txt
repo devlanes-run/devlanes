@@ -31,8 +31,8 @@
 │   ● stub-sendgrid                         │   remote.allow_connections              true│ Applies after saving and a daemon restart.                     │                                           │
 │   ● stub-segment                          │   remote.start_daemon                   true│                                                                │                                           │
 │   ● stub-auth0                            │   remote.require_pairing                true│                                                                │                                           │
-│   ● proxy-edge                            │   remote.port_mapping                   true│                                                                │                                           │
-│   ● docs-search                           │                                             │                                                                │                                           │
+│   ● proxy-edge                            │   remote.relays            https://relay1.d…│                                                                │                                           │
+│   ● docs-search                           │   remote.port_mapping                   true│                                                                │                                           │
 │   ● ml-ranker                             │                                             │                                                                │                                           │
 │   ⠋ ml-embed                        starti│                                             │                                                                │                                           │
 │   ● cache-warm                            │                                             │                                                                │                                           │
@@ -93,8 +93,8 @@
 30: 0 darkgray, 4-5 green, 6-18 darkgray, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 92-133 dim, 155 bold yellow, 199 darkgray
 31: 0 darkgray, 4-5 green, 6-17 darkgray, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
 32: 0 darkgray, 4-5 green, 6-15 darkgray, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
-33: 0 darkgray, 4-5 green, 6-15 cyan, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
-34: 0 darkgray, 4-5 green, 6-16 cyan, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
+33: 0 darkgray, 4-5 green, 6-15 cyan, 44 bold yellow, 46 bold yellow, 73-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
+34: 0 darkgray, 4-5 green, 6-16 cyan, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
 35: 0 darkgray, 4-14 green, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
 36: 0 darkgray, 6-13 green, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
 37: 0 darkgray, 4-5 green, 6-15 dim blue, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
