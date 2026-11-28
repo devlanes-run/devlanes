@@ -144,9 +144,15 @@ pub(crate) struct FrameCodec {
 impl FrameCodec {
     /// Builds a codec bounded by [`MAX_FRAME_LEN`].
     pub(crate) fn new() -> Self {
+        Self::with_max(MAX_FRAME_LEN)
+    }
+
+    /// Builds a codec that rejects frames above `max` bytes, for streams
+    /// where the other end may not send more than a small message.
+    pub(crate) fn with_max(max: usize) -> Self {
         Self {
             inner: LengthDelimitedCodec::builder()
-                .max_frame_length(MAX_FRAME_LEN)
+                .max_frame_length(max)
                 .new_codec(),
         }
     }

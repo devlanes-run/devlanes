@@ -37,7 +37,9 @@
 //! [`Link::resume`] after a [`TransportError::NeedsAuth`] one or a session
 //! that needs pairing ([`SessionError::is_needs_pairing`]).
 //! [`PeerEndpoint`] is the peer-to-peer side: one endpoint per daemon that
-//! dials boxes by key and accepts the clients its [`Admission`] lets in.
+//! dials boxes by key and accepts the clients its [`Admission`] lets in. A
+//! client pairs with a box once, by the box's [`Ticket`], over the
+//! one-request exchange of [`request_pairing`] and [`answer_pairing`].
 //!
 //! [`memory`] provides an in-process transport with fault injection for tests.
 //! With the `test-support` feature, `conformance` holds the checks every
@@ -47,6 +49,7 @@
 pub mod conformance;
 pub mod memory;
 mod mux;
+mod pair;
 pub mod pairing;
 mod peer;
 mod preamble;
@@ -60,10 +63,13 @@ mod transport;
 mod wire;
 
 pub use mux::{mux_client, mux_server};
+pub use pair::{
+    PAIR_FRAME_LIMIT, PairAnswer, PairDesk, PairError, PairRequest, answer_pairing, request_pairing,
+};
 pub use pairing::{NoPairing, PairingCheck, PairingClaim, PairingClient, PairingGate};
 pub use peer::{
     Admission, Alpn, PAIR_ALPN, PeerAddr, PeerEndpoint, PeerError, PeerId, PeerIdError,
-    PeerIncoming, TUNNEL_ALPN,
+    PeerIncoming, TUNNEL_ALPN, Ticket, TicketError, TicketSecret,
 };
 pub use preamble::{PREAMBLE_LIMIT, Preamble, PreambleError, TUNNEL_PREAMBLE, read_preamble};
 pub use reconnect::{Backoff, Link, LinkError, LinkState};

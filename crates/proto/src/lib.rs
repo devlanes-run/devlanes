@@ -1431,6 +1431,9 @@ pub mod remote {
     pub const TOKEN_PREFIX: &str = "dl_rt_";
     /// How long a pairing code from `remote.pair` stays valid: 10 minutes.
     pub const PAIRING_CODE_TTL_MS: u64 = 10 * 60 * 1000;
+    /// How a peer-to-peer pairing ticket starts, in either case; base32
+    /// follows, so a ticket is always longer than 64 characters.
+    pub const TICKET_PREFIX: &str = "dlp1";
 
     /// Whether `text` is `prefix` followed by 64 lowercase hex digits, the
     /// shape of client ids and remote tokens.
