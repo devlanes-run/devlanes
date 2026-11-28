@@ -765,7 +765,90 @@ pub fn gui_missing(method: &InstallMethod) -> Option<PathBuf> {
     let InstallMethod::Script(dir) = method else {
         return None;
     };
-    (writable(dir) && dir.join(GUI_BINARY).symlink_metadata().is_err()).then(|| dir.clone())
+    (writable(dir) && gui_absent(dir)).then(|| dir.clone())
+}
+
+/// Whether `dir` has no [`GUI_BINARY`], not even a dangling link. Blocking.
+fn gui_absent(dir: &Path) -> bool {
+    dir.join(GUI_BINARY).symlink_metadata().is_err()
+}
+
+/// What [`repair_gui`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuiRepair {
+    /// Nothing to do: not a script install, `devlanes-gui` is there, the
+    /// release has none, this is no release build, or another install
+    /// changed the directory while this one waited for the lock.
+    Nothing,
+    /// `devlanes-gui` was installed at this path.
+    Installed(PathBuf),
+    /// It is missing from a script install this user cannot write to; a
+    /// person runs `command`.
+    Unwritable { command: String },
+}
+
+/// For a script install already at `version` that has no [`GUI_BINARY`]
+/// (an updater from before it installed this release, or an update that
+/// stopped between two renames), installs only that binary of `version` with
+/// [`install_gui`], under [`Lock`] taken here with up to `lock_wait`. Once it
+/// holds the lock it checks again that the binary is still missing and that
+/// the directory's `devlanes` reports exactly `version`, since another
+/// install may have run meanwhile; otherwise it does nothing. It runs
+/// `devlanes`, never `devlanes-gui`, so one that is there is never replaced,
+/// even when it cannot run. Package-manager installs bring it themselves.
+pub async fn repair_gui(
+    home: &Path,
+    urls: &Urls,
+    method: &InstallMethod,
+    version: &str,
+    lock_wait: Duration,
+    timeout: Duration,
+) -> Result<GuiRepair, InstallError> {
+    let InstallMethod::Script(dir) = method else {
+        return Ok(GuiRepair::Nothing);
+    };
+    if Version::parse_release(version).is_none() {
+        return Ok(GuiRepair::Nothing);
+    }
+    // What `Plan::new` names for a directory this user cannot write to.
+    #[cfg(unix)]
+    let command = crate::method::sudo_script_upgrade(dir);
+    #[cfg(windows)]
+    let command = method.upgrade_command(version);
+    let (home, dir) = (home.to_path_buf(), dir.clone());
+    let checked = {
+        let (home, dir) = (home.clone(), dir.clone());
+        blocking(move || {
+            if !gui_absent(&dir) {
+                return Ok(Err(GuiRepair::Nothing));
+            }
+            if !writable(&dir) {
+                return Ok(Err(GuiRepair::Unwritable { command }));
+            }
+            let lock = Lock::acquire(&home, lock_wait)?;
+            // Another install may have run while this one waited.
+            Ok(if gui_absent(&dir) {
+                Ok(lock)
+            } else {
+                Err(GuiRepair::Nothing)
+            })
+        })
+        .await?
+    };
+    let _lock = match checked {
+        Ok(lock) => lock,
+        Err(done) => return Ok(done),
+    };
+    if reported_version(&dir.join(BINARIES[0])).await.as_deref() != Some(version) {
+        return Ok(GuiRepair::Nothing);
+    }
+    let release = Release::of(version);
+    Ok(
+        match install_gui(&home, urls, &release, version, &dir, timeout).await? {
+            GuiInstall::Installed(path) => GuiRepair::Installed(path),
+            GuiInstall::NotInRelease => GuiRepair::Nothing,
+        },
+    )
 }
 
 /// Puts only [`GUI_BINARY`] of `version` into the script install in `dir`,

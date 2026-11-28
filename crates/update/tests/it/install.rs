@@ -460,6 +460,77 @@ async fn a_missing_gui_comes_from_the_running_release() {
     assert!(!site.dir.join(GUI_BINARY).exists());
 }
 
+/// Makes the install's `devlanes` report `reports`, as the installed
+/// release would.
+fn installed_devlanes(site: &Site, reports: &str) {
+    let work = site.base.join("work").join("installed");
+    std::fs::create_dir_all(&work).expect("work");
+    let _ = std::fs::remove_file(site.dir.join(BINARIES[0]));
+    fake_binary(&site.dir, &work, "devlanes", &format!("devlanes {reports}"));
+    // fake-tool reads its behaviour next to itself.
+    #[cfg(windows)]
+    std::fs::copy(
+        work.join("devlanes.exe.json"),
+        site.dir.join("devlanes.exe.json"),
+    )
+    .expect("behaviour");
+}
+
+/// Runs `install::repair_gui` for the site's install at `version`.
+async fn repair(site: &Site, version: &str) -> install::GuiRepair {
+    install::repair_gui(
+        &site.home,
+        &site.urls(),
+        &devlanes_update::InstallMethod::Script(site.dir.clone()),
+        version,
+        Duration::from_secs(30),
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("repaired")
+}
+
+/// The repair checks again once it holds the update lock: another install
+/// that ran meanwhile may have put a devlanes-gui there, or changed
+/// devlanes to another version, and then nothing is touched.
+#[tokio::test]
+async fn a_gui_repair_leaves_what_another_install_changed() {
+    let site = Site::new();
+    site.publish("0.9.1", "0.9.1", None, None);
+    let gui = site.publish_gui("0.9.1", None, None);
+    // devlanes there is another version than the one asked for.
+    installed_devlanes(&site, "0.9.2");
+    assert_eq!(repair(&site, "0.9.1").await, install::GuiRepair::Nothing);
+    assert!(!site.dir.join(GUI_BINARY).exists());
+
+    // A devlanes-gui that another install puts there while this one waits.
+    installed_devlanes(&site, "0.9.1");
+    let held = Lock::acquire(&site.home, Duration::ZERO).expect("lock");
+    let waiting = repair(&site, "0.9.1");
+    let other = async {
+        // The repair checks before it waits for the lock; give it the time to
+        // get past that check. Too short a pause only skips the re-check, so
+        // the test cannot fail because of it.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        std::fs::write(site.dir.join(GUI_BINARY), "the other install's").expect("gui");
+        drop(held);
+    };
+    let (repaired, ()) = tokio::join!(waiting, other);
+    assert_eq!(repaired, install::GuiRepair::Nothing);
+    assert_eq!(
+        std::fs::read(site.dir.join(GUI_BINARY)).expect("gui"),
+        b"the other install's"
+    );
+
+    // Without either, the release's devlanes-gui goes in.
+    std::fs::remove_file(site.dir.join(GUI_BINARY)).expect("remove");
+    assert_eq!(
+        repair(&site, "0.9.1").await,
+        install::GuiRepair::Installed(site.dir.join(GUI_BINARY))
+    );
+    assert_eq!(std::fs::read(site.dir.join(GUI_BINARY)).expect("gui"), gui);
+}
+
 #[test]
 fn a_second_install_waits_for_the_lock_or_reports_it_busy() {
     let home = tempfile::tempdir().expect("tempdir");
