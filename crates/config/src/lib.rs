@@ -41,9 +41,8 @@ pub use hostname::{
 };
 pub use loader::{
     ConfigSources, LocalFallback, ProjectLoad, ProjectOptions, check, check_compose_files,
-    is_local_overlay, load_lane_project_with, load_project, load_project_files,
-    load_project_with, local_overlay_path, parse_project, parse_project_with,
-    parse_project_with_options,
+    is_local_overlay, load_lane_project_with, load_project, load_project_files, load_project_with,
+    local_overlay_path, parse_project, parse_project_with, parse_project_with_options,
 };
 pub use model::*;
 pub use scalar::{ByteSize, ConfigDuration, Percent, Scalar, Templated};

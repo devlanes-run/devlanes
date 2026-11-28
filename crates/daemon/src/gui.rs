@@ -108,7 +108,10 @@ pub(crate) enum HostFailure {
     #[error("devlanes-gui printed a line devlanes cannot read: {0}")]
     Unreadable(&'static str),
     /// It is another devlanes release or speaks another protocol.
-    #[error("devlanes-gui is version {version} (GUI protocol {protocol}), not {}", devlanes_version::VERSION)]
+    #[error(
+        "devlanes-gui is version {version} (GUI protocol {protocol}), not {}",
+        devlanes_version::VERSION
+    )]
     Mismatch { version: String, protocol: u16 },
     /// It listens somewhere else than the unit's port.
     #[error("devlanes-gui listens on {0}, not on the unit's devlanes_gui port")]
@@ -496,7 +499,10 @@ fn keep_tail(tail: &Mutex<String>, bytes: &Bytes) {
 
 /// The kept standard error without escapes and surrounding blank lines.
 fn tail(stderr: &Mutex<String>) -> String {
-    let text = stderr.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let text = stderr
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     strip_ansi_escapes::strip_str(&text).trim().to_owned()
 }
 
@@ -781,7 +787,11 @@ impl Inner {
         let Some(port) = request.ports.get(devlanes_core::ports::GUI_PORT).copied() else {
             return Err(crate::units::internal(
                 "gui_host_failed",
-                format!("{} has no {} port", request.name, devlanes_core::ports::GUI_PORT),
+                format!(
+                    "{} has no {} port",
+                    request.name,
+                    devlanes_core::ports::GUI_PORT
+                ),
             ));
         };
         let host = HostRequest {
@@ -846,9 +856,17 @@ impl Inner {
             engine
                 .write_note(host.info().log_dir.clone(), &name, &note)
                 .await;
-            if let Some(rec) = lane.st().unit_mut(&name).filter(|rec| rec.host.same_run(&host)) {
+            if let Some(rec) = lane
+                .st()
+                .unit_mut(&name)
+                .filter(|rec| rec.host.same_run(&host))
+            {
                 let mut notes = rec.launch.notes.clone();
-                notes.push(note.trim_start_matches(crate::spawn_error::LOG_PREFIX).trim().to_owned());
+                notes.push(
+                    note.trim_start_matches(crate::spawn_error::LOG_PREFIX)
+                        .trim()
+                        .to_owned(),
+                );
                 rec.launch = Arc::new(LaunchRecord {
                     env: crate::lifecycle::copy_env(&rec.launch.env),
                     notes,
@@ -905,7 +923,8 @@ mod tests {
         let (tx, mut rx) = output();
         tx.send(chunk(OutputStream::Stdout, b"{\"rea")).ok();
         tx.send(chunk(OutputStream::Stderr, b"starting\n")).ok();
-        tx.send(chunk(OutputStream::Stdout, b"dy\":1}\r\nmore")).ok();
+        tx.send(chunk(OutputStream::Stdout, b"dy\":1}\r\nmore"))
+            .ok();
         let line = read_line(&mut rx, &stderr, READY_TIMEOUT).await;
         assert_eq!(line.expect("a line"), "{\"ready\":1}");
         assert_eq!(tail(&stderr), "starting");
@@ -946,9 +965,15 @@ mod tests {
         };
         assert!(check(&line(devlanes_version::VERSION, 41234), address).is_ok());
         let other = check(&line("0.0.1", 41234), address);
-        assert!(matches!(other, Err(HostFailure::Mismatch { .. })), "{other:?}");
+        assert!(
+            matches!(other, Err(HostFailure::Mismatch { .. })),
+            "{other:?}"
+        );
         let moved = check(&line(devlanes_version::VERSION, 41235), address);
-        assert!(matches!(moved, Err(HostFailure::WrongAddress(_))), "{moved:?}");
+        assert!(
+            matches!(moved, Err(HostFailure::WrongAddress(_))),
+            "{moved:?}"
+        );
         let unready = devlanes_gui_proto::ready::Unready::new(
             devlanes_version::VERSION,
             UnavailableReason::NoDesktopSession,

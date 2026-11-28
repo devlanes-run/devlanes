@@ -955,10 +955,7 @@ pub fn load_project_files<E: Extensions>(
     } else {
         collect(
             entry,
-            Walk {
-                fallback,
-                options,
-            },
+            Walk { fallback, options },
             &mut Vec::new(),
             &mut Vec::new(),
             &mut documents,

@@ -419,7 +419,10 @@ async fn gui_replicas_get_their_own_gui_port() {
     let ports = [gui_port("desktop.1"), gui_port("desktop.2")];
     assert_ne!(ports[0], ports[1]);
     let defaults: Vec<u16> = lane.services.values().map(|s| s.port).collect();
-    assert!(ports.iter().all(|port| !defaults.contains(port)), "{ports:?}");
+    assert!(
+        ports.iter().all(|port| !defaults.contains(port)),
+        "{ports:?}"
+    );
     assert!(!lane.services["api"].gui);
 }
 

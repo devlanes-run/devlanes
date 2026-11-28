@@ -494,7 +494,9 @@ mod tests {
             HostLine::Unready(line) => assert_eq!(line.reason, UnavailableReason::Other),
             other => panic!("{other:?}"),
         }
-        let format = unready.to_line().replace(r#""unready":1"#, r#""unready":2"#);
+        let format = unready
+            .to_line()
+            .replace(r#""unready":1"#, r#""unready":2"#);
         assert!(matches!(
             HostLine::parse(&format),
             Err(ReadyError::Format(2))

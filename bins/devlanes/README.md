@@ -46,6 +46,8 @@ Any command except `devlanes daemon status`, `daemon stop`, `daemon reset-state`
 
 Everything lives under `~/.devlanes`, or `DEVLANES_HOME` when set: `state.db`, `config.yaml`, `logs/` (including `daemon.log`), `ca/` and `run/daemon.sock`. When the socket path is too long for macOS, it moves to a short temporary directory. devlanes refuses a home that other users can read or write, so create it with `mkdir -m 700 ~/.devlanes` when you add `config.yaml` before the first run.
 
+GUI services (`gui: true`) are off in every release build. A debug build turns them on when `DEVLANES_GUI_BACKEND` is set, and runs their GUI hosts with that backend (`test-pattern` is the one there is; any other name runs them without a host, as on an OS with no backend). The daemon looks for `devlanes-gui` next to the `devlanes` it runs, and `doctor` adds a `gui` group while they are on.
+
 ## Daemon shutdown
 
 `devlanes daemon stop` and `devlanes daemon restart` first run the `lane.stop` tasks of every lane with running units, as `devlanes stop` does for one lane: lanes in parallel, each lane's tasks in file order and within their own timeouts. Then every unit stops with its stop policy, all at once. A failed task is logged and listed in the result, and the other tasks and the stops still run. The result names the stopped units and each task's outcome. Containers keep running.

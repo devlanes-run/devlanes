@@ -2028,9 +2028,9 @@ pub(crate) const WINDOWS_DRIVE_COST: &str =
 /// not the usual one: its host exited, or this machine has none.
 pub(crate) fn gui_note(gui: &devlanes_proto::GuiStatus) -> Option<String> {
     match gui.host.as_str() {
-        devlanes_proto::GUI_HOST_EXITED => Some(
-            "its GUI host exited, so its windows cannot be viewed until it restarts".into(),
-        ),
+        devlanes_proto::GUI_HOST_EXITED => {
+            Some("its GUI host exited, so its windows cannot be viewed until it restarts".into())
+        }
         devlanes_proto::GUI_HOST_NONE => Some(
             "this machine has no GUI host, so its windows open on this machine's desktop".into(),
         ),
@@ -2116,7 +2116,12 @@ pub(crate) fn gui_cause(code: &str, data: &Value) -> (String, Option<Hint>) {
 /// (`stderr`), or nothing when it wrote none.
 fn said(data: &Value) -> String {
     let stderr = text(data, "stderr");
-    match stderr.lines().rev().map(str::trim).find(|line| !line.is_empty()) {
+    match stderr
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+    {
         Some(line) => format!("; it said: {}", super::clean(line)),
         None => String::new(),
     }

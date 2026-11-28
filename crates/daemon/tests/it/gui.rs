@@ -38,7 +38,14 @@ async fn gui_harness(
         std::fs::create_dir_all(program.parent().expect("dir")).expect("bin");
         std::fs::write(&program, "").expect("devlanes-gui");
     }
-    gui_harness_at(&tmp.path.join("home"), range, backend, program, Setup::default()).await
+    gui_harness_at(
+        &tmp.path.join("home"),
+        range,
+        backend,
+        program,
+        Setup::default(),
+    )
+    .await
 }
 
 /// [`gui_harness`] over `home`, with the rest of `setup`.
@@ -130,9 +137,11 @@ async fn why(h: &Harness, cwd: &Path, unit: &str) -> Vec<Value> {
 
 /// The `n`th GUI host the runner spawned, once it registered.
 async fn host(h: &Harness, n: usize) -> SpawnedHost {
-    eventually(Duration::from_secs(5), || async { h.runner.hosts().get(n).cloned() })
-        .await
-        .unwrap_or_else(|| panic!("no GUI host {n}"))
+    eventually(Duration::from_secs(5), || async {
+        h.runner.hosts().get(n).cloned()
+    })
+    .await
+    .unwrap_or_else(|| panic!("no GUI host {n}"))
 }
 
 /// Waits until the pattern of `host` received a command `pick` takes.
@@ -149,7 +158,11 @@ async fn received(host: &SpawnedHost, what: &str, pick: impl Fn(&Command) -> boo
 async fn answers(port: u16) -> bool {
     let options = ClientOptions::new(Role::Tool, "test", "test");
     matches!(
-        tokio::time::timeout(Duration::from_secs(5), connect(("127.0.0.1", port), options)).await,
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            connect(("127.0.0.1", port), options)
+        )
+        .await,
         Ok(Ok(_))
     )
 }
@@ -178,7 +191,11 @@ async fn a_gui_host_starts_before_its_unit_and_stops_after_it() {
             .await
             .expect("start");
         let (host_at, unit_at) = spawn_order(&h);
-        assert!(host_at < unit_at && host_at.is_some(), "{:?}", h.runner.journal.entries());
+        assert!(
+            host_at < unit_at && host_at.is_some(),
+            "{:?}",
+            h.runner.journal.entries()
+        );
 
         let desktop = unit(&h, &main, "desktop").await;
         assert_eq!(
@@ -193,20 +210,32 @@ async fn a_gui_host_starts_before_its_unit_and_stops_after_it() {
         assert!(answers(port).await);
         let first = host(&h, 0).await;
         let pid = desktop.pid.expect("pid");
-        received(&first, "the unit's identity", |c| {
-            matches!(c, Command::UnitIdentity { pid: p, .. } if *p == pid)
-        })
+        received(
+            &first,
+            "the unit's identity",
+            |c| matches!(c, Command::UnitIdentity { pid: p, .. } if *p == pid),
+        )
         .await;
 
         // The ready line's variables are the unit's, from the gui layer, and
         // the one it removes is gone.
         let (env, notes) = explain(&h, &main, "desktop").await;
-        assert!(env.contains(&("WAYLAND_DISPLAY".into(), "gui".into())), "{env:?}");
+        assert!(
+            env.contains(&("WAYLAND_DISPLAY".into(), "gui".into())),
+            "{env:?}"
+        );
         assert!(!env.iter().any(|(key, _)| key == "DISPLAY"), "{env:?}");
-        assert!(notes.iter().any(|note| note.contains("removed DISPLAY")), "{notes:?}");
+        assert!(
+            notes.iter().any(|note| note.contains("removed DISPLAY")),
+            "{notes:?}"
+        );
         let printed = eventually(Duration::from_secs(5), || async {
             let page = h
-                .call(Method::Logs, json!({"units": ["desktop"], "tail": 10}), cx(&main))
+                .call(
+                    Method::Logs,
+                    json!({"units": ["desktop"], "tail": 10}),
+                    cx(&main),
+                )
                 .await
                 .ok()?;
             page.to_string().contains("devlanes-test").then_some(())
@@ -229,9 +258,11 @@ async fn a_gui_host_starts_before_its_unit_and_stops_after_it() {
         assert!(first.unit.ended(), "the old host outlived its unit");
         let second = host(&h, 1).await;
         let pid = unit(&h, &main, "desktop").await.pid.expect("pid");
-        received(&second, "the new unit's identity", |c| {
-            matches!(c, Command::UnitIdentity { pid: p, .. } if *p == pid)
-        })
+        received(
+            &second,
+            "the new unit's identity",
+            |c| matches!(c, Command::UnitIdentity { pid: p, .. } if *p == pid),
+        )
         .await;
         assert!(answers(port).await);
 
@@ -265,7 +296,11 @@ async fn a_host_that_does_not_come_up_fails_the_unit_before_it_runs() {
                 "gui_host_failed",
                 "exited",
             ),
-            (GuiHost::Line("not json".into()), "gui_host_failed", "bad_ready_line"),
+            (
+                GuiHost::Line("not json".into()),
+                "gui_host_failed",
+                "bad_ready_line",
+            ),
             (
                 GuiHost::Line(Ready::new(address, "0.0.1", &[], false).to_line()),
                 "gui_host_failed",
@@ -280,7 +315,11 @@ async fn a_host_that_does_not_come_up_fails_the_unit_before_it_runs() {
             UnavailableReason::Other,
         ] {
             let line = Unready::new(devlanes_version::VERSION, reason, "cannot run here");
-            cases.push((GuiHost::Line(line.to_line()), "gui_unavailable", reason.word()));
+            cases.push((
+                GuiHost::Line(line.to_line()),
+                "gui_unavailable",
+                reason.word(),
+            ));
         }
         for (n, (mode, code, reason)) in cases.into_iter().enumerate() {
             *h.runner.gui.lock().expect("lock") = mode;
@@ -294,12 +333,17 @@ async fn a_host_that_does_not_come_up_fails_the_unit_before_it_runs() {
             assert_eq!(failure.data["reason"], reason, "{failure:?}");
             if reason == "exited" {
                 assert!(
-                    failure.data["stderr"].as_str().is_some_and(|s| s.contains("no pixman")),
+                    failure.data["stderr"]
+                        .as_str()
+                        .is_some_and(|s| s.contains("no pixman")),
                     "{failure:?}"
                 );
             }
             assert_eq!(spawn_order(&h).1, None, "the unit ran without its host");
-            assert!(host(&h, n).await.unit.ended(), "a failed host was left running");
+            assert!(
+                host(&h, n).await.unit.ended(),
+                "a failed host was left running"
+            );
         }
         h.close().await;
 
@@ -310,7 +354,11 @@ async fn a_host_that_does_not_come_up_fails_the_unit_before_it_runs() {
         let _ = h.call(Method::Start, json!({}), cx(&main)).await;
         let failure = unit(&h, &main, "desktop").await.reason.expect("reason");
         assert_eq!(failure.code, "gui_host_missing", "{failure:?}");
-        assert!(failure.data["path"].as_str().is_some_and(|p| p.contains("devlanes-gui")));
+        assert!(
+            failure.data["path"]
+                .as_str()
+                .is_some_and(|p| p.contains("devlanes-gui"))
+        );
         assert!(h.runner.hosts().is_empty());
         assert_eq!(unit(&h, &main, "api").await.state, "ready");
         h.close().await;
@@ -352,7 +400,10 @@ async fn a_host_that_dies_leaves_its_unit_running() {
                 .then_some(())
         })
         .await;
-        assert!(noted.is_some(), "the unit's notes do not say the host exited");
+        assert!(
+            noted.is_some(),
+            "the unit's notes do not say the host exited"
+        );
         h.call(Method::Stop, json!({}), cx(&main))
             .await
             .expect("stop");
@@ -383,7 +434,11 @@ async fn an_orphaned_gui_service_is_stopped_with_its_host() {
         drop(first);
         gui.unit.crash(0);
         let processes = FakeProcesses::default();
-        processes.alive.lock().expect("lock").extend([pid, gui.unit.pid()]);
+        processes
+            .alive
+            .lock()
+            .expect("lock")
+            .extend([pid, gui.unit.pid()]);
         // The old engine still holds its log writers, which a real crash releases.
         let second = gui_harness_at(
             &home,
@@ -404,7 +459,10 @@ async fn an_orphaned_gui_service_is_stopped_with_its_host() {
             .expect("stop");
         let killed = processes.killed.lock().expect("lock").clone();
         assert!(killed.contains(&pid), "{killed:?}");
-        assert!(killed.contains(&gui.unit.pid()), "the host was not stopped: {killed:?}");
+        assert!(
+            killed.contains(&gui.unit.pid()),
+            "the host was not stopped: {killed:?}"
+        );
         second.close().await;
     })
     .await
@@ -475,14 +533,22 @@ async fn without_a_backend_a_gui_service_runs_without_a_host() {
         assert_eq!(desktop.state, "ready");
         assert_eq!(desktop.gui.map(|gui| gui.host), Some("none".into()));
         let (_, notes) = explain(&h, &main, "desktop").await;
-        assert!(notes.iter().any(|note| note.contains("no GUI host")), "{notes:?}");
+        assert!(
+            notes.iter().any(|note| note.contains("no GUI host")),
+            "{notes:?}"
+        );
         let reasons = why(&h, &main, "desktop").await;
         assert!(
-            reasons.iter().any(|reason| reason["code"] == "gui_no_backend"),
+            reasons
+                .iter()
+                .any(|reason| reason["code"] == "gui_no_backend"),
             "{reasons:?}"
         );
-        std::fs::write(main.join("devlanes.yaml"), CONFIG.replace(", gui: true", ""))
-            .expect("edit");
+        std::fs::write(
+            main.join("devlanes.yaml"),
+            CONFIG.replace(", gui: true", ""),
+        )
+        .expect("edit");
         let drift = unit(&h, &main, "desktop").await.drift.expect("drift");
         assert!(drift.fields.contains(&"gui".to_owned()), "{drift:?}");
         h.close().await;

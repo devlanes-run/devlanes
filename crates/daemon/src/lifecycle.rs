@@ -2459,7 +2459,11 @@ impl Inner {
                 // orphaned run after a crash stops its host too.
                 let recorded = match (recorded, gui.as_ref().and_then(|g| g.host_identity())) {
                     (Ok(run), Some(member)) => {
-                        match self.store.record_unit_run_members(run.id, vec![member]).await {
+                        match self
+                            .store
+                            .record_unit_run_members(run.id, vec![member])
+                            .await
+                        {
                             Ok(_) => Ok(run),
                             Err(error) => {
                                 // Stopped below; its row ends here, as nothing

@@ -569,7 +569,10 @@ impl FakeUnit {
                 let address = listener.local_addr().expect("bound");
                 self.lingers.store(true, Ordering::SeqCst);
                 let env_out = [
-                    ("WAYLAND_DISPLAY".to_owned(), Some("devlanes-test".to_owned())),
+                    (
+                        "WAYLAND_DISPLAY".to_owned(),
+                        Some("devlanes-test".to_owned()),
+                    ),
                     ("DISPLAY".to_owned(), None),
                 ];
                 let ready = devlanes_gui_proto::ready::Ready::new(

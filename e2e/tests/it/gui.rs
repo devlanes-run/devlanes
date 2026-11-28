@@ -37,7 +37,9 @@ fn devlanes(lab: &Lab, args: &[&str]) -> Result<Output> {
 
 /// The `desktop` unit of lane 0.
 fn desktop(lab: &Lab) -> Result<Value> {
-    let status = devlanes(lab, &["status", "--json"])?.expect_code(0)?.json()?;
+    let status = devlanes(lab, &["status", "--json"])?
+        .expect_code(0)?
+        .json()?;
     let lanes = status["items"].as_array().cloned().unwrap_or_default();
     let found = lane(&lanes, "fixture-gui@0").and_then(|lane| unit(lane, "desktop"));
     need(found.cloned(), "the desktop unit")
@@ -46,7 +48,10 @@ fn desktop(lab: &Lab) -> Result<Value> {
 /// The unit's `devlanes_gui` port.
 fn gui_port(unit: &Value) -> Result<u16> {
     let port = unit["ports"]["devlanes_gui"].as_u64();
-    need(port.and_then(|port| u16::try_from(port).ok()), "the devlanes_gui port")
+    need(
+        port.and_then(|port| u16::try_from(port).ok()),
+        "the devlanes_gui port",
+    )
 }
 
 /// Says hello on `port` as a tool and takes a screenshot of the first
@@ -90,9 +95,11 @@ fn a_gui_service_serves_its_windows_until_it_stops() -> Result<()> {
     screenshot(port)?;
 
     devlanes(&lab, &["stop", "desktop"])?.expect_code(0)?;
-    lab.eventually("the GUI host to close its port", Duration::from_secs(15), || {
-        Ok((!listening(port)).then_some(()))
-    })?;
+    lab.eventually(
+        "the GUI host to close its port",
+        Duration::from_secs(15),
+        || Ok((!listening(port)).then_some(())),
+    )?;
     assert_eq!(desktop(&lab)?["gui"]["host"], "stopped");
     Ok(())
 }
