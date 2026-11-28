@@ -1,5 +1,5 @@
-# Installs devlanes for Windows from a GitHub release after checking the archive
-# against the release's SHA256SUMS.
+# Installs devlanes.exe and devlanes-gui.exe for Windows from a GitHub release after
+# checking the archives against the release's SHA256SUMS.
 #
 #   irm https://devlanes.run/install.ps1 | iex
 #   iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
@@ -24,8 +24,8 @@
 # (npm, pnpm, Bun, Yarn, uv, pipx or cargo), it stops and names it, since that one
 # would keep running; -Force installs anyway.
 #
-# The directory goes first in the user PATH. A devlanes.exe that is running
-# (usually the daemon) is renamed to devlanes.exe.old-TIMESTAMP and keeps running;
+# The directory goes first in the user PATH. A devlanes.exe or devlanes-gui.exe that
+# is running (usually the daemon) is renamed to NAME.old-TIMESTAMP and keeps running;
 # when a daemon answers, `devlanes update --finish` restarts it into the new
 # version, and `devlanes doctor` or the next install.ps1 run deletes the old file
 # afterwards. It works in Windows PowerShell 5.1 and PowerShell 7, on Windows 11
@@ -52,6 +52,10 @@
 
     # The files of every Windows release archive, below its devlanes-VERSION-TARGET/ directory.
     $DevlanesFiles = @('LICENSE', 'devlanes.exe')
+    # The files of the GUI archive, devlanes-VERSION-TARGET-gui.zip, below the same
+    # directory. devlanes-gui.exe has an archive of its own because released installers
+    # refuse a main archive with any other entry.
+    $DevlanesGuiFiles = @('LICENSE', 'devlanes-gui.exe')
 
     function Get-DevlanesWindowsBuild {
         <#
@@ -112,6 +116,60 @@
             return @{ Hash = $hash; Archive = $archive; Version = $found }
         }
         throw "devlanes install: no $Target archive listed in $Source"
+    }
+
+    function Find-DevlanesGuiArchive {
+        <#
+        The GUI archive line for Version and Target in a SHA256SUMS text: Hash and
+        Archive, or $null for a release without one.
+        #>
+        param([string]$Sums, [string]$Version, [string]$Target)
+        $name = "devlanes-$Version-$Target-gui.zip"
+        foreach ($line in ($Sums -split "`r?`n")) {
+            $fields = @($line -split '\s+' | Where-Object { $_ -ne '' })
+            if ($fields.Count -ne 2 -or $fields[1].TrimStart('*') -cne $name) { continue }
+            if ($fields[0] -cnotmatch '^[0-9a-f]{64}$') {
+                throw "devlanes install: malformed checksum for $name"
+            }
+            return @{ Hash = $fields[0]; Archive = $name }
+        }
+        return $null
+    }
+
+    function Expand-DevlanesArchive {
+        <#
+        Checks that the zip at Path holds exactly Files below Top, then extracts
+        Top/Entry to Staged. Name is the archive's name for messages.
+        #>
+        param([string]$Path, [string]$Name, [string]$Top, [string[]]$Files, [string]$Entry, [string]$Staged)
+        $expected = @($Files | ForEach-Object { "$Top/$_" })
+        Add-Type -AssemblyName System.IO.Compression
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($Path)
+        try {
+            $names = @($zip.Entries | ForEach-Object { $_.FullName } | Where-Object { $_ -ne "$Top/" } | Sort-Object)
+            if (($names -join '|') -cne (($expected | Sort-Object) -join '|')) {
+                throw "devlanes install: unexpected entries in ${Name}: $($names -join ', ')"
+            }
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($zip.GetEntry("$Top/$Entry"), $Staged, $true)
+        } finally {
+            $zip.Dispose()
+        }
+        # An antivirus that scans new files as they are written may already have
+        # taken it.
+        if (-not (Test-Path -LiteralPath $Staged -PathType Leaf)) {
+            throw "devlanes install: the extracted $Entry ($Staged) is gone; an antivirus may have quarantined it. Restore it or exclude $(Split-Path $Staged) in the antivirus, then run this script again"
+        }
+    }
+
+    function Get-DevlanesCheckedDownload {
+        <# Downloads Url to OutFile and throws unless its SHA-256 is Hash. #>
+        param([string]$Url, [string]$OutFile, [string[]]$Schemes, [string]$Hash, [string]$Name)
+        Get-DevlanesDownload -Url $Url -OutFile $OutFile -Schemes $Schemes
+        $actual = Get-DevlanesFileHash $OutFile
+        if ($actual -ne $Hash) {
+            throw "devlanes install: checksum mismatch for ${Name}: expected $Hash, got $actual"
+        }
     }
 
     function Get-DevlanesFileHash {
@@ -288,7 +346,10 @@
 
         $removed = @()
         $files = @(Get-ChildItem -LiteralPath $Dir -Force -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -like 'devlanes.exe.old-*' -or $_.Name -like '.devlanes.exe.new.*' })
+                Where-Object {
+                    $_.Name -eq 'devlanes-gui.exe' -or $_.Name -like 'devlanes.exe.old-*' -or $_.Name -like 'devlanes-gui.exe.old-*' -or
+                    $_.Name -like '.devlanes.exe.new.*' -or $_.Name -like '.devlanes-gui.exe.new.*'
+                })
         foreach ($file in $files) {
             Remove-Item -LiteralPath $file.FullName -Force
             $removed += $file.FullName
@@ -467,9 +528,12 @@
     }
 
     function Clear-DevlanesOldCopy {
-        <# Deletes the devlanes.exe.old-* files in Directory that nothing runs any more. #>
+        <# Deletes the devlanes.exe.old-* and devlanes-gui.exe.old-* files in Directory that nothing runs any more. #>
         param([string]$Directory)
-        foreach ($old in @(Get-ChildItem -LiteralPath $Directory -Filter 'devlanes.exe.old-*' -File -ErrorAction SilentlyContinue)) {
+        $copies = @('devlanes.exe.old-*', 'devlanes-gui.exe.old-*' | ForEach-Object {
+                Get-ChildItem -LiteralPath $Directory -Filter $_ -File -ErrorAction SilentlyContinue
+            })
+        foreach ($old in $copies) {
             Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue
         }
     }
@@ -552,6 +616,7 @@
         $temporary = Join-Path ([IO.Path]::GetTempPath()) ('devlanes-install-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $temporary | Out-Null
         $staged = Join-Path $dir ".devlanes.exe.new.$PID"
+        $stagedGui = Join-Path $dir ".devlanes-gui.exe.new.$PID"
         try {
             $sumsUrl = if ($next) { "$base/download/next/SHA256SUMS" } else { "$base/latest/download/SHA256SUMS" }
             $sumsFile = Join-Path $temporary 'SHA256SUMS'
@@ -562,43 +627,36 @@
             # The archive comes from that version's own release, or from the `next`
             # release, which only ever holds its latest build.
             $folder = if ($next) { 'next' } else { "v$version" }
-            $url = "$base/download/$folder/$($release.Archive)"
             $archive = Join-Path $temporary $release.Archive
-            Get-DevlanesDownload -Url $url -OutFile $archive -Schemes $schemes
-            $actual = Get-DevlanesFileHash $archive
-            if ($actual -ne $release.Hash) {
-                throw "devlanes install: checksum mismatch for $($release.Archive): expected $($release.Hash), got $actual"
+            Get-DevlanesCheckedDownload -Url "$base/download/$folder/$($release.Archive)" -OutFile $archive -Schemes $schemes -Hash $release.Hash -Name $release.Archive
+            # devlanes-gui.exe comes from an archive of its own; a release from before
+            # it has none. Both are checked before anything is installed.
+            $gui = Find-DevlanesGuiArchive -Sums ([IO.File]::ReadAllText($sumsFile)) -Version $version -Target $target
+            if ($gui) {
+                $guiArchive = Join-Path $temporary $gui.Archive
+                Get-DevlanesCheckedDownload -Url "$base/download/$folder/$($gui.Archive)" -OutFile $guiArchive -Schemes $schemes -Hash $gui.Hash -Name $gui.Archive
             }
 
-            # Only the exact entries release archives contain. devlanes.exe is extracted
-            # straight next to its target, so replacing it is a rename on one volume and
-            # a full disk or a failed write leaves the installed version untouched.
+            # Only the exact entries release archives contain. Each executable is
+            # extracted straight next to its target, so replacing it is a rename on one
+            # volume and a full disk or a failed write leaves the installed version untouched.
             $top = "devlanes-$version-$target"
-            $expected = @($DevlanesFiles | ForEach-Object { "$top/$_" })
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
-            Add-Type -AssemblyName System.IO.Compression
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            $zip = [IO.Compression.ZipFile]::OpenRead($archive)
-            try {
-                $names = @($zip.Entries | ForEach-Object { $_.FullName } | Where-Object { $_ -ne "$top/" } | Sort-Object)
-                if (($names -join '|') -cne (($expected | Sort-Object) -join '|')) {
-                    throw "devlanes install: unexpected entries in $($release.Archive): $($names -join ', ')"
-                }
-                $entry = $zip.GetEntry("$top/devlanes.exe")
-                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $staged, $true)
-            } finally {
-                $zip.Dispose()
-            }
-            # An antivirus that scans new files as they are written may already have
-            # taken it.
-            if (-not (Test-Path -LiteralPath $staged -PathType Leaf)) {
-                throw "devlanes install: the extracted devlanes.exe ($staged) is gone; an antivirus may have quarantined it. Restore it or exclude $dir in the antivirus, then run this script again"
+            Expand-DevlanesArchive -Path $archive -Name $release.Archive -Top $top -Files $DevlanesFiles -Entry 'devlanes.exe' -Staged $staged
+            if ($gui) {
+                Expand-DevlanesArchive -Path $guiArchive -Name $gui.Archive -Top $top -Files $DevlanesGuiFiles -Entry 'devlanes-gui.exe' -Staged $stagedGui
             }
 
             Clear-DevlanesOldCopy $dir
+            # devlanes.exe last, so a devlanes that runs finds its devlanes-gui.exe. A
+            # GUI host still running keeps its old copy, which `devlanes doctor` and
+            # this script delete later.
+            if ($gui) {
+                $null = Install-DevlanesFile -Staged $stagedGui -Directory $dir -Name 'devlanes-gui.exe'
+            }
             $inUse = Install-DevlanesFile -Staged $staged -Directory $dir -Name 'devlanes.exe'
         } finally {
-            Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $staged, $stagedGui -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
         }
 

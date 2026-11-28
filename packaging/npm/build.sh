@@ -32,19 +32,28 @@ for spec in \
 $spec
 EOF
 	archive=$dist/devlanes-$version-$target.tar.gz
-	if [ "$os" = win32 ]; then archive=$dist/devlanes-$version-$target.zip; fi
-	if [ ! -f "$archive" ]; then
-		echo "missing $archive" >&2
-		exit 1
+	gui=$dist/devlanes-$version-$target-gui.tar.gz
+	if [ "$os" = win32 ]; then
+		archive=$dist/devlanes-$version-$target.zip
+		gui=$dist/devlanes-$version-$target-gui.zip
 	fi
+	for file in "$archive" "$gui"; do
+		if [ ! -f "$file" ]; then
+			echo "missing $file" >&2
+			exit 1
+		fi
+	done
 	pkg=$out/devlanes-$os-$cpu
 	mkdir -p "$pkg/bin"
+	# devlanes-gui sits next to devlanes in bin/, where devlanes looks for it.
 	if [ "$os" = win32 ]; then
 		unzip -q -j "$archive" "devlanes-$version-$target/devlanes.exe" -d "$pkg/bin"
+		unzip -q -j "$gui" "devlanes-$version-$target/devlanes-gui.exe" -d "$pkg/bin"
 	else
 		tar -xzf "$archive" -C "$pkg/bin" --strip-components 1 \
 			"devlanes-$version-$target/devlanes" "devlanes-$version-$target/devlanes-hosts"
-		chmod 755 "$pkg/bin/devlanes" "$pkg/bin/devlanes-hosts"
+		tar -xzf "$gui" -C "$pkg/bin" --strip-components 1 "devlanes-$version-$target/devlanes-gui"
+		chmod 755 "$pkg/bin/devlanes" "$pkg/bin/devlanes-hosts" "$pkg/bin/devlanes-gui"
 	fi
 	cp "$root/LICENSE" "$pkg/LICENSE"
 	# Linux builds link glibc; the libc field keeps npm from installing them on musl.

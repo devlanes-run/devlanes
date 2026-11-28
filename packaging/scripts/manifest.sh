@@ -1,6 +1,6 @@
 #!/bin/sh
-# Writes SHA256SUMS (every archive, the Windows .zip and the debug ones included) and
-# release-manifest.json (the .tar.gz archives) for the archives in DIST_DIR.
+# Writes SHA256SUMS (every archive, the Windows .zip, GUI and debug ones included) and
+# release-manifest.json (the main .tar.gz archives) for the archives in DIST_DIR.
 # The daemon's update check reads the manifest's version; older clients'
 # `remote connect --install` also reads its archives: HTTPS URLs, lowercase hex
 # SHA-256, tar_gz members without `..`.
@@ -57,6 +57,23 @@ done
 # installs onto Linux and macOS boxes, so the manifest names the .tar.gz archives alone.
 for target in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
 	name=devlanes-$version-$target.zip
+	if [ ! -f "$dist/$name" ]; then
+		echo "missing $dist/$name" >&2
+		exit 1
+	fi
+	printf '%s  %s\n' "$(sha256 "$dist/$name")" "$name" >>"$sums"
+done
+
+# The GUI archives (package.sh, package.ps1), outside the manifest: older clients'
+# SSH bootstrap takes the first artifact for a box's OS and architecture. install.sh,
+# install.ps1 and `devlanes update`, in every released version, take the first line
+# ending in `-TARGET.tar.gz` or `-TARGET.zip`, which these names never do; current
+# ones read the line of the GUI archive by its full name.
+for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+	case $target in
+	*-windows-msvc) name=devlanes-$version-$target-gui.zip ;;
+	*) name=devlanes-$version-$target-gui.tar.gz ;;
+	esac
 	if [ ! -f "$dist/$name" ]; then
 		echo "missing $dist/$name" >&2
 		exit 1

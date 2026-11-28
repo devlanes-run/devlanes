@@ -62,8 +62,10 @@ function main() {
   const manifest = require.resolve(`@devlanes/${platform}/package.json`);
   const sourceDir = path.join(path.dirname(manifest), "bin");
   // `devlanes setup` looks for devlanes-hosts next to the resolved
-  // devlanes executable, so the helper moves first and the binary only with it.
+  // devlanes executable, and devlanes finds devlanes-gui there too, so both
+  // move first and the binary only with them.
   place(path.join(sourceDir, "devlanes-hosts"), "devlanes-hosts", ["version"]);
+  place(path.join(sourceDir, "devlanes-gui"), "devlanes-gui", ["version"]);
   place(path.join(sourceDir, "devlanes"), "devlanes", ["--version"]);
 }
 

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Installs devlanes and devlanes-hosts from a GitHub release after checking the
-# archive against the release's SHA256SUMS.
+# Installs devlanes, devlanes-hosts and devlanes-gui from a GitHub release after
+# checking the archives against the release's SHA256SUMS.
 #
 #   curl -fsSL https://devlanes.run/install.sh | sh
 #   curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
@@ -141,7 +141,7 @@ if [ -n "$uninstall" ]; then
 		exec "$exe" uninstall
 	fi
 	removed=
-	for bin in devlanes devlanes-hosts; do
+	for bin in devlanes devlanes-hosts devlanes-gui; do
 		if [ -e "$dir/$bin" ]; then
 			rm -f "$dir/$bin"
 			removed="$removed $dir/$bin"
@@ -275,6 +275,25 @@ listed=$(tar -tzf "$tmp/$archive" | sed 's#/$##' | LC_ALL=C sort | tr '\n' ' ')
 	fail "unexpected entries in $archive: $listed"
 tar -xzf "$tmp/$archive" -C "$tmp"
 
+# devlanes-gui comes from an archive of its own, since released installers refuse a
+# third binary in the main one. A release from before it has none.
+bins="devlanes devlanes-hosts"
+gui=devlanes-$version-$target-gui.tar.gz
+gui_line=$(awk -v name="$gui" '$2 == name || $2 == "*" name { print; exit }' "$tmp/SHA256SUMS")
+if [ -n "$gui_line" ]; then
+	gui_expected=${gui_line%% *}
+	printf '%s\n' "$gui_expected" | grep -Eq '^[0-9a-f]{64}$' || fail "malformed checksum for $gui"
+	url=$base/download/${channel:-v$version}/$gui
+	download "$url" "$tmp/$gui" || fail "cannot download $url"
+	actual=$(sha256 "$tmp/$gui")
+	[ "$actual" = "$gui_expected" ] || fail "checksum mismatch for $gui: expected $gui_expected, got $actual"
+	listed=$(tar -tzf "$tmp/$gui" | sed 's#/$##' | LC_ALL=C sort | tr '\n' ' ')
+	[ "$listed" = "$top $top/LICENSE $top/devlanes-gui " ] ||
+		fail "unexpected entries in $gui: $listed"
+	tar -xzf "$tmp/$gui" -C "$tmp"
+	bins="$bins devlanes-gui"
+fi
+
 sudo=
 if ! mkdir -p "$dir" 2>/dev/null || [ ! -w "$dir" ]; then
 	if [ "${DEVLANES_INSTALL_SUDO:-}" != 1 ]; then
@@ -285,7 +304,7 @@ if ! mkdir -p "$dir" 2>/dev/null || [ ! -w "$dir" ]; then
 	sudo=sudo
 fi
 $sudo mkdir -p "$dir"
-for bin in devlanes devlanes-hosts; do
+for bin in $bins; do
 	# Rename into place so a running devlanes keeps its open executable.
 	$sudo cp "$tmp/$top/$bin" "$dir/.$bin.new.$$"
 	$sudo chmod 755 "$dir/.$bin.new.$$"
