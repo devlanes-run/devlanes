@@ -519,6 +519,9 @@ impl Inner {
             store: self.store.clone(),
         });
         let mut options = ServeOptions::new(label);
+        // `PeerGate` takes no code, so a session it refuses gets no time to
+        // type one.
+        options.pairing_timeout = options.timing.handshake_timeout;
         // What `daemon.status` answers the tunnel with, from this daemon itself.
         options.box_info = BoxInfo {
             https_port: self.https_port,
