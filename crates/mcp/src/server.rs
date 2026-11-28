@@ -240,7 +240,7 @@ impl Server {
                 .and_then(Value::as_str)
                 .unwrap_or("--yes")
                 .to_owned();
-            let message = format!("devlanes {}\n{}", call.args.join(" "), output.stderr.trim());
+            let message = format!("devlanes {}\n{}", call.shown(), output.stderr.trim());
             match ask(context, message, self.consent_state(&call, &flag)).await {
                 Answer::Accepted => {
                     call.confirm(&flag);
@@ -724,7 +724,7 @@ fn result(
     let mut result = text_result(text, output.exit_code != 0 || output.cancelled);
     result.structured_content = Some(json!({
         "command": call.path,
-        "args": call.args,
+        "args": call.shown_args(),
         "cwd": cwd,
         "exit_code": output.exit_code,
         "view": view,
@@ -762,7 +762,7 @@ fn declined(call: &Call, cancelled: bool) -> CallToolResult {
         "the user declined"
     };
     text_result(
-        format!("{why}; devlanes {} did not run", call.args.join(" ")),
+        format!("{why}; devlanes {} did not run", call.shown()),
         true,
     )
 }
@@ -813,19 +813,7 @@ async fn consent_message(
         message.push_str("\n\n");
         message.push_str(output.stdout.trim_end());
     }
-    // A pairing ticket is a secret, and too long to read in a question.
-    let shown: Vec<&str> = call
-        .args
-        .iter()
-        .map(|arg| {
-            if devlanes_cli::is_ticket(arg) {
-                "<ticket>"
-            } else {
-                arg.as_str()
-            }
-        })
-        .collect();
-    message.push_str(&format!("\n\ndevlanes {}", shown.join(" ")));
+    message.push_str(&format!("\n\ndevlanes {}", call.shown()));
     message
 }
 

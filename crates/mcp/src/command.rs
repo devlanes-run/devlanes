@@ -190,6 +190,26 @@ impl Call {
             .splice(end..end, flags.iter().map(|flag| (*flag).to_owned()));
     }
 
+    /// The arguments as shown to the user and the client, with `<ticket>`
+    /// for a pairing ticket: a secret, and too long to read in a question.
+    pub fn shown_args(&self) -> Vec<&str> {
+        self.args
+            .iter()
+            .map(|arg| {
+                if devlanes_cli::is_ticket(devlanes_cli::pasted(arg)) {
+                    "<ticket>"
+                } else {
+                    arg.as_str()
+                }
+            })
+            .collect()
+    }
+
+    /// [`Call::shown_args`] as one line.
+    pub fn shown(&self) -> String {
+        self.shown_args().join(" ")
+    }
+
     /// The index of the first `--`, or the length.
     fn end(&self) -> usize {
         self.args
@@ -258,8 +278,8 @@ impl Call {
             } => "Clean every lane whose worktree or project file is gone, with its data?".into(),
             Command::Daemon { command } => match command {
                 DaemonCommand::Pair { .. } => "Print a one-time ticket and code that let another \
-                     machine connect to this one? While the ticket is open, this machine listens \
-                     for it."
+                     machine connect to this one? While the ticket is open, for up to 10 minutes, \
+                     this machine takes pairing requests from any machine that reaches it."
                     .into(),
                 DaemonCommand::Stop => "Stop the daemon and every process it manages?".into(),
                 DaemonCommand::Restart => {
@@ -275,7 +295,9 @@ impl Call {
             },
             Command::Remote { command } => match command {
                 // The ticket is a secret, and too long to read in a question.
-                RemoteCommand::Connect { host, .. } if devlanes_cli::is_ticket(host) => {
+                RemoteCommand::Connect { host, .. }
+                    if devlanes_cli::is_ticket(devlanes_cli::pasted(host)) =>
+                {
                     "Pair with the box in this ticket and mirror its lanes here?".into()
                 }
                 RemoteCommand::Connect { host, .. } => {

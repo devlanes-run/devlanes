@@ -176,7 +176,8 @@ async fn named_tools_ask_too() {
 
 #[tokio::test]
 /// Pairing by ticket asks about the box in the ticket without showing the
-/// ticket, a secret, and runs with it after a yes.
+/// ticket, a secret, and runs with it after a yes; neither the result's
+/// structured content nor a declined answer shows it.
 async fn a_ticket_is_never_shown_in_the_question() {
     tokio::time::timeout(LIMIT, async {
         // Made up: right prefix and letters, nothing a box would accept.
@@ -204,6 +205,31 @@ async fn a_ticket_is_never_shown_in_the_question() {
             ran(&harness),
             [format!("--output agent remote connect {ticket} --yes")]
         );
+        // `data` is the fake's echo of what it ran, which a real connect
+        // does not print; the server's own fields must not hold the ticket.
+        let structured = result.structured_content.clone().unwrap_or_default();
+        assert!(
+            !structured["args"].to_string().contains(&ticket),
+            "{structured}"
+        );
+        assert!(
+            structured["args"]
+                .as_array()
+                .is_some_and(|args| args.iter().any(|arg| arg == "<ticket>")),
+            "{structured}"
+        );
+
+        let declining = connect(
+            TestClient::new().answering(ElicitationAction::Decline),
+            Lifecycle::Initialize,
+            |_| {},
+        )
+        .await;
+        let result = declining
+            .call("devlanes", &["remote", "connect", &ticket])
+            .await;
+        assert!(failed(&result));
+        assert!(!text(&result).contains(&ticket), "{}", text(&result));
     })
     .await
     .expect("in time");
