@@ -670,3 +670,110 @@ fn attach_draws_at_the_terminal_size_and_takes_input() -> Result<()> {
     attached.keys(b"acme\r")?;
     attached.wait_for_text("got acme")
 }
+
+/// The box's entry in `lab`'s `remote ls`, or `None` when it lists none.
+#[cfg(windows)]
+fn listed(lab: &Lab, name: &str) -> Result<Option<serde_json::Value>> {
+    let list = lab.json(lab.repo(), &["remote", "ls", "--json"])?;
+    Ok(list["items"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["host"] == name))
+        .cloned())
+}
+
+/// On Windows a paste reaches the TUI as key presses, which ConPTY makes
+/// from the bytes written here. A ticket pasted into the Boxes view, with a
+/// connected box paired by ticket selected, and pasted again into the
+/// question its `d` opens, must leave the box connected and paired on both
+/// sides and must not open the pairing modal, whose `p` asks the daemon for
+/// a ticket. What runs depends on how ConPTY and the TUI split the paste
+/// into reads, so this runs by hand, before a release or after a change to
+/// how the TUI reads keys.
+#[cfg(windows)]
+#[test]
+#[ignore = "needs a Windows console; timing-dependent"]
+fn a_pasted_ticket_answers_no_question() -> Result<()> {
+    const NO_RELAYS: &str = "remote:\n  relays: []\n  port_mapping: false\n";
+    let with_no_relays = |lab: &Lab| -> Result<()> {
+        let config = lab.home().join("config.yaml");
+        let mut text = std::fs::read_to_string(&config)?;
+        text.push_str(NO_RELAYS);
+        std::fs::write(&config, text)?;
+        Ok(())
+    };
+    let boxed = Lab::new("two-services", BUDGET)?;
+    with_no_relays(&boxed)?;
+    let client = Lab::new("two-services", BUDGET)?;
+    with_no_relays(&client)?;
+    let ticket = |lab: &Lab| -> Result<String> {
+        let pair = lab.json(lab.repo(), &["daemon", "pair", "--ticket"])?;
+        pair["ticket"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| Error::Unexpected(format!("no ticket: {pair}")))
+    };
+    let first = ticket(&boxed)?;
+    let connected = client.json(
+        client.repo(),
+        &["remote", "connect", &first, "--background"],
+    )?;
+    let name = connected["paired"]["name"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| Error::Unexpected(format!("not paired: {connected}")))?;
+    // The welcome and the offer to set up HTTPS (this lab's CA is not
+    // trusted) would take the keys instead.
+    std::fs::write(
+        client.home().join("notices.json"),
+        r#"{"dismissed":["tui-first-run","setup:ca"]}"#,
+    )
+    .map_err(setup)?;
+    let mut tui = Tui::run(&client, &["ui"], (COLUMNS, ROWS))?;
+    tui.wait_for_text("api")?;
+    tui.keys(b"B")?;
+    tui.wait_for_text(&name)?;
+    // What a user pastes: a fresh ticket, which the box keeps open meanwhile,
+    // as `y` copies it, with no line break.
+    let pasted = ticket(&boxed)?;
+    for round in 1..=6 {
+        if round % 2 == 0 {
+            // The question is open before the paste arrives.
+            tui.keys(b"d")?;
+            tui.wait_for_text(&format!("Disconnect {name}?"))?;
+            thread::sleep(Duration::from_millis(500));
+        }
+        tui.keys(pasted.as_bytes())?;
+        thread::sleep(Duration::from_secs(2));
+        let screen = tui.dump();
+        let entry = listed(&client, &name)?
+            .ok_or_else(|| Error::Unexpected(format!("round {round}: {name} is gone\n{screen}")))?;
+        if entry["state"] != "connected" || entry["transport"] != "p2p" {
+            return Err(Error::Unexpected(format!(
+                "round {round}: {name} is {entry}\n{screen}"
+            )));
+        }
+        let clients = boxed.json(boxed.repo(), &["daemon", "clients"])?;
+        let paired = clients["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item["paired"] == true));
+        if !paired {
+            return Err(Error::Unexpected(format!(
+                "round {round}: the box has no paired client: {clients}\n{screen}"
+            )));
+        }
+        if screen.contains("pair another machine") {
+            return Err(Error::Unexpected(format!(
+                "round {round}: the paste opened the pairing modal\n{screen}"
+            )));
+        }
+        // A question still open is declined with a typed `n`, after a pause;
+        // a lone Esc reaches ConPTY's input parser as the start of a sequence.
+        if screen.contains(&format!("Disconnect {name}?")) {
+            thread::sleep(Duration::from_millis(500));
+            tui.keys(b"n")?;
+            tui.wait_for_gone(&format!("Disconnect {name}?"))?;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    Ok(())
+}
