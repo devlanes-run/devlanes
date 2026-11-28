@@ -202,9 +202,9 @@ pub enum PeerError {
     #[error("the box does not accept this machine; pair it again with a new ticket")]
     Refused,
     /// The box's id is 32 bytes that are not a public key, so no dial can
-    /// reach it; only a damaged stored pairing holds one, since a ticket's
-    /// checksum catches typing mistakes.
-    #[error("the stored id of the box ({0}) is not a valid key; pair it again with a new ticket")]
+    /// reach it: a damaged stored pairing, or a ticket from a faulty box,
+    /// since a ticket's checksum catches typing mistakes.
+    #[error("the box's id ({0}) is not a valid key; pair it again with a new ticket")]
     InvalidId(PeerId),
     /// The key file could not be read or written.
     #[error("peer-to-peer key {}: {source}", .path.display())]

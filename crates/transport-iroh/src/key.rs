@@ -167,7 +167,9 @@ fn check_private(path: &Path) -> io::Result<()> {
         format!(
             "other users have access to it (mode {:03o}); run `chmod 600 '{}'`",
             mode & 0o777,
-            path.display()
+            // Inside single quotes only `'` itself needs escaping: end the
+            // quote, add an escaped one, open the quote again.
+            path.display().to_string().replace('\'', r"'\''")
         ),
     ))
 }
@@ -212,15 +214,17 @@ fn check_private(path: &Path) -> io::Result<()> {
 /// `crates/pki`'s fix does: `/reset` drops the explicit grants, then the
 /// file keeps only this user's. The steps are joined with `; `, which Windows
 /// PowerShell 5.1 and PowerShell 7 run in order; Git Bash rewrites `/reset`
-/// into a path, so the message names PowerShell. `None` when this user's SID
-/// cannot be read, so the advice falls back to moving the key away instead
-/// of hiding the real problem behind the lookup's error.
+/// into a path, so the message names PowerShell. The path is in PowerShell
+/// single quotes, where `$name` and `$(...)` in a folder name stay literal
+/// and only `'` is doubled. `None` when this user's SID cannot be read, so
+/// the advice falls back to moving the key away instead of hiding the real
+/// problem behind the lookup's error.
 #[cfg(windows)]
 fn icacls_fix(path: &Path) -> Option<String> {
     let user = devlanes_sys_windows::token::current_user().ok()?;
-    let shown = path.display();
+    let shown = path.display().to_string().replace('\'', "''");
     Some(format!(
-        r#"icacls "{shown}" /reset; icacls "{shown}" /inheritance:r /grant:r "*{user}:F""#
+        "icacls '{shown}' /reset; icacls '{shown}' /inheritance:r /grant:r '*{user}:F'"
     ))
 }
 
@@ -276,7 +280,13 @@ mod tests {
     /// can read.
     #[test]
     fn a_key_others_can_read_is_refused_until_the_printed_fix_runs() -> TestResult {
-        let home = tempfile::tempdir()?;
+        // A name the printed command has to quote right for its shell.
+        let quoted = if cfg!(windows) {
+            "p2p key $x "
+        } else {
+            "p2p key ' "
+        };
+        let home = tempfile::Builder::new().prefix(quoted).tempdir()?;
         let path = home.path().join("p2p-key");
         let created = load_or_create(&path)?;
         expose(&path)?;
