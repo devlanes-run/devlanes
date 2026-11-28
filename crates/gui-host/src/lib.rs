@@ -162,8 +162,8 @@ pub type UnitAlive = Arc<dyn Fn(u32, u64) -> bool + Send + Sync>;
 /// - A control connection that closes before the identity came:
 ///   [`ServeError::NoUnitIdentity`] at once.
 /// - Once the identity came and every control connection closed, the host
-///   checks the unit with `unit_alive` [`UNIT_POLL`] after each answer and ends without
-///   an error when it is gone.
+///   checks the unit with `unit_alive` [`UNIT_POLL`] after each answer and
+///   ends without an error when it is gone.
 #[derive(Clone)]
 pub struct DaemonWatch {
     /// How long the host waits for the unit's identity.
