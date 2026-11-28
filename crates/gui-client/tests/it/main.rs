@@ -204,6 +204,34 @@ async fn a_codec_that_fails_on_its_keyframe_too_is_reported_broken() {
     );
 }
 
+/// A frame in a codec the client did not offer breaks the protocol: the
+/// connection ends with a typed error, and no codec is reported broken.
+#[tokio::test(start_paused = true)]
+async fn a_frame_in_a_codec_not_offered_ends_the_connection() {
+    let (client, mut host) = connect(Role::Viewer, bytes(&welcome())).await;
+    let (_client, mut events) = client.expect("welcomed");
+    let HostMessage::VideoFrame(mut frame) = raw_frame(1, Bytes::from_static(b"\0\0\0\x01")) else {
+        unreachable!("a video frame");
+    };
+    frame.codec = CodecId::H264;
+    host.send(&HostMessage::VideoFrame(frame)).await;
+    let closed = loop {
+        let event = tokio::time::timeout(PATIENCE, events.next())
+            .await
+            .expect("an event");
+        match event {
+            Some(Event::Closed(error)) => break error,
+            Some(Event::CodecFailed(codec)) => panic!("{codec:?} reported broken"),
+            Some(_) => {}
+            None => panic!("the events ended without Closed"),
+        }
+    };
+    assert!(
+        matches!(closed, Some(ClientError::UnsupportedCodec(CodecId::H264))),
+        "{closed:?}"
+    );
+}
+
 /// A message that arrives in slow pieces (a large keyframe over a slow box
 /// link) keeps the connection alive: silence counts from the last bytes,
 /// not the last whole message.

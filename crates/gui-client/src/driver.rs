@@ -148,7 +148,7 @@ impl Reader {
     /// Handles every complete message in `buf`.
     fn drain(&mut self, buf: &mut BytesMut) -> Result<(), ClientError> {
         while let Some(message) = HostMessage::decode(buf)? {
-            self.handle(message);
+            self.handle(message)?;
         }
         Ok(())
     }
@@ -162,8 +162,10 @@ impl Reader {
         }
     }
 
-    /// Handles one message from the host.
-    fn handle(&mut self, message: HostMessage) {
+    /// Handles one message from the host. A frame in a codec this client did
+    /// not offer breaks the protocol, since the host only sends one it chose
+    /// among the offered, and ends the connection.
+    fn handle(&mut self, message: HostMessage) -> Result<(), ClientError> {
         let at = now();
         let shared = self.shared.clone();
         shared.data_arrived(at);
@@ -190,6 +192,9 @@ impl Reader {
                 Event::WindowRemoved(window)
             }
             HostMessage::VideoFrame(frame) => {
+                if !self.backends.iter().any(|b| b.offer().codec == frame.codec) {
+                    return Err(ClientError::UnsupportedCodec(frame.codec));
+                }
                 let window = frame.window;
                 let Some(win) = state.windows.get_mut(&window) else {
                     drop(state);
@@ -198,13 +203,13 @@ impl Reader {
                         window,
                         seq: frame.seq,
                     });
-                    return;
+                    return Ok(());
                 };
                 win.lock.frame(frame.seq, at);
                 self.shared.refresh_lock(window, win, at);
                 drop(state);
                 self.decode(frame);
-                return;
+                return Ok(());
             }
             HostMessage::LockChanged {
                 window,
@@ -214,7 +219,7 @@ impl Reader {
                     win.lock.host_state(host);
                     self.shared.refresh_lock(window, win, at);
                 }
-                return;
+                return Ok(());
             }
             HostMessage::ResizeApplied {
                 window,
@@ -234,13 +239,13 @@ impl Reader {
                 if let Some(reply) = state.screenshots.remove(&request) {
                     let _ = reply.send(result);
                 }
-                return;
+                return Ok(());
             }
             HostMessage::Synced { request } => {
                 if let Some(reply) = state.syncs.remove(&request) {
                     let _ = reply.send(());
                 }
-                return;
+                return Ok(());
             }
             HostMessage::Cursor(cursor) => Event::Cursor(cursor),
             HostMessage::MoveResizeStarted(started) => Event::MoveResizeStarted(started),
@@ -249,9 +254,12 @@ impl Reader {
             HostMessage::Activity => Event::Activity,
             // A heartbeat only proves the link, which `data` above recorded.
             // A second welcome or refusal has no meaning mid-connection.
-            HostMessage::Heartbeat | HostMessage::Welcome(_) | HostMessage::Refused(_) => return,
+            HostMessage::Heartbeat | HostMessage::Welcome(_) | HostMessage::Refused(_) => {
+                return Ok(());
+            }
         };
         self.shared.emit(event);
+        Ok(())
     }
 
     /// Hands `frame` to its window's decoder task, starting one if needed,

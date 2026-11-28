@@ -40,7 +40,9 @@ pub enum ClientError {
     /// The host could not take the screenshot.
     #[error("the screenshot failed: {0}")]
     ScreenshotFailed(String),
-    /// A payload is in a codec this client cannot decode.
+    /// A payload is in a codec this client cannot decode. A video frame in
+    /// one ends the connection, since the host may only use a codec the
+    /// client offered.
     #[error("the payload uses codec {0:?}, which this client cannot decode")]
     UnsupportedCodec(CodecId),
     /// Decoding a payload failed.

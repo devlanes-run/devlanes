@@ -137,6 +137,13 @@ pub async fn run(
         loop {
             tokio::select! {
                 event = events.next() => match event {
+                    // A host that breaks the protocol is dialed again like
+                    // one whose connection closed; the decoders stay, since
+                    // none of them failed.
+                    Some(Event::Closed(Some(error @ ClientError::UnsupportedCodec(_)))) => {
+                        tracing::warn!(%error, "the GUI host sent a frame in a codec this viewer did not offer");
+                        break;
+                    }
                     Some(Event::Closed(Some(error))) => {
                         tracing::info!(%error, "the GUI connection closed");
                         break;
