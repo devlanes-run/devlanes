@@ -39,7 +39,7 @@ fn data(response: Response) -> Option<serde_json::Value> {
 - `Selection`, `LogQuery`, `ExecParams`, `RunParams`, `AttachParams`: request parameters shared by several commands.
 - `UnitSummary`, `LaneSummary`, `ContainerSummary`, `Page`: listing payloads; lists are `{items, truncated, next_cursor}`.
 - `remote`: messages for connected boxes.
-- `remote::ticket_fields` and `remote::is_whole_ticket`: whether a pairing ticket's prefix, base32 and checksum are right, the one check `devlanes-transport` reads tickets with and clients send them after.
+- `remote::ticket_fields`, `remote::is_whole_ticket`: whether a pairing ticket is whole (prefix, base32, checksum).
 - `release`: the `update` and `release_check` fields of `daemon.status`, and the params of `update.check`. Version ordering is in `devlanes-update`.
 - `MAX_FRAME_SIZE`: the largest frame either side accepts.
 

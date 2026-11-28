@@ -8,7 +8,7 @@ kind: reference
 
 In every list, `j` and `k` or the arrow keys move, `g` and `G` jump to the top and bottom, and `PgUp` and `PgDn` scroll.
 
-On Windows, keys that arrive almost at once are taken as a paste. Pasted text goes only into a text field, such as the ticket row of `n` in the Boxes view. A question such as the one `d` asks takes an answer only after it has been open for a third of a second, and not from a key pressed within a third of a second of the one before.
+On Windows, keys that arrive almost at once are taken as a paste. Pasted text goes only into a text field, such as the ticket row of the form `n` opens in the Boxes view. A question, such as the one `d` asks, takes no answer during its first third of a second, and none from a key that comes within a third of a second of the key before.
 
 ## Everywhere
 
