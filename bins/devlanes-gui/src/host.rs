@@ -9,9 +9,13 @@ use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
 
 use devlanes_gui_host::{
-    RunningBackend, ServeError, ServeOptions, TestPattern, TestPatternOptions, serve, start_backend,
+    BackendError, RunningBackend, ServeError, ServeOptions, TestPattern, TestPatternOptions,
+    Unavailable, serve, start_backend,
 };
-use devlanes_gui_proto::{Token, ready::Ready};
+use devlanes_gui_proto::{
+    Token,
+    ready::{Ready, UnavailableReason, Unready},
+};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken as Shutdown;
 
@@ -29,6 +33,12 @@ pub const TOKEN_ENV: &str = "DEVLANES_GUI_TOKEN";
 
 /// The variable that sets the log filter, as for the daemon.
 const LOG_ENV: &str = "DEVLANES_LOG";
+
+/// How long a host the daemon started (one with a token) waits for the
+/// unit's identity once it listens. The daemon sends it within seconds; a host
+/// that never gets it lost its daemon before the unit ran, and nothing else
+/// would ever stop it.
+const IDENTITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The arguments of `devlanes-gui host`.
 #[derive(Debug, clap::Args)]
@@ -91,6 +101,10 @@ pub enum HostError {
     /// The termination signals could not be watched.
     #[error("cannot watch for termination signals")]
     Signals(#[source] std::io::Error),
+    /// The backend cannot run on this machine; standard output has the
+    /// unready line with the reason.
+    #[error("the GUI backend cannot run here: {0}")]
+    Unavailable(String),
     /// The backend did not start, or it stopped while serving.
     #[error(transparent)]
     Serve(#[from] ServeError),
@@ -131,11 +145,21 @@ pub fn run(args: HostArgs) -> Result<(), HostError> {
 /// Starts the backend, binds the port, prints the ready line and serves.
 async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Result<(), HostError> {
     let mut options = ServeOptions::new(args.service);
+    // Only the daemon passes a token, and only it sends the unit's identity.
+    options.identity_timeout = token.is_some().then_some(IDENTITY_TIMEOUT);
     options.control_token = token;
     // Watched first, so a stop that comes while the backend starts still ends
     // the host cleanly.
     watch_signals(options.shutdown.clone()).map_err(HostError::Signals)?;
-    let running = backend.start().await?;
+    let running = match backend.start().await {
+        Ok(running) => running,
+        Err(ServeError::Backend(BackendError::Unavailable { reason, message })) => {
+            let line = Unready::new(devlanes_version::VERSION, unready_reason(reason), &message);
+            print_line(&line.to_line())?;
+            return Err(HostError::Unavailable(message));
+        }
+        Err(error) => return Err(error.into()),
+    };
     let listener = TcpListener::bind(args.listen)
         .await
         .map_err(|source| HostError::Bind {
@@ -156,15 +180,32 @@ async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Res
         running.real_desktop(),
     )
     .to_line();
-    let mut stdout = std::io::stdout().lock();
-    writeln!(stdout, "{line}")
-        .and_then(|()| stdout.flush())
-        .map_err(HostError::Ready)?;
-    drop(stdout);
+    print_line(&line)?;
     tracing::info!(%address, backend = ?backend, "GUI host ready");
     serve(listener, running, options).await?;
     tracing::info!("GUI host stopped");
     Ok(())
+}
+
+/// Writes `line` and a newline to standard output and flushes it, since the
+/// daemon waits for it.
+fn print_line(line: &str) -> Result<(), HostError> {
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "{line}")
+        .and_then(|()| stdout.flush())
+        .map_err(HostError::Ready)
+}
+
+/// The unready line's word for a backend's reason.
+fn unready_reason(reason: Unavailable) -> UnavailableReason {
+    match reason {
+        Unavailable::NoDesktopSession => UnavailableReason::NoDesktopSession,
+        Unavailable::Elevated => UnavailableReason::Elevated,
+        Unavailable::MissingLibrary => UnavailableReason::MissingLibrary,
+        Unavailable::UnsupportedOs => UnavailableReason::UnsupportedOs,
+        // `Other`, and reasons added to the backend later.
+        _ => UnavailableReason::Other,
+    }
 }
 
 /// Logs to standard error, filtered by `DEVLANES_LOG` (default `info`).

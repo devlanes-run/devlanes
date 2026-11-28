@@ -14,7 +14,7 @@ DEVLANES_GUI_TOKEN=... devlanes-gui host --backend test-pattern --listen 127.0.0
 
 `version` prints the name and the devlanes release version first, then the build kind.
 
-`host` starts the backend, binds the address and prints one line on standard output once it listens, then serves the GUI protocol until it gets SIGINT, SIGTERM or SIGHUP (on Windows Ctrl-C, Ctrl-Break or the console closing) or the backend stops. Logs go to standard error, filtered by `DEVLANES_LOG` (default `info`). It exits with 0 after a stop, 1 when it cannot run (an unknown or unavailable backend, an address that is not loopback, a port in use) and 2 for a malformed command line.
+`host` starts the backend, binds the address and prints one line on standard output once it listens, then serves the GUI protocol until it gets SIGINT, SIGTERM or SIGHUP (on Windows Ctrl-C, Ctrl-Break or the console closing) or the backend stops. Logs go to standard error, filtered by `DEVLANES_LOG` (default `info`). It exits with 0 after a stop, 1 when it cannot run (an unknown backend, an address that is not loopback, a port in use), 2 for a malformed command line and 3 when the backend cannot run on this machine, after printing an unready line instead of the ready line. A host started with a token stops by itself when no unit identity came over the control connection within 60 seconds of the ready line, since its daemon is then gone.
 
 ## Ready line
 
@@ -26,6 +26,8 @@ One JSON object, written and read with `devlanes_gui_proto::ready::Ready` (featu
 - `set`: the variables the unit gets, as names and string values.
 - `remove`: the names of variables the unit must not inherit.
 - `real_desktop`: whether the display is the machine's real desktop, as on a Windows host.
+
+A backend that cannot run here prints `{"unready":1,"devlanes":"0.17.0","protocol":1,"reason":"no_desktop_session","message":"..."}` instead, read with `devlanes_gui_proto::ready::HostLine`. The reasons are `no_desktop_session`, `elevated`, `missing_library`, `unsupported_os` and `other`.
 
 ## Control token
 

@@ -10,6 +10,13 @@
 //! `ready` is the format version, [`READY_FORMAT`]. Fields added later keep
 //! it, so [`Ready::parse`] ignores fields it does not know and refuses any
 //! other format version.
+//!
+//! A host whose backend cannot run on the machine prints an [`Unready`] line
+//! instead and exits with [`UNREADY_EXIT`]; [`HostLine::parse`] reads either.
+//!
+//! ```json
+//! {"unready":1,"devlanes":"0.17.0","protocol":1,"reason":"no_desktop_session","message":"no desktop session"}
+//! ```
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -221,6 +228,128 @@ impl Ready {
     }
 }
 
+/// The exit code of a host that printed an [`Unready`] line.
+pub const UNREADY_EXIT: u8 = 3;
+
+/// Why a host's backend cannot run on this machine. Unknown words read as
+/// [`UnavailableReason::Other`], so a later host can add reasons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnavailableReason {
+    /// No logged-in desktop session to show windows in.
+    NoDesktopSession,
+    /// The host runs elevated, so it cannot drive the user's windows.
+    Elevated,
+    /// A system library or program is missing.
+    MissingLibrary,
+    /// This OS has no backend.
+    UnsupportedOs,
+    /// Anything else; the message says what.
+    #[serde(other)]
+    Other,
+}
+
+impl UnavailableReason {
+    /// The word on the line, such as `no_desktop_session`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::NoDesktopSession => "no_desktop_session",
+            Self::Elevated => "elevated",
+            Self::MissingLibrary => "missing_library",
+            Self::UnsupportedOs => "unsupported_os",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// What a host prints instead of [`Ready`] when its backend cannot run here,
+/// before it exits with [`UNREADY_EXIT`]. Read with [`HostLine::parse`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Unready {
+    /// [`READY_FORMAT`], under this name so the two lines cannot be confused.
+    pub unready: u32,
+    /// The devlanes release the host belongs to.
+    pub devlanes: String,
+    /// The GUI protocol version it speaks.
+    pub protocol: u16,
+    /// What is missing.
+    pub reason: UnavailableReason,
+    /// The same for people, such as which library is missing.
+    pub message: String,
+}
+
+impl Unready {
+    /// The line for a backend that cannot run because of `reason`.
+    pub fn new(
+        devlanes: impl Into<String>,
+        reason: UnavailableReason,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            unready: READY_FORMAT,
+            devlanes: devlanes.into(),
+            protocol: crate::PROTOCOL_VERSION,
+            reason,
+            message: message.into(),
+        }
+    }
+
+    /// The line as the host prints it, without the newline.
+    pub fn to_line(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
+/// [`Unready`] as it is read.
+#[derive(Deserialize)]
+struct UnreadyWire {
+    unready: u32,
+    devlanes: String,
+    protocol: u16,
+    reason: UnavailableReason,
+    message: String,
+}
+
+/// The first line a host prints: it listens, or its backend cannot run here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostLine {
+    /// It listens.
+    Ready(Ready),
+    /// It cannot run here and exits.
+    Unready(Unready),
+}
+
+impl HostLine {
+    /// Reads a line (without its newline): an [`Unready`] line when it has an
+    /// `unready` field, else a [`Ready`] line with the checks of
+    /// [`Ready::parse`]. The same length cap and format rule hold for both.
+    pub fn parse(line: &str) -> Result<Self, ReadyError> {
+        if line.len() > MAX_READY_LINE {
+            return Err(ReadyError::TooLong(line.len()));
+        }
+        /// Just the field that tells the lines apart.
+        #[derive(Deserialize)]
+        struct Kind {
+            unready: Option<u64>,
+        }
+        let kind: Kind = serde_json::from_str(line)?;
+        match kind.unready {
+            None => Ready::parse(line).map(Self::Ready),
+            Some(format) if format != u64::from(READY_FORMAT) => Err(ReadyError::Format(format)),
+            Some(_) => {
+                let wire: UnreadyWire = serde_json::from_str(line)?;
+                Ok(Self::Unready(Unready {
+                    unready: wire.unready,
+                    devlanes: wire.devlanes,
+                    protocol: wire.protocol,
+                    reason: wire.reason,
+                    message: wire.message,
+                }))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +473,31 @@ mod tests {
         );
         let long = " ".repeat(MAX_READY_LINE + 1);
         assert!(matches!(Ready::parse(&long), Err(ReadyError::TooLong(_))));
+    }
+
+    #[test]
+    fn a_host_line_is_either_line_and_unknown_reasons_read_as_other() {
+        let ready = Ready::new(address(), "0.17.0", &[], false);
+        assert_eq!(
+            HostLine::parse(&ready.to_line()).expect("ready"),
+            HostLine::Ready(ready)
+        );
+        let unready = Unready::new("0.17.0", UnavailableReason::MissingLibrary, "no pixman");
+        assert_eq!(
+            HostLine::parse(&unready.to_line()).expect("unready"),
+            HostLine::Unready(unready.clone())
+        );
+        let later = unready
+            .to_line()
+            .replace("missing_library", "needs_a_reboot");
+        match HostLine::parse(&later).expect("later reason") {
+            HostLine::Unready(line) => assert_eq!(line.reason, UnavailableReason::Other),
+            other => panic!("{other:?}"),
+        }
+        let format = unready.to_line().replace(r#""unready":1"#, r#""unready":2"#);
+        assert!(matches!(
+            HostLine::parse(&format),
+            Err(ReadyError::Format(2))
+        ));
     }
 }

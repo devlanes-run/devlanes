@@ -235,6 +235,9 @@ pub(crate) struct Hub {
     /// Sessions to close at the end of this turn.
     closing: Vec<SessionId>,
     heartbeat: Bytes,
+    /// When the host gives up waiting for the unit's identity; `None` once it
+    /// came or when [`ServeOptions::identity_timeout`] is unset.
+    identity_deadline: Option<Instant>,
 }
 
 impl Hub {
@@ -279,6 +282,7 @@ impl Hub {
             clipboard_sent: None,
             closing: Vec::new(),
             heartbeat: heartbeat.freeze(),
+            identity_deadline: options.identity_timeout.map(|timeout| now() + timeout),
         }
     }
 
@@ -325,6 +329,11 @@ impl Hub {
                 _ = timer => {}
             }
             self.tick();
+            if self.identity_deadline.is_some_and(|at| now() >= at) {
+                tracing::warn!("no unit identity came in time; stopping");
+                self.close_all();
+                return Err(ServeError::NoUnitIdentity);
+            }
         }
     }
 
@@ -355,7 +364,11 @@ impl Hub {
             .chain(heartbeats)
             .chain(waits)
             .chain(outstanding)
-            .chain([self.arbiter.next_change(now), clipboard])
+            .chain([
+                self.arbiter.next_change(now),
+                clipboard,
+                self.identity_deadline,
+            ])
             .flatten()
             .min()
     }
@@ -669,11 +682,14 @@ impl Hub {
                 pid,
                 start_time,
                 job,
-            } => self.backend.send(Command::UnitIdentity {
-                pid,
-                start_time,
-                job,
-            }),
+            } => {
+                self.identity_deadline = None;
+                self.backend.send(Command::UnitIdentity {
+                    pid,
+                    start_time,
+                    job,
+                });
+            }
             ClientMessage::UnitExited { code } => {
                 self.backend.send(Command::UnitExited { code });
                 self.stopped = true;

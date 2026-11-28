@@ -137,13 +137,18 @@ pub struct ServeOptions {
     pub write_queue_cap: usize,
     /// Called on input from viewers and tools.
     pub on_activity: Option<ActivityCallback>,
+    /// Stops the host with [`ServeError::NoUnitIdentity`] when no control
+    /// connection told it the unit's process identity this long after
+    /// [`serve`] began. The daemon tells it right after the unit starts, so a
+    /// host whose daemon is gone before then does not run on forever.
+    pub identity_timeout: Option<Duration>,
     /// Stops the host when cancelled.
     pub shutdown: CancellationToken,
 }
 
 impl ServeOptions {
     /// Options for `service` with the defaults: `raw` only, no control
-    /// token, [`DEFAULT_WRITE_QUEUE_CAP`], no callback.
+    /// token, [`DEFAULT_WRITE_QUEUE_CAP`], no callback, no identity timeout.
     pub fn new(service: impl Into<String>) -> Self {
         Self {
             service: service.into(),
@@ -151,6 +156,7 @@ impl ServeOptions {
             encoders: vec![Arc::new(RawBackend)],
             write_queue_cap: DEFAULT_WRITE_QUEUE_CAP,
             on_activity: None,
+            identity_timeout: None,
             shutdown: CancellationToken::new(),
         }
     }
@@ -166,6 +172,7 @@ impl std::fmt::Debug for ServeOptions {
             .field("encoders", &encoders)
             .field("write_queue_cap", &self.write_queue_cap)
             .field("on_activity", &self.on_activity.is_some())
+            .field("identity_timeout", &self.identity_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -184,6 +191,10 @@ pub enum ServeError {
     /// Every window was reported Closed and the connections were closed.
     #[error("the GUI backend stopped")]
     BackendStopped,
+    /// No control connection told the unit's identity within
+    /// [`ServeOptions::identity_timeout`]. The connections were closed.
+    #[error("no unit identity came in time, so the daemon that started this host is gone")]
+    NoUnitIdentity,
 }
 
 /// Where [`serve`] gets its connections.

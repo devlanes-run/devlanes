@@ -90,6 +90,43 @@ async fn the_control_role_needs_the_token_and_unserved_roles_are_refused() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_host_without_a_unit_identity_in_time_stops() {
+    let timeout = Duration::from_secs(30);
+    let host = Host::start(TestPatternOptions::default(), |o| {
+        o.identity_timeout = Some(timeout)
+    })
+    .await;
+    let started = tokio::time::Instant::now();
+    let result = tokio::time::timeout(PATIENCE, host.served)
+        .await
+        .expect("the host stops")
+        .expect("the host task did not panic");
+    assert!(
+        matches!(result, Err(ServeError::NoUnitIdentity)),
+        "{result:?}"
+    );
+    assert!(started.elapsed() >= timeout);
+
+    // The identity, sent before the deadline, keeps the host serving past it.
+    let host = Host::start(TestPatternOptions::default(), |o| {
+        o.identity_timeout = Some(timeout)
+    })
+    .await;
+    let (daemon, _events) = host.control().await;
+    daemon.unit_process(4242, 7, None).expect("sends");
+    eventually("the identity reaches the backend", || {
+        host.pattern
+            .commands()
+            .iter()
+            .any(|c| matches!(c, Command::UnitIdentity { pid: 4242, .. }))
+    })
+    .await;
+    tokio::time::sleep(timeout * 2).await;
+    assert!(!host.served.is_finished());
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_message_the_role_may_not_send_closes_the_connection() {
     let host = Host::default().await;
     let window = host.pattern.first_window();
