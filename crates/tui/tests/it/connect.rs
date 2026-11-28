@@ -354,7 +354,7 @@ async fn a_paste_as_key_presses_runs_no_bindings() -> TestResult {
     assert!(app.dialog.is_none(), "{:?}", app.dialog);
     assert_eq!(
         notice(&app),
-        "Pasted text goes only into a text field. Press n, then paste the ticket."
+        "Pasted text goes only into a text field. To pair with a ticket, press n, then paste it."
     );
     assert_eq!(app.view, View::Boxes);
     // A key typed afterwards works as before.
@@ -450,6 +450,35 @@ async fn a_question_waits_before_it_takes_an_answer() -> TestResult {
             }
         }
     }
+    // A question that replaces one already settled waits as long again.
+    let mut app = boxes_app(100, 30, hosts).await;
+    app.clock = Some(app.now());
+    app.paste.on = true;
+    app.update(key(KeyCode::Char('d')));
+    render(&app)?;
+    wait(&mut app, 500);
+    app.dialog = Some(Dialog::Confirm {
+        prompt: "Forget studio?".into(),
+        detail: Vec::new(),
+        action: "forget",
+        strict: true,
+        effect: Box::new(Effect::Forget {
+            host: "studio".into(),
+        }),
+    });
+    app.update(Msg::Tick);
+    render(&app)?;
+    let early = app.update(key(KeyCode::Char('y')));
+    assert!(
+        !early.iter().any(|e| matches!(e, Effect::Forget { .. })),
+        "{early:?}"
+    );
+    wait(&mut app, 400);
+    let settled = app.update(key(KeyCode::Char('y')));
+    assert!(
+        settled.iter().any(|e| matches!(e, Effect::Forget { .. })),
+        "{settled:?}"
+    );
     Ok(())
 }
 

@@ -2502,14 +2502,28 @@ impl App {
     /// Notes when a question appeared and which key opened it, for
     /// [`App::question_settled`].
     fn track_question(&mut self) {
-        let open = matches!(self.dialog, Some(Dialog::Confirm { .. }));
-        match (open, self.paste.question) {
-            (true, None) => {
-                self.paste.question = Some((self.now(), self.paste.keys));
-                self.paste.drawn.set(false);
+        let prompt = match &self.dialog {
+            Some(Dialog::Confirm { prompt, .. }) => Some(prompt),
+            _ => None,
+        };
+        // A question replaced by another one starts over, so the new one
+        // waits as long as a question opened from nothing.
+        let same = self
+            .paste
+            .question
+            .as_ref()
+            .zip(prompt)
+            .is_some_and(|(question, prompt)| question.prompt == *prompt);
+        match prompt {
+            Some(prompt) if !same => {
+                self.paste.question = Some(Question {
+                    by: self.paste.keys,
+                    prompt: prompt.clone(),
+                });
+                self.paste.drawn_at.set(None);
             }
-            (false, Some(_)) => self.paste.question = None,
-            _ => {}
+            Some(_) => {}
+            None => self.paste.question = None,
         }
     }
 
@@ -2522,14 +2536,12 @@ impl App {
         if !self.paste.on {
             return true;
         }
-        self.paste.question.is_some_and(|(opened, _)| {
-            question_settled(
-                opened,
-                self.paste.drawn.get(),
+        self.paste.question.is_some()
+            && question_settled(
+                self.paste.drawn_at.get(),
                 self.paste.previous_key_at,
                 self.now(),
             )
-        })
     }
 
     /// This TUI's restart or start (`verb`) ended. A new daemon answers:
@@ -6349,13 +6361,18 @@ impl App {
         let opened_by_paste = self
             .paste
             .question
-            .is_some_and(|(_, by)| by + 1 == self.paste.keys);
+            .as_ref()
+            .is_some_and(|question| question.by + 1 == self.paste.keys);
         if opened_by_paste && matches!(self.dialog, Some(Dialog::Confirm { .. })) {
             self.dialog = None;
         }
-        self.set_notice(
-            "Pasted text goes only into a text field. Press n, then paste the ticket.".into(),
-        );
+        // `n` opens the form with the ticket row only in the Boxes view.
+        let notice = if self.view == View::Boxes {
+            "Pasted text goes only into a text field. To pair with a ticket, press n, then paste it."
+        } else {
+            "Pasted text goes only into a text field."
+        };
+        self.set_notice(notice.into());
     }
 
     /// Whether a text field has the keys: a row of the connect form or a
@@ -8574,17 +8591,26 @@ fn done_notice(label: &str, value: &Value) -> String {
 /// person who reads the question does not notice it.
 pub const QUESTION_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
-/// Whether a question opened at `opened`, drawn or not, takes an answer at
-/// `now`, when the key before that answer came at `previous_key`.
+/// Whether a question first drawn at `drawn_at` (`None` while it has not
+/// been) takes an answer at `now`, when the key before that answer came at
+/// `previous_key`.
 pub fn question_settled(
-    opened: web_time::Instant,
-    drawn: bool,
+    drawn_at: Option<web_time::Instant>,
     previous_key: Option<web_time::Instant>,
     now: web_time::Instant,
 ) -> bool {
     let long_enough =
         |since: web_time::Instant| now.saturating_duration_since(since) >= QUESTION_SETTLE;
-    drawn && long_enough(opened) && previous_key.is_none_or(long_enough)
+    drawn_at.is_some_and(long_enough) && previous_key.is_none_or(long_enough)
+}
+
+/// The question on screen, for the paste guards.
+#[derive(Debug)]
+struct Question {
+    /// The key count when it opened: the key that opened it.
+    by: u64,
+    /// What it asks, which tells it from a question that replaced it.
+    prompt: String,
 }
 
 /// What the paste guards remember where pastes arrive as key presses.
@@ -8597,11 +8623,10 @@ pub struct PasteGuard {
     last_key_at: Option<web_time::Instant>,
     /// When the key before the one being handled came.
     previous_key_at: Option<web_time::Instant>,
-    /// When the open question appeared, and the key count then: the key
-    /// that opened it.
-    question: Option<(web_time::Instant, u64)>,
-    /// The open question has been drawn.
-    pub drawn: std::cell::Cell<bool>,
+    /// The open question.
+    question: Option<Question>,
+    /// When the open question was first drawn, which the wait counts from.
+    pub drawn_at: std::cell::Cell<Option<web_time::Instant>>,
     /// The paste whose keys are being dropped was told about.
     told: bool,
 }
