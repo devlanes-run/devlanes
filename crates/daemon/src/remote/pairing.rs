@@ -120,10 +120,18 @@ struct Code {
     expires: Instant,
 }
 
-/// Why a code was refused.
+/// One outstanding ticket's secret, from `remote.pair` with `ticket`.
+struct TicketEntry {
+    secret: [u8; 16],
+    expires: Instant,
+    ephemeral: bool,
+}
+
+/// Why a code or a ticket was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refusal {
-    /// Wrong, expired or used; every outstanding code is void now.
+    /// Wrong, expired or used. A wrong code voids every outstanding code; a
+    /// wrong ticket voids nothing.
     Wrong,
     /// Too many failures; every code is refused for `retry_after`.
     Locked { retry_after: Duration },
@@ -138,12 +146,15 @@ pub(crate) enum MintError {
     Random(io::Error),
 }
 
-/// The box's outstanding codes and recent failures, in memory only. The
-/// times are monotonic, so a clock change neither revives nor voids a code;
-/// every method takes the time, so tests choose it.
+/// The box's outstanding codes and ticket secrets and recent failures, in
+/// memory only. The times are monotonic, so a clock change neither revives
+/// nor voids a code; every method takes the time, so tests choose it. Wrong
+/// codes and wrong ticket secrets count towards the same limit.
 #[derive(Default)]
 pub(crate) struct Codes {
     codes: Vec<Code>,
+    /// Secrets of the outstanding tickets, at most [`MAX_CODES`].
+    tickets: Vec<TicketEntry>,
     /// Times of failed attempts within [`FAILURE_WINDOW`], oldest first.
     failures: VecDeque<Instant>,
 }
@@ -168,6 +179,39 @@ impl Codes {
             expires: now + CODE_TTL,
         });
         Ok(display(&value))
+    }
+
+    /// A new ticket secret, valid for [`CODE_TTL`] from `now`, with the
+    /// ticket's `ephemeral` flag. While failures refuse every secret, none is
+    /// handed out.
+    #[allow(dead_code)]
+    pub(crate) fn mint_ticket(
+        &mut self,
+        ephemeral: bool,
+        now: Instant,
+    ) -> Result<[u8; 16], MintError> {
+        if let Some(wait) = self.locked_for(now) {
+            return Err(MintError::Paused(wait));
+        }
+        let mut secret = [0u8; 16];
+        getrandom::fill(&mut secret)
+            .map_err(|error| MintError::Random(io::Error::other(error.to_string())))?;
+        if self.tickets.len() >= MAX_CODES {
+            self.tickets.remove(0);
+        }
+        self.tickets.push(TicketEntry {
+            secret,
+            expires: now + CODE_TTL,
+            ephemeral,
+        });
+        Ok(secret)
+    }
+
+    /// Takes back a ticket that was minted but never handed out, because
+    /// the request failed after minting it.
+    #[allow(dead_code)]
+    pub(crate) fn drop_ticket(&mut self, secret: &[u8; 16]) {
+        self.tickets.retain(|ticket| !same(&ticket.secret, secret));
     }
 
     /// Uses `input` up when it matches an outstanding code. A failure voids
@@ -210,21 +254,66 @@ impl Codes {
         Some((*oldest + FAILURE_WINDOW).saturating_duration_since(now))
     }
 
-    /// Whether a code is still valid, which keeps an idle daemon running so
-    /// the code does not vanish with it.
+    /// Uses up the outstanding ticket whose secret is `secret` and says
+    /// whether it was ephemeral. `None` is a secret that was not 16 bytes,
+    /// which fails like a wrong one. A failure counts towards the limit and
+    /// voids nothing: 128 random bits are not guessed, so voiding would only
+    /// let anyone who knows the box's id cancel the owner's tickets and codes.
+    /// While the limit holds, every secret is refused without being compared.
+    pub(crate) fn claim_ticket(
+        &mut self,
+        secret: Option<&[u8; 16]>,
+        now: Instant,
+    ) -> Result<bool, Refusal> {
+        if let Some(retry_after) = self.locked_for(now) {
+            return Err(Refusal::Locked { retry_after });
+        }
+        let candidate = secret.copied().unwrap_or([0; 16]);
+        // Every ticket is compared, so the time does not tell which one matched.
+        let mut found = None;
+        for (index, ticket) in self.tickets.iter().enumerate() {
+            if same(&ticket.secret, &candidate) {
+                found = Some(index);
+            }
+        }
+        match found.filter(|_| secret.is_some()) {
+            Some(index) => Ok(self.tickets.remove(index).ephemeral),
+            None => {
+                self.failures.push_back(now);
+                Err(Refusal::Wrong)
+            }
+        }
+    }
+
+    /// Whether a ticket is outstanding and secrets are not refused, which is
+    /// when the box admits pairing connections from keys it does not know.
+    pub(crate) fn takes_tickets(&mut self, now: Instant) -> bool {
+        self.locked_for(now).is_none() && !self.tickets.is_empty()
+    }
+
+    /// When the last outstanding ticket expires; `None` without one.
+    pub(crate) fn tickets_until(&mut self, now: Instant) -> Option<Instant> {
+        self.prune(now);
+        self.tickets.iter().map(|ticket| ticket.expires).max()
+    }
+
+    /// Whether a code or a ticket is still valid, which keeps an idle daemon
+    /// running so it does not vanish with it.
     pub(crate) fn outstanding(&mut self, now: Instant) -> bool {
         self.prune(now);
-        !self.codes.is_empty()
+        !self.codes.is_empty() || !self.tickets.is_empty()
     }
 
-    /// Voids every outstanding code; recent failures still count.
+    /// Voids every outstanding code and ticket; recent failures still count.
     pub(crate) fn void(&mut self) {
         self.codes.clear();
+        self.tickets.clear();
     }
 
-    /// Forgets expired codes and failures older than the window.
+    /// Forgets expired codes and tickets and failures older than the window.
     fn prune(&mut self, now: Instant) {
         self.codes.retain(|code| code.expires > now);
+        self.tickets.retain(|ticket| ticket.expires > now);
         while self
             .failures
             .front()
@@ -236,7 +325,7 @@ impl Codes {
 }
 
 /// `retry_after` in milliseconds, for answers.
-fn millis(wait: Duration) -> u64 {
+pub(super) fn millis(wait: Duration) -> u64 {
     u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)
 }
 
@@ -352,7 +441,7 @@ fn connections_off(invalid: bool) -> RpcError {
 /// tunnel reads it ([`devlanes_config::box_settings`]): a missing file
 /// allows connections, a problem under `remote` or with the whole file does
 /// not. The second value says such a problem made it false. Blocking.
-fn allow_connections(home: &std::path::Path) -> (bool, bool) {
+pub(super) fn allow_connections(home: &std::path::Path) -> (bool, bool) {
     let path = home.join("config.yaml");
     if !path.exists() {
         return (true, false);

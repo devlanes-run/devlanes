@@ -29,7 +29,8 @@
 //! mirrors, `status` lists the tunnels serving clients with their reports,
 //! `url` and `hosts` add the URLs each client opens, and `sync.status` lists
 //! the sync entries a tunnel may stream. `remote.pair`, `remote.pairing.*`,
-//! `remote.clients` and `remote.revoke` manage pairings.
+//! `remote.clients` and `remote.revoke` manage pairings. Clients that paired
+//! by ticket are served over the peer-to-peer endpoint instead ([`peer`]).
 
 mod assign;
 mod choice;
@@ -38,6 +39,7 @@ mod identity;
 mod listeners;
 mod mirror;
 mod pairing;
+mod peer;
 mod report;
 mod sync;
 
@@ -143,8 +145,12 @@ pub(crate) struct Remotes {
     /// `clients`, where a newer connection of a client replaces the entry
     /// while the older feed may still run.
     feeds: Mutex<BTreeMap<u64, (String, CancellationToken)>>,
-    /// Box side: outstanding pairing codes and recent failed attempts.
-    codes: Mutex<pairing::Codes>,
+    /// Box side: outstanding pairing codes and tickets and recent failed
+    /// attempts. Shared with the peer admission, which reads it on the
+    /// endpoint's accept path.
+    codes: Arc<Mutex<pairing::Codes>>,
+    /// Box side: clients paired by ticket and the endpoint's listener.
+    peer: peer::PeerState,
     /// What this machine sends every box, read from disk on the first connect.
     identity: tokio::sync::OnceCell<identity::ClientIdentity>,
     /// Hands each new connection its place in connect order ([`HostConn::serial`]).
@@ -210,18 +216,22 @@ struct BoxPortProblem {
 const RANGE_OVERLAP: &str = "ports_range_overlap";
 
 impl Remotes {
-    /// No box is connected, no tunnel serves a client and no pairing code is
-    /// outstanding, so an idle exit would cut nobody off or void a code
-    /// someone is about to type. A box counts as connected while its link
-    /// reconnects or waits for a sign-in or pairing, and while a starting
-    /// daemon restores it, so a daemon with wanted boxes stays up for them. A
-    /// box whose link failed for good does not count: it mirrors nothing, and
-    /// it stays wanted, so the next daemon tries it again.
+    /// No box is connected, no tunnel serves a client, no pairing code or
+    /// ticket is outstanding and the peer-to-peer endpoint does not listen,
+    /// so an idle exit would cut nobody off or void a code someone is about
+    /// to type. Nothing starts a box daemon again when a client paired by
+    /// ticket dials, so a listening daemon is never idle. A box counts as
+    /// connected while its link reconnects or waits for a sign-in or
+    /// pairing, and while a starting daemon restores it, so a daemon with
+    /// wanted boxes stays up for them. A box whose link failed for good does
+    /// not count: it mirrors nothing, and it stays wanted, so the next daemon
+    /// tries it again.
     pub(crate) fn is_idle(&self) -> bool {
         lock(&self.hosts).values().all(|conn| conn.ended())
             && lock(&self.clients).is_empty()
             && !self.restoring.load(Ordering::Relaxed)
             && !lock(&self.codes).outstanding(std::time::Instant::now())
+            && !self.peer.is_listening()
     }
 
     /// Mirrored routes of every connected box, in connect order, of the lanes
@@ -1873,13 +1883,15 @@ impl Inner {
 
     /// Closes every box connection; called on daemon shutdown so ssh masters
     /// exit. Waits for the restore first, so it opens nothing afterwards and
-    /// is done with the store before the store closes. Reported as the
-    /// `remote` step of `steps`.
+    /// is done with the store before the store closes. Closes the
+    /// peer-to-peer endpoint too, so its clients see a clean close. Reported
+    /// as the `remote` step of `steps`.
     pub(crate) async fn remote_shutdown(self: &Arc<Self>, steps: &crate::stopping::StopSteps<'_>) {
         let restore = lock(&self.remote.restore).take();
         if let Some(restore) = restore {
             let _ = restore.await;
         }
+        self.peer_shutdown().await;
         let hosts: Vec<Arc<HostConn>> = std::mem::take(&mut *lock(&self.remote.hosts))
             .into_values()
             .collect();
