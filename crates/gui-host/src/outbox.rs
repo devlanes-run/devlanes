@@ -5,6 +5,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use bytes::Bytes;
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 /// The queue was over its cap or closed; the message was not queued.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,9 @@ pub(crate) struct Outbox {
     state: Mutex<State>,
     notify: Notify,
     cap: usize,
+    /// Cancelled by a close without flush, so the connection drops its
+    /// stream even while a write to a peer that does not read is stuck.
+    discarded: CancellationToken,
 }
 
 impl Outbox {
@@ -32,7 +36,13 @@ impl Outbox {
             state: Mutex::new(State::default()),
             notify: Notify::new(),
             cap,
+            discarded: CancellationToken::new(),
         }
+    }
+
+    /// Completes once the queue was closed without flush.
+    pub(crate) async fn discarded(&self) {
+        self.discarded.cancelled().await;
     }
 
     /// The state; a panic while it was held cannot leave it inconsistent.
@@ -68,6 +78,9 @@ impl Outbox {
         }
         drop(state);
         self.notify.notify_one();
+        if !flush {
+            self.discarded.cancel();
+        }
     }
 
     /// The next message for the writer, or `None` once closed and empty.

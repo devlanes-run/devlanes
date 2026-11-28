@@ -16,6 +16,9 @@ use crate::HELLO_TIMEOUT;
 use crate::hub::Inbox;
 use crate::outbox::Outbox;
 
+/// How long a refusal may take to write.
+const REFUSAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// What every connection needs to know from the options.
 #[derive(Debug)]
 pub(crate) struct Settings {
@@ -84,6 +87,8 @@ where
     tokio::select! {
         _ = write_loop(&mut writer, &outbox) => {}
         _ = read_loop(&mut reader, buf, role, session, &inbox) => {}
+        // Past the write cap: drop the stream now, even mid-write.
+        _ = outbox.discarded() => {}
     }
     outbox.close(false);
     // Fails only once the host task ended, which forgets every session.
@@ -139,14 +144,18 @@ async fn read_hello<R: AsyncRead + Unpin>(
     }
 }
 
-/// Sends a refusal and closes the write side.
+/// Sends a refusal and closes the write side, giving up after
+/// [`REFUSAL_TIMEOUT`] on a peer that does not read.
 async fn refuse<W: AsyncWrite + Unpin>(writer: &mut W, reason: RefusalReason, message: String) {
     let mut out = BytesMut::new();
     let refusal = HostMessage::Refused(Refusal { reason, message });
-    if refusal.encode(&mut out).is_ok() {
-        let _ = writer.write_all(&out).await;
-    }
-    let _ = writer.shutdown().await;
+    let send = async {
+        if refusal.encode(&mut out).is_ok() {
+            let _ = writer.write_all(&out).await;
+        }
+        let _ = writer.shutdown().await;
+    };
+    let _ = tokio::time::timeout(REFUSAL_TIMEOUT, send).await;
 }
 
 /// Forwards each message the role may send; returns on the first one it may

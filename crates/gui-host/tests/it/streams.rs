@@ -7,7 +7,7 @@ use devlanes_gui_codec::{
     CodecError, DecoderBackend, EncodeParams, Encoded, EncoderBackend, Frame, Packet, RawBackend,
     VideoDecoder, VideoEncoder,
 };
-use devlanes_gui_host::Command;
+use devlanes_gui_host::{Command, MAX_SCREENSHOTS_IN_FLIGHT};
 use devlanes_gui_host::pattern::shows_grid;
 use devlanes_gui_proto::{MAX_IN_FLIGHT, Point, Size, WindowId};
 
@@ -42,7 +42,7 @@ fn animate(host: &Host, window: WindowId, during: Duration) {
 
 #[tokio::test(start_paused = true)]
 async fn the_slowest_viewer_sets_the_pace_of_a_shared_stream() {
-    let host = Host::default();
+    let host = Host::default().await;
     let window = host.pattern.first_window();
     let (_ada, mut fast) = host.viewer("ada").await;
     let (_bob, mut slow) = host.viewer("bob").await;
@@ -63,7 +63,7 @@ async fn the_slowest_viewer_sets_the_pace_of_a_shared_stream() {
 
 #[tokio::test(start_paused = true)]
 async fn a_viewer_that_stops_acknowledging_is_set_aside_and_rejoins_once_caught_up() {
-    let host = Host::default();
+    let host = Host::default().await;
     let window = host.pattern.first_window();
     let (_ada, mut ada_events) = host.viewer("ada").await;
     let (_bob, mut bob_events) = host.viewer("bob").await;
@@ -91,7 +91,7 @@ async fn a_viewer_joining_a_static_window_gets_the_cached_frame() {
         changes_only: true,
         ..TestPatternOptions::default()
     };
-    let host = Host::start(options, |_| {});
+    let host = Host::start(options, |_| {}).await;
     let (_ada, mut ada_events) = host.viewer("ada").await;
     let first = next_frame(&mut ada_events).await;
     tokio::time::sleep(Duration::from_secs(30)).await;
@@ -116,10 +116,12 @@ struct Counting {
 }
 
 impl EncoderBackend for Counting {
+    /// The wrapped backend's offer.
     fn offer(&self) -> CodecOffer {
         self.inner.offer()
     }
 
+    /// Counts, then asks the wrapped backend.
     fn encoder(&self) -> Result<Box<dyn VideoEncoder>, CodecError> {
         self.made.fetch_add(1, Ordering::SeqCst);
         self.inner.encoder()
@@ -132,23 +134,28 @@ const PLAIN: CodecOffer = CodecOffer {
     hardware: false,
 };
 
+/// An encoder of [`PLAIN`] and the backend that makes it.
 struct Plain;
 
 impl EncoderBackend for Plain {
+    /// [`PLAIN`].
     fn offer(&self) -> CodecOffer {
         PLAIN
     }
 
+    /// A [`Plain`] encoder.
     fn encoder(&self) -> Result<Box<dyn VideoEncoder>, CodecError> {
         Ok(Box::new(Plain))
     }
 }
 
 impl VideoEncoder for Plain {
+    /// [`PLAIN`].
     fn offer(&self) -> CodecOffer {
         PLAIN
     }
 
+    /// The packed pixels, every frame a keyframe.
     fn encode(&mut self, frame: &Frame, _: &EncodeParams) -> Result<Option<Encoded>, CodecError> {
         Ok(Some(Encoded {
             payload: frame.to_packed(),
@@ -159,24 +166,47 @@ impl VideoEncoder for Plain {
     }
 }
 
-/// Decodes [`Plain`] and counts what it decoded.
-struct PlainDecoder(Arc<AtomicUsize>);
+/// A backend of [`PLAIN`] whose encoder never starts, like a hardware
+/// encoder whose device is gone.
+struct Broken;
 
-impl DecoderBackend for PlainDecoder {
+impl EncoderBackend for Broken {
+    /// [`PLAIN`].
     fn offer(&self) -> CodecOffer {
         PLAIN
     }
 
+    /// Always fails.
+    fn encoder(&self) -> Result<Box<dyn VideoEncoder>, CodecError> {
+        Err(CodecError::Unavailable {
+            codec: "h264",
+            reason: "no encoder device".into(),
+        })
+    }
+}
+
+/// Decodes [`Plain`] and counts what it decoded.
+struct PlainDecoder(Arc<AtomicUsize>);
+
+impl DecoderBackend for PlainDecoder {
+    /// [`PLAIN`].
+    fn offer(&self) -> CodecOffer {
+        PLAIN
+    }
+
+    /// A decoder sharing this one's count.
     fn decoder(&self) -> Result<Box<dyn VideoDecoder>, CodecError> {
         Ok(Box::new(PlainDecoder(self.0.clone())))
     }
 }
 
 impl VideoDecoder for PlainDecoder {
+    /// [`PLAIN`].
     fn offer(&self) -> CodecOffer {
         PLAIN
     }
 
+    /// Counts the packet and takes its bytes as packed pixels.
     fn decode(&mut self, packet: &Packet<'_>) -> Result<Option<Frame>, CodecError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         let pixels = Bytes::copy_from_slice(packet.payload);
@@ -198,7 +228,7 @@ async fn viewers_of_another_codec_get_an_encoder_of_their_own() {
             made: plain_made.clone(),
         }),
     ];
-    let host = Host::start(TestPatternOptions::default(), |o| o.encoders = encoders);
+    let host = Host::start(TestPatternOptions::default(), |o| o.encoders = encoders).await;
     let decoded = Arc::new(AtomicUsize::new(0));
     let (_ada, mut ada) = host.viewer("ada").await;
     let (_cy, mut cy) = host.viewer("cy").await;
@@ -219,8 +249,116 @@ async fn viewers_of_another_codec_get_an_encoder_of_their_own() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn viewers_of_an_encoder_that_cannot_start_fall_back_to_another_codec() {
+    let encoders: Vec<Arc<dyn EncoderBackend>> = vec![Arc::new(Broken), Arc::new(RawBackend)];
+    let host = Host::start(TestPatternOptions::default(), |o| o.encoders = encoders).await;
+    let decoded = Arc::new(AtomicUsize::new(0));
+    let both = ClientOptions::new(Role::Viewer, "ada", "ada").with_decoders(vec![
+        Arc::new(PlainDecoder(decoded.clone())),
+        Arc::new(RawBackend),
+    ]);
+    let (_ada, mut events) = host.connect(both).await;
+    let frame = next_frame(&mut events).await;
+    assert!(shows_grid(&frame.frame));
+    assert_eq!(decoded.load(Ordering::SeqCst), 0, "the frame came as raw");
+
+    // A viewer joining later gets raw straight away.
+    let both = ClientOptions::new(Role::Viewer, "bob", "bob").with_decoders(vec![
+        Arc::new(PlainDecoder(decoded.clone())),
+        Arc::new(RawBackend),
+    ]);
+    let (_bob, mut events) = host.connect(both).await;
+    assert!(shows_grid(&next_frame(&mut events).await.frame));
+    assert_eq!(decoded.load(Ordering::SeqCst), 0);
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_backend_is_told_which_windows_are_watched() {
+    let host = Host::default().await;
+    let window = host.pattern.first_window();
+    let watches = |host: &Host| {
+        host.pattern
+            .commands()
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::Watch { window, watched } => Some((window, watched)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (ada, mut ada_events) = host.viewer("ada").await;
+    let (bob, _bob_events) = host.viewer("bob").await;
+    next_frame(&mut ada_events).await;
+    assert_eq!(watches(&host), vec![(window, true)], "once for both viewers");
+    ada.close();
+    bob.close();
+    let (tool, _events) = host.tool("agent").await;
+    eventually("the last viewer is gone", || {
+        watches(&host) == vec![(window, true), (window, false)]
+    })
+    .await;
+
+    // Nobody watches, so a screenshot asks for a fresh frame instead of the cache.
+    let before = host.pattern.commands().len();
+    tool.screenshot(Some(window)).await.expect("a screenshot");
+    let asked = host.pattern.commands()[before..]
+        .iter()
+        .any(|c| matches!(c, Command::RequestFrame { .. }));
+    assert!(asked);
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tool_with_more_screenshots_than_the_host_allows_waits_its_turn() {
+    let host = Host::default().await;
+    let (tool, _events) = host.tool("agent").await;
+    // Unwatched, so each screenshot waits for a frame the pattern holds back.
+    host.pattern.hold_frames(true);
+    let mut shots = tokio::task::JoinSet::new();
+    for _ in 0..2 * MAX_SCREENSHOTS_IN_FLIGHT {
+        let tool = tool.clone();
+        shots.spawn(async move { tool.screenshot(None).await });
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(shots.try_join_next().is_none(), "they wait for frames");
+    host.pattern.hold_frames(false);
+    let mut taken = 0;
+    while let Some(shot) = shots.join_next().await {
+        let shot = shot.expect("no panic").expect("a screenshot");
+        assert!(shows_grid(&shot.frame));
+        taken += 1;
+    }
+    assert_eq!(taken, 2 * MAX_SCREENSHOTS_IN_FLIGHT);
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_keyframe_request_is_answered_from_the_cache() {
+    let options = TestPatternOptions {
+        changes_only: true,
+        ..TestPatternOptions::default()
+    };
+    let host = Host::start(options, |_| {}).await;
+    let window = host.pattern.first_window();
+    let (ada, mut events) = host.viewer("ada").await;
+    let first = next_frame(&mut events).await;
+    ada.request_keyframe(window).expect("sends");
+    let again = next_frame(&mut events).await;
+    assert!(again.seq > first.seq && again.keyframe);
+    assert_eq!(again.frame.to_packed(), first.frame.to_packed());
+    let captured = host
+        .pattern
+        .commands()
+        .iter()
+        .any(|c| matches!(c, Command::RequestFrame { .. }));
+    assert!(!captured, "no new capture was needed");
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_screenshot_shows_one_window_and_names_a_missing_one() {
-    let host = Host::default();
+    let host = Host::default().await;
     let window = host.pattern.first_window();
     let (tool, _events) = host.tool("agent").await;
     let popup = host

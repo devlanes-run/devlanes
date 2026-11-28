@@ -15,6 +15,7 @@ use bytes::BytesMut;
 use devlanes_gui_client::{Client, ClientOptions, Event, Events, connect_stream};
 use devlanes_gui_host::{
     ServeError, ServeOptions, TestPattern, TestPatternHandle, TestPatternOptions, serve,
+    start_backend,
 };
 use devlanes_gui_proto::{ClientMessage, CodecId, CodecOffer, Hello, HostMessage, Role, Token};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
@@ -40,8 +41,9 @@ struct Host {
 
 impl Host {
     /// A host of a pattern with `pattern`'s options and `tweak` applied to its own.
-    fn start(pattern: TestPatternOptions, tweak: impl FnOnce(&mut ServeOptions)) -> Self {
+    async fn start(pattern: TestPatternOptions, tweak: impl FnOnce(&mut ServeOptions)) -> Self {
         let (backend, handle) = TestPattern::new(pattern);
+        let backend = start_backend(backend).await.expect("the pattern starts");
         let activity = Arc::new(AtomicUsize::new(0));
         let counter = activity.clone();
         let mut options = ServeOptions::new("acme:desktop");
@@ -63,8 +65,8 @@ impl Host {
     }
 
     /// A host with the default pattern and options.
-    fn default() -> Self {
-        Self::start(TestPatternOptions::default(), |_| {})
+    async fn default() -> Self {
+        Self::start(TestPatternOptions::default(), |_| {}).await
     }
 
     /// The client end of a new connection, whose buffer holds `buffer` bytes.

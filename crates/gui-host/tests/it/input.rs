@@ -1,7 +1,10 @@
 //! Input arbitration between clients, releases of held input, and `Sync`.
 
-use devlanes_gui_host::{Command, Echo};
-use devlanes_gui_proto::{Buttons, HELD_INPUT_TIMEOUT, Point, Pointer, WindowId};
+use devlanes_gui_host::{Command, Echo, MAX_PENDING_SYNCS};
+use devlanes_gui_proto::{
+    Buttons, HELD_INPUT_TIMEOUT, HOLD_AFTER_TYPING, Key, KeyCode, LockState, Point, Pointer,
+    WindowId,
+};
 
 use super::*;
 
@@ -29,7 +32,7 @@ fn presses(host: &Host) -> Vec<Point> {
 
 #[tokio::test(start_paused = true)]
 async fn a_viewer_holding_a_button_keeps_input_and_the_other_is_told_who_has_it() {
-    let host = Host::default();
+    let host = Host::default().await;
     let window = host.pattern.first_window();
     let (ada, _ada_events) = host.viewer("ada").await;
     let (bob, mut bob_events) = host.viewer("bob").await;
@@ -62,7 +65,7 @@ async fn a_viewer_holding_a_button_keeps_input_and_the_other_is_told_who_has_it(
 
 #[tokio::test(start_paused = true)]
 async fn a_holder_that_goes_silent_is_released_and_one_that_leaves_at_once() {
-    let host = Host::default();
+    let host = Host::default().await;
     let window = host.pattern.first_window();
     let (bob, _events) = host.tool("bob").await;
     let (held, theirs) = (Point::new(40, 40), Point::new(250, 120));
@@ -130,8 +133,89 @@ async fn a_holder_that_goes_silent_is_released_and_one_that_leaves_at_once() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_key_released_on_a_locked_window_reaches_the_app_and_frees_input() {
+    let host = Host::default().await;
+    let window = host.pattern.first_window();
+    let (ada, mut ada_events) = host.viewer("ada").await;
+    let (bob, _bob_events) = host.tool("bob").await;
+    let (daemon, _control) = host.control().await;
+    let f11 = KeyCode::keyboard(0x44);
+    let lock = |state| {
+        move |event: &Event| match event {
+            Event::Lock { state: s, .. } if *s == state => Some(()),
+            _ => None,
+        }
+    };
+
+    ada.key(window, f11, true).expect("sends");
+    ada.sync().await.expect("synced");
+    daemon.lane_frozen(true).expect("sends");
+    until(&mut ada_events, lock(LockState::Frozen)).await;
+    ada.key(window, f11, false).expect("sends");
+    ada.sync().await.expect("synced");
+    let up = Command::Key(Key {
+        window,
+        code: f11,
+        down: false,
+    });
+    assert_eq!(host.pattern.commands().iter().filter(|c| **c == up).count(), 1);
+
+    daemon.lane_frozen(false).expect("sends");
+    until(&mut ada_events, lock(LockState::Unlocked)).await;
+    // Typing holds input for a moment after the last key, the release included.
+    tokio::time::sleep(HOLD_AFTER_TYPING).await;
+    bob.text(window, "bob").expect("sends");
+    bob.sync().await.expect("synced");
+    let typed = Echo::Text {
+        window,
+        text: "bob".into(),
+    };
+    assert!(host.pattern.echoes().contains(&typed), "ada still held input");
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn syncs_share_one_frame_request_per_window_and_are_capped() {
+    let host = Host::default().await;
+    let (tool, _events) = host.tool("agent").await;
+    let requests = |host: &Host| {
+        host.pattern
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, Command::RequestFrame { .. }))
+            .count()
+    };
+    host.pattern.hold_frames(true);
+    let release = async {
+        // Answered at once, after every sync above it was handled.
+        let _ = tool.screenshot(Some(WindowId(999))).await;
+        assert_eq!(requests(&host), 1, "the later syncs wait for the first request");
+        host.pattern.hold_frames(false);
+    };
+    let (first, second, third, ()) = tokio::join!(tool.sync(), tool.sync(), tool.sync(), release);
+    for synced in [first, second, third] {
+        synced.expect("synced");
+    }
+    // One request answered the first sync; one more covered the two after it.
+    assert_eq!(requests(&host), 2);
+
+    // A client that does not wait for its syncs is closed past the cap.
+    host.pattern.hold_frames(true);
+    let mut flood = Raw::welcomed(&host, Role::Tool).await;
+    for request in 0..=MAX_PENDING_SYNCS as u32 {
+        flood.send(&ClientMessage::Sync { request }).await;
+    }
+    let after = flood.closed().await;
+    assert!(
+        !after.iter().any(|m| matches!(m, HostMessage::Synced { .. })),
+        "{after:?}"
+    );
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn sync_answers_only_after_a_frame_captured_after_the_input() {
-    let host = Host::default();
+    let host = Host::default().await;
     let window = host.pattern.first_window();
     let (tool, _events) = host.tool("agent").await;
     let at = Point::new(100, 60);

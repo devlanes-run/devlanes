@@ -69,7 +69,7 @@ async fn a_resize_locks_the_window_until_the_first_frame_after_it_whatever_its_s
         min_size: Some(min),
         ..TestPatternOptions::default()
     };
-    let host = Host::start(options, |_| {});
+    let host = Host::start(options, |_| {}).await;
     let window = host.pattern.first_window();
     let (ada, mut events) = host.viewer("ada").await;
     next_frame(&mut events).await;
@@ -109,7 +109,7 @@ async fn a_resize_of_a_static_window_that_keeps_its_size_unlocks_on_the_timeout(
         changes_only: true,
         ..TestPatternOptions::default()
     };
-    let host = Host::start(options, |_| {});
+    let host = Host::start(options, |_| {}).await;
     let window = host.pattern.first_window();
     let (ada, mut events) = host.viewer("ada").await;
     next_frame(&mut events).await;
@@ -131,7 +131,7 @@ async fn a_resize_of_a_static_window_that_keeps_its_size_unlocks_on_the_timeout(
 
 #[tokio::test(start_paused = true)]
 async fn the_lane_and_the_app_lock_the_window_end_to_end() {
-    let host = Host::default();
+    let host = Host::default().await;
     let window = host.pattern.first_window();
     let (ada, mut events) = host.viewer("ada").await;
     let (daemon, mut control) = host.control().await;
@@ -159,6 +159,18 @@ async fn the_lane_and_the_app_lock_the_window_end_to_end() {
     until(&mut control, |e| matches!(e, Event::Activity).then_some(())).await;
     assert_eq!(host.activity.load(Ordering::SeqCst), 1);
     assert!(pressed(&host).is_empty());
+    // A frozen app cannot resize: the request is answered and goes no further.
+    let request = ada.resize(window, Size::new(200, 100)).expect("sends");
+    until(&mut events, |e| {
+        matches!(e, Event::ResizeApplied { request: r, .. } if *r == request).then_some(())
+    })
+    .await;
+    let resized = host
+        .pattern
+        .commands()
+        .iter()
+        .any(|c| matches!(c, devlanes_gui_host::Command::Resize { .. }));
+    assert!(!resized);
     daemon.lane_frozen(false).expect("sends");
     locked(&mut events, window, LockState::Unlocked).await;
     ada.click(window, at, Buttons::LEFT).expect("sends");
@@ -205,7 +217,7 @@ async fn the_lane_and_the_app_lock_the_window_end_to_end() {
 
 #[tokio::test(start_paused = true)]
 async fn a_backend_that_disappears_closes_the_windows_and_the_host() {
-    let host = Host::default();
+    let host = Host::default().await;
     let window = host.pattern.first_window();
     let (_ada, mut events) = host.viewer("ada").await;
     host.pattern.vanish();

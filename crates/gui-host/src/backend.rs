@@ -15,14 +15,32 @@ use tokio::sync::mpsc;
 
 /// An OS backend before it starts.
 pub trait Backend: Send + 'static {
-    /// Whether the display is the machine's real desktop (a Windows host),
-    /// for the welcome.
-    fn real_desktop(&self) -> bool;
-
     /// Starts the backend, which then reports through `events` from any of
     /// its threads until the returned control is dropped. Called once, on a
     /// thread of the blocking pool, so it may block while the display comes up.
-    fn start(self: Box<Self>, events: EventSink) -> Result<Box<dyn BackendControl>, BackendError>;
+    fn start(self: Box<Self>, events: EventSink) -> Result<Started, BackendError>;
+}
+
+/// What a backend hands back once its display is up.
+pub struct Started {
+    /// How the host reaches it.
+    pub control: Box<dyn BackendControl>,
+    /// Variables the unit's process needs to reach the display, such as
+    /// `WAYLAND_DISPLAY`; `None` removes an inherited one.
+    pub env: Vec<(String, Option<String>)>,
+    /// Whether the display is the machine's real desktop (a Windows host),
+    /// for the welcome.
+    pub real_desktop: bool,
+}
+
+impl std::fmt::Debug for Started {
+    /// The variables and the flag; the control has nothing to show.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Started")
+            .field("env", &self.env)
+            .field("real_desktop", &self.real_desktop)
+            .finish_non_exhaustive()
+    }
 }
 
 /// How the host reaches a running backend. Dropping it stops the backend.
@@ -32,17 +50,40 @@ pub trait BackendControl: Send {
     /// (a calloop channel, a message to a capture thread) and return.
     ///
     /// Commands arrive in the order the host decided them, and the backend
-    /// applies them in that order.
+    /// applies them in that order. A backend whose thread falls behind
+    /// should merge queued pointer motion (keeping the last position of each
+    /// run of motion with the same buttons) rather than replay all of it.
     fn send(&mut self, command: Command);
+}
+
+/// What keeps a backend from running, so callers can tell the cases apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Unavailable {
+    /// No logged-in desktop session to show windows in.
+    NoDesktopSession,
+    /// The process runs elevated, so it cannot drive the user's windows.
+    Elevated,
+    /// A system library or program is missing.
+    MissingLibrary,
+    /// This OS has no backend.
+    UnsupportedOs,
+    /// Anything else; the message says what.
+    Other,
 }
 
 /// Why a backend could not start.
 #[derive(Debug, thiserror::Error)]
 pub enum BackendError {
     /// Something the backend needs is missing, such as a desktop session or
-    /// a system library; the text says what for people.
-    #[error("the GUI backend cannot run here: {0}")]
-    Unavailable(String),
+    /// a system library.
+    #[error("the GUI backend cannot run here: {message}")]
+    Unavailable {
+        /// What is missing.
+        reason: Unavailable,
+        /// The same for people.
+        message: String,
+    },
     /// Starting failed.
     #[error("the GUI backend failed to start")]
     Failed(#[source] Box<dyn std::error::Error + Send + Sync>),
@@ -74,6 +115,7 @@ pub struct CapturedFrame {
 
 /// What a backend reports, in the order it happened.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Event {
     /// A window appeared. The backend picks its id and never reuses one;
     /// a popup's `parent` names the backend's id of its parent. The host
@@ -106,7 +148,17 @@ pub enum Event {
 
 /// What the host asks a backend to do. Windows are named by the backend's ids.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Command {
+    /// A window got its first viewer (`true`) or lost its last (`false`).
+    /// Windows start unwatched. A backend may stop capturing a window nobody
+    /// watches; it still answers [`Command::RequestFrame`] for it.
+    Watch {
+        /// The window.
+        window: WindowId,
+        /// Whether any viewer watches it now.
+        watched: bool,
+    },
     /// Move the shared pointer and set the buttons it holds; a change from
     /// the previous command's buttons is a press or release.
     Pointer(Pointer),

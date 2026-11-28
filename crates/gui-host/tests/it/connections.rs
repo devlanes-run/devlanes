@@ -2,7 +2,7 @@
 //! a real TCP listener.
 
 use devlanes_gui_client::{ClientError, connect};
-use devlanes_gui_host::Command;
+use devlanes_gui_host::{Command, HELLO_TIMEOUT, MAX_CONNECTIONS, MAX_SCREENSHOTS_IN_FLIGHT};
 use devlanes_gui_host::conformance::{self, TestPatternProbe};
 use devlanes_gui_proto::{
     Buttons, HEADER_LEN, MAGIC, Point, Pointer, RefusalReason, ScreenshotResult, WindowId,
@@ -13,7 +13,7 @@ use super::*;
 
 #[tokio::test(start_paused = true)]
 async fn a_hello_of_another_version_gets_a_version_refusal() {
-    let host = Host::default();
+    let host = Host::default().await;
     let mut hello = BytesMut::new();
     ClientMessage::Hello(Hello {
         role: Role::Tool,
@@ -45,7 +45,7 @@ async fn a_hello_of_another_version_gets_a_version_refusal() {
 
 #[tokio::test(start_paused = true)]
 async fn the_control_role_needs_the_token_and_unserved_roles_are_refused() {
-    let host = Host::default();
+    let host = Host::default().await;
     let cases = [
         (Role::Control, None, Some(RefusalReason::BadToken)),
         (Role::Control, Some("wrong"), Some(RefusalReason::BadToken)),
@@ -70,7 +70,7 @@ async fn the_control_role_needs_the_token_and_unserved_roles_are_refused() {
     host.stop().await;
 
     // A host the daemon gave no token serves no control connection.
-    let tokenless = Host::start(TestPatternOptions::default(), |o| o.control_token = None);
+    let tokenless = Host::start(TestPatternOptions::default(), |o| o.control_token = None).await;
     let options =
         ClientOptions::new(Role::Control, "daemon", "devlanes").with_token(Token::new(TOKEN));
     let refused = connect_stream(tokenless.pipe().await, options).await;
@@ -89,7 +89,7 @@ async fn the_control_role_needs_the_token_and_unserved_roles_are_refused() {
 
 #[tokio::test(start_paused = true)]
 async fn a_message_the_role_may_not_send_closes_the_connection() {
-    let host = Host::default();
+    let host = Host::default().await;
     let window = host.pattern.first_window();
     let press = ClientMessage::Pointer(Pointer {
         window,
@@ -133,7 +133,7 @@ async fn a_message_the_role_may_not_send_closes_the_connection() {
 
 #[tokio::test(start_paused = true)]
 async fn a_client_that_does_not_read_is_closed_past_the_write_cap() {
-    let host = Host::start(TestPatternOptions::default(), |o| o.write_queue_cap = 4096);
+    let host = Host::start(TestPatternOptions::default(), |o| o.write_queue_cap = 4096).await;
     // A small pipe fills at once, so the answers pile up in the host's queue.
     let mut flood = Raw {
         stream: host.pipe_with(256).await,
@@ -162,6 +162,20 @@ async fn a_client_that_does_not_read_is_closed_past_the_write_cap() {
     }
     // Fails once the host closes the connection, which is the point.
     let _ = flood.stream.write_all(&out).await;
+    // Without reading a byte: the host drops the stream although its writer
+    // is stuck on the full pipe, so writing here fails.
+    let mut keep_alive = BytesMut::new();
+    ClientMessage::KeepAlive
+        .encode(&mut keep_alive)
+        .expect("encodes");
+    let dropped = async {
+        while flood.stream.write_all(&keep_alive).await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(PATIENCE, dropped)
+        .await
+        .expect("the host dropped the connection");
     let answered = flood
         .closed()
         .await
@@ -184,11 +198,80 @@ async fn a_client_that_does_not_read_is_closed_past_the_write_cap() {
     host.stop().await;
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_connection_without_a_hello_is_closed_after_the_hello_timeout() {
+    let host = Host::default().await;
+    let mut silent = Raw {
+        stream: host.pipe().await,
+        buf: BytesMut::new(),
+    };
+    let opened = tokio::time::Instant::now();
+    assert!(silent.closed().await.is_empty());
+    assert!(opened.elapsed() >= HELLO_TIMEOUT);
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn connections_past_the_limit_are_dropped() {
+    let host = Host::default().await;
+    let mut open = Vec::new();
+    for _ in 0..MAX_CONNECTIONS {
+        open.push(Raw::welcomed(&host, Role::Tool).await);
+    }
+    let mut extra = Raw::hello(&host, Role::Tool, None).await;
+    assert!(extra.closed().await.is_empty(), "no welcome past the limit");
+
+    // A place frees up when a connection closes.
+    drop(open.pop());
+    let welcomed = async {
+        loop {
+            let mut next = Raw::hello(&host, Role::Tool, None).await;
+            if let Some(HostMessage::Welcome(_)) = next.read().await {
+                return next;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(PATIENCE, welcomed)
+        .await
+        .expect("welcomed once a place is free");
+    host.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fifth_screenshot_in_progress_closes_the_connection() {
+    let host = Host::default().await;
+    // Nobody watches the window, so each screenshot waits for a frame the
+    // pattern holds back.
+    host.pattern.hold_frames(true);
+    let mut tool = Raw::welcomed(&host, Role::Tool).await;
+    let window = Some(host.pattern.first_window());
+    for request in 0..MAX_SCREENSHOTS_IN_FLIGHT as u32 {
+        tool.send(&ClientMessage::Screenshot { request, window })
+            .await;
+    }
+    // Four are allowed: they wait, and the connection stays open.
+    tool.round_trip().await;
+    tool.send(&ClientMessage::Screenshot {
+        request: 99,
+        window,
+    })
+    .await;
+    let after = tool.closed().await;
+    let answered = after
+        .iter()
+        .filter(|m| matches!(m, HostMessage::Screenshot { .. }))
+        .count();
+    assert_eq!(answered, 0, "{after:?}");
+    host.stop().await;
+}
+
 #[tokio::test]
 async fn over_tcp_another_protocol_is_dropped_and_the_test_pattern_passes_conformance() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
     let addr = listener.local_addr().expect("an address");
     let (backend, pattern) = TestPattern::new(TestPatternOptions::default());
+    let backend = start_backend(backend).await.expect("starts");
     let options = ServeOptions::new("acme:desktop");
     let shutdown = options.shutdown.clone();
     let served = tokio::spawn(serve(listener, backend, options));

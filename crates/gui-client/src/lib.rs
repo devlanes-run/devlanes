@@ -24,13 +24,14 @@ use devlanes_gui_codec::{
     CodecError, DecoderBackend, Frame, Packet, RawBackend, RawDecoder, VideoDecoder,
 };
 use devlanes_gui_proto::{
-    Buttons, ClientMessage, CodecId, Hello, HostMessage, Key, KeyCode, LockState, Point, Pointer,
+    Buttons, ClientMessage, CodecId, Hello, HostMessage, Key, KeyCode, LockState,
+    MAX_SCREENSHOTS_IN_FLIGHT, Point, Pointer,
     Role, SYNC_FEATURE, ScreenshotResult, SessionId, Size, Token, ViewerLock, Welcome, Wheel,
     WindowId,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpStream, ToSocketAddrs};
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::{Notify, Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 pub use error::ClientError;
@@ -178,6 +179,7 @@ where
         }),
         wake: Notify::new(),
         close: CancellationToken::new(),
+        screenshots: Semaphore::new(MAX_SCREENSHOTS_IN_FLIGHT),
     });
     tokio::spawn(driver::write_loop(writer, writer_rx, shared.clone()));
     tokio::spawn(driver::read_loop(
@@ -279,6 +281,8 @@ struct Shared {
     /// Wakes the reader to recompute its timer after a resize request.
     wake: Notify,
     close: CancellationToken,
+    /// One permit per screenshot the host lets this connection have unanswered.
+    screenshots: Semaphore,
 }
 
 impl Shared {
@@ -292,6 +296,9 @@ impl Shared {
 
     /// Encodes `message` and queues it for the writer.
     fn send(&self, message: &ClientMessage) -> Result<(), ClientError> {
+        if self.close.is_cancelled() {
+            return Err(ClientError::Closed);
+        }
         let mut out = BytesMut::new();
         message.encode(&mut out)?;
         self.state().held.track(message);
@@ -464,8 +471,17 @@ impl Client {
     }
 
     /// Takes one window's picture, or the host's first top-level window's
-    /// when `window` is `None`, without watching its stream.
+    /// when `window` is `None`, without watching its stream. At most
+    /// [`MAX_SCREENSHOTS_IN_FLIGHT`] calls ask the host at once; more wait
+    /// their turn, since the host closes a connection that asks for more.
     pub async fn screenshot(&self, window: Option<WindowId>) -> Result<Image, ClientError> {
+        // Closed only on drop, which cannot happen while `self` is borrowed.
+        let _permit = self
+            .shared
+            .screenshots
+            .acquire()
+            .await
+            .map_err(|_| ClientError::Closed)?;
         let (tx, rx) = oneshot::channel();
         let request = {
             let mut state = self.shared.state();

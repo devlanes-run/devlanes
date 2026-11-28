@@ -14,18 +14,26 @@
 //! - Writes go through a queue capped at [`ServeOptions::write_queue_cap`];
 //!   a connection that does not read is closed past it.
 //! - A heartbeat goes out when nothing else did for [`HEARTBEAT_INTERVAL`].
+//! - At most [`MAX_CONNECTIONS`] are open at once; more are dropped.
 //!
 //! Video: each window has one stream per codec its viewers selected, with one
 //! encoder and one [`devlanes_gui_proto::Pacer`]. Encoding runs on the
-//! blocking pool, one frame at a time per stream. The last frame of every
-//! window is kept for keyframes and screenshots; right after a resize it is
-//! held back as the pacer documents.
+//! blocking pool, one frame at a time per stream. An encoder that cannot
+//! start moves its viewers to the next codec both ends have (`raw` at the
+//! least). The last frame of every window is kept for keyframes; right after
+//! a resize it is held back as the pacer documents. The backend is told when
+//! a window gains its first viewer and loses its last ([`Command::Watch`]);
+//! a screenshot of a window nobody watches asks the backend for a fresh frame.
 //!
 //! Input: one [`InputArbiter`] for the display. What a holder that went
 //! silent or disconnected held is released on the backend. Input to a
-//! locked window is dropped, and all input counts as activity: the
-//! [`ServeOptions::on_activity`] callback and [`HostMessage::Activity`] to
-//! control connections, at most once per [`HEARTBEAT_INTERVAL`].
+//! locked window is dropped, except releases of held buttons and keys, which
+//! always reach the app. A resize of a Frozen window is dropped and answered
+//! at once, while a close request still goes through. All input counts as
+//! activity: the [`ServeOptions::on_activity`] callback and
+//! [`HostMessage::Activity`] to control connections, at most once per
+//! [`HEARTBEAT_INTERVAL`]. Clipboard text goes to the backend at most once
+//! per [`CLIPBOARD_GAP`], the newest text winning.
 //!
 //! [`InputArbiter`]: devlanes_gui_proto::InputArbiter
 //! [`HostMessage::Activity`]: devlanes_gui_proto::HostMessage::Activity
@@ -56,8 +64,12 @@ use tokio_util::sync::CancellationToken;
 
 pub use backend::{
     Backend, BackendControl, BackendError, CapturedFrame, Command, Event, EventSink, HostGone, Rect,
+    Started, Unavailable,
 };
-pub use test_pattern::{APP_ID, Echo, TestPattern, TestPatternHandle, TestPatternOptions};
+pub use devlanes_gui_proto::MAX_SCREENSHOTS_IN_FLIGHT;
+pub use test_pattern::{
+    APP_ID, Echo, MAX_PATTERN_SIDE, TestPattern, TestPatternHandle, TestPatternOptions,
+};
 
 /// How long a new connection has to send its hello.
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -71,9 +83,20 @@ pub const DEFAULT_WRITE_QUEUE_CAP: usize = 64 * 1024 * 1024;
 /// backend that missed one.
 pub const SYNC_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Screenshots one connection may have in progress; a tool waits for each
+/// `Sync` requests one connection may have unanswered; a tool waits for each
 /// answer, so more close the connection.
-pub const MAX_SCREENSHOTS_IN_FLIGHT: usize = 4;
+pub const MAX_PENDING_SYNCS: usize = 16;
+
+/// Screenshots encoding at once across the whole host; past it a request is
+/// answered as failed, so no connection is closed for others' load.
+pub const MAX_SCREENSHOT_JOBS: usize = 16;
+
+/// Connections open at once; one past it is dropped as it arrives.
+pub const MAX_CONNECTIONS: usize = 64;
+
+/// The shortest gap between two clipboard commands to the backend. Clipboard
+/// text can be megabytes, and only the newest matters.
+pub const CLIPBOARD_GAP: Duration = Duration::from_millis(200);
 
 /// How long connections get to send what is queued when the host stops.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
@@ -137,7 +160,8 @@ impl std::fmt::Debug for ServeOptions {
     }
 }
 
-/// Why [`serve`] ended other than through [`ServeOptions::shutdown`].
+/// Why [`start_backend`] or [`serve`] failed, or why [`serve`] ended other
+/// than through [`ServeOptions::shutdown`].
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
     /// The backend did not start.
@@ -191,22 +215,71 @@ where
     }
 }
 
-/// Starts `backend` and serves its windows on the connections `listener`
-/// accepts, until [`ServeOptions::shutdown`] is cancelled or the backend
-/// stops. On the way out the connections get two seconds to send what is
-/// queued, and the backend is dropped, which stops it.
-pub async fn serve<L: Listener, B: Backend>(
-    mut listener: L,
-    backend: B,
-    options: ServeOptions,
-) -> Result<(), ServeError> {
-    let real_desktop = backend.real_desktop();
+/// A backend whose display is up, before [`serve`] takes it. Dropping it
+/// stops the backend.
+pub struct RunningBackend {
+    control: Box<dyn BackendControl>,
+    events: mpsc::UnboundedReceiver<Event>,
+    env: Vec<(String, Option<String>)>,
+    real_desktop: bool,
+}
+
+impl RunningBackend {
+    /// The variables the unit needs to reach the display; `None` removes one.
+    /// The caller reports them, such as on the host's ready line, once it
+    /// listens.
+    pub fn env(&self) -> &[(String, Option<String>)] {
+        &self.env
+    }
+
+    /// Whether the display is the machine's real desktop.
+    pub fn real_desktop(&self) -> bool {
+        self.real_desktop
+    }
+}
+
+impl std::fmt::Debug for RunningBackend {
+    /// The variables and the flag.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunningBackend")
+            .field("env", &self.env)
+            .field("real_desktop", &self.real_desktop)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Starts `backend` on the blocking pool. Events it sends before [`serve`]
+/// runs wait for it.
+pub async fn start_backend<B: Backend>(backend: B) -> Result<RunningBackend, ServeError> {
     let (sink, events) = EventSink::channel();
     let start = move || Box::new(backend).start(sink);
-    let control = tokio::task::spawn_blocking(start)
+    let started = tokio::task::spawn_blocking(start)
         .await
         .map_err(|_| ServeError::BackendPanicked)??;
+    Ok(RunningBackend {
+        control: started.control,
+        events,
+        env: started.env,
+        real_desktop: started.real_desktop,
+    })
+}
 
+/// Serves the windows of `backend` on the connections `listener` accepts,
+/// until [`ServeOptions::shutdown`] is cancelled or the backend stops. Past
+/// [`MAX_CONNECTIONS`] open connections, a new one is dropped at once. On the
+/// way out the connections get two seconds to send what is queued, and the
+/// backend is dropped, which stops it.
+pub async fn serve<L: Listener>(
+    mut listener: L,
+    backend: RunningBackend,
+    options: ServeOptions,
+) -> Result<(), ServeError> {
+    let RunningBackend {
+        control,
+        events,
+        real_desktop,
+        ..
+    } = backend;
     let settings = Arc::new(connection::Settings {
         token: options.control_token.clone(),
         encoders: options.encoders.iter().map(|e| e.offer()).collect(),
@@ -229,6 +302,10 @@ pub async fn serve<L: Listener, B: Backend>(
         tokio::select! {
             result = &mut hub => break result,
             accepted = listener.accept(), if accepting && paused_until.is_none() => match accepted {
+                Ok(Some(stream)) if connections.len() >= MAX_CONNECTIONS => {
+                    tracing::debug!("dropping a GUI connection past the limit");
+                    drop(stream);
+                }
                 Ok(Some(stream)) => {
                     connections.spawn(connection::run(stream, inbox_tx.clone(), settings.clone()));
                 }

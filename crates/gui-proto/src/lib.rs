@@ -80,3 +80,8 @@ pub const MAGIC: [u8; 4] = *b"DLGU";
 /// sent nothing else to, and the shortest gap between two
 /// [`HostMessage::Activity`] messages.
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Screenshot requests one connection may have unanswered. A client waits
+/// for answers before it asks for more; the host closes a connection that
+/// goes past it.
+pub const MAX_SCREENSHOTS_IN_FLIGHT: usize = 4;

@@ -112,6 +112,9 @@ pub(crate) async fn read_loop<S: AsyncRead>(
         state.screenshots.clear();
         state.syncs.clear();
     }
+    // Later calls on the client then fail with `Closed` instead of queueing
+    // for a writer that is gone.
+    shared.close.cancel();
     shared.emit(Event::Closed(error));
 }
 

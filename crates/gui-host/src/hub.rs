@@ -2,21 +2,21 @@
 //! by the connections, the backend and the encoders, and woken by a timer
 //! for whatever the state machines say happens next.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
 use devlanes_gui_codec::{
-    CodecError, EncodeParams, EncoderBackend, Frame, RawEncoder, VideoEncoder,
+    CodecError, EncodeParams, EncoderBackend, Frame, RawEncoder, VideoEncoder, select,
 };
 use devlanes_gui_proto::{
     Buttons, ClientMessage, CodecId, CodecOffer, Encode, EncodeError, HEARTBEAT_INTERVAL, Hello,
     Holder, HostLock, HostMessage, InputArbiter, Key, LockState, MAX_APP_ID, MAX_CLIPBOARD,
-    MAX_DIMENSION, MAX_TITLE, MAX_WINDOWS, Pacer, Point, Pointer, RESIZE_TIMEOUT, Released, Role,
-    SYNC_FEATURE, Screenshot, ScreenshotResult, SessionId, Size, Verdict, VideoFrame, Welcome,
-    WindowId, WindowInfo, WindowKind,
+    MAX_DIMENSION, MAX_SCREENSHOTS_IN_FLIGHT, MAX_TITLE, MAX_WINDOWS, Pacer, Point, Pointer,
+    RESIZE_TIMEOUT, Released, Role, SYNC_FEATURE, Screenshot, ScreenshotResult, SessionId, Size,
+    Verdict, VideoFrame, Welcome, Wheel, WindowId, WindowInfo, WindowKind,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -24,7 +24,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::backend::{BackendControl, CapturedFrame, Command, Event};
 use crate::outbox::Outbox;
-use crate::{ActivityCallback, MAX_SCREENSHOTS_IN_FLIGHT, SYNC_TIMEOUT, ServeError, ServeOptions};
+use crate::{
+    ActivityCallback, CLIPBOARD_GAP, MAX_PENDING_SYNCS, MAX_SCREENSHOT_JOBS, SYNC_TIMEOUT,
+    ServeError, ServeOptions,
+};
 
 /// Resize requests kept per window while the backend has not answered; the
 /// oldest goes first, and its viewer ends Resizing on its timeout.
@@ -63,12 +66,15 @@ struct Session {
     client_id: String,
     name: String,
     outbox: Arc<Outbox>,
+    /// The decoders a viewer offered, for choosing again when an encoder fails.
+    decoders: Vec<CodecOffer>,
     /// A viewer's codec.
     codec: Option<CodecOffer>,
     /// When the last message was queued, for heartbeats.
     last_sent: Instant,
     /// The window its last input went to, which `Sync` waits on.
     last_input_window: Option<WindowId>,
+    /// Screenshots asked for and not answered yet.
     screenshots: usize,
 }
 
@@ -91,6 +97,8 @@ struct Window {
     awaiting_frame: bool,
     /// Closed while the service runs; waiting for the app to open another.
     gone: bool,
+    /// What the backend was last told with [`Command::Watch`].
+    watched: bool,
 }
 
 impl Window {
@@ -109,7 +117,6 @@ struct Stream {
     /// Away on the blocking pool while `busy`; created there on first use.
     encoder: Option<Box<dyn VideoEncoder>>,
     busy: bool,
-    failed: bool,
     viewers: Vec<SessionId>,
     /// The first sequence number after a size change, until a frame from it on is queued.
     awaiting_from: Option<u64>,
@@ -126,13 +133,31 @@ struct PendingResize {
     request: u32,
 }
 
-/// A `Sync` waiting for its frame.
-struct PendingSync {
-    id: u64,
+/// What waits for a fresh frame of a window.
+#[derive(Clone, Copy)]
+enum Waiter {
+    /// A `Sync`, answered with `Synced`.
+    Sync { request: u32 },
+    /// A screenshot of a window nobody watches, taken from the fresh frame.
+    Screenshot { request: u32 },
+}
+
+/// A request waiting for the backend's frame of a window.
+struct FrameWait {
     window: WindowId,
     session: SessionId,
-    request: u32,
+    waiter: Waiter,
     deadline: Instant,
+    /// The [`Command::RequestFrame`] whose frame answers it; `None` while
+    /// it waits for the one already out to come back first, since that was
+    /// asked for before this request's input.
+    frame_request: Option<u64>,
+}
+
+/// The frame request out for a window.
+struct Outstanding {
+    id: u64,
+    sent: Instant,
 }
 
 /// Why a frame was not encoded.
@@ -152,6 +177,7 @@ enum Done {
         key: StreamKey,
         generation: u64,
         seq: u64,
+        keyframe: bool,
         recipients: Vec<SessionId>,
         encoder: Option<Box<dyn VideoEncoder>>,
         /// The encoded frame message, or `None` when the picture did not change.
@@ -168,6 +194,8 @@ pub(crate) struct Hub {
     service: String,
     real_desktop: bool,
     encoders: Vec<Arc<dyn EncoderBackend>>,
+    /// Encoders that could not start; nobody is given them again.
+    failed_encoders: HashSet<CodecOffer>,
     on_activity: Option<ActivityCallback>,
     shutdown: CancellationToken,
     backend: Box<dyn BackendControl>,
@@ -179,8 +207,11 @@ pub(crate) struct Hub {
     arbiter: InputArbiter,
     holder: Option<SessionId>,
     resizes: Vec<PendingResize>,
-    syncs: Vec<PendingSync>,
+    waits: Vec<FrameWait>,
+    /// At most one frame request out per window.
+    outstanding: HashMap<WindowId, Outstanding>,
     tasks: JoinSet<Done>,
+    screenshot_jobs: usize,
     next_session: u64,
     next_id: u64,
     next_generation: u64,
@@ -193,6 +224,9 @@ pub(crate) struct Hub {
     last_pointer: Option<(WindowId, Point)>,
     /// The window the last accepted key went to, in backend ids, for releases.
     last_key_window: Option<WindowId>,
+    /// Clipboard text waiting for [`CLIPBOARD_GAP`] to pass.
+    clipboard_pending: Option<String>,
+    clipboard_sent: Option<Instant>,
     /// Sessions to close at the end of this turn.
     closing: Vec<SessionId>,
     heartbeat: Bytes,
@@ -212,6 +246,7 @@ impl Hub {
             service: options.service.clone(),
             real_desktop,
             encoders: options.encoders.clone(),
+            failed_encoders: HashSet::new(),
             on_activity: options.on_activity.clone(),
             shutdown: options.shutdown.clone(),
             backend,
@@ -222,8 +257,10 @@ impl Hub {
             arbiter: InputArbiter::new(),
             holder: None,
             resizes: Vec::new(),
-            syncs: Vec::new(),
+            waits: Vec::new(),
+            outstanding: HashMap::new(),
             tasks: JoinSet::new(),
+            screenshot_jobs: 0,
             next_session: 1,
             next_id: 1,
             next_generation: 1,
@@ -233,6 +270,8 @@ impl Hub {
             buttons: Buttons::NONE,
             last_pointer: None,
             last_key_window: None,
+            clipboard_pending: None,
+            clipboard_sent: None,
             closing: Vec::new(),
             heartbeat: heartbeat.freeze(),
         }
@@ -289,19 +328,29 @@ impl Hub {
         let streams = self
             .streams
             .values()
-            .filter(|s| !s.busy && !s.failed)
+            .filter(|s| !s.busy)
             .flat_map(|s| [s.pacer.wake_at(now), s.seed_at]);
         let windows = self.windows.values().map(|w| w.lock.next_change(now));
         let heartbeats = self
             .sessions
             .values()
             .map(|s| Some(s.last_sent + HEARTBEAT_INTERVAL));
-        let syncs = self.syncs.iter().map(|s| Some(s.deadline));
+        let waits = self.waits.iter().map(|w| Some(w.deadline));
+        let outstanding = self
+            .outstanding
+            .values()
+            .map(|o| Some(o.sent + SYNC_TIMEOUT));
+        let clipboard = self
+            .clipboard_pending
+            .as_ref()
+            .and(self.clipboard_sent)
+            .map(|at| at + CLIPBOARD_GAP);
         streams
             .chain(windows)
             .chain(heartbeats)
-            .chain(syncs)
-            .chain([self.arbiter.next_change(now)])
+            .chain(waits)
+            .chain(outstanding)
+            .chain([self.arbiter.next_change(now), clipboard])
             .flatten()
             .min()
     }
@@ -312,17 +361,31 @@ impl Hub {
         let released = self.arbiter.expire(now);
         self.release(released);
         self.refresh_holder(now);
-        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.syncs)
+        // A frame request the backend never answered stops blocking new ones.
+        let lost: Vec<_> = self
+            .outstanding
+            .iter()
+            .filter(|(_, o)| now >= o.sent + SYNC_TIMEOUT)
+            .map(|(window, _)| *window)
+            .collect();
+        for window in lost {
+            self.outstanding.remove(&window);
+            self.reissue(window, now);
+        }
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waits)
             .into_iter()
-            .partition(|s| s.deadline <= now);
-        self.syncs = waiting;
-        for sync in due {
-            self.send(
-                sync.session,
-                &HostMessage::Synced {
-                    request: sync.request,
-                },
-            );
+            .partition(|w| w.deadline <= now);
+        self.waits = waiting;
+        for wait in due {
+            self.complete(wait);
+        }
+        if self
+            .clipboard_sent
+            .is_none_or(|at| now >= at + CLIPBOARD_GAP)
+            && let Some(text) = self.clipboard_pending.take()
+        {
+            self.clipboard_sent = Some(now);
+            self.backend.send(Command::Clipboard { text });
         }
         for ((window, _), stream) in &mut self.streams {
             if stream.seed_at.is_some_and(|at| at <= now) {
@@ -403,6 +466,20 @@ impl Hub {
         }
     }
 
+    /// The best codec for `decoders` among the encoders that still start.
+    fn choose(&self, decoders: &[CodecOffer]) -> Option<CodecOffer> {
+        let available: Vec<_> = self
+            .encoders
+            .iter()
+            .map(|e| e.offer())
+            .filter(|offer| !self.failed_encoders.contains(offer))
+            .collect();
+        select(&available, decoders).map(|chosen| CodecOffer {
+            codec: chosen.codec,
+            hardware: chosen.encoder_hardware,
+        })
+    }
+
     /// Welcomes a connection and, for a viewer, adds it to every window's stream.
     fn join(
         &mut self,
@@ -427,6 +504,11 @@ impl Hub {
         if outbox.push(welcome).is_err() {
             return;
         }
+        // The connection chose among every encoder; one may have failed since.
+        let codec = match codec {
+            Some(offer) if self.failed_encoders.contains(&offer) => self.choose(&hello.decoders),
+            other => other,
+        };
         self.sessions.insert(
             session,
             Session {
@@ -434,6 +516,7 @@ impl Hub {
                 client_id: hello.client_id,
                 name: hello.client_name,
                 outbox,
+                decoders: hello.decoders,
                 codec,
                 last_sent: now(),
                 last_input_window: None,
@@ -471,12 +554,13 @@ impl Hub {
         }
         for key in emptied {
             self.streams.remove(&key);
+            self.refresh_watch(key.0);
             self.check_resize_done(key.0);
         }
         let released = self.arbiter.remove(session);
         self.release(vec![(session, released)]);
         self.resizes.retain(|r| r.session != session);
-        self.syncs.retain(|s| s.session != session);
+        self.waits.retain(|w| w.session != session);
     }
 
     /// Adds viewer `session` to the stream of `window` in its codec,
@@ -499,7 +583,6 @@ impl Hub {
                 backend,
                 encoder: None,
                 busy: false,
-                failed: false,
                 viewers: Vec::new(),
                 awaiting_from: None,
                 seed_at: None,
@@ -521,6 +604,25 @@ impl Hub {
         if let Some(stream) = self.streams.get_mut(&key) {
             stream.viewers.push(session);
             stream.pacer.add_viewer(session);
+        }
+        self.refresh_watch(window);
+    }
+
+    /// Tells the backend when `window` got its first stream or lost its last.
+    fn refresh_watch(&mut self, window: WindowId) {
+        let watched = self.streams.keys().any(|(id, _)| *id == window);
+        let Some(win) = self.windows.get_mut(&window) else {
+            return;
+        };
+        if win.watched != watched {
+            win.watched = watched;
+            // A window waiting for the app has no backend window to tell.
+            if !win.gone {
+                self.backend.send(Command::Watch {
+                    window: win.backend_id,
+                    watched,
+                });
+            }
         }
     }
 
@@ -552,7 +654,7 @@ impl Hub {
             ClientMessage::KeepAlive => self.arbiter.alive(session, now),
             ClientMessage::Screenshot { request, window } => {
                 self.arbiter.alive(session, now);
-                self.screenshot(session, request, window);
+                self.screenshot(session, request, window, now);
             }
             ClientMessage::Sync { request } => {
                 self.arbiter.alive(session, now);
@@ -591,12 +693,6 @@ impl Hub {
         }
     }
 
-    /// The backend id of `window` if input may reach it now.
-    fn input_target(&self, window: WindowId, now: Instant) -> Option<WindowId> {
-        let win = self.windows.get(&window)?;
-        (!win.gone && !win.lock.state(now).is_locked()).then_some(win.backend_id)
-    }
-
     /// Handles input from a viewer or tool.
     fn input(&mut self, session: SessionId, message: ClientMessage, now: Instant) {
         self.activity(now);
@@ -622,6 +718,7 @@ impl Hub {
                 size,
                 request,
             } => return self.resize(session, window, size, request),
+            // A close request reaches even a frozen app, which handles it on thaw.
             ClientMessage::Close { window } => {
                 if let Some(win) = self.windows.get(&window).filter(|w| !w.gone) {
                     self.backend.send(Command::Close {
@@ -630,59 +727,89 @@ impl Hub {
                 }
                 return;
             }
-            ClientMessage::Clipboard { text } => {
-                return self.backend.send(Command::Clipboard { text });
-            }
+            ClientMessage::Clipboard { text } => return self.clipboard(text, now),
             _ => {}
         }
-        let Some(target) = window.and_then(|w| self.input_target(w, now)) else {
-            self.arbiter.alive(session, now);
+        let Some(window) = window else {
             return;
+        };
+        // A release always goes through, so nothing stays held on the app,
+        // or with the arbiter, because the window locked meanwhile.
+        let release = match &message {
+            ClientMessage::Pointer(p) => {
+                p.buttons != self.buttons && p.buttons.pressed_since(self.buttons).is_empty()
+            }
+            ClientMessage::Key(k) => !k.down,
+            _ => false,
+        };
+        let target = self
+            .windows
+            .get(&window)
+            .filter(|w| !w.gone)
+            .map(|w| (w.backend_id, w.lock.state(now).is_locked()));
+        let target = match target {
+            Some((id, locked)) if !locked || release => Some(id),
+            // The window is gone: the arbiter still lets go, the app has nothing to get.
+            None if release => None,
+            _ => {
+                self.arbiter.alive(session, now);
+                return;
+            }
         };
         let command = match message {
             ClientMessage::Pointer(pointer) => {
                 match self.arbiter.pointer(session, pointer.buttons, now) {
-                    Verdict::Accept => {
+                    Verdict::Accept => target.map(|target| {
                         self.buttons = pointer.buttons;
                         self.last_pointer = Some((target, pointer.position));
-                        Some(Command::Pointer(Pointer {
+                        Command::Pointer(Pointer {
                             window: target,
                             ..pointer
-                        }))
-                    }
+                        })
+                    }),
                     Verdict::Drop => None,
                 }
             }
             ClientMessage::Key(key) => match self.arbiter.key(session, key.code, key.down, now) {
-                Verdict::Accept => {
+                Verdict::Accept => target.map(|target| {
                     self.last_key_window = Some(target);
-                    Some(Command::Key(Key {
+                    Command::Key(Key {
                         window: target,
                         ..key
-                    }))
-                }
-                Verdict::Drop => None,
-            },
-            ClientMessage::Text { text, .. } => match self.arbiter.text(session, now) {
-                Verdict::Accept => Some(Command::Text {
-                    window: target,
-                    text,
+                    })
                 }),
                 Verdict::Drop => None,
             },
-            ClientMessage::Wheel(wheel) => (self.arbiter.wheel(session, now) == Verdict::Accept)
-                .then_some(Command::Wheel(devlanes_gui_proto::Wheel {
+            ClientMessage::Text { text, .. } => match (target, self.arbiter.text(session, now)) {
+                (Some(target), Verdict::Accept) => Some(Command::Text {
+                    window: target,
+                    text,
+                }),
+                _ => None,
+            },
+            ClientMessage::Wheel(wheel) => match (target, self.arbiter.wheel(session, now)) {
+                (Some(target), Verdict::Accept) => Some(Command::Wheel(Wheel {
                     window: target,
                     ..wheel
                 })),
-            ClientMessage::PointerLeft { .. } => (self.arbiter.wheel(session, now)
-                == Verdict::Accept)
-                .then_some(Command::PointerLeft { window: target }),
+                _ => None,
+            },
+            ClientMessage::PointerLeft { .. } => {
+                match (target, self.arbiter.wheel(session, now)) {
+                    (Some(target), Verdict::Accept) => {
+                        Some(Command::PointerLeft { window: target })
+                    }
+                    _ => None,
+                }
+            }
             ClientMessage::Focus { focused, .. } => {
-                (self.arbiter.wheel(session, now) == Verdict::Accept).then_some(Command::Focus {
-                    window: target,
-                    focused,
-                })
+                match (target, self.arbiter.wheel(session, now)) {
+                    (Some(target), Verdict::Accept) => Some(Command::Focus {
+                        window: target,
+                        focused,
+                    }),
+                    _ => None,
+                }
             }
             _ => None,
         };
@@ -690,6 +817,21 @@ impl Hub {
             self.backend.send(command);
         }
         self.refresh_holder(now);
+    }
+
+    /// Hands clipboard text to the backend at most once per [`CLIPBOARD_GAP`];
+    /// text that comes sooner replaces any still waiting.
+    fn clipboard(&mut self, text: String, now: Instant) {
+        if self
+            .clipboard_sent
+            .is_some_and(|at| now < at + CLIPBOARD_GAP)
+        {
+            self.clipboard_pending = Some(text);
+            return;
+        }
+        self.clipboard_pending = None;
+        self.clipboard_sent = Some(now);
+        self.backend.send(Command::Clipboard { text });
     }
 
     /// Releases on the backend what silent or departed clients held.
@@ -754,11 +896,21 @@ impl Hub {
         self.broadcast(|role| role == Role::Control, &HostMessage::Activity);
     }
 
-    /// Forwards a resize request and remembers whom to answer.
+    /// Forwards a resize request and remembers whom to answer. A frozen
+    /// app cannot resize, so the request is answered at once and dropped.
     fn resize(&mut self, session: SessionId, window: WindowId, size: Size, request: u32) {
         let Some(win) = self.windows.get(&window).filter(|w| !w.gone) else {
             return;
         };
+        if self.frozen {
+            // Any frame from now on ends the viewer's own Resizing; Frozen shows meanwhile.
+            let answer = HostMessage::ResizeApplied {
+                window,
+                request,
+                from_seq: 0,
+            };
+            return self.send(session, &answer);
+        }
         let backend_id = win.backend_id;
         let id = self.next_id;
         self.next_id += 1;
@@ -781,13 +933,33 @@ impl Hub {
         });
     }
 
-    /// Answers a screenshot from the window's cached frame, encoded as a raw
-    /// keyframe on the blocking pool.
-    fn screenshot(&mut self, session: SessionId, request: u32, window: Option<WindowId>) {
-        let Some(s) = self.sessions.get_mut(&session) else {
-            return;
+    /// Answers a screenshot: from the cached frame of a window viewers watch,
+    /// which the backend keeps current, or from a frame asked for now.
+    fn screenshot(
+        &mut self,
+        session: SessionId,
+        request: u32,
+        window: Option<WindowId>,
+        now: Instant,
+    ) {
+        let target = match window {
+            Some(id) => self.windows.get(&id),
+            None => self.windows.values().find(|w| w.is_toplevel() && !w.gone),
         };
-        if s.screenshots >= MAX_SCREENSHOTS_IN_FLIGHT {
+        // Answered at once, so it is not work in progress.
+        let Some(win) = target.filter(|w| !w.gone) else {
+            let answer = HostMessage::Screenshot {
+                request,
+                result: ScreenshotResult::NoSuchWindow,
+            };
+            return self.send(session, &answer);
+        };
+        let (window, current) = (win.info.id, win.watched && win.frame.is_some());
+        if self
+            .sessions
+            .get(&session)
+            .is_none_or(|s| s.screenshots >= MAX_SCREENSHOTS_IN_FLIGHT)
+        {
             tracing::debug!(
                 session = session.0,
                 "closing a GUI connection with too many screenshots in progress"
@@ -795,43 +967,62 @@ impl Hub {
             self.closing.push(session);
             return;
         }
-        let target = match window {
-            Some(id) => self.windows.get(&id),
-            None => self.windows.values().find(|w| w.is_toplevel() && !w.gone),
-        };
-        let (window, frame) = match target.filter(|w| !w.gone) {
-            None => {
-                let answer = HostMessage::Screenshot {
-                    request,
-                    result: ScreenshotResult::NoSuchWindow,
-                };
-                return self.send(session, &answer);
-            }
-            Some(win) => match &win.frame {
-                None => {
-                    let answer = HostMessage::Screenshot {
-                        request,
-                        result: ScreenshotResult::NoFrame,
-                    };
-                    return self.send(session, &answer);
-                }
-                Some(frame) => (win.info.id, frame.clone()),
-            },
-        };
         if let Some(s) = self.sessions.get_mut(&session) {
             s.screenshots += 1;
         }
+        match current {
+            true => self.capture(session, request, window),
+            false => self.wait_for_frame(session, window, Waiter::Screenshot { request }, now),
+        }
+    }
+
+    /// Encodes the cached frame of `window` as a raw keyframe on the blocking
+    /// pool for a counted screenshot request.
+    fn capture(&mut self, session: SessionId, request: u32, window: WindowId) {
+        let frame = match self.windows.get(&window).filter(|w| !w.gone) {
+            None => return self.answer_screenshot(session, request, ScreenshotResult::NoSuchWindow),
+            Some(win) => win.frame.clone(),
+        };
+        let Some(frame) = frame else {
+            return self.answer_screenshot(session, request, ScreenshotResult::NoFrame);
+        };
+        if self.screenshot_jobs >= MAX_SCREENSHOT_JOBS {
+            let busy = ScreenshotResult::Failed("the GUI host is busy with other screenshots".into());
+            return self.answer_screenshot(session, request, busy);
+        }
+        self.screenshot_jobs += 1;
         self.tasks.spawn_blocking(move || {
-            let result = std::panic::catch_unwind(|| screenshot_result(window, &frame))
+            let work = AssertUnwindSafe(|| screenshot_result(window, &frame));
+            let result = std::panic::catch_unwind(work)
                 .unwrap_or_else(|_| ScreenshotResult::Failed("the encoder panicked".to_owned()));
-            let message = encode(&HostMessage::Screenshot { request, result }).unwrap_or_default();
+            let message =
+                encode(&HostMessage::Screenshot { request, result }).unwrap_or_default();
             Done::Screenshot { session, message }
         });
     }
 
-    /// Asks the backend for a frame of the window the session last sent
-    /// input to, and answers once it arrives.
+    /// Sends the answer to a counted screenshot request.
+    fn answer_screenshot(&mut self, session: SessionId, request: u32, result: ScreenshotResult) {
+        if let Some(s) = self.sessions.get_mut(&session) {
+            s.screenshots = s.screenshots.saturating_sub(1);
+        }
+        self.send(session, &HostMessage::Screenshot { request, result });
+    }
+
+    /// Waits for a frame of the window the session last sent input to, or
+    /// of the first main window, and answers once it arrives.
     fn sync(&mut self, session: SessionId, request: u32, now: Instant) {
+        let pending = self.waits.iter().filter(|w| {
+            w.session == session && matches!(w.waiter, Waiter::Sync { .. })
+        });
+        if pending.count() >= MAX_PENDING_SYNCS {
+            tracing::debug!(
+                session = session.0,
+                "closing a GUI connection with too many syncs waiting"
+            );
+            self.closing.push(session);
+            return;
+        }
         let last = self
             .sessions
             .get(&session)
@@ -839,39 +1030,101 @@ impl Hub {
         let window = last
             .and_then(|id| self.windows.get(&id))
             .filter(|w| !w.gone)
-            .or_else(|| self.windows.values().find(|w| w.is_toplevel() && !w.gone));
-        let Some(window) = window else {
-            return self.send(session, &HostMessage::Synced { request });
+            .or_else(|| self.windows.values().find(|w| w.is_toplevel() && !w.gone))
+            .map(|w| w.info.id);
+        match window {
+            None => self.send(session, &HostMessage::Synced { request }),
+            Some(window) => self.wait_for_frame(session, window, Waiter::Sync { request }, now),
+        }
+    }
+
+    /// Makes `waiter` wait for a frame of `window` captured from now on. With
+    /// a request already out for the window, it waits for the next one.
+    fn wait_for_frame(&mut self, session: SessionId, window: WindowId, waiter: Waiter, now: Instant) {
+        let frame_request = match self.outstanding.contains_key(&window) {
+            true => None,
+            false => self.request_frame(window, now),
         };
-        let (shown, backend_id) = (window.info.id, window.backend_id);
+        self.waits.push(FrameWait {
+            window,
+            session,
+            waiter,
+            deadline: now + SYNC_TIMEOUT,
+            frame_request,
+        });
+    }
+
+    /// Asks the backend for a frame of `window` and records it as out.
+    fn request_frame(&mut self, window: WindowId, now: Instant) -> Option<u64> {
+        let backend_id = self.windows.get(&window).filter(|w| !w.gone)?.backend_id;
         let id = self.next_id;
         self.next_id += 1;
         self.backend.send(Command::RequestFrame {
             window: backend_id,
             request: id,
         });
-        self.syncs.push(PendingSync {
-            id,
-            window: shown,
-            session,
-            request,
-            deadline: now + SYNC_TIMEOUT,
-        });
+        self.outstanding.insert(window, Outstanding { id, sent: now });
+        Some(id)
     }
 
-    /// Answers the syncs of `window` up to request `id`, or all of them.
-    fn answer_syncs(&mut self, window: WindowId, id: Option<u64>) {
-        let (done, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.syncs)
+    /// Sends one new frame request for the waits of `window` that came after
+    /// the last one, once nothing is out for it.
+    fn reissue(&mut self, window: WindowId, now: Instant) {
+        let behind = self
+            .waits
+            .iter()
+            .any(|w| w.window == window && w.frame_request.is_none());
+        if !behind || self.outstanding.contains_key(&window) {
+            return;
+        }
+        let Some(id) = self.request_frame(window, now) else {
+            return;
+        };
+        for wait in &mut self.waits {
+            if wait.window == window && wait.frame_request.is_none() {
+                wait.frame_request = Some(id);
+            }
+        }
+    }
+
+    /// A frame of `window` answered request `answered`: complete every wait
+    /// it covers, and ask again for those that came after.
+    fn frame_answered(&mut self, window: WindowId, answered: u64, now: Instant) {
+        if self
+            .outstanding
+            .get(&window)
+            .is_some_and(|o| o.id <= answered)
+        {
+            self.outstanding.remove(&window);
+        }
+        let (done, waiting): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.waits).into_iter().partition(|w| {
+                w.window == window && w.frame_request.is_some_and(|id| id <= answered)
+            });
+        self.waits = waiting;
+        for wait in done {
+            self.complete(wait);
+        }
+        self.reissue(window, now);
+    }
+
+    /// Answers a wait: its frame came, its window went, or time ran out.
+    fn complete(&mut self, wait: FrameWait) {
+        match wait.waiter {
+            Waiter::Sync { request } => self.send(wait.session, &HostMessage::Synced { request }),
+            Waiter::Screenshot { request } => self.capture(wait.session, request, wait.window),
+        }
+    }
+
+    /// Answers every wait for `window`, which is gone or going.
+    fn complete_all(&mut self, window: WindowId) {
+        self.outstanding.remove(&window);
+        let (done, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waits)
             .into_iter()
-            .partition(|s| s.window == window && id.is_none_or(|id| s.id <= id));
-        self.syncs = waiting;
-        for sync in done {
-            self.send(
-                sync.session,
-                &HostMessage::Synced {
-                    request: sync.request,
-                },
-            );
+            .partition(|w| w.window == window);
+        self.waits = waiting;
+        for wait in done {
+            self.complete(wait);
         }
     }
 
@@ -917,14 +1170,12 @@ impl Hub {
     }
 
     /// A window appeared. A main window that opens while another waits for
-    /// the app takes that one's place.
+    /// the app takes that one's place, with streams started afresh so no
+    /// picture of the old instance is sent as a keyframe.
     fn window_added(&mut self, info: WindowInfo) {
         let backend_id = info.id;
         if self.by_backend.contains_key(&backend_id) {
-            tracing::debug!(
-                window = backend_id.0,
-                "the GUI backend added a window twice"
-            );
+            tracing::debug!(window = backend_id.0, "the GUI backend added a window twice");
             return;
         }
         let now = now();
@@ -938,17 +1189,24 @@ impl Hub {
         if let Some(shown) = waiting {
             let mut info = self.adapt(info, shown);
             self.by_backend.insert(backend_id, shown);
+            self.streams.retain(|(id, _), _| *id != shown);
             let Some(win) = self.windows.get_mut(&shown) else {
                 return;
             };
             win.backend_id = backend_id;
             win.gone = false;
             win.frame = None;
+            win.resized_at = None;
+            win.awaiting_frame = false;
+            // The new backend window has not been told anything yet.
+            win.watched = false;
             win.lock.window_back();
             win.sent_lock = win.lock.state(now);
             info.lock = win.sent_lock;
             win.info = info.clone();
-            return self.broadcast(sees_windows, &HostMessage::WindowChanged(info));
+            self.broadcast(sees_windows, &HostMessage::WindowChanged(info));
+            self.watch_all(shown);
+            return;
         }
         if self.windows.len() >= MAX_WINDOWS {
             tracing::warn!(
@@ -976,9 +1234,15 @@ impl Hub {
                 frame_after_resize: false,
                 awaiting_frame: false,
                 gone: false,
+                watched: false,
             },
         );
         self.broadcast(sees_windows, &HostMessage::WindowAdded(info));
+        self.watch_all(backend_id);
+    }
+
+    /// Adds every viewer to `window`'s streams.
+    fn watch_all(&mut self, window: WindowId) {
         let viewers: Vec<_> = self
             .sessions
             .iter()
@@ -986,7 +1250,7 @@ impl Hub {
             .map(|(id, _)| *id)
             .collect();
         for viewer in viewers {
-            self.watch(backend_id, viewer);
+            self.watch(window, viewer);
         }
     }
 
@@ -1010,7 +1274,6 @@ impl Hub {
         let Some(shown) = self.by_backend.remove(&backend_id) else {
             return;
         };
-        self.answer_syncs(shown, None);
         self.resizes.retain(|r| r.window != shown);
         let other_main = self
             .windows
@@ -1023,6 +1286,7 @@ impl Hub {
             win.gone = true;
             win.frame = None;
             win.lock.window_gone(now());
+            self.complete_all(shown);
         } else {
             self.remove_window(shown);
         }
@@ -1035,12 +1299,12 @@ impl Hub {
         }
         self.streams.retain(|(id, _), _| *id != window);
         self.resizes.retain(|r| r.window != window);
-        self.answer_syncs(window, None);
+        self.complete_all(window);
         self.broadcast(sees_windows, &HostMessage::WindowRemoved { window });
     }
 
     /// A frame arrived: cache it, offer it to the window's streams, and
-    /// answer the syncs it was captured for.
+    /// answer what waited for it.
     fn frame(&mut self, captured: CapturedFrame) {
         let Some(&shown) = self.by_backend.get(&captured.window) else {
             return;
@@ -1063,7 +1327,7 @@ impl Hub {
             win.lock.frame_queued();
         }
         if let Some(id) = captured.answers {
-            self.answer_syncs(shown, Some(id));
+            self.frame_answered(shown, id, now());
         }
     }
 
@@ -1108,7 +1372,11 @@ impl Hub {
             }
         }
         self.refresh_locks(now);
-        let targets: Vec<_> = self.sessions.iter().map(|(id, s)| (*id, s.role)).collect();
+        let targets: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|(id, s)| (*id, s.role))
+            .collect();
         for (session, role) in targets {
             let request = answered.get(&session).copied();
             let from_seq = match role {
@@ -1170,7 +1438,7 @@ impl Hub {
     /// Starts an encode for every idle stream the pacer has a frame for.
     fn pump(&mut self, now: Instant) {
         for (key, stream) in &mut self.streams {
-            if stream.busy || stream.failed {
+            if stream.busy {
                 continue;
             }
             let Some(job) = stream.pacer.poll(now) else {
@@ -1180,7 +1448,7 @@ impl Hub {
             let encoder = stream.encoder.take();
             let backend = stream.backend.clone();
             let (key, generation) = (*key, stream.generation);
-            let (seq, recipients) = (job.seq, job.recipients.clone());
+            let (seq, keyframe, recipients) = (job.seq, job.keyframe, job.recipients.clone());
             self.tasks.spawn_blocking(move || {
                 let work = AssertUnwindSafe(|| encode_frame(encoder, &*backend, key, job));
                 let (encoder, result) = std::panic::catch_unwind(work)
@@ -1189,6 +1457,7 @@ impl Hub {
                     key,
                     generation,
                     seq,
+                    keyframe,
                     recipients,
                     encoder,
                     result,
@@ -1204,6 +1473,7 @@ impl Hub {
                 key,
                 generation,
                 seq,
+                keyframe,
                 recipients,
                 encoder,
                 result,
@@ -1217,33 +1487,48 @@ impl Hub {
                 };
                 stream.busy = false;
                 stream.encoder = encoder;
+                // A skipped frame after the change means the picture did not
+                // change, which ends Resizing as much as a sent one.
+                let after_resize = stream.awaiting_from.is_some_and(|from| seq >= from);
                 match result {
                     Ok(Some(message)) => {
                         let targets: Vec<_> = recipients
                             .into_iter()
                             .filter(|r| stream.viewers.contains(r))
                             .collect();
-                        let after_resize = stream.awaiting_from.is_some_and(|from| seq >= from);
                         if after_resize {
                             stream.awaiting_from = None;
                         }
                         for viewer in targets {
                             self.push(viewer, message.clone());
                         }
+                    }
+                    Ok(None) => {
+                        stream.pacer.skipped(seq);
                         if after_resize {
-                            self.check_resize_done(key.0);
+                            stream.awaiting_from = None;
                         }
                     }
-                    Ok(None) => stream.pacer.skipped(seq),
+                    Err(error) if stream.encoder.is_none() => {
+                        return self.encoder_failed(key.1, &error);
+                    }
                     Err(error) => {
                         tracing::warn!(%error, window = key.0.0, "a GUI frame was not encoded");
                         stream.pacer.skipped(seq);
-                        // Without an encoder the next frame would fail the same way.
-                        stream.failed = stream.encoder.is_none();
+                        // The pacer counted the keyframe as sent; its viewers still need one.
+                        if keyframe {
+                            for viewer in recipients {
+                                stream.pacer.request_keyframe(viewer);
+                            }
+                        }
                     }
+                }
+                if after_resize {
+                    self.check_resize_done(key.0);
                 }
             }
             Done::Screenshot { session, message } => {
+                self.screenshot_jobs = self.screenshot_jobs.saturating_sub(1);
                 if let Some(s) = self.sessions.get_mut(&session) {
                     s.screenshots = s.screenshots.saturating_sub(1);
                 }
@@ -1251,6 +1536,39 @@ impl Hub {
                     self.push(session, message);
                 }
             }
+        }
+    }
+
+    /// An encoder of `offer` could not start (or panicked and was lost):
+    /// nobody gets that encoder again, and its viewers move to the next
+    /// codec both ends share. Frames name their codec, so clients follow.
+    fn encoder_failed(&mut self, offer: CodecOffer, error: &EncodeFailure) {
+        if !self.failed_encoders.insert(offer) {
+            return;
+        }
+        tracing::warn!(%error, codec = ?offer.codec.name(), hardware = offer.hardware, "a GUI encoder failed to start; its viewers fall back to another codec");
+        self.streams.retain(|(_, codec), _| *codec != offer);
+        let moved: Vec<_> = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.codec == Some(offer))
+            .map(|(id, s)| (*id, self.choose(&s.decoders)))
+            .collect();
+        for (session, codec) in &moved {
+            if codec.is_none() {
+                tracing::warn!(session = session.0, "a GUI viewer has no codec left");
+            }
+            if let Some(s) = self.sessions.get_mut(session) {
+                s.codec = *codec;
+            }
+        }
+        let windows: Vec<_> = self.windows.keys().copied().collect();
+        for window in windows {
+            for (session, _) in &moved {
+                self.watch(window, *session);
+            }
+            self.refresh_watch(window);
+            self.check_resize_done(window);
         }
     }
 
@@ -1297,10 +1615,7 @@ fn encode(message: &HostMessage) -> Option<Bytes> {
 
 /// `size` with each side cut to [`MAX_DIMENSION`].
 fn fit(size: Size) -> Size {
-    Size::new(
-        size.width.min(MAX_DIMENSION),
-        size.height.min(MAX_DIMENSION),
-    )
+    Size::new(size.width.min(MAX_DIMENSION), size.height.min(MAX_DIMENSION))
 }
 
 /// Cuts `text` to at most `max` bytes on a character boundary.

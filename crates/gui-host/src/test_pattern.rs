@@ -12,21 +12,26 @@ use std::time::Instant;
 
 use devlanes_gui_codec::Frame;
 use devlanes_gui_proto::{
-    Buttons, KeyCode, LockState, MAX_DIMENSION, Point, Size, WindowId, WindowInfo, WindowKind,
+    Buttons, KeyCode, LockState, Point, Size, WindowId, WindowInfo, WindowKind,
 };
 
 use crate::backend::{
-    Backend, BackendControl, BackendError, CapturedFrame, Command, Event, EventSink,
+    Backend, BackendControl, BackendError, CapturedFrame, Command, Event, EventSink, Started,
 };
 use crate::pattern::draw_grid;
 
 /// The app id of every test-pattern window.
 pub const APP_ID: &str = "run.devlanes.test-pattern";
 
+/// The largest side of a test-pattern window. It draws on the host task, so
+/// its pictures stay small enough to draw in a moment.
+pub const MAX_PATTERN_SIDE: u32 = 2048;
+
 /// How the test pattern behaves.
 #[derive(Debug, Clone)]
 pub struct TestPatternOptions {
-    /// The size of the first window and the default for new ones.
+    /// The size of the first window and the default for new ones; each side
+    /// is clamped to [`MAX_PATTERN_SIDE`], as every later size is.
     pub size: Size,
     /// The smallest size windows take, the way toolkits clamp a resize.
     pub min_size: Option<Size>,
@@ -34,18 +39,21 @@ pub struct TestPatternOptions {
     /// a resize that keeps the size draws nothing, and nothing is redrawn
     /// unless input changed the picture.
     pub changes_only: bool,
-    /// What [`Backend::real_desktop`] answers.
+    /// The real-desktop flag it reports in [`Started`].
     pub real_desktop: bool,
+    /// The variables it reports in [`Started`] for the unit.
+    pub env: Vec<(String, Option<String>)>,
 }
 
 impl Default for TestPatternOptions {
-    /// One 320x200 window, no clamp, frames on every redraw.
+    /// One 320x200 window, no clamp, frames on every redraw, no variables.
     fn default() -> Self {
         Self {
             size: Size::new(320, 200),
             min_size: None,
             changes_only: false,
             real_desktop: false,
+            env: Vec::new(),
         }
     }
 }
@@ -171,13 +179,11 @@ impl Pattern {
         id
     }
 
-    /// `size` within the clamp and the protocol's limits.
+    /// `size` within the clamp and [`MAX_PATTERN_SIDE`].
     fn clamp(&self, size: Size) -> Size {
         let min = self.options.min_size.unwrap_or(Size::new(1, 1));
-        Size::new(
-            size.width.clamp(min.width.max(1), MAX_DIMENSION),
-            size.height.clamp(min.height.max(1), MAX_DIMENSION),
-        )
+        let side = |want: u32, min: u32| want.max(min).clamp(1, MAX_PATTERN_SIDE);
+        Size::new(side(size.width, min.width), side(size.height, min.height))
     }
 
     /// Draws `window` again and sends the frame.
@@ -283,7 +289,9 @@ impl Pattern {
             | Command::UnitIdentity { .. }
             | Command::UnitExited { .. }
             | Command::Frozen
-            | Command::Thawed => {}
+            | Command::Thawed
+            // It draws only on change, so it has no capture to stop.
+            | Command::Watch { .. } => {}
         }
     }
 }
@@ -373,13 +381,9 @@ impl TestPattern {
 }
 
 impl Backend for TestPattern {
-    /// What the options said.
-    fn real_desktop(&self) -> bool {
-        self.real_desktop
-    }
-
-    /// Announces the windows with a first frame each.
-    fn start(self: Box<Self>, events: EventSink) -> Result<Box<dyn BackendControl>, BackendError> {
+    /// Announces the windows with a first frame each, and reports the
+    /// variables and the real-desktop flag of the options.
+    fn start(self: Box<Self>, events: EventSink) -> Result<Started, BackendError> {
         let mut pattern = lock(&self.shared);
         pattern.sink = Some(events);
         let windows: Vec<_> = pattern.windows.values().map(|w| w.info.clone()).collect();
@@ -388,10 +392,15 @@ impl Backend for TestPattern {
             pattern.emit(Event::WindowAdded(info));
             pattern.redraw(id, None);
         }
+        let env = pattern.options.env.clone();
         drop(pattern);
-        Ok(Box::new(Control {
-            shared: self.shared,
-        }))
+        Ok(Started {
+            control: Box::new(Control {
+                shared: self.shared,
+            }),
+            env,
+            real_desktop: self.real_desktop,
+        })
     }
 }
 
