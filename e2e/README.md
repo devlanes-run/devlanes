@@ -20,10 +20,11 @@ Each lab prints the end of its daemon log to stderr on teardown: the last 400 li
 
 ## Binaries
 
-Tests need `devlanes` and `fixture-server`. When `DEVLANES_E2E_BIN_DIR` is set, they are taken from that directory. Otherwise, on macOS and Linux, the first test of each test process runs `cargo build -p devlanes -p devlanes-testing` into `$CARGO_TARGET_DIR` (relative paths are taken from the workspace root) or `target`, and uses its `debug` directory. The build time does not count against a test's budget. On Windows tests never run cargo: they take the binaries from the target directory that holds the test binary, so build them first. Under nextest every test is its own process, so CI builds once and sets the variable:
+Tests need `devlanes`, `devlanes-gui` (next to it, where `devlanes` finds it) and `fixture-server`. When `DEVLANES_E2E_BIN_DIR` is set, they are taken from that directory. Otherwise, on macOS and Linux, the first test of each test process runs `cargo build -p devlanes -p devlanes-testing`, then `cargo build -p devlanes-gui` on its own as releases build it, into `$CARGO_TARGET_DIR` (relative paths are taken from the workspace root) or `target`, and uses its `debug` directory. The build time does not count against a test's budget. On Windows tests never run cargo: they take the binaries from the target directory that holds the test binary, so build them first. Under nextest every test is its own process, so CI builds once and sets the variable:
 
 ```sh
 cargo build -p devlanes -p devlanes-testing
+cargo build -p devlanes-gui
 DEVLANES_E2E_BIN_DIR="$PWD/target/debug" cargo nextest run --profile e2e
 ```
 

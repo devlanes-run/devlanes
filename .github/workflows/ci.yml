@@ -340,7 +340,11 @@ jobs:
           tool: nextest
       # Built once here; each nextest test process would otherwise run cargo build
       # itself (on Windows tests never build, so the binaries must exist first).
-      - run: cargo build -p devlanes -p devlanes-testing --locked
+      # devlanes-gui sits next to devlanes, where devlanes finds it; a cargo invocation
+      # of its own, as in build.yml, so its features never reach devlanes.
+      - run: |
+          cargo build -p devlanes -p devlanes-testing --locked
+          cargo build -p devlanes-gui --locked
       # -p: the e2e profile only runs devlanes-e2e, and without it nextest would build
       # every other package's test binaries too.
       - run: cargo nextest run -p devlanes-e2e --profile e2e --locked --no-fail-fast --failure-output immediate-final

@@ -36,7 +36,7 @@ module.exports = async ({ github, context, core }) => {
     lint: changed.length > 0,
     rust: affected.length > 0,
     tests: all ? '' : affected.map((name) => `package(=${name})`).join(' | '),
-    e2e: result.affected.has('devlanes') || result.affected.has('devlanes-e2e'),
+    e2e: ['devlanes', 'devlanes-gui', 'devlanes-e2e'].some((name) => result.affected.has(name)),
     web: result.affected.has('devlanes-tui-web'),
     mcp_ui: result.changed.has('devlanes-mcp-ui'),
     prose: result.prose,
@@ -83,7 +83,7 @@ module.exports = async ({ github, context, core }) => {
     }
     const since = await select(tag.object.sha, ['packaging/', 'install.sh', 'install.ps1']);
     if (since === 'all' || since.assets) return true;
-    return since.affected.has('devlanes') || since.affected.has('devlanes-hosts-helper');
+    return ['devlanes', 'devlanes-hosts-helper', 'devlanes-gui'].some((name) => since.affected.has(name));
   }
 
   /**

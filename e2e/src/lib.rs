@@ -86,11 +86,12 @@ pub fn workspace_root() -> &'static Path {
     manifest.parent().unwrap_or(manifest)
 }
 
-/// Directory holding `devlanes` and `fixture-server`.
+/// Directory holding `devlanes`, `devlanes-gui` and `fixture-server`.
 ///
 /// `DEVLANES_E2E_BIN_DIR` wins. Otherwise, on Unix, the first call runs
-/// `cargo build -p devlanes -p devlanes-testing` into `$CARGO_TARGET_DIR` (relative to the
-/// workspace root) or `target`, and uses its `debug` directory. On Windows tests never
+/// `cargo build -p devlanes -p devlanes-testing`, then `cargo build -p devlanes-gui`,
+/// into `$CARGO_TARGET_DIR` (relative to the workspace root) or `target`, and uses
+/// its `debug` directory. On Windows tests never
 /// run cargo: the binaries must already be built next to the test binary's `deps`
 /// directory.
 pub fn bin_dir() -> Result<&'static Path> {
@@ -129,38 +130,39 @@ fn locate_bins() -> Result<PathBuf> {
         .filter(|v| !v.is_empty())
         .map_or_else(|| root.join("target"), |dir| root.join(dir));
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let status = Command::new(cargo)
-        .current_dir(root)
-        .args([
-            "build",
-            "--quiet",
-            "-p",
-            "devlanes",
-            "-p",
-            "devlanes-testing",
-        ])
-        .arg("--target-dir")
-        .arg(&target)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .status()?;
-    if !status.success() {
-        return Err(Error::Setup(format!(
-            "cargo build -p devlanes -p devlanes-testing failed ({status}); \
-             set DEVLANES_E2E_BIN_DIR to use prebuilt binaries"
-        )));
+    // devlanes-gui in a cargo invocation of its own, as releases build it, so its
+    // features never reach devlanes.
+    for packages in [&["devlanes", "devlanes-testing"][..], &["devlanes-gui"]] {
+        let status = Command::new(&cargo)
+            .current_dir(root)
+            .args(["build", "--quiet"])
+            .args(packages.iter().flat_map(|package| ["-p", package]))
+            .arg("--target-dir")
+            .arg(&target)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .status()?;
+        if !status.success() {
+            return Err(Error::Setup(format!(
+                "cargo build -p {} failed ({status}); \
+                 set DEVLANES_E2E_BIN_DIR to use prebuilt binaries",
+                packages.join(" -p ")
+            )));
+        }
     }
     let dir = target.join("debug");
     check_bins(&dir).map(|()| dir)
 }
 
-/// Both binaries must exist before any lab starts.
+/// The binaries must exist before any lab starts; `devlanes` finds
+/// `devlanes-gui` next to itself.
 fn check_bins(dir: &Path) -> Result<()> {
-    for name in ["devlanes", "fixture-server"] {
+    for name in ["devlanes", "devlanes-gui", "fixture-server"] {
         let path = dir.join(format!("{name}{EXE_SUFFIX}"));
         if !path.is_file() {
             return Err(Error::Setup(format!(
-                "{} is missing; build with cargo build -p devlanes -p devlanes-testing",
+                "{} is missing; build with cargo build -p devlanes -p devlanes-testing, \
+                 then cargo build -p devlanes-gui",
                 path.display()
             )));
         }
