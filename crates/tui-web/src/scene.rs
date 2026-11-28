@@ -472,10 +472,17 @@ pub fn clients() -> Value {
     json!({"items": [], "now_ms": NOW_MS, "require_pairing": true, "allow_connections": true})
 }
 
-/// `remote.pair`'s code, valid for 10 minutes.
+/// `remote.pair`'s ticket and code, valid for 10 minutes. The ticket has a
+/// ticket's shape, base32 with `example` in it, and no daemon parses it.
 pub fn pair_code() -> Value {
     let valid = devlanes_proto::remote::PAIRING_CODE_TTL_MS;
-    json!({"code": "K7QM-3XWD", "expires_at_ms": NOW_MS + valid, "valid_ms": valid})
+    let ticket: String = "q7xkexamplem2vz4h3dexamplew6yr5jtnexamplep"
+        .chars()
+        .cycle()
+        .take(176)
+        .collect();
+    json!({"code": "K7QM-3XWD", "ticket": format!("dlp1{ticket}"),
+           "expires_at_ms": NOW_MS + valid, "valid_ms": valid})
 }
 
 /// The user config the options page reads.

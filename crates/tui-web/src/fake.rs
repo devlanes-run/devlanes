@@ -234,7 +234,10 @@ impl Fake {
             }],
             Effect::FetchBoxes => vec![Msg::Boxes(Ok(json!({"items": []})))],
             Effect::FetchClients => vec![Msg::Clients(Ok(scene::clients()))],
-            Effect::Pair => vec![Msg::Paired(Ok(scene::pair_code()))],
+            Effect::Pair { generation } => vec![Msg::Paired {
+                generation,
+                result: Ok(scene::pair_code()),
+            }],
             // The file starts as the scene's config; a save writes its
             // changes over it.
             Effect::Settings(request) => {
