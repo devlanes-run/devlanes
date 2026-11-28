@@ -12,7 +12,9 @@ use std::{
 
 use devlanes_update::{
     check::Urls,
-    install::{self, BINARIES, GUI_BINARY, InstallError, Lock, Release, Staged, TARGET},
+    install::{
+        self, BINARIES, GUI_BINARY, GuiInstall, InstallError, Lock, Release, Staged, TARGET,
+    },
 };
 
 /// The archive format of this OS's releases.
@@ -107,16 +109,22 @@ impl Site {
 
     /// Adds the GUI archive to the release of `version` that [`Site::publish`]
     /// wrote, with a `devlanes-gui` whose `version` prints `devlanes-gui
-    /// <reports> build=release` and `extra` next to it, and lists it in
-    /// `SHA256SUMS` after the main archive. Returns the binary's contents.
-    fn publish_gui(&self, version: &str, reports: &str, extra: Option<&str>) -> Vec<u8> {
+    /// <reports> build=release`, or bytes that cannot run when `reports` is
+    /// `None`, and `extra` next to it, and lists it in `SHA256SUMS` after the
+    /// main archive. Returns the binary's contents.
+    fn publish_gui(&self, version: &str, reports: Option<&str>, extra: Option<&str>) -> Vec<u8> {
         let top = format!("devlanes-{version}-{TARGET}");
         let work = self.base.join("work").join(format!("{version}-gui"));
         let package = work.join(&top);
         std::fs::create_dir_all(&package).expect("package");
         std::fs::write(package.join("LICENSE"), "Apache-2.0").expect("license");
-        let line = format!("devlanes-gui {reports} build=release");
-        fake_binary(&package, &work, "devlanes-gui", &line);
+        match reports {
+            Some(reports) => {
+                let line = format!("devlanes-gui {reports} build=release");
+                fake_binary(&package, &work, "devlanes-gui", &line);
+            }
+            None => std::fs::write(package.join(GUI_BINARY), "not a program").expect("gui"),
+        }
         if let Some(extra) = extra {
             std::fs::write(package.join(extra), "extra").expect("extra");
         }
@@ -149,6 +157,23 @@ impl Site {
             .join("update")
             .join(version)
             .join(format!("devlanes-{version}-{TARGET}"))
+    }
+
+    /// Installs only devlanes-gui of `version` under the lock.
+    async fn install_gui(&self, version: &str) -> Result<GuiInstall, InstallError> {
+        let home = self.home.clone();
+        let _lock = tokio::task::spawn_blocking(move || Lock::acquire(&home, Duration::ZERO))
+            .await
+            .expect("join")?;
+        install::install_gui(
+            &self.home,
+            &self.urls(),
+            &Release::Version(version.into()),
+            version,
+            &self.dir,
+            Duration::from_secs(60),
+        )
+        .await
     }
 
     /// Stages `version` under the lock.
@@ -248,7 +273,7 @@ async fn a_staged_release_is_applied_over_the_install() {
     assert_eq!(staged.version, "0.9.1");
     assert_eq!(staged.target, site.dir);
     assert_eq!(staged.files, site.staged_files("0.9.1"));
-    assert!(!staged.gui);
+    assert_eq!(staged.gui, Some(false));
     assert_eq!(Staged::load(&site.home), Some(staged.clone()));
     assert_eq!(
         std::fs::read(staged.files.join(BINARIES[0])).expect("staged"),
@@ -271,13 +296,15 @@ async fn a_staged_release_is_applied_over_the_install() {
 
     // A newer staged release replaces the older one.
     site.publish("0.9.2", "0.9.2", None, None);
-    site.publish_gui("0.9.2", "0.9.2", None);
+    site.publish_gui("0.9.2", Some("0.9.2"), None);
     site.stage("0.9.2").await.expect("staged");
     site.publish("0.9.3", "0.9.3", None, None);
-    let gui_binary = site.publish_gui("0.9.3", "0.9.3", None);
+    // A devlanes-gui that cannot run (missing system libraries) still
+    // installs: staging never runs it.
+    let gui_binary = site.publish_gui("0.9.3", None, None);
     let newer = site.stage("0.9.3").await.expect("staged");
     assert!(!site.home.join("update/0.9.2").exists());
-    assert!(newer.gui);
+    assert_eq!(newer.gui, Some(true));
     assert_eq!(Staged::load(&site.home), Some(newer.clone()));
     let newer_binary = std::fs::read(newer.files.join(BINARIES[0])).expect("binary");
     assert_ne!(newer_binary, b"old");
@@ -350,7 +377,7 @@ async fn staging_refuses_a_release_that_does_not_check_out() {
 
     // The GUI archive is checked like the main one, and fails the whole stage.
     site.publish("0.9.4", "0.9.4", None, None);
-    site.publish_gui("0.9.4", "0.9.4", Some("README"));
+    site.publish_gui("0.9.4", Some("0.9.4"), Some("README"));
     let error = site.stage("0.9.4").await.expect_err("extra GUI entry");
     assert!(
         error.to_string().starts_with(&format!(
@@ -359,14 +386,6 @@ async fn staging_refuses_a_release_that_does_not_check_out() {
         )),
         "{error}"
     );
-    site.publish("0.9.5", "0.9.5", None, None);
-    site.publish_gui("0.9.5", "0.9.0", None);
-    let error = site.stage("0.9.5").await.expect_err("wrong GUI version");
-    assert_eq!(
-        error.to_string(),
-        "the 0.9.5 archive's devlanes-gui reports 0.9.0"
-    );
-
     let error = site.stage("0.9.6").await.expect_err("no release");
     assert!(matches!(error, InstallError::Fetch { .. }), "{error}");
     // Nothing reached the install.
@@ -375,6 +394,70 @@ async fn staging_refuses_a_release_that_does_not_check_out() {
     }
     assert!(!site.dir.join(GUI_BINARY).exists());
     assert_eq!(Staged::load(&site.home), None);
+}
+
+/// An install at the latest release without devlanes-gui (an older updater
+/// installed it) gets only devlanes-gui from that release: the main binaries
+/// keep their bytes and no release is staged.
+#[tokio::test]
+async fn a_missing_gui_comes_from_the_running_release() {
+    let site = Site::new();
+    let script = devlanes_update::InstallMethod::Script(site.dir.clone());
+    assert_eq!(install::gui_missing(&script), Some(site.dir.clone()));
+    site.publish("0.9.1", "0.9.1", None, None);
+    // A release from before devlanes-gui has none to give.
+    assert_eq!(
+        site.install_gui("0.9.1").await.expect("checked"),
+        GuiInstall::NotInRelease
+    );
+    assert!(!site.dir.join(GUI_BINARY).exists());
+
+    let gui = site.publish_gui("0.9.1", None, None);
+    assert_eq!(
+        site.install_gui("0.9.1").await.expect("installed"),
+        GuiInstall::Installed(site.dir.join(GUI_BINARY))
+    );
+    assert_eq!(std::fs::read(site.dir.join(GUI_BINARY)).expect("gui"), gui);
+    for name in BINARIES {
+        assert_eq!(std::fs::read(site.dir.join(name)).expect("main"), b"old");
+    }
+    assert_eq!(Staged::load(&site.home), None);
+    let mut names: Vec<_> = std::fs::read_dir(&site.dir)
+        .expect("dir")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    let mut expected: Vec<String> = BINARIES
+        .iter()
+        .chain([&GUI_BINARY])
+        .map(|name| (*name).to_owned())
+        .collect();
+    expected.sort();
+    assert_eq!(names, expected);
+    // One that is there counts as installed, whether or not it runs.
+    assert_eq!(install::gui_missing(&script), None);
+
+    // Only the running version: a release whose SHA256SUMS lists another fails.
+    let releases = site.base.join("releases/download");
+    std::fs::create_dir_all(releases.join("v0.9.2")).expect("folder");
+    std::fs::copy(
+        releases.join("v0.9.1/SHA256SUMS"),
+        releases.join("v0.9.2/SHA256SUMS"),
+    )
+    .expect("sums");
+    std::fs::remove_file(site.dir.join(GUI_BINARY)).expect("remove");
+    let error = site
+        .install_gui("0.9.2")
+        .await
+        .expect_err("another version");
+    assert!(
+        error
+            .to_string()
+            .ends_with("lists version 0.9.1, expected 0.9.2"),
+        "{error}"
+    );
+    assert!(!site.dir.join(GUI_BINARY).exists());
 }
 
 #[test]
