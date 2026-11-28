@@ -40,6 +40,8 @@ mod error;
 mod lock;
 mod message;
 mod pacer;
+#[cfg(feature = "serde")]
+pub mod ready;
 mod types;
 mod wire;
 

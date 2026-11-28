@@ -33,23 +33,24 @@ workspace = true
 [dependencies]
 devlanes-version = { path = "../../crates/version" }
 devlanes-gui-host = { path = "../../crates/gui-host" }
-devlanes-gui-proto = { path = "../../crates/gui-proto" }
+devlanes-gui-proto = { path = "../../crates/gui-proto", features = ["serde"] }
 clap.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 devlanes-gui-client = { path = "../../crates/gui-client" }
+serde_json.workspace = true
 
-# The test stops the host with SIGTERM, as the runner does.
+# The test stops the host with SIGTERM or Ctrl-Break, as the runner does.
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1", features = ["process"] }
 
+[target.'cfg(windows)'.dev-dependencies]
+devlanes-sys-windows = { path = "../../crates/sys-windows" }
+
 [build-dependencies]
-# Compiles the Windows version resource with the SDK's rc.exe.
-embed-resource = "3"
+embed-resource.workspace = true

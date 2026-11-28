@@ -1,6 +1,6 @@
-//! `devlanes-gui`: the second devlanes binary, which holds the GUI hosts and,
-//! later, the viewer. It ships next to `devlanes`, which finds it in its own
-//! directory, so `devlanes` itself never links the GUI libraries.
+//! `devlanes-gui`: the second devlanes binary, which holds the GUI hosts. It
+//! ships next to `devlanes`, so `devlanes` itself never links the GUI
+//! libraries.
 
 mod host;
 
@@ -15,7 +15,7 @@ const FAILED: u8 = 1;
 #[derive(Debug, Parser)]
 #[command(
     name = "devlanes-gui",
-    about = "The devlanes GUI host; devlanes starts it, people do not",
+    about = "The devlanes GUI host, which serves a GUI service's windows over the GUI protocol",
     disable_help_subcommand = true
 )]
 struct Cli {

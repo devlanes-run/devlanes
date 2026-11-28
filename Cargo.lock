@@ -1505,10 +1505,10 @@ dependencies = [
  "devlanes-gui-client",
  "devlanes-gui-host",
  "devlanes-gui-proto",
+ "devlanes-sys-windows",
  "devlanes-version",
  "embed-resource",
  "rustix",
- "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
@@ -1560,6 +1560,8 @@ name = "devlanes-gui-proto"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "serde",
+ "serde_json",
  "subtle",
  "thiserror 2.0.21",
 ]

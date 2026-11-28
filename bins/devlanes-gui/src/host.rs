@@ -11,23 +11,21 @@ use std::net::SocketAddr;
 use devlanes_gui_host::{
     RunningBackend, ServeError, ServeOptions, TestPattern, TestPatternOptions, serve, start_backend,
 };
-use devlanes_gui_proto::Token;
-use serde::Serialize;
+use devlanes_gui_proto::{Token, ready::Ready};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken as Shutdown;
 
-/// The variable that carries the control token. Never a flag: other users
-/// can read a process's arguments in a process listing, but not its
-/// environment. It stays in this process's environment, since removing it
-/// takes `unsafe` code (`std::env::remove_var`) outside the crates allowed
-/// to have it; the host starts no process, and a backend that starts one
-/// must take it out of that child's environment.
+/// The variable that carries the control token, which the daemon's control
+/// connection must present. The token keeps other accounts on the machine,
+/// which can reach the loopback port, from taking the control role. It does
+/// not protect against processes of the same account, which can read this
+/// process's environment and can already do everything through the daemon.
+/// It is an environment variable and never a flag, since other accounts can
+/// read a process's arguments but not its environment. It stays in this
+/// process's environment (removing it takes `unsafe` code), so a backend
+/// that starts a process should start it without the variable where the
+/// spawning API allows it.
 pub const TOKEN_ENV: &str = "DEVLANES_GUI_TOKEN";
-
-/// The version of the ready line, its `ready` field. A reader refuses other
-/// versions; fields added later keep the version, so a reader ignores
-/// fields it does not know.
-pub const READY_VERSION: u32 = 1;
 
 /// The variable that sets the log filter, as for the daemon.
 const LOG_ENV: &str = "DEVLANES_LOG";
@@ -103,7 +101,9 @@ pub enum HostError {
         #[source]
         source: std::io::Error,
     },
-    /// The ready line could not be written, such as when the daemon is gone.
+    /// Writing the ready line failed, such as into a pipe whose reader is
+    /// gone. A standard output that was never open is not caught: the
+    /// standard library then drops what is written.
     #[error("cannot write the ready line")]
     Ready(#[source] std::io::Error),
 }
@@ -149,7 +149,13 @@ async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Res
     if options.shutdown.is_cancelled() {
         return Ok(());
     }
-    let line = ready_line(address, &running);
+    let line = Ready::new(
+        address,
+        devlanes_version::VERSION,
+        running.env(),
+        running.real_desktop(),
+    )
+    .to_line();
     let mut stdout = std::io::stdout().lock();
     writeln!(stdout, "{line}")
         .and_then(|()| stdout.flush())
@@ -159,53 +165,6 @@ async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Res
     serve(listener, running, options).await?;
     tracing::info!("GUI host stopped");
     Ok(())
-}
-
-/// The ready line: one JSON object on one line.
-#[derive(Debug, Serialize)]
-struct Ready {
-    /// [`READY_VERSION`].
-    ready: u32,
-    /// The address the host listens on, such as `127.0.0.1:41234`.
-    address: SocketAddr,
-    /// Variables the unit gets, in the backend's order.
-    set: serde_json::Map<String, serde_json::Value>,
-    /// Variables the unit must not inherit.
-    remove: Vec<String>,
-    /// Whether the display is the machine's real desktop, so a local viewer
-    /// is not needed.
-    real_desktop: bool,
-}
-
-/// The ready line for `running` listening on `address`. A variable the
-/// backend names twice keeps its last value, and a removal after a value
-/// drops the value.
-fn ready_line(address: SocketAddr, running: &RunningBackend) -> String {
-    let mut set = serde_json::Map::new();
-    let mut remove: Vec<String> = Vec::new();
-    for (name, value) in running.env() {
-        match value {
-            Some(value) => {
-                remove.retain(|removed| removed != name);
-                set.insert(name.clone(), serde_json::Value::String(value.clone()));
-            }
-            None => {
-                set.remove(name);
-                if !remove.contains(name) {
-                    remove.push(name.clone());
-                }
-            }
-        }
-    }
-    let ready = Ready {
-        ready: READY_VERSION,
-        address,
-        set,
-        remove,
-        real_desktop: running.real_desktop(),
-    };
-    // A struct of strings, numbers and booleans always serializes.
-    serde_json::to_string(&ready).unwrap_or_default()
 }
 
 /// Logs to standard error, filtered by `DEVLANES_LOG` (default `info`).

@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use devlanes_gui_client::{ClientOptions, connect};
-use devlanes_gui_proto::{Role, Token};
+use devlanes_gui_proto::{PROTOCOL_VERSION, Role, Token, ready::Ready};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -36,7 +36,11 @@ async fn version_names_the_binary_and_the_release() {
 /// and is gone once stopped.
 #[tokio::test]
 async fn the_host_serves_after_its_ready_line_until_stopped() {
-    let mut child = Command::new(EXE)
+    let mut command = Command::new(EXE);
+    // A process group of its own, so a Ctrl-Break reaches the host alone.
+    #[cfg(windows)]
+    command.creation_flags(0x0000_0200);
+    let mut child = command
         .args([
             "host",
             "--backend",
@@ -61,17 +65,17 @@ async fn the_host_serves_after_its_ready_line_until_stopped() {
         .expect("stdout reads")
         .expect("a ready line");
 
-    // The whole line, so a field renamed or added by mistake shows here.
-    let ready: serde_json::Value = serde_json::from_str(&line).expect("one JSON object");
-    let address: SocketAddr = ready["address"]
-        .as_str()
-        .and_then(|text| text.parse().ok())
-        .expect("an address");
-    assert!(address.ip().is_loopback() && address.port() != 0, "{line}");
+    // The daemon's strict reader takes it, and the whole line shows a field
+    // renamed or added by mistake.
+    let ready = Ready::parse(&line).expect("a ready line the daemon reads");
+    let address: SocketAddr = ready.address;
+    let value: serde_json::Value = serde_json::from_str(&line).expect("one JSON object");
     assert_eq!(
-        ready,
+        value,
         serde_json::json!({
             "ready": 1,
+            "devlanes": devlanes_version::VERSION,
+            "protocol": PROTOCOL_VERSION,
             "address": address.to_string(),
             "set": {},
             "remove": [],
@@ -98,16 +102,23 @@ async fn the_host_serves_after_its_ready_line_until_stopped() {
         .expect("control hello in time")
         .expect("the token from the environment is accepted");
 
-    let status = timeout(TIMEOUT, stop(&mut child))
+    drop(client);
+    let (status, signalled) = timeout(TIMEOUT, stop(&mut child))
         .await
         .expect("the host exits in time");
-    // SIGTERM is a clean stop; Windows tests can only terminate the process.
-    if cfg!(unix) {
+    // A signal is a clean stop; a terminated process is not.
+    if signalled {
         assert!(status.success(), "{status:?}");
     }
+    // The port may be bound again by anything once it is free, so the check
+    // is that no GUI host answers there.
+    let after = ClientOptions::new(Role::Tool, "acme-test:2", "test");
     assert!(
-        tokio::net::TcpStream::connect(address).await.is_err(),
-        "{address} still accepts"
+        timeout(TIMEOUT, connect(address, after))
+            .await
+            .expect("an answer in time")
+            .is_err(),
+        "a GUI host still answers on {address}"
     );
 }
 
@@ -145,20 +156,29 @@ async fn the_host_refuses_other_addresses_and_unknown_backends() {
 }
 
 /// Stops the host as the runner does on Unix, with SIGTERM, and waits.
+/// Returns the status and that the stop was a signal.
 #[cfg(unix)]
-async fn stop(child: &mut tokio::process::Child) -> std::process::ExitStatus {
+async fn stop(child: &mut tokio::process::Child) -> (std::process::ExitStatus, bool) {
     use rustix::process::{Pid, Signal, kill_process};
     let pid = child
         .id()
         .and_then(|id| Pid::from_raw(id as i32))
         .expect("pid");
     kill_process(pid, Signal::TERM).expect("SIGTERM");
-    child.wait().await.expect("wait")
+    (child.wait().await.expect("wait"), true)
 }
 
-/// Terminates the host: a console event would reach the test runner too.
+/// Stops the host as the Windows runner does, with Ctrl-Break to its own
+/// process group, which leaves the test's console group alone. A test
+/// process without a console cannot send one; the host is then terminated
+/// and the stop is not a signal.
 #[cfg(windows)]
-async fn stop(child: &mut tokio::process::Child) -> std::process::ExitStatus {
-    child.kill().await.expect("kill");
-    child.wait().await.expect("wait")
+async fn stop(child: &mut tokio::process::Child) -> (std::process::ExitStatus, bool) {
+    let signalled = child
+        .id()
+        .is_some_and(|pid| devlanes_sys_windows::console::ctrl_break_group(pid).is_ok());
+    if !signalled {
+        child.kill().await.expect("kill");
+    }
+    (child.wait().await.expect("wait"), signalled)
 }

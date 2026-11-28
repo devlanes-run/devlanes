@@ -10,7 +10,14 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `ready`, the GUI host's ready line, for the host that prints it and the
+# daemon that reads it.
+serde = ["dep:serde", "dep:serde_json"]
+
 [dependencies]
 bytes.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 subtle.workspace = true
 thiserror.workspace = true
