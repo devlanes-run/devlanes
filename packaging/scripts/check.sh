@@ -267,6 +267,28 @@ esac
 install_with() {
 	DEVLANES_INSTALL_BASE_URL="file://$release" DEVLANES_INSTALL_DIR="$work/installed-opt" sh -s -- "$@" <"$root/install.sh"
 }
+
+# devlanes goes in last; when it cannot take its place (a directory there), the
+# helpers installed before it get their earlier files back and nothing of the
+# attempt stays.
+rollback=$work/installed-rollback
+mkdir -p "$rollback/devlanes"
+: >"$rollback/devlanes/keep"
+printf 'earlier hosts\n' >"$rollback/devlanes-hosts"
+printf 'earlier gui\n' >"$rollback/devlanes-gui"
+status=0
+refused=$(install_with -d "$rollback" 2>&1) || status=$?
+[ "$status" -ne 0 ]
+case $refused in
+*"cannot install $rollback/devlanes; the files it replaced are back in place"*) ;;
+*)
+	echo "install.sh with devlanes unreplaceable: $refused" >&2
+	exit 1
+	;;
+esac
+[ "$(cat "$rollback/devlanes-hosts")" = "earlier hosts" ]
+[ "$(cat "$rollback/devlanes-gui")" = "earlier gui" ]
+[ -z "$(find "$rollback" -name '.*.new.*' -o -name '.*.old.*')" ]
 install_with >/dev/null
 [ "$("$work/installed-opt/devlanes")" = "devlanes $version" ]
 install_with -d "$work/installed-short" >/dev/null

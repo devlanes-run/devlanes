@@ -661,12 +661,20 @@
             try {
                 $inUse = Install-DevlanesFile -Staged $staged -Directory $dir -Name 'devlanes.exe'
             } catch {
+                $failure = $_
                 if ($gui) {
                     $guiTarget = Join-Path $dir 'devlanes-gui.exe'
-                    Remove-Item -LiteralPath $guiTarget -Force -ErrorAction SilentlyContinue
-                    if ($guiOld) { Move-Item -LiteralPath $guiOld -Destination $guiTarget }
+                    try {
+                        if ($guiOld) {
+                            Move-Item -LiteralPath $guiOld -Destination $guiTarget -Force
+                        } else {
+                            Remove-Item -LiteralPath $guiTarget -Force
+                        }
+                    } catch {
+                        Write-Warning "devlanes install: devlanes-gui.exe could not be put back: $($_.Exception.Message)"
+                    }
                 }
-                throw
+                throw $failure
             }
             if ($guiOld) { Remove-Item -LiteralPath $guiOld -Force -ErrorAction SilentlyContinue }
         } finally {

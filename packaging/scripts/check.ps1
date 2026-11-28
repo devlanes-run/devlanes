@@ -614,6 +614,28 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         $run = Invoke-Child $shell (& $withOptions '-Force') $shadowed
         Assert-Equal (Get-FakeVersion (Join-Path $shadowed.DEVLANES_INSTALL_DIR 'devlanes.exe')) $versions[1] "$label, -Force: $($run.Output)"
 
+        # devlanes.exe goes in last; when it cannot take its place (this process holds
+        # it without sharing delete), devlanes-gui.exe gets its earlier file back and
+        # nothing of the attempt stays.
+        $rollback = Join-Path $work "rollback by $label"
+        New-Item -ItemType Directory -Path $rollback | Out-Null
+        $heldExe = Join-Path $rollback 'devlanes.exe'
+        Copy-Item -LiteralPath (Join-Path $work "bin-$($versions[0])/devlanes.exe") -Destination $heldExe
+        [IO.File]::WriteAllText((Join-Path $rollback 'devlanes-gui.exe'), 'earlier gui')
+        $rolledBack = $environment.Clone()
+        $rolledBack.DEVLANES_INSTALL_DIR = $rollback
+        $hold = [IO.File]::Open($heldExe, 'Open', 'Read', 'Read')
+        try {
+            $run = Invoke-Child $shell "& '$installScript'" $rolledBack
+        } finally {
+            $hold.Dispose()
+        }
+        Assert-True ($run.Code -ne 0) "$label, an unreplaceable devlanes.exe fails the install: $($run.Output)"
+        Assert-Equal ([IO.File]::ReadAllText((Join-Path $rollback 'devlanes-gui.exe'))) 'earlier gui' "$label, devlanes-gui.exe is back"
+        Assert-Equal (Get-FakeVersion $heldExe) $versions[0] "$label, devlanes.exe is untouched"
+        $left = @(Get-ChildItem -LiteralPath $rollback -Force | ForEach-Object { $_.Name })
+        Assert-True ($left.Count -eq 2 -and $left -contains 'devlanes.exe' -and $left -contains 'devlanes-gui.exe') "$label, nothing of the attempt stays: $($left -join ', ')"
+
         # -Uninstall runs the devlanes.exe in the directory: the cmd.exe fake reads the
         # closed stdin and exits, leaving the file in place.
         Copy-Item -LiteralPath (Join-Path $work "bin-$($versions[2])/devlanes.exe") -Destination $exe -Force

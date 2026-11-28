@@ -231,7 +231,13 @@ if [ "$os" = Linux ] && ls /lib/ld-musl-* >/dev/null 2>&1; then
 fi
 
 tmp=$(mktemp -d)
-cleanup() { rm -rf "$tmp"; }
+staging=
+# While binaries are being put in place, also their `.NAME.new.PID` and
+# `.NAME.old.PID` files (cleanup_new, below).
+cleanup() {
+	if [ -n "$staging" ]; then cleanup_new; fi
+	rm -rf "$tmp"
+}
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -314,38 +320,46 @@ $sudo mkdir -p "$dir"
 cleanup_new() {
 	for bin in $bins; do $sudo rm -f "$dir/.$bin.new.$$" "$dir/.$bin.old.$$"; done
 }
+# From here a signal or a failure also removes those two kinds of files, and never
+# a target.
+staging=1
 for bin in $bins; do
 	if ! { $sudo cp "$tmp/$top/$bin" "$dir/.$bin.new.$$" && $sudo chmod 755 "$dir/.$bin.new.$$"; }; then
-		cleanup_new
 		fail "cannot copy $bin to $dir"
 	fi
 done
 swapped=
 fresh=
 for bin in $bins; do
-	if [ -e "$dir/$bin" ]; then
+	if [ -e "$dir/$bin" ] || [ -L "$dir/$bin" ]; then
 		# A filesystem without hard links cannot keep it; the rename then replaces it
 		# for good, as `devlanes update` does there.
 		$sudo ln -f "$dir/$bin" "$dir/.$bin.old.$$" 2>/dev/null || true
 	else
 		fresh="$fresh $bin"
 	fi
-	if ! $sudo mv -f "$dir/.$bin.new.$$" "$dir/$bin"; then
+	# mv onto a directory would move the file into it instead of failing.
+	if { [ -d "$dir/$bin" ] && [ ! -L "$dir/$bin" ]; } || ! $sudo mv -f "$dir/.$bin.new.$$" "$dir/$bin"; then
+		restored=all
 		for prev in $swapped; do
 			if [ -e "$dir/.$prev.old.$$" ]; then
-				$sudo mv -f "$dir/.$prev.old.$$" "$dir/$prev"
+				$sudo mv -f "$dir/.$prev.old.$$" "$dir/$prev" || restored=some
 			else
 				case " $fresh " in
-				*" $prev "*) $sudo rm -f "$dir/$prev" ;;
+				*" $prev "*) $sudo rm -f "$dir/$prev" || restored=some ;;
+				*) restored=some ;;
 				esac
 			fi
 		done
-		cleanup_new
-		fail "cannot install $dir/$bin; the files it replaced are back in place"
+		if [ "$restored" = all ]; then
+			fail "cannot install $dir/$bin; the files it replaced are back in place"
+		fi
+		fail "cannot install $dir/$bin, and some of the files it replaced could not be put back; run this script again"
 	fi
 	swapped="$swapped $bin"
 done
 cleanup_new
+staging=
 
 printf 'Installed devlanes %s to %s\n' "$version" "$dir"
 # A daemon keeps running the binary it started from until it restarts into this one.
