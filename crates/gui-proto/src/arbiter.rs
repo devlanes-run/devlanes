@@ -9,11 +9,13 @@
 //! died mid-drag never sends one, so a client that holds something and sends
 //! nothing for [`HELD_INPUT_TIMEOUT`] loses it: [`InputArbiter::expire`] and
 //! [`InputArbiter::remove`] return what it held, for the host to release on
-//! the app.
+//! the app. If the client comes back still reporting those buttons or keys
+//! down, its events for them are dropped until it reports them released, so
+//! the app never sees a second press without a release in between.
 
 use std::time::{Duration, Instant};
 
-use crate::{Buttons, KeyCode, SessionId};
+use crate::{Buttons, KeyCode, RECONNECT_AFTER, SessionId};
 
 /// How long typing keeps input after the last key or text.
 pub const HOLD_AFTER_TYPING: Duration = Duration::from_millis(500);
@@ -21,8 +23,10 @@ pub const HOLD_AFTER_TYPING: Duration = Duration::from_millis(500);
 /// How long a client holding a button or key may stay silent before what it
 /// holds is released. Clients send [`crate::ClientMessage::KeepAlive`] or
 /// pointer messages at least every [`crate::HEARTBEAT_INTERVAL`] while they
-/// hold something, so only a client that is gone reaches it.
-pub const HELD_INPUT_TIMEOUT: Duration = Duration::from_secs(5);
+/// hold something. A P2P link can pause for about four seconds after a network
+/// switch, so two arrivals can be about six seconds apart; this is the same
+/// threshold a viewer uses before it shows Reconnecting.
+pub const HELD_INPUT_TIMEOUT: Duration = RECONNECT_AFTER;
 
 /// Keys one client may hold at once. Further key presses are dropped, which
 /// bounds the memory a client can make the host keep.
@@ -54,6 +58,9 @@ struct Client {
     buttons: Buttons,
     keys: Vec<KeyCode>,
     last_event: Instant,
+    /// What [`InputArbiter::expire`] released that the client has not
+    /// reported released yet.
+    expired: Released,
 }
 
 impl Client {
@@ -119,6 +126,8 @@ impl InputArbiter {
                     buttons: std::mem::take(&mut client.buttons),
                     keys: std::mem::take(&mut client.keys),
                 };
+                client.expired.buttons = client.expired.buttons | held.buttons;
+                client.expired.keys.extend(&held.keys);
                 released.push((client.session, held));
             }
         }
@@ -134,7 +143,13 @@ impl InputArbiter {
     /// Pointer motion with the buttons `session` holds now. Pressing a button
     /// takes input.
     pub fn pointer(&mut self, session: SessionId, buttons: Buttons, now: Instant) -> Verdict {
-        self.entry(session, now);
+        let expired = &mut self.entry(session, now).expired.buttons;
+        // Released buttons it reports up again are forgotten; while one is still
+        // reported down, its events are dropped.
+        *expired = Buttons(expired.0 & buttons.0);
+        if !expired.is_empty() {
+            return Verdict::Drop;
+        }
         if self.blocked(session, now) {
             return Verdict::Drop;
         }
@@ -159,7 +174,14 @@ impl InputArbiter {
 
     /// A key going down or up. Either takes input.
     pub fn key(&mut self, session: SessionId, code: KeyCode, down: bool, now: Instant) -> Verdict {
-        self.entry(session, now);
+        let expired = &mut self.entry(session, now).expired.keys;
+        if expired.contains(&code) {
+            // The app already got this key's release from `expire`.
+            if !down {
+                expired.retain(|key| *key != code);
+            }
+            return Verdict::Drop;
+        }
         if self.blocked(session, now) {
             return Verdict::Drop;
         }
@@ -227,6 +249,7 @@ impl InputArbiter {
                     buttons: Buttons::NONE,
                     keys: Vec::new(),
                     last_event: now,
+                    expired: Released::default(),
                 });
                 self.clients.len() - 1
             }
@@ -333,6 +356,27 @@ mod tests {
             Vec::new(),
             "released once"
         );
+    }
+
+    #[test]
+    fn a_client_back_from_silence_cannot_press_what_was_released_for_it_again() {
+        let t0 = Instant::now();
+        let mut arbiter = InputArbiter::new();
+        arbiter.pointer(A, Buttons::LEFT, t0);
+        arbiter.key(A, KEY_A, true, t0);
+        let back = t0 + HELD_INPUT_TIMEOUT;
+        assert_eq!(arbiter.expire(back).len(), 1);
+
+        // Its link recovers while the user still holds both.
+        assert_eq!(arbiter.pointer(A, Buttons::LEFT, back), Verdict::Drop);
+        assert_eq!(arbiter.key(A, KEY_A, true, back), Verdict::Drop);
+        assert_eq!(arbiter.holder(back), None);
+        // The releases end that, and are dropped too: the app had them already.
+        assert_eq!(arbiter.key(A, KEY_A, false, back), Verdict::Drop);
+        assert_eq!(arbiter.pointer(A, Buttons::NONE, back), Verdict::Accept);
+        assert_eq!(arbiter.pointer(A, Buttons::LEFT, back), Verdict::Accept);
+        assert_eq!(arbiter.key(A, KEY_A, true, back), Verdict::Accept);
+        assert_eq!(arbiter.holder(back), Some(A));
     }
 
     #[test]
