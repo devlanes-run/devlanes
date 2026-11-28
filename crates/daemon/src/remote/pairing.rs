@@ -662,9 +662,9 @@ impl Inner {
             Some(wait) => tokio::time::timeout(wait, read).await.unwrap_or_else(|_| {
                 Err(RpcError::new(
                     "ticket_not_ready",
-                    json!({"message": "this machine was still connecting for pairing by ticket; \
-                                       run devlanes daemon pair --ticket, which waits up to 5 \
-                                       seconds"}),
+                    json!({"message": "this machine was still reaching its relay; run devlanes \
+                                       daemon pair again in a few seconds, or devlanes daemon \
+                                       pair --ticket to wait for it"}),
                     1,
                 ))
             }),

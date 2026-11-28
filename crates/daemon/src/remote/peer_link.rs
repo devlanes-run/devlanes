@@ -593,12 +593,15 @@ const MAX_HOST: usize = 253;
 /// [`MAX_HOST`]. Such text holds a secret, so it is never passed to `ssh`,
 /// listed as a box, echoed or logged as a host.
 pub(super) fn ticket_as_host(host: &str) -> Option<RpcError> {
-    (devlanes_proto::remote::holds_ticket(host) || host.len() > MAX_HOST).then(|| {
-        bad_ticket(
-            "this is not a box name or an SSH destination, and not a whole pairing ticket \
-             either; copy the ticket again from `devlanes daemon pair` on the box",
-        )
-    })
+    if devlanes_proto::remote::holds_ticket(host) {
+        return Some(bad_ticket(
+            "this looks like a pairing ticket or part of one, not a box name; to pair, copy the \
+             whole ticket from `devlanes daemon pair` on the box and run `devlanes remote \
+             connect <ticket>`",
+        ));
+    }
+    (host.len() > MAX_HOST)
+        .then(|| bad_ticket("this is longer than any box name or SSH destination"))
 }
 
 /// `bad_ticket`: text that is not a usable ticket.

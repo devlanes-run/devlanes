@@ -2864,7 +2864,7 @@ fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
     // Peer-to-peer trouble never costs the code: it goes out with the reason.
     let failed = json!({"code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000,
         "ticket_error": {"code": "ticket_not_ready",
-                         "message": "this machine was still connecting for pairing by ticket; run devlanes daemon pair --ticket, which waits up to 5 seconds"}});
+                         "message": "this machine was still reaching its relay; run devlanes daemon pair again in a few seconds, or devlanes daemon pair --ticket to wait for it"}});
     for mode in [OutputMode::Human, OutputMode::Agent] {
         let text = render(mode, &failed);
         assert!(
@@ -2872,7 +2872,7 @@ fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
             "{text}"
         );
         assert!(
-            text.contains("o ticket yet: this machine was still connecting"),
+            text.contains("o ticket yet: this machine was still reaching its relay"),
             "{text}"
         );
         assert!(!text.contains("older than"), "{text}");
@@ -2890,11 +2890,11 @@ fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
     // reasons are said.
     let neither = error(
         "ticket_not_ready",
-        json!({"message": "this machine was still connecting for pairing by ticket",
+        json!({"message": "this machine was still reaching its relay",
                "code_paused_ms": 3 * 60_000 - 5}),
     );
     assert!(
-        neither.contains("no ticket yet: this machine was still connecting")
+        neither.contains("no ticket yet: this machine was still reaching its relay")
             && neither.contains("pairing codes are paused for 3 minutes"),
         "{neither}"
     );
