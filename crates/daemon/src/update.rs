@@ -246,7 +246,7 @@ impl Inner {
 
     /// How this daemon was installed and the executable it runs, read from
     /// the filesystem on first use.
-    async fn install_method(&self) -> &(InstallMethod, PathBuf) {
+    pub(crate) async fn install_method(&self) -> &(InstallMethod, PathBuf) {
         let configured = self.opts.update_check.method.clone();
         self.update
             .method

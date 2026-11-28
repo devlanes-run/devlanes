@@ -702,6 +702,18 @@ fn unit_facts(app: &App, unit: &UnitSummary, width: usize) -> Vec<Line<'static>>
             theme.quiet(),
         ));
     }
+    if let Some(gui) = &unit.gui {
+        let host = match gui.host.as_str() {
+            devlanes_proto::GUI_HOST_RUNNING if gui.real_desktop == Some(true) => {
+                "yes, its GUI host runs, on this desktop"
+            }
+            devlanes_proto::GUI_HOST_RUNNING => "yes, its GUI host runs",
+            devlanes_proto::GUI_HOST_EXITED => "yes, but its GUI host exited",
+            devlanes_proto::GUI_HOST_NONE => "yes, with no GUI host on this machine",
+            _ => "yes",
+        };
+        lines.extend(field(theme, "gui", host, width, plain));
+    }
     lines
 }
 

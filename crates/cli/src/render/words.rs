@@ -550,6 +550,14 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             ),
             spawn_hint(data).or_else(|| logs_hint(data)),
         ),
+        // The unit alone, as for `spawn_failed`.
+        "gui_host_missing" | "gui_unavailable" | "gui_host_failed" => {
+            let (cause, hint) = gui_cause(&error.code, data);
+            (
+                format!("{} couldn't start: {cause}", text(data, "unit")),
+                hint,
+            )
+        }
         "unit_failed" => (format!("{} failed", target(data)), logs_hint(data)),
         "ready_timeout" => (
             match target(data) {
@@ -2011,6 +2019,104 @@ pub(crate) const WSL_RESTART: &str =
 pub(crate) const WINDOWS_DRIVE_COST: &str =
     "file access is slow and file watching misses edits made from Windows";
 
+/// What a running GUI service's host state means for its windows, when it is
+/// not the usual one: its host exited, or this machine has none.
+pub(crate) fn gui_note(gui: &devlanes_proto::GuiStatus) -> Option<String> {
+    match gui.host.as_str() {
+        devlanes_proto::GUI_HOST_EXITED => Some(
+            "its GUI host exited, so its windows cannot be viewed until it restarts".into(),
+        ),
+        devlanes_proto::GUI_HOST_NONE => Some(
+            "this machine has no GUI host, so its windows open on this machine's desktop".into(),
+        ),
+        _ => None,
+    }
+}
+
+/// For a GUI service whose host did not start, why (the end of `couldn't
+/// start: ...`) and the command that helps, for the CLI and the TUI; `None`
+/// for any other error.
+pub fn gui_failure(code: &str, data: &Value) -> Option<(String, Option<String>)> {
+    is_gui_failure(code).then(|| {
+        let (cause, hint) = gui_cause(code, data);
+        (cause, hint.map(|hint| hint.0))
+    })
+}
+
+/// Whether `code` is a GUI service whose host did not start.
+pub(crate) fn is_gui_failure(code: &str) -> bool {
+    matches!(
+        code,
+        "gui_host_missing" | "gui_unavailable" | "gui_host_failed"
+    )
+}
+
+/// Why a GUI service's host did not start (`gui_host_missing`,
+/// `gui_unavailable`, `gui_host_failed`), as the end of `couldn't start: ...`,
+/// and the command that helps.
+pub(crate) fn gui_cause(code: &str, data: &Value) -> (String, Option<Hint>) {
+    let message = super::clean(&text(data, "message"));
+    match code {
+        "gui_host_missing" => (
+            format!(
+                "devlanes-gui, which runs its GUI host, is not installed at {}",
+                field(data, "path")
+            ),
+            Some(match data.get("install").and_then(Value::as_str) {
+                Some(install) => Hint(super::clean(install)),
+                None => Hint::command(["update"]),
+            }),
+        ),
+        "gui_unavailable" => (
+            match text(data, "reason").as_str() {
+                "no_desktop_session" => {
+                    "its GUI host needs a desktop session, and this daemon runs outside one".into()
+                }
+                "elevated" => "its GUI host cannot drive windows from an elevated process".into(),
+                "unsupported_os" => "this OS has no GUI host".into(),
+                _ => format!("its GUI host cannot run here: {message}"),
+            },
+            Some(Hint::command(["doctor"])),
+        ),
+        _ => {
+            let cause = match text(data, "reason").as_str() {
+                "exited" => match (int(data, "exit_code"), int(data, "signal")) {
+                    (Some(code), _) => {
+                        format!("its GUI host exited with code {code} before it was ready")
+                    }
+                    (None, Some(signal)) => {
+                        format!("its GUI host was killed by signal {signal} before it was ready")
+                    }
+                    _ => "its GUI host exited before it was ready".into(),
+                },
+                "timeout" => "its GUI host did not report ready in time".into(),
+                "bad_ready_line" => "its GUI host printed a line devlanes cannot read".into(),
+                "version_mismatch" => format!(
+                    "its GUI host is devlanes-gui {}, not {}",
+                    field(data, "version"),
+                    field(data, "expected")
+                ),
+                _ => format!("its GUI host failed: {message}"),
+            };
+            let hint = match text(data, "reason").as_str() {
+                "version_mismatch" => Hint::command(["update"]),
+                _ => Hint::command(["doctor"]),
+            };
+            (format!("{cause}{}", said(data)), Some(hint))
+        }
+    }
+}
+
+/// `; it said: <line>` with the last line of a GUI host's standard error
+/// (`stderr`), or nothing when it wrote none.
+fn said(data: &Value) -> String {
+    let stderr = text(data, "stderr");
+    match stderr.lines().rev().map(str::trim).find(|line| !line.is_empty()) {
+        Some(line) => format!("; it said: {}", super::clean(line)),
+        None => String::new(),
+    }
+}
+
 /// A `why` reason as one line, plus the command that addresses it.
 pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (String, Option<Hint>) {
     let start_unit = || Hint::command(["start", &format!("{lane}:{unit}")]);
@@ -2135,6 +2241,29 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
         "spawn_failed" => (
             format!("couldn't start: {}", spawn_cause(data)),
             Some(spawn_hint(data).unwrap_or_else(|| Hint::logs(lane, unit, 200))),
+        ),
+        "gui_host_missing" | "gui_unavailable" | "gui_host_failed" => {
+            let (cause, hint) = gui_cause(code, data);
+            (format!("couldn't start: {cause}"), hint)
+        }
+        // A GUI service running on while its host is gone.
+        "gui_host_exited" => {
+            let how = match (int(data, "exit_code"), int(data, "signal")) {
+                (Some(code), _) => format!(" with exit code {code}"),
+                (None, Some(signal)) => format!(" by signal {signal}"),
+                _ => String::new(),
+            };
+            (
+                format!(
+                    "its GUI host exited{how}{}, so its windows cannot be viewed until it restarts",
+                    said(data)
+                ),
+                Some(Hint::command(["restart", &format!("{lane}:{unit}")])),
+            )
+        }
+        "gui_no_backend" => (
+            "this machine has no GUI host, so its windows open on this machine's desktop".into(),
+            None,
         ),
         "helper_missing" | "sudo_denied" | "helper_outdated" | "helper_revision_outdated" => {
             let hosts: Vec<String> = list(data, "hosts").iter().map(display_value).collect();

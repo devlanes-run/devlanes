@@ -787,17 +787,30 @@ impl Inner {
             service: format!("{reference}:{}", request.name),
             port,
         };
-        let started = start_host(
+        let started = match start_host(
             self.integ.runner.as_ref(),
             &self.opts.gui.program,
             host,
             &request.spec,
         )
         .await
-        .map_err(|(failure, stderr)| {
-            tracing::warn!(unit = %request.name, lane = %reference, "GUI host did not start: {failure}");
-            failure.error(&request.name, reference, &stderr)
-        })?;
+        {
+            Ok(started) => started,
+            Err((failure, stderr)) => {
+                tracing::warn!(unit = %request.name, lane = %reference, "GUI host did not start: {failure}");
+                let mut error = failure.error(&request.name, reference, &stderr);
+                if matches!(failure, HostFailure::Missing(_)) {
+                    // `devlanes update` fetches a missing devlanes-gui for a
+                    // script install; a package manager reinstalls both.
+                    let (method, _) = self.install_method().await;
+                    if !matches!(method, devlanes_update::InstallMethod::Script(_)) {
+                        error.data["install"] =
+                            json!(method.upgrade_command(devlanes_version::VERSION));
+                    }
+                }
+                return Err(error);
+            }
+        };
         let launch = apply_env(&mut request.spec, &request.launch, started.ready());
         request.launch = Arc::new(launch);
         Ok(GuiStart::Host(started))
