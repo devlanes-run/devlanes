@@ -4,3 +4,6 @@
 //! per daemon. Sessions use one QUIC stream per protocol stream and run only
 //! on a direct path between the two machines: the relay helps them find each
 //! other and is never used for session data.
+
+#[allow(dead_code)]
+mod key;
