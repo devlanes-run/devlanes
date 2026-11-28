@@ -178,8 +178,9 @@ async fn named_tools_ask_too() {
 /// Pairing by ticket asks about the box in the ticket without showing the
 /// ticket, a secret, and runs with it after a yes; neither the result's
 /// structured content nor a declined answer shows it, nor a usage error
-/// about half of it. An argument that only contains a ticket-like run, such
-/// as a URL, is shown whole.
+/// about half of it. Only the box of a remote command is hidden: a URL with
+/// a ticket-like run, a lane name or a program's argument of ticket-like
+/// letters is shown whole.
 async fn a_ticket_is_never_shown_in_the_question() {
     tokio::time::timeout(LIMIT, async {
         // Made up: right prefix and letters, nothing a box would accept.
@@ -262,6 +263,36 @@ async fn a_ticket_is_never_shown_in_the_question() {
             "{questions:?}"
         );
 
+        // Ticket-like text anywhere but a remote command's box is shown
+        // whole: a lane to clean, a program's argument.
+        let lane = "b".repeat(64);
+        let cleaning = connect(
+            TestClient::new().answering(ElicitationAction::Accept),
+            Lifecycle::Initialize,
+            |_| {},
+        )
+        .await;
+        cleaning.call("devlanes", &["lane", "clean", &lane]).await;
+        let questions = cleaning.handler.questions();
+        assert!(
+            questions
+                .first()
+                .is_some_and(|question| question.contains(&lane) && !question.contains("<ticket>")),
+            "{questions:?}"
+        );
+        let file = "c".repeat(64);
+        let running = connect(TestClient::new(), Lifecycle::Initialize, |_| {}).await;
+        let result = running
+            .call("devlanes", &["exec", "--name", "x", "--", "rm", &file])
+            .await;
+        let structured = result.structured_content.clone().unwrap_or_default();
+        assert!(
+            structured["args"]
+                .as_array()
+                .is_some_and(|args| args.iter().any(|arg| arg == file.as_str())),
+            "{structured}"
+        );
+
         // The question asked again for a command's own confirmation.
         let confirming = connect(
             TestClient::new().answering(ElicitationAction::Accept),
@@ -271,13 +302,15 @@ async fn a_ticket_is_never_shown_in_the_question() {
             },
         )
         .await;
-        let result = confirming.call("devlanes", &["run", &ticket]).await;
+        let result = confirming
+            .call("devlanes", &["remote", "use", &ticket, "acme@0"])
+            .await;
         assert!(!failed(&result), "{}", text(&result));
         let questions = confirming.handler.questions();
         assert!(
             questions
                 .iter()
-                .any(|question| question.contains("devlanes run <ticket>")),
+                .any(|question| question.contains("devlanes remote use <ticket> acme@0")),
             "{questions:?}"
         );
         assert!(

@@ -191,20 +191,37 @@ impl Call {
     }
 
     /// The arguments as shown to the user and the client, with `<ticket>`
-    /// for an argument that is a pairing ticket and nothing else: a secret,
-    /// and too long to read in a question. An argument with anything else in
-    /// it stays whole, so the user sees what they agree to.
+    /// for the box of `remote connect`, `remote disconnect` or `remote use`
+    /// when it is a pairing ticket and nothing else: a secret, and too long
+    /// to read in a question. Every other argument, of these commands and
+    /// of all others, stays whole, so a question never hides a lane, a
+    /// program or a file behind the word.
     pub fn shown_args(&self) -> Vec<&str> {
+        let ticket = self
+            .ticket_host()
+            .filter(|host| devlanes_proto::remote::is_ticket_text(devlanes_cli::pasted(host)));
         self.args
             .iter()
-            .map(|arg| {
-                if devlanes_proto::remote::is_ticket_text(devlanes_cli::pasted(arg)) {
-                    "<ticket>"
-                } else {
-                    arg.as_str()
-                }
+            .map(|arg| match ticket {
+                Some(host) if arg == host => "<ticket>",
+                _ => arg.as_str(),
             })
             .collect()
+    }
+
+    /// The box positional of `remote connect`, `remote disconnect` and
+    /// `remote use`, the only arguments that may be a ticket.
+    fn ticket_host(&self) -> Option<&str> {
+        match self.cli.command.as_ref()? {
+            Command::Remote { command } => match command {
+                RemoteCommand::Connect { host, .. } => Some(host),
+                RemoteCommand::Disconnect { host, .. } | RemoteCommand::Use { host, .. } => {
+                    host.as_deref()
+                }
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// [`Call::shown_args`] as one line.
