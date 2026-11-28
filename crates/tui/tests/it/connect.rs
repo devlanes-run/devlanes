@@ -229,8 +229,8 @@ async fn the_form_sends_a_pasted_ticket() -> TestResult {
     let other = if ticket.ends_with('a') { 'b' } else { 'a' };
     let changed = format!("{}{other}", &ticket[..ticket.len() - 1]);
     for (typed, refusal) in [
-        (cut, "This ticket is not complete yet."),
-        (changed.as_str(), "This ticket is not complete yet."),
+        (cut, "This ticket is incomplete or damaged."),
+        (changed.as_str(), "This ticket is incomplete or damaged."),
         (
             "dlp1box",
             "This starts like a pairing ticket but is too short for one.",
@@ -350,10 +350,11 @@ async fn a_paste_as_key_presses_runs_no_bindings() -> TestResult {
         effects.extend(app.update(msg));
     }
     assert!(acts(&effects).is_empty(), "{effects:?}");
-    assert!(
-        matches!(&app.dialog, Some(Dialog::Confirm { prompt, .. }) if prompt == "Disconnect hetzner?"),
-        "{:?}",
-        app.dialog
+    // The question its `d` opened closes again, and the notice says why.
+    assert!(app.dialog.is_none(), "{:?}", app.dialog);
+    assert_eq!(
+        notice(&app),
+        "Pasted text goes only into a text field. Press n, then paste the ticket."
     );
     assert_eq!(app.view, View::Boxes);
 
@@ -376,6 +377,71 @@ async fn a_paste_as_key_presses_runs_no_bindings() -> TestResult {
             .any(|e| matches!(e, Effect::Forget { host } if host == "studio")),
         "{effects:?}"
     );
+    Ok(())
+}
+
+/// Where pastes arrive as keys, a question takes `y` only once it has been
+/// on screen a third of a second and the key before came that long before,
+/// since a paste read in pieces starts each piece with a key that reads as
+/// typed: a `y` 50 ms after the `d`, `f` or `x` that opened the question
+/// leaves it open, a `y` after the wait answers it. Where pastes are paste
+/// events, the first `y` answers.
+#[tokio::test]
+async fn a_question_waits_before_it_takes_an_answer() -> TestResult {
+    let hosts = json!([
+        {"host": "hetzner", "state": "connected", "transport": "ssh"},
+        {"host": "studio", "state": "connected", "transport": "p2p"},
+    ]);
+    let client = json!({"items": [{
+        "id": format!("dl_cid_{}", "3f".repeat(32)), "name": "laptop", "paired": true,
+        "pairings": 1, "connections": [],
+    }], "now_ms": 0});
+    let wait = |app: &mut App, ms: u64| {
+        app.clock = Some(app.now() + std::time::Duration::from_millis(ms));
+    };
+    for pastes_are_keys in [true, false] {
+        // The key that opens each question, after the moves that select its row.
+        for (moves, opener, answered) in [
+            (0, 'd', "disconnect"),
+            (1, 'f', "forget"),
+            (2, 'x', "revoke"),
+        ] {
+            let mut app = boxes_app(100, 30, hosts.clone()).await;
+            app.update(Msg::Clients(Ok(client.clone())));
+            app.clock = Some(app.now());
+            app.paste.on = pastes_are_keys;
+            for _ in 0..moves {
+                app.update(key(KeyCode::Char('j')));
+                wait(&mut app, 500);
+            }
+            app.update(key(KeyCode::Char(opener)));
+            assert!(
+                matches!(app.dialog, Some(Dialog::Confirm { .. })),
+                "{opener}: {:?}",
+                app.dialog
+            );
+            render(&app)?;
+            wait(&mut app, 50);
+            let first = app.update(key(KeyCode::Char('y')));
+            let acted = |effects: &[Effect]| {
+                effects.iter().any(|e| match e {
+                    Effect::Disconnect { .. } => answered == "disconnect",
+                    Effect::Forget { .. } => answered == "forget",
+                    Effect::RevokeClient { .. } => answered == "revoke",
+                    _ => false,
+                })
+            };
+            if pastes_are_keys {
+                assert!(!acted(&first), "{opener}: {first:?}");
+                assert!(matches!(app.dialog, Some(Dialog::Confirm { .. })));
+                wait(&mut app, 400);
+                let second = app.update(key(KeyCode::Char('y')));
+                assert!(acted(&second), "{opener}: {second:?}");
+            } else {
+                assert!(acted(&first), "{opener}: {first:?}");
+            }
+        }
+    }
     Ok(())
 }
 
@@ -403,7 +469,7 @@ async fn a_ticket_pasted_as_key_presses_waits_for_enter() -> TestResult {
     let mut app = boxes_app(100, 30, json!([])).await;
     app.update(key(KeyCode::Char('n')));
     type_text(&mut app, &ticket[..ticket.len() / 2]);
-    assert!(screen(&render(&app)?).contains("This ticket is not complete yet."));
+    assert!(screen(&render(&app)?).contains("This ticket is incomplete or damaged."));
     let effects = app.update(key(KeyCode::Enter));
     assert_eq!(sent_ticket(&effects), None, "{effects:?}");
 

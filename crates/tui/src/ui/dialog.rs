@@ -353,6 +353,8 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
             strict,
             ..
         } => {
+            // A question takes an answer only once a person could see it.
+            app.paste.drawn.set(true);
             let mut body = wrapped(prompt, narrow, Style::new().add_modifier(Modifier::BOLD));
             if !detail.is_empty() {
                 body.push(Line::from(""));

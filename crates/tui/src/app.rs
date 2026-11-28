@@ -1345,6 +1345,8 @@ pub struct App {
     /// The time step rows count from; `None` is the real clock. Tests and
     /// the screens example pin it so drawn times do not change.
     pub clock: Option<web_time::Instant>,
+    /// The guards against a paste that arrives as key presses.
+    pub paste: PasteGuard,
     pub dialog: Option<Dialog>,
     pub attached: Option<Attached>,
     /// The latest `metrics` reply; `None` until one arrives or after an error.
@@ -1531,6 +1533,7 @@ impl App {
             daemon_state: DaemonState::Online,
             starting_since: None,
             clock: None,
+            paste: PasteGuard::default(),
             dialog: None,
             attached: None,
             metrics: None,
@@ -1886,8 +1889,16 @@ impl App {
                 // Asked once; the next q closes without asking again.
                 self.on_quit = OnQuit::Keep;
             }
-            Msg::Key(key) => self.key(key, &mut effects),
-            Msg::PastedKey(key) => self.pasted_key(key, &mut effects),
+            Msg::Key(key) => {
+                let now = self.now();
+                self.paste.key(now, true);
+                self.key(key, &mut effects);
+            }
+            Msg::PastedKey(key) => {
+                let now = self.now();
+                self.paste.key(now, false);
+                self.pasted_key(key, &mut effects);
+            }
             Msg::Mouse(mouse) => self.mouse(mouse, &mut effects),
             Msg::Paste(text) => self.paste(&text, &mut effects),
             Msg::Resize(width, height) => {
@@ -2484,7 +2495,41 @@ impl App {
             Msg::DaemonRestarted(result) => self.daemon_answered("restart", result, &mut effects),
             Msg::DaemonStarted(result) => self.daemon_answered("start", result, &mut effects),
         }
+        self.track_question();
         effects
+    }
+
+    /// Notes when a question appeared and which key opened it, for
+    /// [`App::question_settled`].
+    fn track_question(&mut self) {
+        let open = matches!(self.dialog, Some(Dialog::Confirm { .. }));
+        match (open, self.paste.question) {
+            (true, None) => {
+                self.paste.question = Some((self.now(), self.paste.keys));
+                self.paste.drawn.set(false);
+            }
+            (false, Some(_)) => self.paste.question = None,
+            _ => {}
+        }
+    }
+
+    /// Whether the open question takes an answer. Where pastes arrive as
+    /// keys, a paste split across reads can start a batch with a `y` that
+    /// reads as typed, so a question answers only once it has been on
+    /// screen for [`QUESTION_SETTLE`] and the key before the answer came at
+    /// least that long before it. Elsewhere it always does.
+    fn question_settled(&self) -> bool {
+        if !self.paste.on {
+            return true;
+        }
+        self.paste.question.is_some_and(|(opened, _)| {
+            question_settled(
+                opened,
+                self.paste.drawn.get(),
+                self.paste.previous_key_at,
+                self.now(),
+            )
+        })
     }
 
     /// This TUI's restart or start (`verb`) ended. A new daemon answers:
@@ -6290,9 +6335,27 @@ impl App {
             && !key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-        if text && self.takes_text() {
+        let takes_text = self.takes_text();
+        if text && takes_text {
             self.key(key, effects);
+            return;
         }
+        if takes_text || self.paste.told {
+            return;
+        }
+        // Once per paste: say where pasted text goes, and close a question
+        // its first key opened, which came as a typed key.
+        self.paste.told = true;
+        let opened_by_paste = self
+            .paste
+            .question
+            .is_some_and(|(_, by)| by + 1 == self.paste.keys);
+        if opened_by_paste && matches!(self.dialog, Some(Dialog::Confirm { .. })) {
+            self.dialog = None;
+        }
+        self.set_notice(
+            "Pasted text goes only into a text field. Press n, then paste the ticket.".into(),
+        );
     }
 
     /// Whether a text field has the keys: a row of the connect form or a
@@ -6318,6 +6381,15 @@ impl App {
         };
         match dialog {
             Dialog::Help => {}
+            // An answer that may be part of a paste waits; see
+            // `question_settled`.
+            dialog @ Dialog::Confirm { strict, .. }
+                if (matches!(key.code, KeyCode::Char('y' | 'Y'))
+                    || (key.code == KeyCode::Enter && !strict))
+                    && !self.question_settled() =>
+            {
+                self.dialog = Some(dialog);
+            }
             // A stray Enter must not stop or remove anything.
             Dialog::Confirm { strict, effect, .. }
                 if matches!(key.code, KeyCode::Char('y' | 'Y'))
@@ -8492,6 +8564,58 @@ fn done_notice(label: &str, value: &Value) -> String {
         other => return format!("{other} {rest}: done"),
     };
     format!("{done} {rest}")
+}
+
+/// How long a question must be on screen, and how long the key before an
+/// answer must come before it, where pastes arrive as key presses. A paste
+/// read in pieces (conhost still parsing it, ConPTY writing it in parts, a
+/// slow frame) starts each piece with a key that reads as typed; a third of
+/// a second is far longer than any of those gaps and short enough that a
+/// person who reads the question does not notice it.
+pub const QUESTION_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Whether a question opened at `opened`, drawn or not, takes an answer at
+/// `now`, when the key before that answer came at `previous_key`.
+pub fn question_settled(
+    opened: web_time::Instant,
+    drawn: bool,
+    previous_key: Option<web_time::Instant>,
+    now: web_time::Instant,
+) -> bool {
+    let long_enough =
+        |since: web_time::Instant| now.saturating_duration_since(since) >= QUESTION_SETTLE;
+    drawn && long_enough(opened) && previous_key.is_none_or(long_enough)
+}
+
+/// What the paste guards remember where pastes arrive as key presses.
+#[derive(Debug, Default)]
+pub struct PasteGuard {
+    /// Pastes arrive as key presses here (Windows), so the guards are on.
+    pub on: bool,
+    /// Keys taken so far, typed or pasted.
+    keys: u64,
+    last_key_at: Option<web_time::Instant>,
+    /// When the key before the one being handled came.
+    previous_key_at: Option<web_time::Instant>,
+    /// When the open question appeared, and the key count then: the key
+    /// that opened it.
+    question: Option<(web_time::Instant, u64)>,
+    /// The open question has been drawn.
+    pub drawn: std::cell::Cell<bool>,
+    /// The paste whose keys are being dropped was told about.
+    told: bool,
+}
+
+impl PasteGuard {
+    /// Counts a key that arrived at `now`; a typed one starts a new paste.
+    fn key(&mut self, now: web_time::Instant, typed: bool) {
+        self.keys += 1;
+        self.previous_key_at = self.last_key_at;
+        self.last_key_at = Some(now);
+        if typed {
+            self.told = false;
+        }
+    }
 }
 
 /// The notice once the connect modal's box connected: `connected to acme`,

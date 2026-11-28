@@ -176,9 +176,11 @@ fn ticket_note(typed: &str) -> Option<&'static str> {
 /// The note on a whole ticket.
 pub const READY_TO_PAIR: &str = "Press enter to pair.";
 
-/// The note on a ticket that starts right but is not whole yet.
-const NOT_WHOLE: &str = "This ticket is not complete yet. Paste the rest, or copy it again on the box (y in its pair \
-     dialog).";
+/// The note on a ticket that starts right but is not whole: cut short, or
+/// as long as one with a character changed, which the checksum cannot tell
+/// apart.
+const NOT_WHOLE: &str = "This ticket is incomplete or damaged. Paste the rest, or copy it again on the box (y in its \
+     pair dialog).";
 
 /// The new connection form.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

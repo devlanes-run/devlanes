@@ -242,6 +242,7 @@ where
 {
     let size = terminal.size().map_err(backend_error)?;
     let mut app = App::new(size.width, size.height);
+    app.paste.on = pastes_are_keys;
     app.theme = options.theme();
     app.on_quit = crate::app::OnQuit::parse(options.on_quit.as_deref());
     app.start_default = options.start_default;
