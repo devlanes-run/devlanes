@@ -3,6 +3,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The start of every port name devlanes itself gives a unit. A project
+/// cannot name a port this way.
+pub const RESERVED_PORT_PREFIX: &str = "devlanes_";
+
+/// The port of a GUI service replica (`gui: true`), where its GUI host
+/// listens. Clients find GUI services by a port with this name.
+pub const GUI_PORT: &str = "devlanes_gui";
+
 /// Inclusive machine-wide dynamic pool; explicit blocks may be outside this pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortPool {

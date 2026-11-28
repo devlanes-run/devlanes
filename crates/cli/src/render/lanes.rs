@@ -97,6 +97,10 @@ pub(crate) fn unit_line(unit: &UnitSummary, cx: &Ctx<'_>) -> String {
     if let Some(power) = &unit.power {
         line.push_str(&format!(" power={}", clean(power)));
     }
+    // A GUI service, with its host's state: `gui=running`, `gui=exited`.
+    if let Some(gui) = &unit.gui {
+        line.push_str(&format!(" gui={}", clean(&gui.host)));
+    }
     if orphaned(unit)
         && let Some(pid) = unit.pid
     {
@@ -127,6 +131,9 @@ fn unit_block(unit: &UnitSummary, tail: &[Value], styled: &[Value], cx: &Ctx<'_>
     if let Some(drift) = &unit.drift {
         lines.push(format!("  {}", words::unit_drift(drift)));
     }
+    if let Some(note) = unit.gui.as_ref().and_then(words::gui_note) {
+        lines.push(format!("  {note}"));
+    }
     lines.extend(leftover_notes("  ", &unit.left_running, &unit.escaped));
     if unit.state == "failed" {
         lines.extend(super::tail_lines_in(tail, styled, cx));
@@ -149,7 +156,7 @@ fn loose_unit(value: &Value) -> Option<UnitSummary> {
     };
     for (key, field) in fields {
         // These are left out of the defaults' JSON while empty.
-        let listed = matches!(key.as_str(), "left_running" | "escaped" | "drift");
+        let listed = matches!(key.as_str(), "left_running" | "escaped" | "drift" | "gui");
         if (listed || target.contains_key(key)) && !field.is_null() {
             target.insert(key.clone(), field.clone());
         }
@@ -554,6 +561,11 @@ fn start_result(result: &StartResult, cx: &Ctx<'_>) -> Vec<String> {
 fn row_reason(reason: &RpcError) -> String {
     if reason.code == "spawn_failed" && reason.data.get("unit").is_some() {
         format!("couldn't start: {}", words::spawn_cause(&reason.data))
+    } else if words::is_gui_failure(&reason.code) {
+        format!(
+            "couldn't start: {}",
+            words::gui_cause(&reason.code, &reason.data).0
+        )
     } else {
         words::error_message(reason).0
     }
@@ -572,6 +584,7 @@ fn unit_fix(failure: Option<&UnitFailureData>, unit: Option<&UnitSummary>) -> Op
     match reason.code.as_str() {
         "spawn_failed" => words::spawn_hint(&reason.data),
         "ready_timeout" => words::status_hint(&reason.data),
+        code if words::is_gui_failure(code) => words::gui_cause(code, &reason.data).1,
         _ => None,
     }
 }
@@ -1042,6 +1055,9 @@ fn unit_table(lane: &LaneSummary, cx: &Ctx<'_>) -> Vec<String> {
         if let Some(code) = unit.exit_code.filter(|_| unit.state == "failed") {
             state.push_str(&format!(" ({code})"));
         }
+        if unit.gui.is_some() {
+            state.push_str(", gui");
+        }
         rows.push(vec![
             cx.unit_name(&unit_label(unit, cx), &unit.state, unit.color.as_deref()),
             cx.state_text(state_word(unit, cx), &state),
@@ -1071,6 +1087,9 @@ fn unit_table(lane: &LaneSummary, cx: &Ctx<'_>) -> Vec<String> {
                 clean(&unit.name),
                 words::unit_drift(drift)
             ));
+        }
+        if let Some(note) = unit.gui.as_ref().and_then(words::gui_note) {
+            extra.push(format!("  {}: {note}", clean(&unit.name)));
         }
         extra.extend(leftover_notes(
             &format!("  {}: ", clean(&unit.name)),

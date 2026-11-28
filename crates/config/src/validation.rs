@@ -796,6 +796,72 @@ fn windows_unit_folders<E: Extensions>(config: &ProjectConfig<E>) -> Result<(), 
     ))
 }
 
+/// Whether a port name is one devlanes keeps for itself, such as `devlanes_gui`.
+fn is_reserved_port(name: &str) -> bool {
+    name.starts_with(devlanes_core::ports::RESERVED_PORT_PREFIX)
+}
+
+/// Fails, naming the key, for a port name starting with `devlanes_` in a
+/// service's `hosts[].port`, `ready.tcp` or an expression's
+/// `self.ports.<name>`, `services.<alias>.ports.<name>` or
+/// `lanes.main.services.<alias>.ports.<name>`. The loader applies it with GUI
+/// services, whose `devlanes_gui` port it keeps apart; without them such a
+/// name stays a project's own.
+pub(crate) fn reserved_port_names<E: Extensions>(
+    config: &ProjectConfig<E>,
+) -> Result<(), ConfigError> {
+    for (name, service) in &config.services {
+        let path = format!("services.{name}");
+        for host in service.hosts.iter().flatten() {
+            if let crate::HostConfig::Route(route) = host
+                && let Some(port) = &route.port
+                && is_reserved_port(port)
+            {
+                return Err(fail(&format!("{path}.hosts"), reserved_port(port)));
+            }
+        }
+        if let Some(ReadyConfig::Check(ready)) = &service.ready
+            && let Some(crate::TcpReady::Port(port)) = &ready.tcp
+            && is_reserved_port(port)
+        {
+            return Err(fail(&format!("{path}.ready.tcp"), reserved_port(port)));
+        }
+    }
+    let value = serde_json::to_value(config).map_err(|e| ConfigError::plain(e.to_string()))?;
+    let mut texts = Vec::new();
+    if let Some(map) = value.as_object() {
+        for (key, value) in map {
+            expressions(value, key, &mut texts);
+        }
+    }
+    for (path, text) in texts {
+        for reference in crate::references(&text).map_err(|e| fail(&path, e.message))? {
+            let components: Vec<&str> = reference.split('.').collect();
+            // Where `ports` sits in each form.
+            let ports = match components[0] {
+                "self" => 1,
+                "services" => 2,
+                "lanes" => 4,
+                _ => continue,
+            };
+            if components.get(ports) == Some(&"ports")
+                && let Some(port) = components.get(ports + 1).filter(|p| is_reserved_port(p))
+            {
+                return Err(fail(&path, reserved_port(port)));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The error for a project naming a port devlanes keeps for itself.
+fn reserved_port(name: &str) -> String {
+    format!(
+        "port `{name}`: names starting with `{}` are reserved for devlanes",
+        devlanes_core::ports::RESERVED_PORT_PREFIX
+    )
+}
+
 /// Count distinct allocated names, including preset ports, before accepting a fixed block.
 fn validate_port_capacity<E: Extensions>(
     config: &ProjectConfig<E>,
@@ -808,6 +874,9 @@ fn validate_port_capacity<E: Extensions>(
     for (name, service) in &config.services {
         if !service.env.contains_key("PORT") {
             ports.insert((name.clone(), "default".to_owned()));
+        }
+        if service.gui == Some(true) {
+            ports.insert((name.clone(), devlanes_core::ports::GUI_PORT.to_owned()));
         }
         if let Some(preset) = &service.preset
             && let Some(preset_ports) = preset_ports

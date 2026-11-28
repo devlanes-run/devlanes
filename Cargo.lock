@@ -1386,6 +1386,9 @@ dependencies = [
  "devlanes-config",
  "devlanes-core",
  "devlanes-git",
+ "devlanes-gui-client",
+ "devlanes-gui-host",
+ "devlanes-gui-proto",
  "devlanes-ipc",
  "devlanes-logs",
  "devlanes-loopback",
@@ -1441,6 +1444,8 @@ name = "devlanes-e2e"
 version = "0.3.0"
 dependencies = [
  "async-trait",
+ "devlanes-gui-client",
+ "devlanes-gui-proto",
  "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-testing",
@@ -1502,9 +1507,11 @@ name = "devlanes-gui"
 version = "0.17.0"
 dependencies = [
  "clap",
+ "devlanes-core",
  "devlanes-gui-client",
  "devlanes-gui-host",
  "devlanes-gui-proto",
+ "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-version",
  "embed-resource",

@@ -32,6 +32,7 @@ mod daemon;
 mod driver;
 #[cfg(windows)]
 mod follow;
+mod gui;
 mod lifecycle;
 mod local;
 mod local_doctor;

@@ -232,6 +232,18 @@ fn first_match(dirs: &[String], program: &str, cwd: &Path) -> Option<PathBuf> {
         .find(|candidate| candidate.exists())
 }
 
+/// The `[devlanes] could not start: <message>` line for a unit that failed
+/// before its process started for another reason than its own spawn, such as
+/// its GUI host.
+pub(crate) fn failure_note(error: &RpcError) -> String {
+    let message = error
+        .data
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or(&error.code);
+    format!("{LOG_PREFIX} could not start: {message}")
+}
+
 /// The `[devlanes] could not start: ...` line for a `spawn_failed` error.
 pub(crate) fn log_line(error: &RpcError) -> String {
     format!(

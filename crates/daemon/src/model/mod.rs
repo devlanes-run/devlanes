@@ -104,6 +104,8 @@ pub(crate) struct ServiceInfo {
     pub color: String,
     /// `services.<name>.name`, for `UnitSummary.display_name`.
     pub display_name: Option<String>,
+    /// `gui: true`, for `UnitSummary.gui`.
+    pub gui: bool,
 }
 
 /// One `infra.hosts` route to a container's published host port.
@@ -231,6 +233,8 @@ pub(crate) struct UnitRec {
     /// What a service run was spawned with, to tell when the config changed it.
     /// Memory only, never state.db: it holds environment values.
     pub fingerprint: Option<Arc<crate::drift::Fingerprint>>,
+    /// A GUI service run's host, for `UnitSummary.gui` and `debug why`.
+    pub gui: Option<Arc<crate::gui::GuiState>>,
 }
 
 impl UnitRec {
@@ -1959,6 +1963,10 @@ pub(crate) fn unit_summary(lane: &str, name: &str, unit: &UnitRec) -> UnitSummar
             .cloned(),
         power: None,
         drift: None,
+        gui: unit
+            .gui
+            .as_ref()
+            .map(|gui| gui.status(unit.host.is_alive())),
     }
 }
 
@@ -2026,6 +2034,10 @@ pub(crate) fn idle_summary(lane: &str, service: &ServiceInfo) -> UnitSummary {
         display_name: service.display_name.clone(),
         role: Some("service".into()),
         public_url: service.public_url.clone(),
+        gui: service.gui.then(|| devlanes_proto::GuiStatus {
+            host: devlanes_proto::GUI_HOST_STOPPED.into(),
+            real_desktop: None,
+        }),
         ..UnitSummary::default()
     }
 }

@@ -65,6 +65,10 @@ pub enum Activity {
     Command,
     /// A stop, restart or clean, which thaws the lane first.
     Stop,
+    /// Input from a viewer or tool in a GUI service's window, which its host
+    /// reports. A viewer holds one long connection, which the connection
+    /// check counts only once.
+    Gui,
 }
 
 impl Activity {
@@ -76,6 +80,7 @@ impl Activity {
             Self::Cpu => "cpu",
             Self::Command => "command",
             Self::Stop => "stop",
+            Self::Gui => "gui",
         }
     }
 
@@ -87,6 +92,7 @@ impl Activity {
             Self::Cpu => 3,
             Self::Command => 4,
             Self::Stop => 5,
+            Self::Gui => 6,
         }
     }
 
@@ -98,6 +104,7 @@ impl Activity {
             3 => Self::Cpu,
             4 => Self::Command,
             5 => Self::Stop,
+            6 => Self::Gui,
             _ => return None,
         })
     }

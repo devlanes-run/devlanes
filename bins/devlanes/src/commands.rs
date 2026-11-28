@@ -551,6 +551,7 @@ async fn rpc_start(
                 data["service"] = crate::daemon::service_report().await;
                 data["browser"] = crate::setup::browser_report().await;
                 crate::local_doctor::add_wsl(&mut data).await;
+                crate::local_doctor::add_gui(&mut data).await;
                 return render_result(runtime, Method::Doctor, &data, None)
                     .map(|code| (code, None));
             }
@@ -662,6 +663,7 @@ async fn rpc_start(
                                     data["terminal"] = crate::local_doctor::terminal_facts();
                                 }
                                 crate::local_doctor::add_wsl(&mut data).await;
+                                crate::local_doctor::add_gui(&mut data).await;
                             }
                             // The tunnel reads this from the user config, not the
                             // daemon, so a box that pairs nobody is told here.

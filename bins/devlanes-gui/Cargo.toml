@@ -32,6 +32,9 @@ workspace = true
 
 [dependencies]
 devlanes-version = { path = "../../crates/version" }
+# Whether the unit still runs, once the daemon that started this host is gone.
+devlanes-core = { path = "../../crates/core" }
+devlanes-sys = { path = "../../crates/sys" }
 devlanes-gui-host = { path = "../../crates/gui-host" }
 devlanes-gui-proto = { path = "../../crates/gui-proto", features = ["serde"] }
 clap.workspace = true

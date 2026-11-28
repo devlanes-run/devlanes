@@ -93,6 +93,9 @@ pub(crate) struct SpawnRequest {
     pub keep_awake: bool,
     /// A service run's [`crate::drift::Fingerprint`]; `None` for one-shot units.
     pub fingerprint: Option<crate::drift::Fingerprint>,
+    /// `gui: true`: a GUI host starts before the unit (services only; `exec`
+    /// and `with` commands never get one).
+    pub gui: bool,
 }
 
 /// Copies an environment with its provenance (the type is deliberately not `Clone`).
@@ -137,6 +140,7 @@ impl SpawnRequest {
             role: "service",
             keep_awake: service.keep_awake,
             fingerprint: Some(crate::drift::Fingerprint::of(service, inputs)),
+            gui: service.gui,
         }
     }
 
@@ -176,6 +180,42 @@ impl SpawnRequest {
             role: kind.word(),
             keep_awake: false,
             fingerprint: None,
+            gui: false,
+        }
+    }
+
+    /// The record of this request's service run that failed before its
+    /// process existed, with the `[devlanes]` `note` written to its log at
+    /// `note_seq`.
+    fn not_started(
+        self,
+        log_dir: std::path::PathBuf,
+        note: String,
+        note_seq: Option<u64>,
+        color: String,
+    ) -> NotStartedRec {
+        NotStartedRec {
+            name: self.name,
+            actor: self.actor,
+            log_dir,
+            note,
+            note_seq,
+            ports: self.ports,
+            urls: self.urls,
+            tags: self.tags,
+            hidden: self.hidden,
+            autostart: self.autostart,
+            stop: self.stop,
+            literal_port: self.literal_port,
+            launch: self.launch,
+            preset: self.preset,
+            files: self.files,
+            color: Some(color),
+            display_name: self.display_name,
+            goal: self.goal,
+            keep_awake: self.keep_awake,
+            fingerprint: self.fingerprint,
+            gui: self.gui,
         }
     }
 }
@@ -204,6 +244,8 @@ pub(crate) struct NotStartedRec {
     pub goal: RunGoal,
     pub keep_awake: bool,
     pub fingerprint: Option<crate::drift::Fingerprint>,
+    /// A GUI service, whose host never started either.
+    pub gui: bool,
 }
 
 impl NotStartedRec {
@@ -239,6 +281,7 @@ impl NotStartedRec {
             goal: RunGoal::Ready(None),
             keep_awake: false,
             fingerprint: None,
+            gui: service.gui,
         }
     }
 }
@@ -2211,6 +2254,7 @@ pub(crate) struct StartOptions {
 
 type Spawned = (UnitHost, Arc<dyn ManagedUnit>);
 
+use crate::gui::GuiStart;
 use crate::idle::Activity;
 
 impl Inner {
@@ -2219,7 +2263,7 @@ impl Inner {
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
-        request: SpawnRequest,
+        mut request: SpawnRequest,
     ) -> Result<Spawned, RpcError> {
         // Counted before the shutdown check: once shutdown saw no spawn in flight,
         // every later one sees the cancelled token and refuses. The lane's own
@@ -2276,6 +2320,25 @@ impl Inner {
         }
         let data_path = self.lane_data_path(&project.name(), record.id);
         write_files(&[lane_path, data_path], request.files.clone()).await?;
+        let log_dir = unit_log_dir(
+            &self.opts.logs,
+            &project.name(),
+            record.index,
+            &request.name,
+        );
+        // A GUI service's host comes up first: its variables go into the
+        // unit's launch, and a host that fails fails the unit before it runs.
+        let gui = match self.start_gui(&reference, &mut request).await {
+            Ok(gui) => gui,
+            Err(failure) => {
+                let note = crate::spawn_error::failure_note(&failure);
+                let note_seq = self.write_note(log_dir.clone(), &request.name, &note).await;
+                let rec = request.not_started(log_dir, note, note_seq, color);
+                self.record_not_started(project, lane, rec, failure.clone())
+                    .await;
+                return Err(failure);
+            }
+        };
         // The process exists before its run row does. A daemon crash between the
         // spawn and `record_unit_run` below leaves a process no later daemon knows
         // about: reconcile cannot list it as an orphan and nothing stops it. The
@@ -2298,53 +2361,60 @@ impl Inner {
             "spawning"
         );
         let pty = request.spec.pty;
-        let spawned = if request.kind == Kind::Task {
-            runner.spawn_task(request.spec).await
-        } else {
-            runner.spawn(request.spec).await
-        };
-        let log_dir = unit_log_dir(
-            &self.opts.logs,
-            &project.name(),
-            record.index,
-            &request.name,
+        // Taken out, so a failure can still keep the rest of the request.
+        let spec = std::mem::replace(
+            &mut request.spec,
+            LaunchSpec {
+                program: String::new(),
+                args: Vec::new(),
+                cwd: std::path::PathBuf::new(),
+                env: BTreeMap::new(),
+                pty,
+                size: TerminalSize::default(),
+            },
         );
-        let managed = match spawned {
-            Ok(managed) => managed,
-            Err(error) => {
+        let spawned = if request.kind == Kind::Task {
+            runner.spawn_task(spec).await
+        } else {
+            runner.spawn(spec).await
+        };
+        let no_backend = matches!(gui, GuiStart::NoBackend);
+        let (managed, gui) = match (spawned, gui) {
+            (Ok(managed), GuiStart::Host(host)) => {
+                let (unit, events) = host.attach(managed);
+                let managed: Arc<dyn ManagedUnit> = unit.clone();
+                (managed, Some((unit, events)))
+            }
+            (Ok(managed), _) => (managed, None),
+            (Err(error), gui) => {
+                if let GuiStart::Host(host) = gui {
+                    host.abandon().await;
+                }
                 let (failure, note_seq) = self
                     .spawn_failed(attempt, error, log_dir.clone(), &reference)
                     .await;
                 // A service stays failed on the lane; tasks and exec units
                 // report the failure to their caller.
                 if request.kind == Kind::Service {
-                    let rec = NotStartedRec {
-                        name: request.name,
-                        actor: request.actor,
-                        log_dir,
-                        note: crate::spawn_error::log_line(&failure),
-                        note_seq,
-                        ports: request.ports,
-                        urls: request.urls,
-                        tags: request.tags,
-                        hidden: request.hidden,
-                        autostart: request.autostart,
-                        stop: request.stop,
-                        literal_port: request.literal_port,
-                        launch: request.launch,
-                        preset: request.preset,
-                        files: request.files,
-                        color: Some(color),
-                        display_name: request.display_name,
-                        goal: request.goal,
-                        keep_awake: request.keep_awake,
-                        fingerprint: request.fingerprint,
-                    };
+                    let note = crate::spawn_error::log_line(&failure);
+                    let rec = request.not_started(log_dir, note, note_seq, color);
                     self.record_not_started(project, lane, rec, failure.clone())
                         .await;
                 }
                 return Err(failure);
             }
+        };
+        let gui_state = match &gui {
+            Some((unit, _)) => Some(unit.state()),
+            None if no_backend => Some(crate::gui::GuiState::without_host(
+                devlanes_proto::GUI_HOST_NONE,
+            )),
+            // A GUI service whose host was skipped, as for a missing working
+            // directory, which its own spawn reports.
+            None if request.gui => Some(crate::gui::GuiState::without_host(
+                devlanes_proto::GUI_HOST_STOPPED,
+            )),
+            None => None,
         };
         let identity = managed.identity();
         tracing::debug!(unit = %request.name, pid = identity.map(|i| i.pid), "spawned");
@@ -2386,6 +2456,36 @@ impl Inner {
                         boot_id,
                     })
                     .await;
+                // The host goes on record with the unit's run, so stopping an
+                // orphaned run after a crash stops its host too.
+                let recorded = match (recorded, gui.as_ref().and_then(|(g, _)| g.host_identity())) {
+                    (Ok(run), Some(member)) => {
+                        match self
+                            .store
+                            .record_unit_run_members(run.id, vec![member])
+                            .await
+                        {
+                            Ok(_) => Ok(run),
+                            Err(error) => {
+                                // Stopped below; its row ends here, as nothing
+                                // watches this run.
+                                let _ = host.stop(request.stop).await;
+                                let outcome = host.exit_outcome().unwrap_or(ExitOutcome {
+                                    code: None,
+                                    signal: None,
+                                });
+                                self.finish_run(
+                                    run.id,
+                                    outcome,
+                                    Some(devlanes_state::EndedBy::Requested),
+                                )
+                                .await;
+                                Err(error)
+                            }
+                        }
+                    }
+                    (recorded, _) => recorded,
+                };
                 match recorded {
                     Ok(run) => Some(run.id),
                     Err(error) => {
@@ -2427,6 +2527,7 @@ impl Inner {
                 role: request.role,
                 keep_awake: request.keep_awake,
                 fingerprint: request.fingerprint.map(Arc::new),
+                gui: gui_state,
             },
         );
         drop(st);
@@ -2434,6 +2535,18 @@ impl Inner {
         // beats are cleared even when the unit exits before the claim ends.
         if first_run {
             self.publish_routes();
+        }
+        if let Some((unit, events)) = gui {
+            // Only now: a host that hears nothing in time exits by itself, so
+            // a daemon that died before the run was recorded leaves none.
+            unit.tell_identity();
+            self.watch_gui_host(
+                project,
+                lane,
+                (&request.name, &reference),
+                &host,
+                (unit, events),
+            );
         }
         if request.kind == Kind::Service {
             crate::local_sync::start(
@@ -2536,6 +2649,9 @@ impl Inner {
                     role: "service",
                     keep_awake: rec.keep_awake,
                     fingerprint: rec.fingerprint.map(Arc::new),
+                    gui: rec.gui.then(|| {
+                        crate::gui::GuiState::without_host(devlanes_proto::GUI_HOST_STOPPED)
+                    }),
                 },
             );
         }
@@ -4442,6 +4558,18 @@ impl Inner {
                         .get(unit)
                         .filter(|rec| rec.host.is_alive())
                         .map(|rec| {
+                            // When the plan has the unit as a GUI service again,
+                            // its next host comes up, so viewers wait for it.
+                            // Otherwise they are told the service closed.
+                            let again = resolved.services.get(unit).is_some_and(|s| {
+                                s.gui
+                                    && !resolved
+                                        .errors
+                                        .contains_key(&format!("services.{}", s.name))
+                            });
+                            if let Some(gui) = rec.gui.as_ref().filter(|_| again) {
+                                gui.restarting();
+                            }
                             (
                                 unit.clone(),
                                 rec.host.clone(),

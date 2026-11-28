@@ -46,7 +46,12 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("devlanes-gui: {}", chain(&error));
-                ExitCode::from(FAILED)
+                match error {
+                    host::HostError::Unavailable(_) => {
+                        ExitCode::from(devlanes_gui_proto::ready::UNREADY_EXIT)
+                    }
+                    _ => ExitCode::from(FAILED),
+                }
             }
         },
     }

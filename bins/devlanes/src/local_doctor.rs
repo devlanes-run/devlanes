@@ -88,6 +88,82 @@ pub async fn add_wsl(data: &mut Value) {
     }
 }
 
+/// How long `devlanes-gui version` may take.
+const GUI_VERSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Adds `gui` (`{path, installed, version, expected, error, backend, fix}`)
+/// to doctor `data` while GUI services are on, by running `devlanes-gui
+/// version`; otherwise `data` is left as it is, since users cannot reach the
+/// feature yet. `fix` is the command that installs `devlanes-gui` again the
+/// way devlanes was installed.
+pub async fn add_gui(data: &mut Value) {
+    let options = crate::gui::options().await;
+    if !options.enabled {
+        return;
+    }
+    let path = options.program.clone();
+    let (installed, fix) = {
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || {
+            // `devlanes update` fetches a missing devlanes-gui for a script
+            // install; a package manager reinstalls both.
+            let fix = match devlanes_update::InstallMethod::current() {
+                devlanes_update::InstallMethod::Script(_) => "devlanes update".to_owned(),
+                method => method.upgrade_command(devlanes_version::VERSION),
+            };
+            (path.is_file(), fix)
+        })
+        .await
+        .unwrap_or((false, "devlanes update".to_owned()))
+    };
+    let (version, error) = if installed {
+        match gui_version(&path).await {
+            Ok(version) => (Some(version), None),
+            Err(error) => (None, Some(error)),
+        }
+    } else {
+        (None, None)
+    };
+    if let Some(data) = data.as_object_mut() {
+        data.insert(
+            "gui".into(),
+            json!({
+                "path": path,
+                "installed": installed,
+                "version": version,
+                "expected": devlanes_version::VERSION,
+                "error": error,
+                "backend": options.backend,
+                "fix": fix,
+            }),
+        );
+    }
+}
+
+/// The release `devlanes-gui version` at `path` prints, or why it did not.
+async fn gui_version(path: &Path) -> Result<String, String> {
+    let mut command = tokio::process::Command::new(path);
+    command
+        .arg("version")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(GUI_VERSION_TIMEOUT, command.output())
+        .await
+        .map_err(|_| format!("no answer within {}s", GUI_VERSION_TIMEOUT.as_secs()))?
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(format!("version exited with {}", output.status));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .next()
+        .and_then(|line| line.strip_prefix("devlanes-gui "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(str::to_owned)
+        .ok_or_else(|| "version printed no version".to_owned())
+}
+
 /// `ports.range` (inclusive, `None` when invalid) and the proxy listeners.
 #[cfg(windows)]
 type CheckedPorts = (Option<(u16, u16)>, [(&'static str, u16); 2]);

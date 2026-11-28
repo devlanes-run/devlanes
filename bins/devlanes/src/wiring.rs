@@ -270,6 +270,7 @@ pub async fn engine(
     options.idle = idle;
     options.round_trips = round_trips;
     options.ci = devlanes_daemon::update::ci_detected(|name| std::env::var(name).ok());
+    options.gui = crate::gui::options().await;
     options.user = user;
     let engine: Arc<dyn Handler> = Arc::new(Engine::new(options, store, integ, shutdown));
     Ok(engine)

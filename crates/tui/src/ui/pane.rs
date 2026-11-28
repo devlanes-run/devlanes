@@ -702,6 +702,18 @@ fn unit_facts(app: &App, unit: &UnitSummary, width: usize) -> Vec<Line<'static>>
             theme.quiet(),
         ));
     }
+    if let Some(gui) = &unit.gui {
+        let host = match gui.host.as_str() {
+            devlanes_proto::GUI_HOST_RUNNING if gui.real_desktop == Some(true) => {
+                "yes, its GUI host runs, on this desktop"
+            }
+            devlanes_proto::GUI_HOST_RUNNING => "yes, its GUI host runs",
+            devlanes_proto::GUI_HOST_EXITED => "yes, but its GUI host exited",
+            devlanes_proto::GUI_HOST_NONE => "yes, with no GUI host on this machine",
+            _ => "yes",
+        };
+        lines.extend(field(theme, "gui", host, width, plain));
+    }
     lines
 }
 
@@ -792,6 +804,7 @@ fn idle_fact(power: &devlanes_proto::LanePower) -> String {
             "connection" => "a connection".to_owned(),
             "cpu" => "CPU use".to_owned(),
             "command" => "a command".to_owned(),
+            "gui" => "input in a GUI window".to_owned(),
             "start" => "a start".to_owned(),
             "stop" => "a stop".to_owned(),
             other => clean(other),

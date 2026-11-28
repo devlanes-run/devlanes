@@ -54,7 +54,7 @@ fn extends_merges_files_and_their_local_overlays_in_order() {
         ],
     );
     let entry = dir.path().join("devlanes.prod.yaml");
-    let load = load_project_files::<OpaqueExtensions>(&entry, None);
+    let load = load_project_files::<OpaqueExtensions>(&entry, None, Default::default());
     let (config, _) = load.result.expect("loaded");
     assert_eq!(config.project, "acme-prod");
     assert_eq!(script(&config, "api"), "start");
@@ -268,6 +268,7 @@ fn missing_overlays_fall_back_to_the_primary_worktree() {
             lane_dir: lane.path(),
             primary_dir: primary.path(),
         }),
+        Default::default(),
     );
     let (config, _) = load.result.expect("loaded");
     assert_eq!(

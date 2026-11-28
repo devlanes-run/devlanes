@@ -19,6 +19,10 @@ devlanes-logs = { path = "../logs" }
 devlanes-loopback = { path = "../loopback" }
 devlanes-config = { path = "../config" }
 devlanes-git = { path = "../git" }
+# The GUI host's ready line and its control connection; never `devlanes-gui`,
+# which links the GUI libraries.
+devlanes-gui-client = { path = "../gui-client" }
+devlanes-gui-proto = { path = "../gui-proto", features = ["serde"] }
 devlanes-metrics = { path = "../metrics" }
 devlanes-resolve = { path = "../resolve" }
 devlanes-resolver-dns = { path = "../resolver-dns" }
@@ -61,6 +65,8 @@ devlanes-sys-windows = { path = "../sys-windows" }
 
 [dev-dependencies]
 devlanes-client = { path = "../client" }
+# The fake runner's GUI host serves the real protocol in-process.
+devlanes-gui-host = { path = "../gui-host" }
 devlanes-pki = { path = "../pki" }
 devlanes-proxy = { path = "../proxy" }
 devlanes-resolver-hosts = { path = "../resolver-hosts", features = ["fake"] }

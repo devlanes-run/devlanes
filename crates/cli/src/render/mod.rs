@@ -18,7 +18,7 @@ pub use other::{DoctorCheck, DoctorState, doctor_checks_of, watch_line};
 pub(crate) use other::{doctor_failed, hide_env_values};
 pub use statusline::{StatuslineInput, statusline};
 pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording, lane_drift, unit_drift};
-pub use words::{status_hint, task_timeout};
+pub use words::{gui_failure, status_hint, task_timeout};
 
 use crate::{OutputMode, Runtime};
 

@@ -71,6 +71,8 @@ pub struct EngineOptions {
     /// other moves onto it, so a job's lane numbers never shift under it.
     /// Off in [`EngineOptions::new`] so tests behave the same in and out of CI.
     pub ci: bool,
+    /// GUI services (`gui: true`); off in [`EngineOptions::new`].
+    pub gui: crate::gui::GuiOptions,
 }
 
 impl std::fmt::Debug for EngineOptions {
@@ -91,6 +93,7 @@ impl std::fmt::Debug for EngineOptions {
             .field("round_trips", &self.round_trips)
             .field("resume", &self.resume.as_ref().map(|plan| plan.lanes.len()))
             .field("ci", &self.ci)
+            .field("gui", &self.gui)
             .finish()
     }
 }
@@ -114,6 +117,7 @@ impl EngineOptions {
             round_trips: Arc::default(),
             resume: None,
             ci: false,
+            gui: crate::gui::GuiOptions::default(),
         }
     }
 }

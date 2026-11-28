@@ -167,6 +167,10 @@ pub(crate) fn service_port_names<E: Extensions>(
     if let Some(preset) = &service.preset {
         names.extend(E::required_ports(preset).iter().map(|p| (*p).to_owned()));
     }
+    // Each replica's GUI host listens on its own port.
+    if service.gui == Some(true) {
+        names.insert(devlanes_core::ports::GUI_PORT.to_owned());
+    }
     let tags = service.tags.as_deref().unwrap_or_default();
     let view = ServiceView {
         name,

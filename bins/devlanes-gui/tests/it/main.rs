@@ -50,7 +50,7 @@ async fn the_host_serves_after_its_ready_line_until_stopped() {
             "--service",
             "acme:desktop",
         ])
-        .env("DEVLANES_GUI_TOKEN", "acme-token")
+        .env(devlanes_gui_proto::ready::TOKEN_ENV, "acme-token")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -97,7 +97,9 @@ async fn the_host_serves_after_its_ready_line_until_stopped() {
     assert!(devlanes_gui_host::pattern::shows_grid(&shot.frame));
     let control = ClientOptions::new(Role::Control, "acme-daemon:1", "daemon")
         .with_token(Token::new("acme-token"));
-    timeout(TIMEOUT, connect(address, control))
+    // Held open: a host whose control connection closes before the unit's
+    // identity came stops by itself.
+    let (_daemon, _control_events) = timeout(TIMEOUT, connect(address, control))
         .await
         .expect("control hello in time")
         .expect("the token from the environment is accepted");

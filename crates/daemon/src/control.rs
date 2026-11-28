@@ -995,6 +995,8 @@ impl Inner {
             role: "exec",
             keep_awake: false,
             fingerprint: None,
+            // An exec command never gets a GUI host, whatever it runs.
+            gui: false,
         };
         // Held until the unit is recorded, so a clean or reset that begins meanwhile
         // waits and then stops it, or refuses it once the lane is released.
@@ -1610,8 +1612,11 @@ impl Inner {
         let known = crate::platforms::known(&self.integ.contributors);
         let path = file.clone();
         let (config, report, unknown) = tokio::task::spawn_blocking(move || {
-            let config =
-                devlanes_config::load_lane_project_with::<OpaqueExtensions>(&path, &primary_dir)?;
+            let config = devlanes_config::load_lane_project_with::<OpaqueExtensions>(
+                &path,
+                &primary_dir,
+                checks.options,
+            )?;
             let report = crate::registry::check_config(&config, &checks)?;
             let unknown = crate::platforms::unknown(&config, &known);
             Ok::<_, devlanes_config::ConfigError>((config, report, unknown))

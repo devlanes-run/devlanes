@@ -497,6 +497,14 @@ pub fn rpc(error: &RpcError) -> Worded {
             rest,
             logs_hint(data),
         ),
+        "gui_host_missing" | "gui_unavailable" | "gui_host_failed" => {
+            let (cause, hint) = devlanes_cli::gui_failure(&code, data).unwrap_or_default();
+            (
+                format!("{} couldn't start: {cause}", target(data)),
+                Vec::new(),
+                hint,
+            )
+        }
         "git_failed" => (format!("git failed: {message}"), rest, None),
         "daemon_start_stalled" => {
             let waited = data.get("waited_s").and_then(Value::as_u64).unwrap_or(30);

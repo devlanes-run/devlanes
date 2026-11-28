@@ -170,6 +170,9 @@ pub struct ServiceLayout {
     pub autostart: bool,
     /// Evaluated `keep_awake`: while this unit runs, its lane is never throttled or frozen.
     pub keep_awake: bool,
+    /// `gui: true`: the replica's GUI host listens on its
+    /// [`devlanes_core::ports::GUI_PORT`] port in [`Self::ports`].
+    pub gui: bool,
     pub tags: Vec<String>,
     /// Palette name from [`devlanes_core::color::unit_color`].
     pub color: String,
@@ -366,6 +369,8 @@ pub struct ResolvedService {
     pub hidden: bool,
     /// See [`ServiceLayout::keep_awake`].
     pub keep_awake: bool,
+    /// See [`ServiceLayout::gui`].
+    pub gui: bool,
     pub tags: Vec<String>,
     /// Palette name from [`devlanes_core::color::unit_color`].
     pub color: String,
