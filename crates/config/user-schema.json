@@ -623,7 +623,7 @@
             "markdownDescription": "A box that `devlanes remote connect <name>` reaches by running a command. The command must run `devlanes tunnel --stdio` in the box."
           },
           "default": {},
-          "description": "Boxes that `devlanes remote connect <name>` reaches by running a command instead of SSH, keyed by that name. Use it for a container, a WSL distribution or a codespace. Names not listed here are SSH destinations. Changes apply at the next `remote connect`.",
+          "description": "Boxes that `devlanes remote connect <name>` reaches by running a command instead of SSH, keyed by that name. Use it for a container, a WSL distribution or a codespace. Names not listed here are SSH destinations. Names are up to 63 letters, digits, `-` and `_`, and do not start with `-`. Changes apply at the next `remote connect`.",
           "examples": [
             {
               "acme": {
@@ -639,7 +639,7 @@
               }
             }
           ],
-          "markdownDescription": "Boxes that `devlanes remote connect <name>` reaches by running a command instead of SSH, keyed by that name. Use it for a container, a WSL distribution or a codespace. Names not listed here are SSH destinations. Changes apply at the next `remote connect`.",
+          "markdownDescription": "Boxes that `devlanes remote connect <name>` reaches by running a command instead of SSH, keyed by that name. Use it for a container, a WSL distribution or a codespace. Names not listed here are SSH destinations. Names are up to 63 letters, digits, `-` and `_`, and do not start with `-`. Changes apply at the next `remote connect`.",
           "type": "object"
         },
         "port_mapping": {

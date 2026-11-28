@@ -105,12 +105,14 @@ impl Form {
             return Ok(Submit::Connect(name));
         }
         // The name becomes a key of remote.boxes in config.yaml.
-        if !name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        if name.len() > 63
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         {
             return Err(
-                "A box reached by a command needs a name of letters, digits, - and _.".into(),
+                "A box reached by a command needs a name of 1 to 63 letters, digits, - and _."
+                    .into(),
             );
         }
         let command = split_command(&self.command)?;

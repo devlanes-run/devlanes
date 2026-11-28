@@ -858,7 +858,7 @@ fn remote_boxes_need_a_name_and_a_program() {
         ),
         (
             "remote: { boxes: { acme.box: { command: [ssh] } } }",
-            "remote.boxes.acme.box: a box name may only hold",
+            "remote.boxes.acme.box: a box name has 1 to 63",
         ),
         (
             "remote: { boxes: { -acme: { command: [ssh] } } }",
@@ -907,7 +907,7 @@ fn remote_boxes_need_a_name_and_a_program() {
                 "remote: {{ boxes: {{ {}: {{ command: [ssh] }} }} }}",
                 "a".repeat(64)
             ),
-            "a box name may only hold up to 63",
+            "a box name has 1 to 63",
         ),
     ] {
         let error = parse_user(source).expect_err(source);

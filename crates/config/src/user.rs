@@ -469,8 +469,8 @@ impl Default for DaemonConfig {
 pub struct RemoteConfig {
     /// Boxes that `devlanes remote connect <name>` reaches by running a command instead of
     /// SSH, keyed by that name. Use it for a container, a WSL distribution or a codespace.
-    /// Names not listed here are SSH destinations. Changes apply at the next
-    /// `remote connect`.
+    /// Names not listed here are SSH destinations. Names are up to 63 letters, digits, `-`
+    /// and `_`, and do not start with `-`. Changes apply at the next `remote connect`.
     #[schemars(extend("examples" = [{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}]))]
     pub boxes: std::collections::BTreeMap<String, RemoteBox>,
     /// Let other machines connect to this one with `devlanes remote connect`. Defaults to
@@ -577,8 +577,8 @@ impl RemoteConfig {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
             if !plain {
                 return Err(ConfigError::plain(format!(
-                    "remote.boxes.{name}: a box name may only hold up to 63 letters, digits, `-` \
-                     and `_`, and cannot start with `-`"
+                    "remote.boxes.{name}: a box name has 1 to 63 letters, digits, `-` and `_`, \
+                     and does not start with `-`"
                 )));
             }
             if entry.command.first().is_none_or(String::is_empty) {
@@ -1532,11 +1532,14 @@ pub fn box_settings(
 }
 
 /// The path a lenient load dropped for the per-key problem `message`
-/// (`path: text; the default applies`, or `...; the default of DROPPED
-/// applies` when an ancestor went), or `None` for a problem about the whole
-/// file.
+/// (`path: text; the default applies`, `...; that entry is left out` for a
+/// list item, or `...; the default of DROPPED applies` when an ancestor
+/// went), or `None` for a problem about the whole file.
 fn dropped_by(message: &str) -> Option<&str> {
-    if let Some(rest) = message.strip_suffix("; the default applies") {
+    if let Some(rest) = message
+        .strip_suffix("; the default applies")
+        .or_else(|| message.strip_suffix("; that entry is left out"))
+    {
         return Some(rest.split_once(": ").map_or(rest, |(path, _)| path));
     }
     let (_, dropped) = message
@@ -1598,7 +1601,10 @@ pub fn parse_user_lenient(file: &str, source: &str) -> (UserConfig, Vec<ConfigEr
         // An ancestor of `path` went when `path` itself was absent; the text
         // names it, so a reader such as `box_settings` knows which settings
         // fell back to defaults.
-        let applies = if dropped == path {
+        let applies = if dropped == path && dropped.ends_with(']') {
+            // One item of a list went, and the rest of the list applies.
+            "that entry is left out".to_owned()
+        } else if dropped == path {
             "the default applies".to_owned()
         } else {
             format!("the default of {dropped} applies")
