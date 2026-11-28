@@ -11,21 +11,28 @@
 //! H.264 4:2:0 needs even sides. A frame with an odd side is padded here by
 //! repeating its last column or row, the encoded picture has the even size,
 //! and the decoder crops back to the size the frame message carries.
+//!
+//! The BGRA to 4:2:0 half serves the encoders, which only Linux and Windows
+//! have, so it is compiled there (and in tests) only; macOS decodes.
 
+#[cfg(any(target_os = "linux", windows, test))]
 use crate::Frame;
 
 /// `n` rounded up to even.
+#[cfg(any(target_os = "linux", windows, test))]
 pub(crate) fn even(n: u32) -> u32 {
     n + (n & 1)
 }
 
 /// Luma of one pixel.
+#[cfg(any(target_os = "linux", windows, test))]
 #[inline(always)]
 fn luma(b: i32, g: i32, r: i32) -> u8 {
     (((47 * r + 157 * g + 16 * b + 128) >> 8) + 16) as u8
 }
 
 /// The chroma pair of a block from the sums of its four pixels' channels.
+#[cfg(any(target_os = "linux", windows, test))]
 #[inline(always)]
 fn chroma(b4: i32, g4: i32, r4: i32) -> (u8, u8) {
     // Each row of coefficients sums to zero, so greys have no colour.
@@ -75,12 +82,14 @@ fn row_to_bgra(line: &mut [u8], y: &[u8], chroma: impl Fn(usize) -> (u8, u8)) {
 
 /// One row pair of a frame: the two source rows (the same row twice for the
 /// last row of an odd height), and where its luma and chroma go.
+#[cfg(any(target_os = "linux", windows, test))]
 struct RowPair<'a> {
     top: &'a [u8],
     bottom: &'a [u8],
     width: usize,
 }
 
+#[cfg(any(target_os = "linux", windows, test))]
 impl RowPair<'_> {
     /// Converts the pair, calling `chroma_out` with each block's index and
     /// chroma pair and filling the two luma rows.
@@ -135,6 +144,7 @@ impl RowPair<'_> {
 }
 
 /// The row pairs of `frame`, with the index of each.
+#[cfg(any(target_os = "linux", windows, test))]
 fn row_pairs(frame: &Frame) -> impl Iterator<Item = (usize, RowPair<'_>)> {
     let height = frame.height();
     (0..even(height) / 2).map(move |j| {
