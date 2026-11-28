@@ -331,7 +331,10 @@ pub enum Method {
     /// `box_pairing_missing` (`{host, message}`) when its pairing is gone,
     /// `not_supported_yet` (`{feature: "boxes paired by ticket"}`) without
     /// an endpoint, and `bad_request` with a `code`; its
-    /// `remote_needs_pairing` has `transport: "p2p"`.
+    /// `remote_needs_pairing` has `transport: "p2p"`. A `host` that holds a
+    /// ticket or most of one (the prefix and 60 base32 characters, or 64
+    /// base32 characters in a row) or is longer than 253 bytes fails with
+    /// `bad_ticket` before it is dialed or echoed.
     #[serde(rename = "connect")]
     Connect,
     /// Client side, for `devlanes remote disconnect`: closes the link to

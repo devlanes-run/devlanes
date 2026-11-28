@@ -590,7 +590,8 @@ const MAX_HOST: usize = 253;
 
 /// `bad_ticket` for a `host` that is a ticket, or most of one: the ticket
 /// prefix in any case and 60 or more base32 characters, as a ticket cut,
-/// wrapped or changed on the way leaves it, or any text longer than
+/// wrapped or changed on the way leaves it, 64 base32 characters in a row
+/// (a ticket whose prefix was mistyped), or any text longer than
 /// [`MAX_HOST`]. Such text holds a secret, so it is never passed to `ssh`,
 /// listed as a box or logged as a host.
 pub(super) fn ticket_as_host(host: &str) -> Option<RpcError> {
@@ -600,7 +601,14 @@ pub(super) fn ticket_as_host(host: &str) -> Option<RpcError> {
             .count()
     });
     let ticket_like = looks_like_ticket(host) && base32 >= 60;
-    (ticket_like || host.len() > MAX_HOST).then(|| {
+    // A ticket with a mistyped prefix: no host name label or user name in
+    // use is 64 base32 characters in a row.
+    let longest = host
+        .split(|c: char| !matches!(c.to_ascii_lowercase(), 'a'..='z' | '2'..='7'))
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    (ticket_like || longest >= 64 || host.len() > MAX_HOST).then(|| {
         bad_ticket(
             "this is not a box name or an SSH destination, and not a whole pairing ticket \
              either; copy the ticket again from `devlanes daemon pair` on the box",
@@ -1175,20 +1183,22 @@ mod tests {
         }
     }
 
-    /// A host that is a ticket, or most of one, or longer than any name,
-    /// is refused before `ssh` sees it; names that only start like one,
-    /// and SSH destinations, go through.
+    /// A host that is a ticket, most of one, one with a mistyped prefix, or
+    /// longer than any name, is refused before `ssh` sees it; names that
+    /// only start like one, and SSH destinations, go through.
     #[test]
     fn a_ticket_is_never_taken_for_a_host() {
         let cut = format!("DLP1{}", "a2b3".repeat(15));
         let whole = format!("dlp1{}", "example".repeat(20));
         let changed = format!("dlp1{}x{}", "a".repeat(60), "!".repeat(5));
-        let long = format!("user@{}.example.invalid", "a".repeat(250));
+        let long = format!("user@{}example.invalid", "host1.".repeat(45));
+        let mistyped = format!("dpl1{}", "example".repeat(20));
         for host in [
             cut.as_str(),
             whole.as_str(),
             changed.as_str(),
             long.as_str(),
+            mistyped.as_str(),
         ] {
             assert_eq!(
                 ticket_as_host(host).map(|error| error.code),
