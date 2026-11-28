@@ -2,8 +2,8 @@
 //! a real TCP listener.
 
 use devlanes_gui_client::{ClientError, connect};
-use devlanes_gui_host::{Command, HELLO_TIMEOUT, MAX_CONNECTIONS, MAX_SCREENSHOTS_IN_FLIGHT};
 use devlanes_gui_host::conformance::{self, TestPatternProbe};
+use devlanes_gui_host::{Command, HELLO_TIMEOUT, MAX_CONNECTIONS, MAX_SCREENSHOTS_IN_FLIGHT};
 use devlanes_gui_proto::{
     Buttons, HEADER_LEN, MAGIC, Point, Pointer, RefusalReason, ScreenshotResult, WindowId,
 };

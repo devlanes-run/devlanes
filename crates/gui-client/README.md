@@ -1,6 +1,6 @@
 # devlanes-gui-client
 
-A headless async client of the devlanes GUI protocol: it connects to a GUI host, says hello with a role, sends input and requests, and turns what the host sends into events with decoded frames. The agent commands (`devlanes gui click` and the rest) and the viewer build on it; it uses `devlanes-gui-proto` for the messages and `devlanes-gui-codec` for decoding, and draws nothing itself.
+A headless async client of the devlanes GUI protocol: it connects to a GUI host, says hello with a role, sends input and requests, and turns what the host sends into events with decoded frames. The conformance checks of `devlanes-gui-host` drive hosts with it; it uses `devlanes-gui-proto` for the messages and `devlanes-gui-codec` for decoding, and draws nothing itself.
 
 ## Usage
 
@@ -46,7 +46,7 @@ async fn watch(port: u16) -> Result<(), ClientError> {
 
 ## Behaviour
 
-Each window decodes on the blocking pool in order, and events keep the order the host sent them in. A frame that fails to decode is acknowledged as discarded and followed by a keyframe request. While the client holds a button or key it sends a keep-alive every heartbeat interval, so the host does not release them. Lock states combine the host's state with the client's own resizes and its link, as `ViewerLock` does.
+Each window decodes on the blocking pool in order, and events keep the order the host sent them in. A frame that fails to decode is acknowledged as discarded and followed by a keyframe request. While the client holds a button or key it sends a keep-alive every heartbeat interval, so the host does not release them. Lock states combine the host's state with the client's own resizes and its link, as `ViewerLock` does, for one connection only. At most `MAX_SCREENSHOTS_IN_FLIGHT` screenshots are asked for at once; further calls wait. Once the connection closes, every call returns `ClientError::Closed`.
 
 ## License
 

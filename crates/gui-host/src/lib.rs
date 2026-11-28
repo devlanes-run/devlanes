@@ -63,8 +63,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 pub use backend::{
-    Backend, BackendControl, BackendError, CapturedFrame, Command, Event, EventSink, HostGone, Rect,
-    Started, Unavailable,
+    Backend, BackendControl, BackendError, CapturedFrame, Command, Event, EventSink, HostGone,
+    Rect, Started, Unavailable,
 };
 pub use devlanes_gui_proto::MAX_SCREENSHOTS_IN_FLIGHT;
 pub use test_pattern::{

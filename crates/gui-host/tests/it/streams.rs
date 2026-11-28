@@ -7,8 +7,8 @@ use devlanes_gui_codec::{
     CodecError, DecoderBackend, EncodeParams, Encoded, EncoderBackend, Frame, Packet, RawBackend,
     VideoDecoder, VideoEncoder,
 };
-use devlanes_gui_host::{Command, MAX_SCREENSHOTS_IN_FLIGHT};
 use devlanes_gui_host::pattern::shows_grid;
+use devlanes_gui_host::{Command, MAX_SCREENSHOTS_IN_FLIGHT};
 use devlanes_gui_proto::{MAX_IN_FLIGHT, Point, Size, WindowId};
 
 use super::*;
@@ -290,7 +290,11 @@ async fn the_backend_is_told_which_windows_are_watched() {
     let (ada, mut ada_events) = host.viewer("ada").await;
     let (bob, _bob_events) = host.viewer("bob").await;
     next_frame(&mut ada_events).await;
-    assert_eq!(watches(&host), vec![(window, true)], "once for both viewers");
+    assert_eq!(
+        watches(&host),
+        vec![(window, true)],
+        "once for both viewers"
+    );
     ada.close();
     bob.close();
     let (tool, _events) = host.tool("agent").await;

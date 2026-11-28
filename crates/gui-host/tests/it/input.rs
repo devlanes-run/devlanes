@@ -158,7 +158,10 @@ async fn a_key_released_on_a_locked_window_reaches_the_app_and_frees_input() {
         code: f11,
         down: false,
     });
-    assert_eq!(host.pattern.commands().iter().filter(|c| **c == up).count(), 1);
+    assert_eq!(
+        host.pattern.commands().iter().filter(|c| **c == up).count(),
+        1
+    );
 
     daemon.lane_frozen(false).expect("sends");
     until(&mut ada_events, lock(LockState::Unlocked)).await;
@@ -170,7 +173,10 @@ async fn a_key_released_on_a_locked_window_reaches_the_app_and_frees_input() {
         window,
         text: "bob".into(),
     };
-    assert!(host.pattern.echoes().contains(&typed), "ada still held input");
+    assert!(
+        host.pattern.echoes().contains(&typed),
+        "ada still held input"
+    );
     host.stop().await;
 }
 
@@ -189,7 +195,11 @@ async fn syncs_share_one_frame_request_per_window_and_are_capped() {
     let release = async {
         // Answered at once, after every sync above it was handled.
         let _ = tool.screenshot(Some(WindowId(999))).await;
-        assert_eq!(requests(&host), 1, "the later syncs wait for the first request");
+        assert_eq!(
+            requests(&host),
+            1,
+            "the later syncs wait for the first request"
+        );
         host.pattern.hold_frames(false);
     };
     let (first, second, third, ()) = tokio::join!(tool.sync(), tool.sync(), tool.sync(), release);
@@ -207,7 +217,9 @@ async fn syncs_share_one_frame_request_per_window_and_are_capped() {
     }
     let after = flood.closed().await;
     assert!(
-        !after.iter().any(|m| matches!(m, HostMessage::Synced { .. })),
+        !after
+            .iter()
+            .any(|m| matches!(m, HostMessage::Synced { .. })),
         "{after:?}"
     );
     host.stop().await;

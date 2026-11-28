@@ -794,14 +794,10 @@ impl Hub {
                 })),
                 _ => None,
             },
-            ClientMessage::PointerLeft { .. } => {
-                match (target, self.arbiter.wheel(session, now)) {
-                    (Some(target), Verdict::Accept) => {
-                        Some(Command::PointerLeft { window: target })
-                    }
-                    _ => None,
-                }
-            }
+            ClientMessage::PointerLeft { .. } => match (target, self.arbiter.wheel(session, now)) {
+                (Some(target), Verdict::Accept) => Some(Command::PointerLeft { window: target }),
+                _ => None,
+            },
             ClientMessage::Focus { focused, .. } => {
                 match (target, self.arbiter.wheel(session, now)) {
                     (Some(target), Verdict::Accept) => Some(Command::Focus {
@@ -980,14 +976,17 @@ impl Hub {
     /// pool for a counted screenshot request.
     fn capture(&mut self, session: SessionId, request: u32, window: WindowId) {
         let frame = match self.windows.get(&window).filter(|w| !w.gone) {
-            None => return self.answer_screenshot(session, request, ScreenshotResult::NoSuchWindow),
+            None => {
+                return self.answer_screenshot(session, request, ScreenshotResult::NoSuchWindow);
+            }
             Some(win) => win.frame.clone(),
         };
         let Some(frame) = frame else {
             return self.answer_screenshot(session, request, ScreenshotResult::NoFrame);
         };
         if self.screenshot_jobs >= MAX_SCREENSHOT_JOBS {
-            let busy = ScreenshotResult::Failed("the GUI host is busy with other screenshots".into());
+            let busy =
+                ScreenshotResult::Failed("the GUI host is busy with other screenshots".into());
             return self.answer_screenshot(session, request, busy);
         }
         self.screenshot_jobs += 1;
@@ -995,8 +994,7 @@ impl Hub {
             let work = AssertUnwindSafe(|| screenshot_result(window, &frame));
             let result = std::panic::catch_unwind(work)
                 .unwrap_or_else(|_| ScreenshotResult::Failed("the encoder panicked".to_owned()));
-            let message =
-                encode(&HostMessage::Screenshot { request, result }).unwrap_or_default();
+            let message = encode(&HostMessage::Screenshot { request, result }).unwrap_or_default();
             Done::Screenshot { session, message }
         });
     }
@@ -1012,9 +1010,10 @@ impl Hub {
     /// Waits for a frame of the window the session last sent input to, or
     /// of the first main window, and answers once it arrives.
     fn sync(&mut self, session: SessionId, request: u32, now: Instant) {
-        let pending = self.waits.iter().filter(|w| {
-            w.session == session && matches!(w.waiter, Waiter::Sync { .. })
-        });
+        let pending = self
+            .waits
+            .iter()
+            .filter(|w| w.session == session && matches!(w.waiter, Waiter::Sync { .. }));
         if pending.count() >= MAX_PENDING_SYNCS {
             tracing::debug!(
                 session = session.0,
@@ -1040,7 +1039,13 @@ impl Hub {
 
     /// Makes `waiter` wait for a frame of `window` captured from now on. With
     /// a request already out for the window, it waits for the next one.
-    fn wait_for_frame(&mut self, session: SessionId, window: WindowId, waiter: Waiter, now: Instant) {
+    fn wait_for_frame(
+        &mut self,
+        session: SessionId,
+        window: WindowId,
+        waiter: Waiter,
+        now: Instant,
+    ) {
         let frame_request = match self.outstanding.contains_key(&window) {
             true => None,
             false => self.request_frame(window, now),
@@ -1063,7 +1068,8 @@ impl Hub {
             window: backend_id,
             request: id,
         });
-        self.outstanding.insert(window, Outstanding { id, sent: now });
+        self.outstanding
+            .insert(window, Outstanding { id, sent: now });
         Some(id)
     }
 
@@ -1097,10 +1103,9 @@ impl Hub {
         {
             self.outstanding.remove(&window);
         }
-        let (done, waiting): (Vec<_>, Vec<_>) =
-            std::mem::take(&mut self.waits).into_iter().partition(|w| {
-                w.window == window && w.frame_request.is_some_and(|id| id <= answered)
-            });
+        let (done, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waits)
+            .into_iter()
+            .partition(|w| w.window == window && w.frame_request.is_some_and(|id| id <= answered));
         self.waits = waiting;
         for wait in done {
             self.complete(wait);
@@ -1175,7 +1180,10 @@ impl Hub {
     fn window_added(&mut self, info: WindowInfo) {
         let backend_id = info.id;
         if self.by_backend.contains_key(&backend_id) {
-            tracing::debug!(window = backend_id.0, "the GUI backend added a window twice");
+            tracing::debug!(
+                window = backend_id.0,
+                "the GUI backend added a window twice"
+            );
             return;
         }
         let now = now();
@@ -1372,11 +1380,7 @@ impl Hub {
             }
         }
         self.refresh_locks(now);
-        let targets: Vec<_> = self
-            .sessions
-            .iter()
-            .map(|(id, s)| (*id, s.role))
-            .collect();
+        let targets: Vec<_> = self.sessions.iter().map(|(id, s)| (*id, s.role)).collect();
         for (session, role) in targets {
             let request = answered.get(&session).copied();
             let from_seq = match role {
@@ -1615,7 +1619,10 @@ fn encode(message: &HostMessage) -> Option<Bytes> {
 
 /// `size` with each side cut to [`MAX_DIMENSION`].
 fn fit(size: Size) -> Size {
-    Size::new(size.width.min(MAX_DIMENSION), size.height.min(MAX_DIMENSION))
+    Size::new(
+        size.width.min(MAX_DIMENSION),
+        size.height.min(MAX_DIMENSION),
+    )
 }
 
 /// Cuts `text` to at most `max` bytes on a character boundary.

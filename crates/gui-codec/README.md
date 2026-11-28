@@ -1,6 +1,6 @@
 # devlanes-gui-codec
 
-Video codecs for devlanes GUI streaming: the BGRA frame type, the `VideoEncoder` and `VideoDecoder` traits that each OS backend implements, the `raw` codec every build has, and the selector that picks the codec a window streams in. The GUI host encodes with it and the viewer decodes with it; the message types come from `devlanes-gui-proto`.
+Video codecs for devlanes GUI streaming: the BGRA frame type, the `VideoEncoder` and `VideoDecoder` traits that each OS backend implements, the `raw` codec every build has, and the selector that picks the codec a window streams in. `devlanes-gui-host` encodes with it and `devlanes-gui-client` decodes with it; the message types come from `devlanes-gui-proto`.
 
 ## Usage
 

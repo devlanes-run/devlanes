@@ -25,9 +25,8 @@ use devlanes_gui_codec::{
 };
 use devlanes_gui_proto::{
     Buttons, ClientMessage, CodecId, Hello, HostMessage, Key, KeyCode, LockState,
-    MAX_SCREENSHOTS_IN_FLIGHT, Point, Pointer,
-    Role, SYNC_FEATURE, ScreenshotResult, SessionId, Size, Token, ViewerLock, Welcome, Wheel,
-    WindowId,
+    MAX_SCREENSHOTS_IN_FLIGHT, Point, Pointer, Role, SYNC_FEATURE, ScreenshotResult, SessionId,
+    Size, Token, ViewerLock, Welcome, Wheel, WindowId,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpStream, ToSocketAddrs};
