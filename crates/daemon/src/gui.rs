@@ -634,8 +634,10 @@ impl GuiUnit {
             .get_or_init(|| async {
                 let _ = self.control.unit_exited(code);
                 self.state.stopped();
-                if let Err(error) = self.host.stop(HOST_STOP).await {
-                    tracing::warn!(%error, "the GUI host did not stop");
+                match self.host.stop(HOST_STOP).await {
+                    // A host that died before has nothing left to stop.
+                    Ok(()) | Err(devlanes_core::Error::Exited) => {}
+                    Err(error) => tracing::warn!(%error, "the GUI host did not stop"),
                 }
                 let _ = tokio::time::timeout(HOST_STOP.timeout, self.host.wait()).await;
                 self.control.close();
