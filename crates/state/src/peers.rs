@@ -39,7 +39,8 @@ impl From<P2pClientRow> for P2pClient {
 
 impl Store {
     /// Pins `client`'s key, replacing the row of the same key, and keeps at
-    /// most `keep` keys of its client id, newest first, in one transaction.
+    /// most `keep` keys of its client id, the most recently paired, in one
+    /// transaction; the key just paired is always kept.
     /// Returns the keys it dropped to stay within that, which the caller
     /// stops admitting.
     pub async fn add_p2p_client(
@@ -61,17 +62,17 @@ impl Store {
                     last_seen: client.last_seen,
                 };
                 // Deleted and inserted rather than updated, so the key's
-                // new row is the newest by rowid too.
+                // new row is the newest by rowid.
                 diesel::delete(p2p_clients::table.find(&row.peer_key)).execute(c)?;
                 diesel::insert_into(p2p_clients::table)
                     .values(&row)
                     .execute(c)?;
-                // Pairings made within one millisecond are told apart by
-                // insertion order, so the oldest is always the one dropped.
+                // Insertion order is pairing order. `paired_at` is the wall
+                // clock, which may step back, and ordering by it could drop
+                // the key just paired, which the caller pins anyway.
                 let dropped: Vec<String> = p2p_clients::table
                     .filter(p2p_clients::client_id.eq(&client_id))
-                    .order(p2p_clients::paired_at.desc())
-                    .then_order_by(diesel::dsl::sql::<diesel::sql_types::BigInt>("rowid DESC"))
+                    .order(diesel::dsl::sql::<diesel::sql_types::BigInt>("rowid DESC"))
                     .offset(i64::try_from(keep).unwrap_or(i64::MAX))
                     .select(p2p_clients::peer_key)
                     .load(c)?;

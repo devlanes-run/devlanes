@@ -97,7 +97,7 @@ async fn migration_adds_p2p_clients_and_down_drops_them() {
         paired_at: 1,
         last_seen: None,
     };
-    // Two keys per client here; all pairings in one millisecond.
+    // Two keys per client here; pairings in one millisecond unless set.
     let pin = |client: P2pClient| {
         let store = store.clone();
         async move { store.add_p2p_client(client, 2).await.expect("pin") }
@@ -111,9 +111,15 @@ async fn migration_adds_p2p_clients_and_down_drops_them() {
     assert_eq!(pin(client("d", "laptop", "laptop")).await, ["a".repeat(64)]);
     // The desk's key paired again under another id replaces its own row.
     assert!(pin(client("b", "other", "other")).await.is_empty());
+    // After the clock stepped back, the key just paired is still the newest.
+    let stepped_back = P2pClient {
+        paired_at: 0,
+        ..client("e", "laptop", "laptop")
+    };
+    assert_eq!(pin(stepped_back).await, ["c".repeat(64)]);
     assert!(
         store
-            .touch_p2p_client("c".repeat(64), "laptop-2".into(), 9)
+            .touch_p2p_client("d".repeat(64), "laptop-2".into(), 9)
             .await
             .expect("touch")
     );
@@ -127,8 +133,8 @@ async fn migration_adds_p2p_clients_and_down_drops_them() {
     assert_eq!(
         pinned,
         [
-            ("d".repeat(64), "dl_cid_laptop".into(), None),
-            ("c".repeat(64), "dl_cid_laptop".into(), Some(9)),
+            ("e".repeat(64), "dl_cid_laptop".into(), None),
+            ("d".repeat(64), "dl_cid_laptop".into(), Some(9)),
             ("b".repeat(64), "dl_cid_other".into(), None),
         ]
     );
