@@ -213,6 +213,17 @@ fn two_daemons_pair_by_ticket() -> Result<()> {
 
     let pair = boxed.json(boxed.repo(), &["daemon", "pair"])?;
     let ticket = need(pair["ticket"].as_str(), "a ticket from daemon pair")?.to_owned();
+    // Without a relay the addresses are the only way to the box, and a dial
+    // with none fails as unreachable, which would point at the box instead.
+    let parsed = devlanes_transport::Ticket::parse(&ticket)
+        .map_err(|error| Error::Unexpected(format!("daemon pair printed a bad ticket: {error}")))?;
+    if parsed.addr.direct.is_empty() {
+        return Err(Error::Unexpected(
+            "the ticket has no direct address on this runner: iroh found no usable network \
+             interface"
+                .into(),
+        ));
+    }
     let connected = client.json(
         client.repo(),
         &["remote", "connect", &ticket, "--background"],
