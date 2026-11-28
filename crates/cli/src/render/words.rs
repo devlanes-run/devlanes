@@ -2097,7 +2097,10 @@ pub(crate) fn codec_problem(reason: &str, library: &str, found: &str, supported:
         devlanes_proto::GUI_CODEC_DECODER_TOO_OLD if !library.is_empty() => format!(
             "{library} {found} is installed, and devlanes decodes with {supported} only, since older versions have a security flaw in their decoder"
         ),
-        _ => "the OS has no encoder or decoder for it that starts".to_owned(),
+        devlanes_proto::GUI_CODEC_UNAVAILABLE => "the OS has none, or it did not start".to_owned(),
+        // A reason from another devlanes-gui version; the detail, where
+        // there is one, says more.
+        _ => "devlanes-gui reports it unavailable".to_owned(),
     }
 }
 
@@ -2106,7 +2109,7 @@ pub(crate) fn codec_problem(reason: &str, library: &str, found: &str, supported:
 /// each distribution's own: Debian and Ubuntu name the library package after
 /// its soname, which changes between releases; Fedora's package comes from
 /// its `fedora-cisco-openh264` repository; Alpine has it in `community`.
-pub(crate) const OPENH264_INSTALL: &str = "install it with the package manager: apt install libopenh264-8 (libopenh264-7 on Debian 12 and Ubuntu 24.04, libopenh264-6 on Ubuntu 22.04), dnf install openh264 (from Fedora's fedora-cisco-openh264 repository), pacman -S openh264 or apk add openh264; then restart the GUI services";
+pub(crate) const OPENH264_INSTALL: &str = "install it with the package manager: apt install libopenh264-8 (libopenh264-7 on Debian 12 and Ubuntu 24.04, libopenh264-6 on Ubuntu 22.04), dnf install openh264 (from Fedora's fedora-cisco-openh264 repository), pacman -S openh264 or apk add openh264; then restart the GUI services. The versions in Debian 12 and Ubuntu 22.04 and 24.04 only encode; showing GUI windows on this machine needs OpenH264 2.6 or 2.7, as in Debian 13 and Ubuntu 26.04";
 
 /// For a GUI service whose host did not start, why (the end of `couldn't
 /// start: ...`) and the command that helps, for the CLI and the TUI; `None`

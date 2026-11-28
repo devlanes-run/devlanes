@@ -1009,7 +1009,7 @@ fn missing_h264_is_worded_in_status_and_doctor() {
             json!({"h264": {"version": "OpenH264 2.4.1", "encode": true, "decode": false,
                              "encoders": ["software"], "decoders": []}, "problems": [
             {"codec": "h264", "side": "decode", "reason": "decoder_too_old", "library": "OpenH264",
-             "found": "2.4.1", "supported": "2.6 or later", "detail": ""}]}),
+             "found": "2.4.1", "supported": "2.6 to 2.7", "detail": ""}]}),
         ),
     );
     assert!(
@@ -1022,7 +1022,7 @@ fn missing_h264_is_worded_in_status_and_doctor() {
             {"codec": "h264", "side": "encode", "reason": "unsupported_version", "library": "OpenH264",
              "found": "3.0.0", "supported": "2.2 to 2.7", "detail": ""},
             {"codec": "h264", "side": "decode", "reason": "unsupported_version", "library": "OpenH264",
-             "found": "3.0.0", "supported": "2.2 to 2.7", "detail": ""}]})),
+             "found": "3.0.0", "supported": "2.6 to 2.7", "detail": ""}]})),
     );
     assert!(!refused.contains("apt install"), "{refused}");
     let windows = render_text(
@@ -1033,10 +1033,17 @@ fn missing_h264_is_worded_in_status_and_doctor() {
                     "problems": []}),
         ),
     );
+    // A reason from a newer devlanes-gui is named neutrally, with its detail.
+    let unknown = render_text(
+        Method::Doctor,
+        &gui(json!({"h264": none, "problems": [
+            {"codec": "h264", "side": "encode", "reason": "a_future_reason",
+             "detail": "what that devlanes-gui says"}]})),
+    );
     insta::assert_snapshot!(
         "render_missing_h264",
         format!(
-            "{status}=== doctor without OpenH264\n{missing}=== doctor with OpenH264 2.4.1\n{old}=== doctor with OpenH264 3.0\n{refused}=== doctor on Windows\n{windows}"
+            "{status}=== doctor without OpenH264\n{missing}=== doctor with OpenH264 2.4.1\n{old}=== doctor with OpenH264 3.0\n{refused}=== doctor on Windows\n{windows}=== doctor with an unknown reason\n{unknown}"
         )
     );
 }
