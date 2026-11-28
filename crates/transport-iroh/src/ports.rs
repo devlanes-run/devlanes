@@ -1,5 +1,8 @@
-//! The UDP ports the endpoint bound, kept next to the key file so the next
-//! start binds the same ones.
+//! The UDP ports a listening endpoint bound, kept next to the key file so
+//! the next start binds the same ones. The file goes when the endpoint
+//! stops listening, and an endpoint that only dials writes none: a fixed
+//! source port would link a laptop across the networks it visits, and a
+//! client needs no stable address.
 //!
 //! A client keeps the box's socket addresses from the ticket. Without a
 //! relay those are all it can dial, so a box that came back on other ports
@@ -56,17 +59,15 @@ pub(crate) fn path(key_file: &Path) -> PathBuf {
     key_file.with_file_name(FILE)
 }
 
-/// The saved ports, or none when the file is missing, unreadable or holds
-/// something else: the endpoint then binds any port, and never fails for it.
-pub(crate) fn load(path: &Path) -> Ports {
-    match std::fs::read_to_string(path) {
-        Ok(text) => parse(&text),
-        Err(error) => {
-            if error.kind() != io::ErrorKind::NotFound {
-                tracing::debug!(%error, path = %path.display(), "ignoring the saved peer-to-peer ports");
-            }
-            Ports::default()
-        }
+/// The saved ports, or none when the file is missing or holds something
+/// else. A file that exists but cannot be read is an error: it may hold
+/// ports that clients depend on, so the caller must not take it for none
+/// and write over it.
+pub(crate) fn load(path: &Path) -> io::Result<Ports> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(parse(&String::from_utf8_lossy(&bytes))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Ports::default()),
+        Err(error) => Err(error),
     }
 }
 
@@ -120,6 +121,14 @@ pub(crate) fn save(path: &Path, ports: Ports) -> io::Result<()> {
     written
 }
 
+/// Removes the saved ports; a file that is already gone is no error.
+pub(crate) fn remove(path: &Path) -> io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        removed => removed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +159,18 @@ mod tests {
         for (text, ports) in cases {
             assert_eq!(parse(text), ports, "{text:?}");
         }
+    }
+
+    /// A missing file means no ports, while one that is there but cannot be
+    /// read (here a directory) is an error, so the endpoint does not write
+    /// over ports that clients may depend on.
+    #[test]
+    fn only_a_missing_file_means_no_ports() -> io::Result<()> {
+        let home = tempfile::tempdir()?;
+        let path = home.path().join(FILE);
+        assert_eq!(load(&path)?, Ports::default());
+        std::fs::create_dir(&path)?;
+        assert!(load(&path).is_err());
+        Ok(())
     }
 }

@@ -955,6 +955,7 @@ impl Inner {
     pub(crate) async fn forget_pairings(self: &Arc<Self>, rule: tokio::sync::MutexGuard<'_, ()>) {
         lock(&self.remote.codes).void();
         let keys = self.unpin_peers(&rule, |_, _| true);
+        self.remote.peer.forget_failed_load();
         drop(rule);
         let ended = self.remote.end_feeds(|_| true);
         self.close_peers(&keys);

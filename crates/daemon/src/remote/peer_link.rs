@@ -28,6 +28,7 @@ use devlanes_transport::{
 use futures_util::FutureExt as _;
 use serde_json::{Value, json};
 use tokio::{sync::OwnedMutexGuard, time::Instant};
+use tokio_util::sync::CancellationToken;
 
 use super::feed::clean;
 use crate::{engine::Inner, model::lock};
@@ -338,6 +339,9 @@ pub(super) struct PeerAttempts {
     restored: Mutex<Option<(Instant, i64, Unreached)>>,
     /// Set once the link stopped trying because the box stayed away.
     gave_up: Arc<AtomicBool>,
+    /// The daemon's shutdown, which closes the endpoint before it stops
+    /// the links ([`PeerAttempts::stops_with`]).
+    shutdown: CancellationToken,
 }
 
 /// A gap between two attempts longer than this means the daemon was not
@@ -378,7 +382,15 @@ impl PeerAttempts {
                 (now, wall, unreached)
             })),
             gave_up: Arc::default(),
+            shutdown: CancellationToken::new(),
         }
+    }
+
+    /// Tells the attempts the daemon's `shutdown` token: once it fired, a
+    /// dial that finds the endpoint closed waits for the link to stop.
+    pub(super) fn stops_with(mut self, shutdown: CancellationToken) -> Self {
+        self.shutdown = shutdown;
+        self
     }
 
     /// How long a box may stay unreachable.
@@ -415,6 +427,17 @@ impl Transport for PeerAttempts {
             }
             Err(error) => error,
         };
+        // Daemon shutdown closes the endpoint for good before it stops the
+        // links. The box is not unreachable then and the link has nothing
+        // to retry or fail for, so the attempt waits until the link is
+        // stopped, which ends it, and the link keeps showing `connecting`;
+        // the link's connect timeout bounds the wait if no stop comes. A
+        // `Closed` outside shutdown, from a dial whose connection ended
+        // without a reason, is an ordinary failed attempt.
+        if self.shutdown.is_cancelled() && matches!(error.downcast_ref(), Some(PeerError::Closed)) {
+            tracing::debug!(host = %self.name, "not dialing a box: the daemon is stopping");
+            std::future::pending::<()>().await;
+        }
         let name = self.name.clone();
         if matches!(error.downcast_ref(), Some(PeerError::Refused)) {
             return Err(TransportError::permanent(PeerLinkError::Refused { name }));
@@ -510,12 +533,10 @@ impl Inner {
             None
         };
         let transport = Arc::new(PeerTransport::new(endpoint, addr));
-        Ok(PeerAttempts::new(
-            transport,
-            &paired.name,
-            paired.ephemeral,
-            unreached,
-        ))
+        Ok(
+            PeerAttempts::new(transport, &paired.name, paired.ephemeral, unreached)
+                .stops_with(self.shutdown.clone()),
+        )
     }
 }
 
@@ -679,16 +700,22 @@ pub(super) struct Paired {
 
 /// The error of a pairing dial that failed, for the box called `label`
 /// here. An unreachable box is most often one whose ticket expired, after
-/// which it stops listening, so that text says a ticket expires too.
+/// which it stops listening, so that text names the ticket's age too. It is
+/// written here in full around the cause rather than appended to
+/// [`PeerError::Unreachable`]'s own text, so the advice is one sentence; it
+/// keeps that text's opening words, "the box is not reachable", which the
+/// CLI's docs and tests match on.
 fn pairing_dial_failed(label: &str, error: &TransportError) -> RpcError {
     let reason = clean_reason(&error.to_string());
     match error.downcast_ref::<PeerError>() {
         Some(PeerError::InvalidId(_)) => bad_ticket(reason),
         Some(PeerError::Refused) => pairing_refused(NO_TICKET_OPEN, None),
-        Some(PeerError::Unreachable(_)) => pairing_failed(
+        Some(PeerError::Unreachable(cause)) => pairing_failed(
             label,
             format!(
-                "{reason}. Also check that the ticket was printed less than {} minutes ago.",
+                "the box is not reachable ({}). Check that its devlanes daemon is running and \
+                 that the ticket is less than {} minutes old.",
+                clean_reason(cause),
                 PAIRING_CODE_TTL_MS / 60_000
             ),
         ),
@@ -1560,6 +1587,42 @@ mod tests {
             "{error}"
         );
         assert!(attempts.gave_up().load(Ordering::SeqCst));
+    }
+
+    /// A dial on an endpoint closed for shutdown neither fails nor counts
+    /// against the box: it waits for the link to stop, even past the
+    /// deadline, and gives nothing up. Without a shutdown the same error is
+    /// an ordinary failed attempt.
+    #[tokio::test(start_paused = true)]
+    async fn a_closed_endpoint_neither_fails_nor_gives_up() {
+        let closed = || -> TransportError { PeerError::Closed.into() };
+        let (memory, _listener) = memory_transport();
+        // (the daemon is stopping, time since the link started)
+        for (stopping, after) in [
+            (true, 2 * EPHEMERAL_RETRY_FOR),
+            (false, EPHEMERAL_RETRY_FOR / 2),
+        ] {
+            let inner = Arc::new(Scripted {
+                outcomes: Mutex::new(VecDeque::from([Some(closed as fn() -> TransportError)])),
+                memory: memory.clone(),
+            });
+            let shutdown = CancellationToken::new();
+            if stopping {
+                shutdown.cancel();
+            }
+            let attempts = PeerAttempts::new(inner, "acme", true, None).stops_with(shutdown);
+            tokio::time::advance(after).await;
+            let waited = tokio::time::timeout(Duration::from_secs(60), attempts.connect()).await;
+            match waited {
+                Err(_) => assert!(stopping, "a dial outside shutdown waited"),
+                Ok(Err(error)) => {
+                    assert!(!stopping, "the attempt ended during shutdown: {error}");
+                    assert!(!error.is_permanent(), "{error}");
+                }
+                Ok(Ok(_)) => panic!("connected"),
+            }
+            assert!(!attempts.gave_up().load(Ordering::SeqCst), "{stopping}");
+        }
     }
 
     /// `span` rounds down at its boundaries.
