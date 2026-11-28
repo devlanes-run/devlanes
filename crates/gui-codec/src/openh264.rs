@@ -7,7 +7,7 @@ use bytes::Bytes;
 use devlanes_gui_proto::{CodecId, CodecOffer};
 use devlanes_sys::openh264::{Decoder, Encoder, EncoderConfig, FrameKind, I420, Library};
 
-use crate::h264::{frame_rate, quantizer};
+use crate::h264::{frame_rate, refine_qp};
 use crate::yuv::{self, I420Buffer, Planes};
 use crate::{
     CodecError, DecoderBackend, EncodeParams, Encoded, EncoderBackend, Frame, Packet, VideoDecoder,
@@ -19,13 +19,6 @@ const OFFER: CodecOffer = CodecOffer {
     codec: CodecId::H264,
     hardware: false,
 };
-
-/// How many quantizer steps a sharp-text refinement is finer than the
-/// stream at least.
-const REFINE_STEPS: u8 = 6;
-
-/// The finest quantizer a refinement uses, so one frame stays a modest size.
-const FINEST_QP: u8 = 12;
 
 /// Wraps an OpenH264 error.
 fn backend(source: devlanes_sys::openh264::Error) -> CodecError {
@@ -149,13 +142,9 @@ impl VideoEncoder for OpenH264Encoder {
             }
         }
         if params.refine {
-            // A few steps finer than what bitrate control used last, and
-            // never coarser than the stream nor finer than `FINEST_QP`.
+            // From what bitrate control used last.
             let stream = encoder.last_qp().map_err(backend)?;
-            let qp = quantizer(params.quality)
-                .min(stream.saturating_sub(REFINE_STEPS))
-                .max(FINEST_QP)
-                .min(stream);
+            let qp = refine_qp(params.quality, stream);
             encoder.set_fixed_qp(Some(qp)).map_err(backend)?;
         }
         let picture = I420 {
@@ -207,7 +196,17 @@ impl VideoDecoder for OpenH264Decoder {
         if packet.payload.is_empty() {
             return Err(CodecError::BadPayload { width, height });
         }
-        let Some(picture) = self.decoder.decode(packet.payload).map_err(backend)? else {
+        let decoded = self
+            .decoder
+            .decode(packet.payload)
+            .map_err(|error| match error {
+                // A picture larger than any frame message announces.
+                devlanes_sys::openh264::Error::TooLarge { .. } => {
+                    CodecError::BadPayload { width, height }
+                }
+                other => backend(other),
+            })?;
+        let Some(picture) = decoded else {
             return Ok(None);
         };
         let (w, h) = (width as usize, height as usize);

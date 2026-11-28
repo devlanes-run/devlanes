@@ -31,9 +31,11 @@ fn rank(codec: CodecId) -> Option<u8> {
 ///
 /// The order is fixed, with no user setting: the newer codec first, so H.264
 /// beats `raw`. Within a codec the host's encoders are tried in the order it
-/// lists them (on Windows Microsoft's software encoder before a hardware
-/// one, by the supervisor's decision of this run), and the viewer decodes
-/// with its hardware decoder where it lists one. `None` only when the lists
+/// passes them, which for each window follows `EncoderBackend::rank` at the
+/// window's size (on Windows Microsoft's software encoder first for windows
+/// up to about 2.5 megapixels, since it was measured faster there and has
+/// no session cap and no driver to hang, and the hardware one first above),
+/// and the viewer decodes with its hardware decoder where it lists one. `None` only when the lists
 /// share no codec, which cannot happen between devlanes builds since both
 /// have `raw`.
 pub fn select(encoders: &[CodecOffer], decoders: &[CodecOffer]) -> Option<Selection> {

@@ -1,13 +1,15 @@
 //! H.264 on Windows through Media Foundation (`devlanes_sys_windows::
-//! media_foundation`): Microsoft's software encoder first, a hardware
-//! encoder where the GPU has one as the next to try, and Microsoft's
+//! media_foundation`): Microsoft's software encoder and a hardware encoder
+//! where the GPU has one, each the other's fallback, and Microsoft's
 //! decoder.
 //!
-//! Software comes first by the supervisor's decision for this run: it was
-//! faster on the machine it was measured on, has no session cap and no
-//! driver to hang, and behaves the same on every machine. The quantizer of
-//! every frame, a refinement's included, comes from the quality the pacer
-//! asks for.
+//! Which encoder a window tries first depends on its size
+//! ([`LARGE_WINDOW_PIXELS`]). Up to it the software encoder comes first: it
+//! was faster where it was measured, has no session cap and no driver to
+//! hang. Above it the hardware encoder does, since software then costs
+//! several times the CPU for the same time per frame, and large windows are
+//! few, so the session cap rarely matters. The quantizer of every frame, a
+//! refinement's included, comes from the quality the pacer asks for.
 
 use std::sync::Arc;
 
@@ -15,12 +17,15 @@ use bytes::Bytes;
 use devlanes_gui_proto::{CodecId, CodecOffer};
 use devlanes_sys_windows::media_foundation::{self as mf, Decoder, Encoder, EncoderConfig};
 
-use crate::h264::{H264, Unavailable, frame_rate, level_5_2, quantizer};
+use crate::h264::{H264, Unavailable, frame_rate, level_5_2, quantizer, refine_qp};
 use crate::yuv::{self, Planes};
 use crate::{
     CodecError, DecoderBackend, EncodeParams, Encoded, EncoderBackend, Frame, Packet, VideoDecoder,
     VideoEncoder,
 };
+
+/// The window size, in pixels, above which the hardware encoder comes first.
+const LARGE_WINDOW_PIXELS: u64 = 2_500_000;
 
 /// Maps a Media Foundation error.
 fn codec_error(error: mf::Error) -> CodecError {
@@ -99,11 +104,19 @@ impl EncoderBackend for MediaFoundationEncoder {
         }
     }
 
+    /// The software encoder first up to 2.5 megapixels, the hardware one
+    /// above.
+    fn rank(&self, width: u32, height: u32) -> u8 {
+        let large = u64::from(width) * u64::from(height) > LARGE_WINDOW_PIXELS;
+        u8::from(large == self.hardware)
+    }
+
     /// An encoder that starts its transform on the first frame.
     fn encoder(&self) -> Result<Box<dyn VideoEncoder>, CodecError> {
         Ok(Box::new(Stream {
             hardware: self.hardware,
             encoder: None,
+            stream_qp: None,
             nv12: Vec::new(),
             output: Vec::new(),
         }))
@@ -115,6 +128,8 @@ struct Stream {
     hardware: bool,
     /// Started on the first frame and again when the size changes.
     encoder: Option<Encoder>,
+    /// The quantizer of the last frame that was not a refinement.
+    stream_qp: Option<u8>,
     nv12: Vec<u8>,
     output: Vec<u8>,
 }
@@ -140,6 +155,15 @@ impl VideoEncoder for Stream {
         self.nv12.resize(w * h * 3 / 2, 0);
         yuv::to_nv12(frame, &mut self.nv12, w, w * h);
         let bitrate = params.bitrate_bps.max(1);
+        // A refinement's quality is above the stream's, so its quantizer is
+        // finer, within `refine_qp`'s bound.
+        let qp = match (params.refine, self.stream_qp) {
+            (true, Some(stream)) => refine_qp(params.quality, stream),
+            _ => quantizer(params.quality),
+        };
+        if !params.refine {
+            self.stream_qp = Some(qp);
+        }
         let fresh = !self
             .encoder
             .as_ref()
@@ -151,6 +175,7 @@ impl VideoEncoder for Stream {
                 height,
                 bitrate_bps: bitrate,
                 frame_rate: frame_rate(params).round() as u32,
+                qp,
             };
             self.encoder = Some(Encoder::new(config, self.hardware).map_err(codec_error)?);
         }
@@ -161,8 +186,6 @@ impl VideoEncoder for Stream {
         if !encoder.constant_qp() && encoder.config().bitrate_bps != bitrate {
             encoder.set_bitrate(bitrate).map_err(codec_error)?;
         }
-        // A refinement's quality is above the stream's, so its quantizer is finer.
-        let qp = quantizer(params.quality);
         let keyframe = encoder
             .encode(
                 &self.nv12,
@@ -223,11 +246,15 @@ impl VideoDecoder for Decode {
         if packet.payload.is_empty() {
             return Err(bad());
         }
-        let Some(picture) = self
-            .0
-            .decode(packet.payload, packet.timestamp)
-            .map_err(codec_error)?
-        else {
+        let decoded =
+            self.0
+                .decode(packet.payload, packet.timestamp)
+                .map_err(|error| match error {
+                    // A picture larger than any frame message announces.
+                    mf::Error::TooLarge { .. } => bad(),
+                    other => codec_error(other),
+                })?;
+        let Some(picture) = decoded else {
             return Ok(None);
         };
         let stride = picture.stride as usize;

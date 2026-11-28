@@ -46,13 +46,16 @@ impl VideoDecoder for Decode {
         if packet.payload.is_empty() {
             return Err(CodecError::BadPayload { width, height });
         }
-        let picture = self
-            .0
-            .decode(packet.payload)
-            .map_err(|source| CodecError::Backend {
+        let picture = self.0.decode(packet.payload).map_err(|error| match error {
+            // A picture larger than any frame message announces.
+            devlanes_sys::videotoolbox::Error::TooLarge { .. } => {
+                CodecError::BadPayload { width, height }
+            }
+            other => CodecError::Backend {
                 codec: "h264",
-                source: Box::new(source),
-            })?;
+                source: Box::new(other),
+            },
+        })?;
         let Some(picture) = picture else {
             return Ok(None);
         };

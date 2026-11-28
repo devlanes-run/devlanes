@@ -27,6 +27,23 @@ pub(crate) fn quantizer(quality: u8) -> u8 {
     44 - (u32::from(quality.min(100)) * 26 / 100) as u8
 }
 
+/// How many quantizer steps finer than its stream a refinement is at most.
+/// A refinement of text at 640x360 cost Microsoft's and NVIDIA's encoders
+/// twice the stream's keyframe at 21 steps finer and under 1.5 times it at
+/// 15, which still took three quarters of the blur away.
+#[cfg(any(target_os = "linux", windows))]
+const MAX_REFINE_STEPS: u8 = 15;
+
+/// The quantizer of a refinement at the pacer's `quality` of a stream coded
+/// at `stream_qp`: at most [`MAX_REFINE_STEPS`] finer than the stream, and
+/// never coarser.
+#[cfg(any(target_os = "linux", windows))]
+pub(crate) fn refine_qp(quality: u8, stream_qp: u8) -> u8 {
+    quantizer(quality)
+        .max(stream_qp.saturating_sub(MAX_REFINE_STEPS))
+        .min(stream_qp)
+}
+
 /// Whether a picture of `width` by `height` fits H.264 level 5.2, the
 /// highest the software encoders here support: at most 36,864 macroblocks
 /// (4096x2304) and sides of at most 4096.
@@ -62,7 +79,7 @@ pub enum Unavailable {
         library: &'static str,
         /// Its version.
         found: String,
-        /// The versions whose decoder is used, such as `2.6 or later`.
+        /// The versions whose decoder is used, such as `2.6 to 2.7`.
         supported: String,
     },
     /// The OS has no H.264 codec, or the one found does not start.
@@ -103,11 +120,12 @@ fn os() -> H264 {
     let library = match devlanes_sys::openh264::Library::load() {
         Ok(library) => library,
         Err(error) => {
-            let unavailable = match error {
+            // Each side names the versions it takes.
+            let unavailable = |supported: &str| match &error {
                 LoadError::Unsupported { found, .. } => Unavailable::UnsupportedVersion {
                     library: "OpenH264",
                     found: found.to_string(),
-                    supported: SUPPORTED.to_owned(),
+                    supported: supported.to_owned(),
                 },
                 missing @ LoadError::Missing { .. } => Unavailable::MissingLibrary {
                     library: "OpenH264",
@@ -120,8 +138,8 @@ fn os() -> H264 {
             return H264 {
                 encoders: Vec::new(),
                 decoders: Vec::new(),
-                encode: Some(unavailable.clone()),
-                decode: Some(unavailable),
+                encode: Some(unavailable(SUPPORTED)),
+                decode: Some(unavailable(DECODER_SUPPORTED)),
                 version: None,
             };
         }

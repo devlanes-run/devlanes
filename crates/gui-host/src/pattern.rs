@@ -64,8 +64,8 @@ pub fn shows_grid(frame: &Frame) -> bool {
 }
 
 /// Whether the centre of every cell of `frame` has its colour with each
-/// channel at most `tolerance` off, for checks of one codec's accuracy.
-pub fn shows_grid_within(frame: &Frame, tolerance: u8) -> bool {
+/// channel at most `tolerance` off.
+fn shows_grid_within(frame: &Frame, tolerance: u8) -> bool {
     let size = Size::new(frame.width(), frame.height());
     (0..GRID_ROWS).all(|row| {
         (0..GRID_COLUMNS).all(|column| {

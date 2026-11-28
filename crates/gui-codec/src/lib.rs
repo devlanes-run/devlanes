@@ -6,7 +6,7 @@
 //! can run its encoder on a thread of its own and a viewer its decoder off the
 //! UI thread.
 //!
-//! The `h264` feature adds the H.264 backends of each OS ([`h264()`]): the
+//! The `h264` feature adds the H.264 backends of each OS (`h264()`): the
 //! system's OpenH264 on Linux, Media Foundation on Windows, the VideoToolbox
 //! decoder on macOS. Their FFI lives in `devlanes-sys` and
 //! `devlanes-sys-windows`; only `devlanes-gui` enables the feature, so the
@@ -15,7 +15,10 @@
 mod frame;
 mod raw;
 mod select;
-#[cfg(feature = "h264")]
+#[cfg(all(
+    feature = "h264",
+    any(target_os = "linux", windows, target_os = "macos")
+))]
 mod yuv;
 
 #[cfg(feature = "h264")]
@@ -175,6 +178,17 @@ pub trait EncoderBackend: Send + Sync {
     fn fits(&self, width: u32, height: u32) -> bool {
         let _ = (width, height);
         true
+    }
+
+    /// Where this backend stands among the host's encoders for a window of
+    /// `width` by `height`, higher first; equal ranks keep the order the host
+    /// lists them in. The host ranks a window again only once its size moved
+    /// well away from the size it last ranked for, so a window dragged
+    /// across a backend's preferred sizes does not switch on every step.
+    /// Every size the same by default.
+    fn rank(&self, width: u32, height: u32) -> u8 {
+        let _ = (width, height);
+        0
     }
 
     /// A new encoder, for one window.
