@@ -1026,8 +1026,9 @@ pub struct Integrations {
     pub launch_checks: Vec<Arc<dyn LaunchCheck>>,
     /// Transports to boxes for `connect`.
     pub remote: Arc<dyn RemoteConnector>,
-    /// This machine's peer-to-peer endpoint; `None` turns pairing by ticket
-    /// and serving clients paired that way off.
+    /// This machine's peer-to-peer endpoint, which dials boxes paired by
+    /// ticket and, with `box_serving`, serves clients paired that way;
+    /// `None` turns pairing by ticket off both ways.
     pub peer: Option<Arc<dyn devlanes_transport::PeerEndpoint>>,
     /// What the box serves clients paired by ticket with; needed with `peer`.
     pub box_serving: Option<Arc<dyn BoxServing>>,

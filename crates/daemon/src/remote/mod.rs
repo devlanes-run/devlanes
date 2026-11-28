@@ -40,6 +40,7 @@ mod listeners;
 mod mirror;
 mod pairing;
 mod peer;
+mod peer_link;
 mod report;
 mod sync;
 
@@ -518,10 +519,65 @@ impl Transport for Attended {
     }
 }
 
+/// How [`Inner::open_host`] reaches a box: over the connector's transport,
+/// or for a box paired by ticket over the peer-to-peer endpoint.
+struct Reach {
+    transport: Arc<dyn Transport>,
+    /// The transport name `remote_hosts` records.
+    kind: &'static str,
+    /// What `remote_hosts.address` records ([`HostConn::address`]).
+    address: String,
+    /// How sessions present a token and ask for a code; `None` for a box
+    /// paired by ticket.
+    pairing: Option<Arc<dyn devlanes_transport::PairingClient>>,
+    /// [`HostConn::forget`].
+    forget: Option<Forget>,
+}
+
+/// Which pairing by ticket a link was opened for: its box key and when it
+/// was made, which tell it from a pairing made again under the same name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PeerPairing {
+    /// The box's key, 64 hex digits.
+    pub(super) key: String,
+    /// `p2p_boxes.paired_at` of the pairing.
+    pub(super) paired_at: i64,
+}
+
+/// What forgets an ephemeral box once its link gave up.
+struct Forget {
+    /// Set by the link's [`peer_link::PeerAttempts`] when it gave up.
+    gave_up: Arc<AtomicBool>,
+    /// The pairing the link was opened for, the only one forgetting deletes.
+    pairing: PeerPairing,
+}
+
+/// Why [`Inner::open_host`] opens a link, which decides how it may reach
+/// the box and how long a box paired by ticket is tried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Opening {
+    /// A `remote connect` of a name, which reuses a live link.
+    Asked,
+    /// A starting daemon reopens a box an earlier one had connected (see
+    /// [`RemoteConnector::transport`]).
+    ///
+    /// [`RemoteConnector::transport`]: crate::integrations::RemoteConnector::transport
+    Restored,
+    /// A `remote connect` with a ticket just paired with the box: it gets a
+    /// new link, and only as a box paired by ticket.
+    Paired,
+}
+
 /// One `connect`ed box: the link, its mirror and its syncs.
 pub(crate) struct HostConn {
     name: String,
     kind: &'static str,
+    /// What `remote_hosts.address` records: the name for SSH and command
+    /// boxes, `p2p:` and the key's short form for a box paired by ticket.
+    address: String,
+    /// For an ephemeral box paired by ticket: forgets the box once its link
+    /// stopped trying because the box stayed away.
+    forget: Option<Forget>,
     state: watch::Receiver<LinkState>,
     registry: ClientRegistry,
     link: tokio::sync::Mutex<Option<Link>>,
@@ -633,9 +689,31 @@ impl HostConn {
         match &*self.state.borrow() {
             LinkState::Retrying { error, .. }
             | LinkState::NeedsAuth { error }
-            | LinkState::NeedsPairing { error, .. }
-            | LinkState::Failed { error } => Some(error.clone()),
+            | LinkState::Failed { error } => Some(self.shown(error)),
+            LinkState::NeedsPairing { error, .. } => Some(self.pairing_error(error)),
             _ => None,
+        }
+    }
+
+    /// A link state's reason as this box's messages carry it: for a box
+    /// paired by ticket without what [`peer_link::clean_reason`] drops,
+    /// since its close reasons and decode errors may hold text the box
+    /// chose; for SSH and command boxes as it is.
+    fn shown(&self, error: &str) -> String {
+        if self.kind == P2P {
+            peer_link::clean_reason(error)
+        } else {
+            error.to_owned()
+        }
+    }
+
+    /// The reason of a link waiting for pairing: for a box paired by
+    /// ticket this daemon's own text, since the transport's is about codes.
+    fn pairing_error(&self, error: &str) -> String {
+        if self.kind == P2P {
+            p2p_pairing_needed(&self.name)
+        } else {
+            error.to_owned()
         }
     }
 
@@ -699,11 +777,18 @@ impl HostConn {
     /// waits for a sign-in or pairing; `None` otherwise.
     fn stuck(&self) -> Option<RpcError> {
         match &*self.state.borrow() {
-            LinkState::Failed { error } => Some(remote_failed(&self.name, error)),
-            LinkState::NeedsAuth { error } => Some(remote_needs_auth(&self.name, error)),
+            LinkState::Failed { error } => Some(remote_failed(&self.name, self.shown(error))),
+            LinkState::NeedsAuth { error } => {
+                Some(remote_needs_auth(&self.name, self.shown(error)))
+            }
             LinkState::NeedsPairing {
                 error, retry_at, ..
-            } => Some(remote_needs_pairing(&self.name, error, *retry_at)),
+            } => Some(remote_needs_pairing(
+                &self.name,
+                self.kind,
+                self.pairing_error(error),
+                *retry_at,
+            )),
             _ => None,
         }
     }
@@ -792,13 +877,25 @@ impl HostConn {
     fn state_json(&self) -> Value {
         let mut value = describe(&self.state.borrow());
         if let Some(map) = value.as_object_mut() {
+            if let Some(error) = map.get("error").and_then(Value::as_str) {
+                let shown = if map.get("state").and_then(Value::as_str) == Some("needs_pairing") {
+                    self.pairing_error(error)
+                } else {
+                    self.shown(error)
+                };
+                map.insert("error".into(), json!(shown));
+            }
+            if let Some(server) = map.get("server").and_then(Value::as_str) {
+                let shown = self.label_of(server);
+                map.insert("server".into(), json!(shown));
+            }
             map.insert("host".into(), json!(self.name));
             match map.get("state").and_then(Value::as_str) {
                 Some("needs_auth") => {
                     map.insert("fix".into(), json!(sign_in_command(&self.name)));
                 }
                 Some("needs_pairing") => {
-                    map.insert("fix".into(), json!(pair_command(&self.name)));
+                    map.insert("fix".into(), json!(pair_command(&self.name, self.kind)));
                 }
                 _ => {}
             }
@@ -812,10 +909,29 @@ impl HostConn {
     /// connected box's handshake waits for [`watch_link`] to copy it. The only
     /// reader of `info` and `label`.
     fn handshake(&self) -> (BoxInfo, String) {
-        if let LinkState::Connected(session) = &*self.state.borrow() {
-            return (session.box_info().clone(), session.server().to_owned());
+        let (mut info, label) = match &*self.state.borrow() {
+            LinkState::Connected(session) => {
+                (session.box_info().clone(), self.label_of(session.server()))
+            }
+            _ => (lock(&self.info).clone(), self.label_of(&lock(&self.label))),
+        };
+        // The port range is text the box sent too, shown in `remote ls` and
+        // in the `ports_range_overlap` message.
+        info.ports_range = info.ports_range.map(|range| self.label_of(&range));
+        (info, label)
+    }
+
+    /// Text a box sent about itself, such as its version label `server`,
+    /// as shown and stored: for a box paired by ticket without control and
+    /// format characters and at most `MAX_CLIENT_TEXT` bytes, since any
+    /// machine that holds a ticket's key sends it; for SSH and command
+    /// boxes as it is.
+    fn label_of(&self, server: &str) -> String {
+        if self.kind == P2P {
+            feed::clean(server)
+        } else {
+            server.to_owned()
         }
-        (lock(&self.info).clone(), lock(&self.label).clone())
     }
 
     /// Version, linger and port range findings about the box by code, from
@@ -1018,9 +1134,13 @@ fn sign_in_command(host: &str) -> String {
     format!("devlanes remote connect {host}")
 }
 
-/// The command that pairs with `host` again, with the code `devlanes daemon
-/// pair` printed on the box.
-fn pair_command(host: &str) -> String {
+/// The command that pairs with `host`, reached over `kind`, again: with the
+/// code `devlanes daemon pair` printed on the box, or for a box paired by
+/// ticket with the new ticket it printed, which pairs it under its name.
+fn pair_command(host: &str, kind: &str) -> String {
+    if kind == P2P {
+        return format!("devlanes daemon pair on {host}, then devlanes remote connect <ticket>");
+    }
     format!("devlanes daemon pair on {host}, then devlanes remote connect {host} --code <code>")
 }
 
@@ -1088,6 +1208,92 @@ fn command_missing(host: &str) -> RpcError {
     )
 }
 
+/// The transport name `remote_hosts` records for a box paired by ticket.
+const P2P: &str = "p2p";
+
+/// `box_pairing_missing`: a restored box was paired by ticket, and this
+/// machine no longer has that pairing, so the restore does not try ssh
+/// instead.
+pub(super) fn pairing_missing(host: &str) -> RpcError {
+    RpcError::new(
+        "box_pairing_missing",
+        json!({
+            "host": host,
+            "message": format!(
+                "this machine no longer has the pairing with box {host}. Run `devlanes daemon \
+                 pair` on the box, then `devlanes remote connect <ticket>` here, or run \
+                 `devlanes remote disconnect {host}` to stop connecting to it"
+            ),
+        }),
+        1,
+    )
+}
+
+/// `box_name_ambiguous`: `host` is both a box paired by ticket and an entry
+/// of `remote.boxes`, and neither may win without a word. `paired_name`
+/// is the paired box's name, the same as `name` here.
+fn name_ambiguous(host: &str) -> RpcError {
+    RpcError::new(
+        "box_name_ambiguous",
+        json!({
+            "name": host,
+            "paired_name": host,
+            "message": format!(
+                "{host} is both a box paired by ticket and an entry of remote.boxes in the user \
+                 config. Rename the remote.boxes entry, or forget the paired box and pair with it \
+                 again from a new ticket with `--name`"
+            ),
+        }),
+        1,
+    )
+}
+
+/// `box_name_ambiguous` for `host`, which differs only in case from
+/// `paired`, a box paired by ticket: on a file system that ignores case
+/// the two would share a sync directory, so `host` is not reached at all.
+/// The way to the other machine depends on whether `host` names a
+/// `remote.boxes` entry, `configured` being its key as the config spells
+/// it, or an SSH destination.
+fn case_ambiguous(host: &str, paired: &str, configured: Option<&str>) -> RpcError {
+    let other = match configured {
+        Some(entry) => {
+            format!("to reach the remote.boxes entry {entry}, rename it in the user config")
+        }
+        None => format!(
+            "to reach {host} over SSH, use another name for it, such as `<your user>@{host}` or \
+             a second `Host` entry in `~/.ssh/config`"
+        ),
+    };
+    RpcError::new(
+        "box_name_ambiguous",
+        json!({
+            "name": host,
+            "paired_name": paired,
+            "message": format!(
+                "{host} differs only in case from {paired}, a box paired by ticket here, and the \
+                 two would share one sync directory. `devlanes remote connect {paired}` reaches \
+                 the paired box; {other}"
+            ),
+        }),
+        1,
+    )
+}
+
+/// What a box paired by ticket that needs pairing again says, in place of
+/// the transport's text, which is about codes.
+fn p2p_pairing_needed(host: &str) -> String {
+    format!(
+        "box {host} no longer accepts this machine's pairing. Run `devlanes daemon pair` on the \
+         box, then `devlanes remote connect <ticket>` here."
+    )
+}
+
+/// `remote_hosts.address` of a box paired by ticket with key `key`: `p2p:`
+/// and the key's first 8 hex digits, as `PeerId::short` shows it.
+fn p2p_address(key: &str) -> String {
+    format!("p2p:{}", key.get(..8).unwrap_or(key))
+}
+
 /// One line for a failure nobody waits for, such as a restore's: its message
 /// and, for a `config_error`, the file and line it is about.
 fn error_text(error: &RpcError) -> String {
@@ -1121,34 +1327,47 @@ fn remote_needs_auth(host: &str, message: impl std::fmt::Display) -> RpcError {
 }
 
 /// `remote_needs_pairing`: the box serves only paired clients and took no
-/// token or code from this machine, with the commands that pair it as `fix`
-/// and, after too many wrong codes, when the box takes codes again.
+/// token or code from this machine, with the commands that pair it, reached
+/// over `kind`, as `fix` and, after too many wrong codes, when the box takes
+/// codes again; for a box paired by ticket also `transport`.
 fn remote_needs_pairing(
     host: &str,
+    kind: &str,
     message: impl std::fmt::Display,
     retry_at: Option<SystemTime>,
 ) -> RpcError {
-    RpcError::new(
-        "remote_needs_pairing",
-        json!({
-            "host": host,
-            "message": message.to_string(),
-            "fix": pair_command(host),
-            "retry_at_ms": retry_at.map(unix_ms),
-        }),
-        4,
-    )
+    let mut data = json!({
+        "host": host,
+        "message": message.to_string(),
+        "fix": pair_command(host, kind),
+        "retry_at_ms": retry_at.map(unix_ms),
+    });
+    // Only for a box paired by ticket, so the answer for SSH and command
+    // boxes stays as it was.
+    if kind == P2P {
+        data["transport"] = json!(P2P);
+    }
+    RpcError::new("remote_needs_pairing", data, 4)
 }
 
-/// `connect` parameters. Not `Debug`: `code` is a secret.
+/// `connect` parameters: `host`, or a `ticket` and an optional `name`. Not
+/// `Debug`: `code` and `ticket` hold secrets.
 #[derive(Deserialize)]
 struct ConnectParams {
+    #[serde(default)]
     host: String,
     #[serde(default)]
     background: bool,
     /// A pairing code from `devlanes daemon pair` on the box.
     #[serde(default)]
     code: Option<String>,
+    /// A pairing ticket from `devlanes daemon pair` on the box, which pairs
+    /// with the box it names before connecting.
+    #[serde(default)]
+    ticket: Option<String>,
+    /// The name to keep a box paired by ticket under.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 /// `disconnect` parameters; no host means every box.
@@ -1263,13 +1482,42 @@ impl Inner {
     /// `background` only returns once the first attempt settled and, when it
     /// connected, the connection is recorded. A `code` is kept for the next
     /// time the box asks for one, and dropped when the link is up already and
-    /// when this request returns or its CLI detaches.
+    /// when this request returns or its CLI detaches. A `ticket` pairs with
+    /// its box first ([`Inner::pair_by_ticket`]) and then connects the name
+    /// the box is kept under, with a new link.
     pub(crate) async fn connect_method(
         self: &Arc<Self>,
         value: Value,
         session: &Session,
     ) -> Result<Value, RpcError> {
-        let args: ConnectParams = required(value)?;
+        let mut args: ConnectParams = required(value)?;
+        let mut held = None;
+        let mut paired_as = None;
+        // A ticket names its box, and pairing by ticket takes no code.
+        let opening = match args.ticket.take() {
+            Some(ticket) if args.host.is_empty() && args.code.is_none() => {
+                let paired = self.pair_by_ticket(&ticket, args.name.take()).await?;
+                paired_as = Some(json!({"name": paired.name, "kept": paired.kept}));
+                args.host = paired.name;
+                held = Some(paired.connecting);
+                Opening::Paired
+            }
+            Some(_) => {
+                return Err(RpcError::new(
+                    "bad_request",
+                    json!({"message": "`ticket` cannot be sent with `host` or `code`"}),
+                    2,
+                ));
+            }
+            None if args.name.is_some() => {
+                return Err(RpcError::new(
+                    "bad_request",
+                    json!({"message": "`name` is only taken with a `ticket`"}),
+                    2,
+                ));
+            }
+            None => Opening::Asked,
+        };
         if !valid_host(&args.host) {
             return Err(RpcError::new(
                 "bad_request",
@@ -1278,8 +1526,29 @@ impl Inner {
             ));
         }
         let code = args.code.filter(|code| !code.trim().is_empty());
+        if code.is_some() && self.is_peer_box(&args.host).await? {
+            return Err(RpcError::new(
+                "bad_request",
+                json!({
+                    "host": args.host,
+                    "message": format!(
+                        "box {} pairs by ticket, not by code. Run `devlanes daemon pair` on the \
+                         box, then `devlanes remote connect <ticket>` here",
+                        args.host
+                    ),
+                }),
+                2,
+            ));
+        }
+        // The answer to a pairing says which name the box is kept under.
+        let answer = |mut value: Value| {
+            if let (Some(paired), Some(map)) = (&paired_as, value.as_object_mut()) {
+                map.insert("paired".into(), paired.clone());
+            }
+            value
+        };
         let (conn, _watching) = self
-            .ensure_host(&args.host, Some(session), false, code.clone())
+            .ensure_host(&args.host, Some(session), opening, held, code.clone())
             .await?;
         let _forget = code.map(|code| ForgetCode {
             slot: conn.code.clone(),
@@ -1304,7 +1573,7 @@ impl Inner {
                 return Err(error);
             }
             conn.record_written().await;
-            return Ok(conn.status_json(&self.remote.all()));
+            return Ok(answer(conn.status_json(&self.remote.all())));
         }
         // Later `connected` events come from `watch_link` after the record.
         conn.record_written().await;
@@ -1314,7 +1583,7 @@ impl Inner {
             data: conn.state_json(),
         };
         if session.event(first).await.is_err() {
-            return Ok(conn.status_json(&self.remote.all()));
+            return Ok(answer(conn.status_json(&self.remote.all())));
         }
         let host = conn.name.clone();
         let mine = move |event: &Event| {
@@ -1328,30 +1597,34 @@ impl Inner {
             conn.finished().await
         };
         tokio::select! {
-            () = self.bus.forward(session, mine) => Ok(conn.status_json(&self.remote.all())),
-            finished = finished => finished.map(|()| conn.status_json(&self.remote.all())),
+            () = self.bus.forward(session, mine) => Ok(answer(conn.status_json(&self.remote.all()))),
+            finished = finished => finished.map(|()| answer(conn.status_json(&self.remote.all()))),
         }
     }
 
     /// The live connection to `host`, or a new one. A stopped link is closed, with
     /// its listeners, before its replacement starts. `watcher`, the CLI of a
     /// `connect`, gets the link's prompts from before its first attempt until
-    /// the returned guard drops. `connected_before` marks a box restored after
-    /// a daemon restart (see [`RemoteConnector::transport`]). `code` is a
-    /// pairing code for the next time the box asks for one.
-    ///
-    /// [`RemoteConnector::transport`]: crate::integrations::RemoteConnector::transport
+    /// the returned guard drops. `opening` says why: a link just paired by
+    /// ticket replaces a live one too, so the new link dials what the new
+    /// ticket says. `held` is [`Remotes::connecting`] when the caller holds
+    /// it already. `code` is a pairing code for the next time the box asks
+    /// for one.
     async fn ensure_host(
         self: &Arc<Self>,
         host: &str,
         watcher: Option<&Session>,
-        connected_before: bool,
+        opening: Opening,
+        held: Option<tokio::sync::OwnedMutexGuard<()>>,
         code: Option<String>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let identity = self.client_identity().await?;
         self.load_choices().await;
-        let _connecting = self.remote.connecting.lock().await;
-        self.replace_host(host, identity, watcher, connected_before, None, code)
+        let _connecting = match held {
+            Some(held) => held,
+            None => self.remote.connecting.clone().lock_owned().await,
+        };
+        self.replace_host(host, identity, watcher, opening, None, code)
             .await
     }
 
@@ -1363,14 +1636,14 @@ impl Inner {
         host: &str,
         identity: identity::ClientIdentity,
         watcher: Option<&Session>,
-        connected_before: bool,
+        opening: Opening,
         recorded: Option<&str>,
         code: Option<String>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let old = {
             let mut hosts = lock(&self.remote.hosts);
             match hosts.get(host) {
-                Some(conn) if !conn.ended() => {
+                Some(conn) if !conn.ended() && opening != Opening::Paired => {
                     let guard = watcher.map(|session| conn.board.watch(session));
                     if let Some(code) = code {
                         *lock(&conn.code) = Some((code, std::time::Instant::now()));
@@ -1386,7 +1659,7 @@ impl Inner {
             self.announce_findings();
         }
         let (conn, guard) = self
-            .open_host(host, identity, watcher, connected_before, recorded, code)
+            .open_host(host, identity, watcher, opening, recorded, code)
             .await?;
         lock(&self.remote.restore_errors).remove(host);
         Ok((conn, guard))
@@ -1423,13 +1696,18 @@ impl Inner {
     /// prompts and `code` kept for pairing before the link's first attempt.
     /// A box `recorded` as reached by a command fails with
     /// `box_command_missing` when the connector no longer has a command for
-    /// it, instead of trying the name as an ssh destination.
+    /// it, instead of trying the name as an ssh destination. A name in
+    /// `p2p_boxes` is dialed through the peer-to-peer endpoint, pinned to the
+    /// stored key ([`peer_link`]); one that is also a `remote.boxes` entry
+    /// fails with `box_name_ambiguous`, and one `recorded` as reached that
+    /// way, or just paired (`Opening::Paired`), without a pairing left
+    /// fails with `box_pairing_missing`.
     async fn open_host(
         self: &Arc<Self>,
         host: &str,
         identity: identity::ClientIdentity,
         watcher: Option<&Session>,
-        connected_before: bool,
+        opening: Opening,
         recorded: Option<&str>,
         code: Option<String>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
@@ -1437,35 +1715,94 @@ impl Inner {
         let prompter = Arc::new(HostPrompter {
             board: board.clone(),
         });
-        let remote = self
-            .integ
-            .remote
-            .transport(host, prompter.clone(), connected_before)
-            .await?;
-        if recorded == Some(COMMAND) && remote.kind != COMMAND {
-            return Err(command_missing(host));
-        }
-        let transport = Arc::new(Attended {
-            inner: remote.transport,
-            board: board.clone(),
-        });
-        let guard = watcher.map(|session| board.watch(session));
         let code: pairing::GivenCode = Arc::new(Mutex::new(
             code.map(|code| (code, std::time::Instant::now())),
         ));
+        // A name paired by ticket is a P2P box before the connector is
+        // asked, so a command or SSH destination of the same name never
+        // gets this box's link. A store that cannot be read fails the
+        // connect, of every kind of box: asking the connector instead would
+        // dial SSH for a P2P name.
+        let paired = self
+            .store
+            .p2p_box(host.to_owned())
+            .await
+            .map_err(crate::registry::store_error)?;
+        let reach = match paired {
+            Some(paired) => {
+                if self.configured_box(host).await.is_some() {
+                    return Err(name_ambiguous(host));
+                }
+                let attempts = self
+                    .peer_attempts(&paired, opening == Opening::Restored)
+                    .await?;
+                // The box pins this machine's key, so no token or code is
+                // ever sent to it; a refused session waits in
+                // `needs_pairing` for a new ticket.
+                Reach {
+                    forget: paired.ephemeral.then(|| Forget {
+                        gave_up: attempts.gave_up(),
+                        pairing: PeerPairing {
+                            key: paired.peer_key.clone(),
+                            paired_at: paired.paired_at,
+                        },
+                    }),
+                    transport: Arc::new(attempts),
+                    kind: P2P,
+                    address: p2p_address(&paired.peer_key),
+                    pairing: None,
+                }
+            }
+            None => {
+                // A box paired by ticket whose row is gone fails closed: its
+                // name must never become an SSH destination.
+                if recorded == Some(P2P) || opening == Opening::Paired {
+                    return Err(pairing_missing(host));
+                }
+                // The same conflict as a remote.boxes entry of the paired
+                // name, so the same error, whichever spelling was asked for.
+                if let Some(stored) = self.peer_box_spelled(host).await? {
+                    let configured = self.configured_box(host).await;
+                    return Err(case_ambiguous(host, &stored, configured.as_deref()));
+                }
+                let remote = self
+                    .integ
+                    .remote
+                    .transport(host, prompter.clone(), opening == Opening::Restored)
+                    .await?;
+                if recorded == Some(COMMAND) && remote.kind != COMMAND {
+                    return Err(command_missing(host));
+                }
+                let transport = Arc::new(Attended {
+                    inner: remote.transport,
+                    board: board.clone(),
+                });
+                let pairing = Arc::new(pairing::HostPairing {
+                    host: host.to_owned(),
+                    store: self.store.clone(),
+                    prompter,
+                    code: code.clone(),
+                });
+                Reach {
+                    transport,
+                    kind: remote.kind,
+                    address: host.to_owned(),
+                    pairing: Some(pairing),
+                    forget: None,
+                }
+            }
+        };
+        let guard = watcher.map(|session| board.watch(session));
         let mut options = SessionOptions::new(format!("devlanes {}", devlanes_version::VERSION));
         options.client_id = identity.id;
         options.client_name = identity.name;
-        options.pairing = Some(Arc::new(pairing::HostPairing {
-            host: host.to_owned(),
-            store: self.store.clone(),
-            prompter,
-            code: code.clone(),
-        }));
-        let link = Link::spawn(transport, options, self.integ.remote.backoff());
+        options.pairing = reach.pairing;
+        let link = Link::spawn(reach.transport, options, self.integ.remote.backoff());
         let conn = Arc::new(HostConn {
             name: host.to_owned(),
-            kind: remote.kind,
+            kind: reach.kind,
+            address: reach.address,
+            forget: reach.forget,
             state: link.state(),
             registry: link.registry().clone(),
             link: tokio::sync::Mutex::new(Some(link)),
@@ -1567,8 +1904,9 @@ impl Inner {
         Ok(json!({"disconnected": names}))
     }
 
-    /// `remote ls`: boxes known from `remote_hosts` plus live connection state,
-    /// with each live box's registry and mirror view ([`HostConn::list_json`]).
+    /// `remote ls`: boxes known from `remote_hosts` and `p2p_boxes` plus live
+    /// connection state, with each live box's registry and mirror view
+    /// ([`HostConn::list_json`]).
     /// A wanted box the restore could not open is `failed` with its error.
     /// Every box lists its `chosen_lanes`, and `yielded_local_lanes` names this
     /// machine's stopped lanes whose hostnames a chosen box lane serves.
@@ -1602,6 +1940,27 @@ impl Inner {
                 item["error"] = json!(error);
             }
             items.insert(host.name.clone(), item);
+        }
+        // A box paired by ticket that never connected, or whose row
+        // retention deleted, keeps its pairing and is listed with it. Best
+        // effort, as the `remote_hosts` read above is: `remote ls` still
+        // shows every live link, and the failure is logged. A connect fails
+        // closed instead, since there a missing row could mean an SSH dial.
+        let paired = self.store.p2p_boxes().await.unwrap_or_else(|error| {
+            tracing::warn!(%error, "cannot read the boxes paired by ticket for remote ls");
+            Vec::new()
+        });
+        for paired in paired {
+            items.entry(paired.name.clone()).or_insert_with(|| {
+                json!({
+                    "host": paired.name,
+                    "transport": P2P,
+                    "address": p2p_address(&paired.peer_key),
+                    "daemon_version": null,
+                    "last_connected_ms": null,
+                    "state": "disconnected",
+                })
+            });
         }
         let boxes = self.remote.all();
         for conn in &boxes {
@@ -1846,7 +2205,14 @@ impl Inner {
                 return;
             }
             match self
-                .replace_host(&name, identity, None, true, Some(&transport), None)
+                .replace_host(
+                    &name,
+                    identity,
+                    None,
+                    Opening::Restored,
+                    Some(&transport),
+                    None,
+                )
                 .await
             {
                 Ok(_) => {
@@ -2172,9 +2538,14 @@ fn label_warnings(label: &str) -> Vec<(&'static str, String)> {
 async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
     let mut state = conn.state.clone();
     let mut syncing: Option<JoinHandle<()>> = None;
+    let mut was_live = false;
     loop {
         let session = live(&state.borrow_and_update());
         let Some(inner) = engine.upgrade() else { break };
+        if was_live && session.is_none() {
+            inner.note_session_end(&conn).await;
+        }
+        was_live = session.is_some();
         {
             let mut since = lock(&conn.connected_since);
             match &session {
@@ -2192,8 +2563,8 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
             let record = devlanes_state::RemoteHost {
                 name: conn.name.clone(),
                 transport: conn.kind.to_owned(),
-                address: conn.name.clone(),
-                daemon_version: Some(session.server().to_owned()),
+                address: conn.address.clone(),
+                daemon_version: Some(conn.label_of(session.server())),
                 last_connected: i64::try_from(now_ms()).ok(),
                 // A box that connected is restored after a restart until
                 // `remote disconnect`.
@@ -2223,6 +2594,15 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
         } else if conn.ended() {
             inner.announce_findings();
             inner.reconcile_box_ports().await;
+            if let Some(forget) = &conn.forget
+                && forget.gave_up.swap(false, Ordering::SeqCst)
+            {
+                // In a task of its own: forgetting closes this link, and
+                // closing waits for this watcher.
+                let (engine, name, serial) = (inner.clone(), conn.name.clone(), conn.serial);
+                let pairing = forget.pairing.clone();
+                tokio::spawn(async move { engine.forget_peer_box(&name, serial, &pairing).await });
+            }
         }
         drop(inner);
         tokio::select! {
@@ -2230,8 +2610,29 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
             changed = state.changed() => if changed.is_err() { break },
         }
     }
+    // A link closed while connected, as on daemon shutdown, was reached
+    // until now.
+    if was_live && let Some(inner) = engine.upgrade() {
+        inner.note_session_end(&conn).await;
+    }
     if let Some(task) = syncing {
         task.abort();
+    }
+}
+
+impl Inner {
+    /// Records that `conn`'s session just ended, for a box paired by ticket:
+    /// its `last_connected` then says when the box was last reached, which
+    /// a restored link counts its retry window from. SSH and command boxes
+    /// keep the start of their last session there, as before.
+    async fn note_session_end(&self, conn: &HostConn) {
+        if conn.kind != P2P {
+            return;
+        }
+        let at = i64::try_from(now_ms()).unwrap_or(i64::MAX);
+        if let Err(error) = self.store.touch_remote_host(conn.name.clone(), at).await {
+            tracing::warn!(%error, host = %conn.name, "cannot record when the box was last reached");
+        }
     }
 }
 
@@ -2541,9 +2942,21 @@ mod tests {
         serial: u64,
         state: watch::Receiver<LinkState>,
     ) -> Arc<HostConn> {
+        conn_of_kind(name, "memory", serial, state)
+    }
+
+    /// [`conn_named`] for a box reached over transport `kind`.
+    fn conn_of_kind(
+        name: &str,
+        kind: &'static str,
+        serial: u64,
+        state: watch::Receiver<LinkState>,
+    ) -> Arc<HostConn> {
         Arc::new(HostConn {
             name: name.into(),
-            kind: "memory",
+            kind,
+            address: name.into(),
+            forget: None,
             state,
             registry: ClientRegistry::default(),
             link: tokio::sync::Mutex::new(None),
@@ -2674,6 +3087,54 @@ mod tests {
             code: "K7QM-3XWD".into(),
         });
         assert!(lock(&slot).is_some(), "a later connect's code stays");
+    }
+
+    /// A box paired by ticket that needs pairing again says so in its own
+    /// words, with the ticket command as `fix` and `transport` in the
+    /// error; an SSH box keeps the transport's text and its code command.
+    #[test]
+    fn a_p2p_box_that_needs_pairing_says_what_it_needs() {
+        let transport_text = "the box no longer accepts this machine's pairing and needs a new \
+                              code from `devlanes daemon pair` on the box";
+        let waiting = || LinkState::NeedsPairing {
+            error: transport_text.into(),
+            refused: false,
+            retry_at: None,
+        };
+        let rows = [
+            (
+                P2P,
+                "box acme no longer accepts this machine's pairing. Run `devlanes daemon pair` \
+                 on the box, then `devlanes remote connect <ticket>` here.",
+                "devlanes daemon pair on acme, then devlanes remote connect <ticket>",
+                Some(P2P),
+            ),
+            (
+                "ssh",
+                transport_text,
+                "devlanes daemon pair on acme, then devlanes remote connect acme --code <code>",
+                None,
+            ),
+        ];
+        for (kind, error, fix, transport) in rows {
+            let (_state, receiver) = watch::channel(waiting());
+            let conn = conn_of_kind("acme", kind, 0, receiver);
+            let shown = conn.state_json();
+            assert_eq!(
+                (&shown["state"], &shown["error"], &shown["fix"]),
+                (&json!("needs_pairing"), &json!(error), &json!(fix)),
+                "{kind}"
+            );
+            let stuck = conn.stuck().expect("needs pairing");
+            assert_eq!(stuck.code, "remote_needs_pairing", "{kind}");
+            assert_eq!(stuck.data["message"], error, "{kind}");
+            assert_eq!(stuck.data["fix"], fix, "{kind}");
+            assert_eq!(
+                stuck.data.get("transport").and_then(Value::as_str),
+                transport,
+                "{kind}"
+            );
+        }
     }
 
     /// Ranges overlap when they share one port; invalid ranges never parse.

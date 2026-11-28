@@ -42,7 +42,10 @@ fn pair_fix(host: &str) -> String {
 
 /// `connect` with `params` from a CLI that cannot answer prompts: its
 /// session is gone before the daemon asks anything.
-async fn connect_unattended(client: &ClientSide, params: Value) -> Result<Value, RpcError> {
+pub(super) async fn connect_unattended(
+    client: &ClientSide,
+    params: Value,
+) -> Result<Value, RpcError> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(9_400);
     let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (session, frames) = Session::local(id);
@@ -66,7 +69,7 @@ fn now_ms() -> u64 {
 }
 
 /// The id a client engine keeps in its home.
-async fn client_id(client: &ClientSide) -> String {
+pub(super) async fn client_id(client: &ClientSide) -> String {
     tokio::fs::read_to_string(client.h.home.join("client-id"))
         .await
         .expect("the client stored its id")
@@ -750,7 +753,7 @@ async fn pairing_needs_connections_to_be_allowed() {
 }
 
 /// A pairing ticket from `daemon pair` on `side`.
-async fn new_ticket(side: &BoxSide) -> Ticket {
+pub(super) async fn new_ticket(side: &BoxSide) -> Ticket {
     let answer = side
         .h
         .call(
