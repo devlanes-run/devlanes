@@ -23,8 +23,6 @@ const INTERNAL: &[&str] = &[
     "resize_failed",
     "spawn_task",
     "stop_failed",
-    // A pairing by ticket whose task panicked; the message is enough.
-    "internal",
     // Hosts sync states in `doctor`, matched by the tuple pattern.
     "applied",
     // Config check warning with its own renderer (`config_check`).
