@@ -1,5 +1,6 @@
 //! OpenH264, loaded at run time from the library the user installed, for the
-//! Linux GUI host and viewer. Nothing links it: a machine without it runs
+//! Linux GUI host and viewer, behind the `openh264` feature, which only
+//! `devlanes-gui` enables. Nothing links it: a machine without it runs
 //! every other part of devlanes, and the GUI falls back to the `raw` codec.
 //!
 //! The bindings are written here rather than taken from the `openh264` crate:
@@ -10,6 +11,16 @@
 //! soname went from 7 to 8): the output of an encode is read with the layout
 //! of the loaded version, and versions outside 2.2 to 2.7 are refused, since
 //! their layouts are not known.
+//!
+//! The decoder needs 2.6 or later ([`DECODER_OLDEST`]): every release before
+//! 2.6.0 has a heap overflow in its decoder (CVE-2025-27091), and a viewer
+//! decodes what a GUI host on another machine sends. The encoder only
+//! encodes the host's own pixels and accepts the whole range.
+//!
+//! The library is found through the dynamic loader's own search path
+//! (`LD_LIBRARY_PATH`, the `ld.so` cache), the same one that decides what any
+//! program of the user loads; only the fixed names of [`LIBRARY_NAMES`] are
+//! tried.
 
 use std::ffi::{OsStr, c_int, c_long, c_uint, c_ushort, c_void};
 use std::ptr::NonNull;
@@ -39,6 +50,23 @@ pub const NEWEST: Version = Version {
     minor: 7,
     revision: 0,
 };
+
+/// The oldest version whose decoder is used: earlier ones have the decoder
+/// heap overflow of CVE-2025-27091.
+pub const DECODER_OLDEST: Version = Version {
+    major: 2,
+    minor: 6,
+    revision: 0,
+};
+
+/// The versions the encoder takes, for messages.
+pub const SUPPORTED: &str = "2.2 to 2.7";
+
+/// The versions the decoder takes, for messages.
+pub const DECODER_SUPPORTED: &str = "2.6 or later";
+
+/// The largest picture side the decoder returns, the GUI protocol's limit.
+pub const MAX_SIDE: u32 = 8192;
 
 /// An OpenH264 release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -78,7 +106,7 @@ pub enum LoadError {
         detail: String,
     },
     /// OpenH264 of a version whose structures these bindings do not know.
-    #[error("OpenH264 {found} at {path} is not supported; devlanes supports {OLDEST} to {}.{}", NEWEST.major, NEWEST.minor)]
+    #[error("OpenH264 {found} at {path} is not supported; devlanes supports {SUPPORTED}")]
     Unsupported {
         /// The name or path that loaded.
         path: String,
@@ -101,6 +129,11 @@ pub enum Error {
     /// A picture whose planes do not hold its size.
     #[error("invalid picture: {0}")]
     Picture(&'static str),
+    /// A decoder asked of a library older than [`DECODER_OLDEST`].
+    #[error(
+        "OpenH264 {0}'s decoder is not used: it needs {DECODER_SUPPORTED}, since older versions have a decoder heap overflow (CVE-2025-27091)"
+    )]
+    DecoderTooOld(Version),
 }
 
 /// Which `SLayerBSInfo` the library writes.
@@ -152,6 +185,7 @@ const ENCODER_OPTION_FRAME_RATE: c_int = 4;
 const ENCODER_OPTION_BITRATE: c_int = 5;
 const ENCODER_OPTION_RC_MODE: c_int = 8;
 const ENCODER_OPTION_TRACE_LEVEL: c_int = 25;
+const ENCODER_OPTION_GET_STATISTICS: c_int = 28;
 const DECODER_OPTION_TRACE_LEVEL: c_int = 9;
 
 const VIDEO_FRAME_TYPE_IDR: c_int = 1;
@@ -303,6 +337,28 @@ struct FrameBsInfo<L> {
     time_stamp: i64,
 }
 
+/// `SEncoderStatistics`, unchanged from 2.2 to 2.7.
+#[repr(C)]
+struct EncoderStatistics {
+    width: c_uint,
+    height: c_uint,
+    average_frame_speed_in_ms: f32,
+    average_frame_rate: f32,
+    latest_frame_rate: f32,
+    bit_rate: c_uint,
+    average_frame_qp: c_uint,
+    input_frame_count: c_uint,
+    skipped_frame_count: c_uint,
+    resolution_change_times: c_uint,
+    idr_req_num: c_uint,
+    idr_sent_num: c_uint,
+    ltr_sent_num: c_uint,
+    statistics_ts: i64,
+    total_encoded_bytes: std::ffi::c_ulong,
+    last_statistics_bytes: std::ffi::c_ulong,
+    last_statistics_frame_count: std::ffi::c_ulong,
+}
+
 #[repr(C)]
 struct BitrateInfo {
     layer: c_int,
@@ -420,23 +476,38 @@ impl std::fmt::Debug for Library {
 
 impl Library {
     /// Loads the system's OpenH264 by its [`LIBRARY_NAMES`], through the
-    /// dynamic loader's search path.
+    /// dynamic loader's search path (the user's own `LD_LIBRARY_PATH` and
+    /// `ld.so` cache). A name that loads a refused version or something else
+    /// does not stop the search; when none is usable, the first refusal is
+    /// the error, or [`LoadError::Missing`] when nothing loaded.
     pub fn load() -> Result<Arc<Self>, LoadError> {
         Self::load_from(&LIBRARY_NAMES)
     }
 
-    /// Loads the first of `candidates` (names the loader searches, or paths)
-    /// that loads, and refuses it unless it is OpenH264 of a supported version.
-    pub fn load_from<S: AsRef<OsStr>>(candidates: &[S]) -> Result<Arc<Self>, LoadError> {
+    /// [`Library::load`] over `candidates`. Private: the safety of loading
+    /// rests on the names being OpenH264's; the tests point it at a path
+    /// that does not exist.
+    fn load_from<S: AsRef<OsStr>>(candidates: &[S]) -> Result<Arc<Self>, LoadError> {
         let mut detail = String::from("nothing to try");
+        let mut refused = None;
         for candidate in candidates {
             let name = candidate.as_ref();
             // SAFETY: loading runs the library's initializers. The names are
-            // OpenH264's, whose initializers only set up its own statics.
+            // OpenH264's sonames, whose initializers only set up its own
+            // statics; the loader resolves them as it would for any program
+            // of this user.
             match unsafe { libloading::Library::new(name) } {
-                Ok(library) => return Self::from_library(library, name.to_string_lossy().into()),
+                Ok(library) => match Self::from_library(library, name.to_string_lossy().into()) {
+                    Ok(loaded) => return Ok(loaded),
+                    Err(error) => {
+                        refused.get_or_insert(error);
+                    }
+                },
                 Err(error) => detail = error.to_string(),
             }
+        }
+        if let Some(refused) = refused {
+            return Err(refused);
         }
         Err(LoadError::Missing {
             tried: candidates
@@ -740,6 +811,23 @@ impl Encoder {
         check("ForceIntraFrame", code)
     }
 
+    /// The average quantizer of the last frame encoded, from the encoder's
+    /// statistics (the same structure in every 2.x).
+    pub fn last_qp(&mut self) -> Result<u8, Error> {
+        let mut statistics = zeroed::<EncoderStatistics>();
+        // SAFETY: the encoder is alive; the option copies its statistics
+        // into a structure of the layout every 2.x uses.
+        let code = unsafe {
+            ((**self.raw.as_ptr()).get_option)(
+                self.raw.as_ptr(),
+                ENCODER_OPTION_GET_STATISTICS,
+                (&mut *statistics as *mut EncoderStatistics).cast(),
+            )
+        };
+        check("GetOption(statistics)", code)?;
+        Ok(statistics.average_frame_qp.min(51) as u8)
+    }
+
     /// Encodes frames at the fixed quantizer `qp` (0 best to 51 worst) with
     /// rate control off, or with `None` under bitrate control again.
     pub fn set_fixed_qp(&mut self, qp: Option<u8>) -> Result<(), Error> {
@@ -922,8 +1010,18 @@ impl std::fmt::Debug for Decoder {
 }
 
 impl Decoder {
-    /// A decoder for an AVC byte stream.
+    /// A decoder for an AVC byte stream; refused with
+    /// [`Error::DecoderTooOld`] for a library older than [`DECODER_OLDEST`].
     pub fn new(library: &Arc<Library>) -> Result<Self, Error> {
+        if library.version < DECODER_OLDEST {
+            return Err(Error::DecoderTooOld(library.version));
+        }
+        Self::any_version(library)
+    }
+
+    /// A decoder whatever the version: only the tests use older ones, to
+    /// decode their own encoder's output and so read the pre-2.6 layout.
+    fn any_version(library: &Arc<Library>) -> Result<Self, Error> {
         let mut raw: *mut DecoderObject = std::ptr::null_mut();
         // SAFETY: the function writes a new decoder's address to `raw`.
         let code = unsafe { (library.create_decoder)(&mut raw) };
@@ -965,8 +1063,12 @@ impl Decoder {
     }
 
     /// Decodes one access unit (Annex B) and returns its picture, or `None`
-    /// when it held none (parameter sets only).
+    /// when it held none (parameter sets only). An empty payload, and a
+    /// picture with a side above [`MAX_SIDE`], are errors.
     pub fn decode(&mut self, data: &[u8]) -> Result<Option<Decoded<'_>>, Error> {
+        if data.is_empty() {
+            return Err(Error::Picture("the payload is empty"));
+        }
         let len =
             c_int::try_from(data.len()).map_err(|_| Error::Picture("the payload is too large"))?;
         let mut planes: [*mut u8; 3] = [std::ptr::null_mut(); 3];
@@ -1002,6 +1104,9 @@ impl Decoder {
         let (y_stride, uv_stride) = (buffer.stride[0], buffer.stride[1]);
         if width <= 0 || height <= 0 || y_stride < width || uv_stride < (width + 1) / 2 {
             return Err(Error::Picture("the decoder returned a picture of no size"));
+        }
+        if width as u32 > MAX_SIDE || height as u32 > MAX_SIDE {
+            return Err(Error::Picture("the decoded picture is larger than 8192"));
         }
         if planes.iter().any(|plane| plane.is_null()) {
             return Err(Error::Picture("the decoder returned no planes"));
@@ -1116,6 +1221,68 @@ mod tests {
                 assert!(!detail.is_empty());
             }
             other => panic!("expected a missing library, got {other:?}"),
+        }
+    }
+
+    /// The installed library encodes a picture and decodes its own output,
+    /// whichever output layout its version writes (CI's Ubuntu package is
+    /// 2.4, Cisco's binary 2.6), and the public decoder refuses versions
+    /// before 2.6. Skips, printing why, without OpenH264, unless
+    /// `DEVLANES_REQUIRE_H264` names `encode`.
+    #[test]
+    fn the_installed_library_decodes_its_own_output() {
+        let library = match Library::load() {
+            Ok(library) => library,
+            Err(error) => {
+                let required = std::env::var("DEVLANES_REQUIRE_H264").unwrap_or_default();
+                assert!(
+                    !required.contains("encode"),
+                    "OpenH264 is required: {error}"
+                );
+                eprintln!("skipped: {error}");
+                return;
+            }
+        };
+        assert_eq!(
+            matches!(Decoder::new(&library), Err(Error::DecoderTooOld(_))),
+            library.version() < DECODER_OLDEST,
+            "{}",
+            library.version()
+        );
+        let (width, height) = (64u32, 48u32);
+        let y: Vec<u8> = (0..width * height)
+            .map(|i| 16 + ((i % width) * 3) as u8)
+            .collect();
+        let chroma = vec![128u8; (width * height / 4) as usize];
+        let picture = I420 {
+            width,
+            height,
+            y: &y,
+            u: &chroma,
+            v: &chroma,
+            y_stride: width,
+            uv_stride: width / 2,
+        };
+        let config = EncoderConfig {
+            width,
+            height,
+            bitrate_bps: 2_000_000,
+            frame_rate: 30.0,
+        };
+        let mut encoder = Encoder::new(&library, config).expect("an encoder");
+        let mut decoder = Decoder::any_version(&library).expect("a decoder");
+        for frame in 0..3 {
+            let mut out = Vec::new();
+            let kind = encoder
+                .encode(&picture, frame * 33, &mut out)
+                .expect("encodes");
+            assert_eq!(kind == FrameKind::Idr, frame == 0, "frame {frame}");
+            let decoded = decoder.decode(&out).expect("decodes").expect("a picture");
+            assert_eq!((decoded.width, decoded.height), (width, height));
+            let row = &decoded.y[..width as usize];
+            for (got, want) in row.iter().zip(&y[..width as usize]) {
+                assert!(got.abs_diff(*want) <= 8, "{got} for {want}");
+            }
         }
     }
 }
