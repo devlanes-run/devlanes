@@ -1028,6 +1028,9 @@ pub enum Effect {
     /// Samples over the monitor's range.
     FetchMetrics(MetricsQuery),
     OpenUrl(String),
+    /// `devlanes gui open` for the GUI service `lane:unit`: its windows open
+    /// on this machine, or come to the front.
+    OpenViewer(String),
     Copy(String),
     /// Sends `yes`; only produced by a confirmed dialog.
     CleanLane {
@@ -1391,6 +1394,9 @@ pub struct App {
     pub on_quit: OnQuit,
     /// `start.restore: false`: `s` on a lane starts its default selection.
     pub start_default: bool,
+    /// GUI services are on in this build: `w` opens a GUI service's windows
+    /// and the options page has the GUI settings.
+    pub gui: bool,
     /// Where daemon.log times are shown: UTC until the runtime sets the
     /// system's zone, so tests draw the same everywhere.
     pub time_zone: jiff::tz::TimeZone,
@@ -1533,6 +1539,7 @@ impl App {
             start_run: None,
             on_quit: OnQuit::Ask,
             start_default: false,
+            gui: false,
             time_zone: jiff::tz::TimeZone::UTC,
             version: devlanes_version::VERSION,
             service_report: None,
@@ -6030,6 +6037,7 @@ impl App {
                 );
             }
             KeyCode::Char('o') => self.open_url(effects),
+            KeyCode::Char('w') if self.gui => self.open_viewer(effects),
             KeyCode::Char('m') => {
                 if let Some(reference) = self.selected.as_ref().map(|s| s.lane.clone()) {
                     self.use_lane(&reference, effects);
@@ -6403,7 +6411,7 @@ impl App {
     /// Opens the options page and loads config.yaml, with setting `key`
     /// selected when one is named.
     fn open_options(&mut self, key: &str, effects: &mut Vec<Effect>) {
-        let mut settings = Box::<crate::settings::Settings>::default();
+        let mut settings = Box::new(crate::settings::Settings::for_gui(self.gui));
         if !key.is_empty() {
             settings.select(key);
         }
@@ -7111,6 +7119,26 @@ impl App {
                 state: ProfilesState::Loading,
             });
             effects.push(Effect::FetchProfiles { lane });
+        }
+    }
+
+    /// Opens the windows of the selected GUI service on this machine.
+    fn open_viewer(&mut self, effects: &mut Vec<Effect>) {
+        let Some(lane) = self.selected_lane().map(|lane| lane.reference.clone()) else {
+            return;
+        };
+        match self.selected_unit() {
+            Some(unit) if is_gui(unit) => {
+                effects.push(Effect::OpenViewer(format!("{lane}:{}", unit.name)));
+            }
+            Some(unit) => {
+                let notice = format!(
+                    "{} is not a GUI service, so it has no windows to open",
+                    unit.label()
+                );
+                self.set_notice(notice);
+            }
+            None => self.set_notice("select a GUI service to open its windows".into()),
         }
     }
 
@@ -8233,6 +8261,12 @@ fn failure_words(failure: &devlanes_proto::UnitFailureData) -> Worded {
         .hint
         .get_or_insert_with(|| format!("devlanes logs {}", unit_ref(&failure.lane, &failure.unit)));
     worded
+}
+
+/// Whether `unit` is a GUI service: this machine's say so, a box's have a
+/// GUI port in the box's registry.
+pub fn is_gui(unit: &UnitSummary) -> bool {
+    unit.gui.is_some() || unit.ports.contains_key(devlanes_proto::GUI_PORT)
 }
 
 /// States with a live process behind them, or one about to start. Orphans

@@ -1500,6 +1500,19 @@ fn hints(app: &App) -> Vec<Hint> {
         return Vec::new();
     };
     let mut hints = lane_hints(app, lane);
+    // A running GUI service's windows open next to its address.
+    let gui = app.gui
+        && matches!(app.selected_id(), Some(RowId::Unit(_)))
+        && app
+            .selected_unit()
+            .is_some_and(|unit| crate::app::is_gui(unit) && crate::app::is_active(&unit.state));
+    if gui {
+        let at = hints
+            .iter()
+            .position(|(key, ..)| *key == "o")
+            .map_or(0, |o| o + 1);
+        hints.insert(at, ("w", "open windows", ch('w')));
+    }
     if let Some(grey) = app.grey(&lane.reference) {
         // Its hostnames lead to the lane in use, so there is nothing to open.
         hints.retain(|(key, ..)| *key != "o");

@@ -567,6 +567,49 @@ async fn a_project_whose_last_lane_went_away_still_opens() -> TestResult {
     Ok(())
 }
 
+/// `w` asks for a GUI service's windows by its full reference, only in a
+/// build with GUI services on; another unit says it has none.
+#[tokio::test]
+async fn w_opens_the_windows_of_a_gui_service() -> TestResult {
+    let mut lanes = mixed_lanes();
+    let api_unit = lanes[0]
+        .units
+        .iter_mut()
+        .find(|u| u.name == "api")
+        .ok_or("no api")?;
+    api_unit.gui = Some(devlanes_proto::GuiStatus {
+        host: devlanes_proto::GUI_HOST_RUNNING.into(),
+        real_desktop: Some(false),
+    });
+    let api = FakeApi::with_lanes(lanes);
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    select(&mut app, Selected::unit("acme@0", "api"));
+    let opened = |effects: &[Effect]| {
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::OpenViewer(unit) if unit == "acme@0:api"))
+    };
+    assert!(
+        !opened(&app.update(key(KeyCode::Char('w')))),
+        "GUI services off"
+    );
+    app.gui = true;
+    assert!(opened(&app.update(key(KeyCode::Char('w')))));
+    let other = app.selected_lane().and_then(|lane| {
+        lane.units
+            .iter()
+            .find(|unit| unit.gui.is_none() && unit.kind == "service")
+            .map(|unit| unit.name.clone())
+    });
+    select(
+        &mut app,
+        Selected::unit("acme@0", &other.ok_or("another service")?),
+    );
+    let effects = app.update(key(KeyCode::Char('w')));
+    assert!(!effects.iter().any(|e| matches!(e, Effect::OpenViewer(_))));
+    Ok(())
+}
+
 #[tokio::test]
 async fn o_opens_the_public_url_first() -> TestResult {
     let mut lanes = mixed_lanes();

@@ -31,7 +31,7 @@ use crate::ui::{fit, spans_width, spread};
 /// Tabs and the config sections they hold, in order. Sections not listed
 /// here join the first tab.
 const CATEGORIES: [(&str, &[&str]); 4] = [
-    ("general", &["tui", "terminal", "updates"]),
+    ("general", &["tui", "terminal", "updates", "gui"]),
     ("network", &["proxy", "hostnames", "ports", "tls", "remote"]),
     ("startup", &["start", "startup"]),
     ("storage", &["logs", "metrics", "history", "state"]),
@@ -212,8 +212,14 @@ impl Default for Settings {
 impl Settings {
     /// Every setting of the user config schema, waiting for the file.
     pub fn new() -> Self {
+        Self::for_gui(false)
+    }
+
+    /// [`Settings::new`], with the settings of GUI services when `gui`:
+    /// they show only in a build that has GUI services on.
+    pub fn for_gui(gui: bool) -> Self {
         Self {
-            categories: catalog(),
+            categories: catalog_for(gui),
             tab: 0,
             index: 0,
             saved: None,
@@ -1037,9 +1043,14 @@ pub fn perform(request: Request, home: Option<PathBuf>, sender: mpsc::Sender<Msg
 
 // ---- catalog --------------------------------------------------------------
 
-/// Every editable setting of the user config schema, grouped into tabs.
+/// Every editable setting of the published user config schema, grouped into tabs.
 pub fn catalog() -> Vec<Category> {
-    let schema = devlanes_config::user_schema();
+    catalog_for(false)
+}
+
+/// [`catalog`], with the settings of GUI services when `gui`.
+pub fn catalog_for(gui: bool) -> Vec<Category> {
+    let schema = devlanes_config::user_schema_for(gui);
     let mut items = Vec::new();
     walk(&schema, &schema, "", &mut items);
     let place = |key: &str| {

@@ -233,6 +233,7 @@ where
     app.theme = options.theme();
     app.on_quit = crate::app::OnQuit::parse(options.on_quit.as_deref());
     app.start_default = options.start_default;
+    app.gui = options.gui;
     app.time_zone = options
         .time_zone
         .clone()
@@ -872,6 +873,17 @@ impl Executor {
                     }
                 });
             }
+            Effect::OpenViewer(reference) => {
+                tokio::spawn(async move {
+                    if let Err(message) = open_viewer(&reference).await {
+                        let msg = Msg::Failed {
+                            what: format!("open the windows of {reference}"),
+                            message,
+                        };
+                        deliver(&sender, msg).await;
+                    }
+                });
+            }
             Effect::Copy(text) => {
                 if text.len() > MAX_COPY_BYTES {
                     self.fail(
@@ -1229,6 +1241,30 @@ fn open_url(url: &str) -> io::Result<()> {
             opener.program.display()
         )))
     }
+}
+
+/// Runs `devlanes gui open REFERENCE` with this TUI's devlanes, which starts
+/// the viewer from this environment. Fails with the command's error line.
+async fn open_viewer(reference: &str) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let output = tokio::process::Command::new(exe)
+        .args(["gui", "open", reference, "--output", "plain"])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(std::time::Duration::from_secs(30), output)
+        .await
+        .map_err(|_| "devlanes gui open did not answer in time".to_owned())?
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("error: "))
+        .unwrap_or("devlanes gui open failed")
+        .to_owned())
 }
 
 /// Hands a URL to the shell, which opens only plain `http` and `https` URLs

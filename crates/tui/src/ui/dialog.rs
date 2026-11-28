@@ -629,6 +629,15 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
                 }
                 body.push(Line::styled((*name).to_owned(), theme.quiet()));
                 for (key, what) in *pairs {
+                    // With GUI services on, `w` shares the line of `o`, so the
+                    // list keeps fitting 60 rows.
+                    let (key, what) = match (*key, app.gui) {
+                        ("o", true) => (
+                            &"o  w",
+                            &"open the address in a browser, a GUI service's windows",
+                        ),
+                        _ => (key, what),
+                    };
                     body.push(fit(
                         vec![
                             Span::styled(format!("  {key:<18}"), theme.key()),
