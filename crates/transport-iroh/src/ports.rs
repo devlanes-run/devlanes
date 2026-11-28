@@ -1,7 +1,8 @@
 //! The UDP ports a listening endpoint bound, kept next to the key file so
-//! the next start binds the same ones. An endpoint that only dials keeps
-//! none: a fixed source port would link a laptop across the networks it
-//! visits, and a client needs no stable address.
+//! the next start binds the same ones. The file goes when the endpoint
+//! stops listening, and an endpoint that only dials writes none: a fixed
+//! source port would link a laptop across the networks it visits, and a
+//! client needs no stable address.
 //!
 //! A client keeps the box's socket addresses from the ticket. Without a
 //! relay those are all it can dial, so a box that came back on other ports
@@ -120,6 +121,14 @@ pub(crate) fn save(path: &Path, ports: Ports) -> io::Result<()> {
         let _ = std::fs::remove_file(&temporary);
     }
     written
+}
+
+/// Removes the saved ports; a file that is already gone is no error.
+pub(crate) fn remove(path: &Path) -> io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        removed => removed,
+    }
 }
 
 #[cfg(test)]
