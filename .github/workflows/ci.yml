@@ -175,9 +175,9 @@ jobs:
       # The H.264 tests of devlanes-gui-codec load the system's OpenH264, as
       # devlanes-gui does on a user's Linux machine, and skip with the reason
       # printed where it is missing. The development package depends on the
-      # release's library, whatever its soname (libopenh264-7 on 24.04,
-      # libopenh264-8 on 26.04). Nothing links it, so the release builds in
-      # build.yml do not need it. One retry rides out a mirror's hiccup.
+      # release's library, whatever its soname (libopenh264-8, 2.6, on the
+      # 26.04 runners). Nothing links it, so the release builds in build.yml
+      # do not need it. One retry rides out a mirror's hiccup.
       - name: Install OpenH264
         if: runner.os == 'Linux'
         run: |
@@ -195,38 +195,18 @@ jobs:
       # Every test binary is built, so the kache entries stay those of a workspace
       # build, and TESTS picks which packages' tests run; empty runs them all.
       # DEVLANES_REQUIRE_H264 makes an H.264 test that would skip fail where
-      # the codec must be there: Ubuntu's OpenH264 encodes (its 2.4 is too old
-      # to decode), and every Mac decodes with VideoToolbox.
+      # the codec must be there: the Linux runner's OpenH264 2.6 encodes and
+      # decodes, the Windows runners have Microsoft's software transforms,
+      # and every Mac decodes with VideoToolbox. devlanes never ships, bundles
+      # or downloads OpenH264 for users, and neither does CI.
       - name: Tests
         shell: bash
         env:
           TESTS: ${{ needs.changes.outputs.tests }}
-          DEVLANES_REQUIRE_H264: ${{ runner.os == 'Linux' && 'encode' || runner.os == 'macOS' && 'decode' || '' }}
+          DEVLANES_REQUIRE_H264: ${{ runner.os == 'macOS' && 'decode' || 'encode,decode' }}
         run: cargo nextest run --workspace --all-features --locked --no-fail-fast --failure-output immediate-final ${TESTS:+--no-tests=pass -E "$TESTS"}
-      # The H.264 tests again with Cisco's OpenH264 2.6.0 build, the oldest
-      # whose decoder devlanes uses, so the decoder is tested on Linux too.
-      # Cisco's own download is the one its patent licence covers; the hash
-      # pins the file. It goes to the runner's temporary directory only, to
-      # test the decoder: devlanes never ships, bundles or downloads OpenH264
-      # for users.
-      - name: Tests with Cisco's OpenH264
-        if: runner.os == 'Linux'
-        env:
-          TESTS: ${{ needs.changes.outputs.tests }}
-          DEVLANES_REQUIRE_H264: encode,decode
-        run: |
-          dir="$RUNNER_TEMP/openh264"
-          mkdir -p "$dir"
-          curl -fsSL --retry 2 -o "$dir/lib.so.bz2" https://ciscobinary.openh264.org/libopenh264-2.6.0-linux64.8.so.bz2
-          echo "27ab53323c110b76214c1c72222f459d17febbcd1e252136cadc292b0308d75b  $dir/lib.so.bz2" | sha256sum -c -
-          bunzip2 -c "$dir/lib.so.bz2" > "$dir/libopenh264.so.8"
-          filter='package(devlanes-gui-codec) | (package(devlanes-sys) & test(/openh264/))'
-          LD_LIBRARY_PATH="$dir" cargo nextest run --workspace --all-features --locked --no-fail-fast --failure-output immediate-final \
-            ${TESTS:+--no-tests=pass} -E "${TESTS:+($TESTS) & }($filter)"
-      # Which H.264 this runner has, or why it has none, which is when the
-      # H.264 tests above skip: nextest shows no output of a passing test.
-      # Microsoft documents its H.264 transforms for client Windows only, and
-      # the Windows runners are Windows Server.
+      # Which H.264 this runner has, or why it has none: nextest shows no
+      # output of a passing test.
       - name: H.264 on this runner
         if: ${{ !cancelled() }}
         shell: bash
@@ -251,6 +231,69 @@ jobs:
           # --full adds the "Not cached" reasons and the remote upload and download counts.
           kache stats --full
           # Lets the daemon finish its queued uploads before the runner goes away.
+          kache daemon stop
+  # The OpenH264 encoder output layout of 2.2 to 2.5, which the rust job's
+  # runner (2.6) never reaches and hosts on Ubuntu 22.04 and 24.04 and Debian
+  # 12 use: the library of Ubuntu 24.04 (2.4.1, libopenh264-7) and 22.04
+  # (2.2.0, libopenh264-6). Their decoders are older than 2.6 and not used,
+  # so only encoding is required. Runners are used rather than a debian:12
+  # container, which would build without the toolchain and kache setup the
+  # other jobs share. GitHub retires the 22.04 runners on 17 April 2027, with
+  # brownouts in March and April; that entry goes before then.
+  openh264:
+    needs: changes
+    # Skipped, as the rust job is, when no Rust changed, and also when the
+    # tests that run leave out both packages it tests (TESTS empty runs all).
+    if: >-
+      needs.changes.outputs.rust == 'true' && (needs.changes.outputs.tests == ''
+      || contains(needs.changes.outputs.tests, 'package(=devlanes-sys)')
+      || contains(needs.changes.outputs.tests, 'package(=devlanes-gui-codec)'))
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - uses: ./.github/actions/kache
+        with:
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-endpoint: ${{ vars.KACHE_S3_ENDPOINT }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-access-key: ${{ secrets.KACHE_S3_ACCESS_KEY }}
+          s3-secret-key: ${{ secrets.KACHE_S3_SECRET_KEY }}
+      # As in the rust job.
+      - name: Install OpenH264
+        run: |
+          install() {
+            sudo apt-get update -qq &&
+              sudo apt-get install -y -qq --no-install-recommends libopenh264-dev
+          }
+          install || { sleep 15; install; }
+      - name: OpenH264 on this runner
+        run: dpkg-query -W -f '${Package} ${Version}\n' 'libopenh264-[0-9]*'
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: nextest
+      # Only the OpenH264 tests: the bindings' own round trip through the old
+      # layout and the H.264 tests of devlanes-gui-codec.
+      - name: OpenH264 tests
+        env:
+          TESTS: ${{ needs.changes.outputs.tests }}
+          DEVLANES_REQUIRE_H264: encode
+        run: |
+          filter='package(devlanes-gui-codec) | (package(devlanes-sys) & test(/openh264/))'
+          cargo nextest run -p devlanes-sys -p devlanes-gui-codec --all-features --locked --no-fail-fast --failure-output immediate-final \
+            ${TESTS:+--no-tests=pass} -E "${TESTS:+($TESTS) & }($filter)"
+      - name: kache stats
+        if: ${{ !cancelled() }}
+        run: |
+          kache stats --full
           kache daemon stop
   packaging:
     runs-on: ubuntu-latest
@@ -482,7 +525,7 @@ jobs:
   # can't affect them, and a skipped job passes; a failed or cancelled one fails this.
   ci:
     if: always()
-    needs: [changes, lint, web, rust, packaging, prose, packaging-windows, e2e, ssh, mcp-ui]
+    needs: [changes, lint, web, rust, openh264, packaging, prose, packaging-windows, e2e, ssh, mcp-ui]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -1233,8 +1233,8 @@ mod tests {
     }
 
     /// The installed library encodes a picture and decodes its own output,
-    /// whichever output layout its version writes (CI's Ubuntu package is
-    /// 2.4, Cisco's binary 2.6), and the public decoder refuses versions
+    /// whichever output layout its version writes (CI runs it with Ubuntu's
+    /// 2.2, 2.4 and 2.6 packages), and the public decoder refuses versions
     /// before 2.6. Skips, printing why, without OpenH264, unless
     /// `DEVLANES_REQUIRE_H264` names `encode`.
     #[test]
