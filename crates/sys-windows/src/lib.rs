@@ -35,6 +35,11 @@ pub mod console;
 pub mod file;
 #[allow(unsafe_code)]
 pub mod job;
+/// The Media Foundation H.264 encoder and decoder of the GUI host and viewer;
+/// behind the `media-foundation` feature, which only `devlanes-gui` enables.
+#[cfg(feature = "media-foundation")]
+#[allow(unsafe_code)]
+pub mod media_foundation;
 #[allow(unsafe_code)]
 pub mod net;
 #[allow(unsafe_code)]
