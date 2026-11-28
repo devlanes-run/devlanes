@@ -929,6 +929,11 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
     }
 }
 
+/// What `daemon pair` says when the daemon answered with neither a code
+/// nor a ticket, which this release's daemon never does.
+pub(crate) const PAIRING_EMPTY: &str = "the daemon made neither a pairing code nor a ticket; run \
+     devlanes daemon restart, then devlanes daemon pair again";
+
 /// What `daemon pair` says when the daemon answered without a ticket it was
 /// asked for: it predates tickets and ignored the request's params.
 pub(crate) const OLD_DAEMON_NO_TICKETS: &str =
@@ -1377,14 +1382,19 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 .get("retry_after_ms")
                 .and_then(Value::as_u64)
                 .map_or(10, |ms| ms.div_ceil(60_000).max(1));
-            (
-                format!(
-                    "pairing is paused for {} after 5 wrong codes",
-                    super::plural(usize::try_from(minutes).unwrap_or(usize::MAX), "minute")
-                ),
-                None,
-            )
+            let mut line = format!(
+                "pairing is paused for {} after 5 wrong codes",
+                super::plural(usize::try_from(minutes).unwrap_or(usize::MAX), "minute")
+            );
+            // Asked with a ticket that could not be made either.
+            if let Some(reason) = data.get("ticket_error").map(|error| text(error, "message"))
+                && !reason.is_empty()
+            {
+                line.push_str(&format!("; no ticket: {reason}"));
+            }
+            (line, None)
         }
+        "pairing_empty" => (PAIRING_EMPTY.to_owned(), None),
         // Tunnel-side answers of the box daemon, shown when someone calls
         // these methods by hand.
         "client_not_paired" => (

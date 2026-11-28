@@ -14,7 +14,7 @@ use devlanes_proto::{Event, LeftProcess, Method, events};
 use serde_json::Value;
 
 pub(crate) use lanes::display_url;
-pub use other::{DoctorCheck, DoctorState, doctor_checks_of, watch_line};
+pub use other::{DoctorCheck, DoctorState, doctor_checks_of, nothing_minted, watch_line};
 pub(crate) use other::{doctor_failed, hide_env_values};
 pub use statusline::{StatuslineInput, statusline};
 pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording, lane_drift, unit_drift};

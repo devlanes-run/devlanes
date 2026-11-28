@@ -2425,11 +2425,39 @@ pub(super) fn paired_lines(paired: &Value, cx: &Ctx<'_>) -> Vec<String> {
     ]
 }
 
+/// The error for a `remote.pair` answer with neither a code nor a ticket:
+/// `pairing_paused` when it says codes are paused (with the ticket's
+/// reason when it gave one), else `pairing_empty`. This release's daemon
+/// answers both cases as errors; printing such an answer would leave a
+/// script an empty code and a person or agent nothing to do.
+pub fn nothing_minted(data: &Value) -> Option<RpcError> {
+    if data.get("code").is_some() || data.get("ticket").is_some() {
+        return None;
+    }
+    Some(match data.get("code_paused_ms").and_then(Value::as_u64) {
+        Some(wait) => RpcError::new(
+            "pairing_paused",
+            json!({"retry_after_ms": wait, "ticket_error": data.get("ticket_error")}),
+            crate::exit::DAEMON,
+        ),
+        None => RpcError::new("pairing_empty", json!({}), crate::exit::FAILED),
+    })
+}
+
 /// `daemon pair`: the ticket and the code, and what to run on the other
 /// machine. Plain output is one line for scripts: the code, or the ticket
 /// when only a ticket was asked for. Agents get one line saying what to ask
 /// the user. The ticket stands on a line of its own, so it copies whole.
 pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+    // `devlanes` turns such an answer into this error before rendering;
+    // a caller that renders it anyway gets the same words and no empty code.
+    if let Some(error) = nothing_minted(data) {
+        return if cx.mode == crate::OutputMode::Plain {
+            Vec::new()
+        } else {
+            vec![words::error_message(&error).0]
+        };
+    }
     let code = data.get("code").and_then(Value::as_str).map(clean);
     let ticket = data.get("ticket").and_then(Value::as_str).map(clean);
     // Wrong codes paused codes, and the ticket went out alone.
@@ -2493,7 +2521,9 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                 "pairing code {code}{valid_for} single_use: ask the user to run `{connect}` on \
                  their machine. <box> is this machine's SSH host or remote.boxes name."
             ),
-            _ => format!("pairing{valid_for}"),
+            // Neither: `nothing_minted` answered above, so this is never
+            // reached; the same words if it were.
+            _ => return vec![words::PAIRING_EMPTY.to_owned()],
         };
         if let (Some(_), Some(connect)) = (&ticket, &with_code) {
             line.push_str(&format!(
