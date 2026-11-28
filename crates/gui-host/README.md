@@ -72,7 +72,7 @@ impl Backend for Acme {
 
 ## Threads and timing
 
-A host stops when `ServeOptions::shutdown` is cancelled, reporting every window Closed first, or with `ServeError::NoUnitIdentity` when `ServeOptions::identity_timeout` passes without a control connection telling it the unit's identity.
+A host stops when `ServeOptions::shutdown` is cancelled, closing its connections without marking windows Closed (a restarted unit's viewers reconnect to the next host), and after a control connection's `UnitExited`, which shows every window Closed first. `ServeOptions::daemon` (a `DaemonWatch`) makes a host the daemon started end by itself once its daemon is gone: `ServeError::NoUnitIdentity` without the unit's identity, or once the unit is gone after the control connection closed.
 
 `Backend::start` runs on the blocking pool and `BackendControl::send` must return at once, so a compositor's event loop or a capture thread stays on its own thread. Encoding and screenshots run on the blocking pool, one frame at a time per window and codec. Everything else runs on one task, driven by the clock of `tokio::time`, so tests on a paused clock are deterministic. The test pattern draws inside `send`, which is why its windows are at most 2048 pixels on a side.
 

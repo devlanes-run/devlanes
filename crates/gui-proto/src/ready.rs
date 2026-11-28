@@ -23,6 +23,15 @@ use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
+/// The variable that carries the control token from the daemon to the host
+/// it starts; the daemon's control connection presents it. It keeps other
+/// accounts on the machine, which can reach the loopback port, from taking
+/// the control role, but not processes of the same account, which can read
+/// the host's environment and can already do everything through the daemon.
+/// It is an environment variable and never a flag, since other accounts can
+/// read a process's arguments but not its environment.
+pub const TOKEN_ENV: &str = "DEVLANES_GUI_TOKEN";
+
 /// The format version in the `ready` field.
 pub const READY_FORMAT: u32 = 1;
 

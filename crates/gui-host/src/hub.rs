@@ -26,7 +26,7 @@ use crate::backend::{BackendControl, CapturedFrame, Command, Event};
 use crate::outbox::Outbox;
 use crate::{
     ActivityCallback, CLIPBOARD_GAP, MAX_PENDING_SYNCS, MAX_SCREENSHOT_JOBS, SYNC_TIMEOUT,
-    ServeError, ServeOptions,
+    ServeError, ServeOptions, UNIT_POLL, UnitAlive,
 };
 
 /// Resize requests kept per window while the backend has not answered; the
@@ -236,8 +236,17 @@ pub(crate) struct Hub {
     closing: Vec<SessionId>,
     heartbeat: Bytes,
     /// When the host gives up waiting for the unit's identity; `None` once it
-    /// came or when [`ServeOptions::identity_timeout`] is unset.
+    /// came or without a [`DaemonWatch`].
     identity_deadline: Option<Instant>,
+    /// [`DaemonWatch::unit_alive`].
+    unit_alive: Option<UnitAlive>,
+    /// The unit's pid and start time, once the daemon told them.
+    identity: Option<(u32, u64)>,
+    /// When to check the unit next, once every control connection closed
+    /// after the identity came.
+    unit_poll: Option<Instant>,
+    /// Why serving ends after this turn.
+    ending: Option<Result<(), ServeError>>,
 }
 
 impl Hub {
@@ -282,7 +291,51 @@ impl Hub {
             clipboard_sent: None,
             closing: Vec::new(),
             heartbeat: heartbeat.freeze(),
-            identity_deadline: options.identity_timeout.map(|timeout| now() + timeout),
+            identity_deadline: options
+                .daemon
+                .as_ref()
+                .map(|daemon| now() + daemon.identity_timeout),
+            unit_alive: options
+                .daemon
+                .as_ref()
+                .map(|daemon| daemon.unit_alive.clone()),
+            identity: None,
+            unit_poll: None,
+            ending: None,
+        }
+    }
+
+    /// Every control connection closed: before the identity the daemon is
+    /// gone and so is the reason to run; after it the unit decides.
+    fn control_gone(&mut self, now: Instant) {
+        if self.unit_alive.is_none() || self.ending.is_some() {
+            return;
+        }
+        if self.identity.is_none() {
+            tracing::warn!("the daemon's control connection closed before the unit ran; stopping");
+            self.ending = Some(Err(ServeError::NoUnitIdentity));
+        } else {
+            self.unit_poll = Some(now);
+        }
+    }
+
+    /// Checks the unit once its control connection is gone, and ends
+    /// serving when the unit is gone too.
+    fn poll_unit(&mut self, now: Instant) {
+        let (Some(at), Some((pid, start_time)), Some(alive)) =
+            (self.unit_poll, self.identity, self.unit_alive.as_ref())
+        else {
+            return;
+        };
+        if now < at {
+            return;
+        }
+        if alive(pid, start_time) {
+            self.unit_poll = Some(now + UNIT_POLL);
+        } else {
+            tracing::info!(pid, "the unit is gone and so is its daemon; stopping");
+            self.unit_poll = None;
+            self.ending = Some(Ok(()));
         }
     }
 
@@ -302,10 +355,10 @@ impl Hub {
                 }
             };
             tokio::select! {
+                // Without the unit's exit, as for a restart: viewers see the
+                // connection close and reconnect to the next host.
                 _ = shutdown.cancelled() => {
-                    // A host stops with its service, so viewers show Closed,
-                    // whether or not the daemon's exit notice came first.
-                    self.service_ended();
+                    self.close_all();
                     return Ok(());
                 }
                 event = events.recv() => match event {
@@ -331,10 +384,15 @@ impl Hub {
                 _ = timer => {}
             }
             self.tick();
-            if self.identity_deadline.is_some_and(|at| now() >= at) {
+            let now = now();
+            if self.ending.is_none() && self.identity_deadline.is_some_and(|at| now >= at) {
                 tracing::warn!("no unit identity came in time; stopping");
+                self.ending = Some(Err(ServeError::NoUnitIdentity));
+            }
+            self.poll_unit(now);
+            if let Some(ending) = self.ending.take() {
                 self.close_all();
-                return Err(ServeError::NoUnitIdentity);
+                return ending;
             }
         }
     }
@@ -370,6 +428,7 @@ impl Hub {
                 self.arbiter.next_change(now),
                 clipboard,
                 self.identity_deadline,
+                self.unit_poll,
             ])
             .flatten()
             .min()
@@ -562,6 +621,9 @@ impl Hub {
             return;
         };
         gone.outbox.close(false);
+        if gone.role == Role::Control && !self.sessions.values().any(|s| s.role == Role::Control) {
+            self.control_gone(now());
+        }
         let mut emptied = Vec::new();
         for (key, stream) in &mut self.streams {
             if stream.viewers.contains(&session) {
@@ -686,18 +748,22 @@ impl Hub {
                 job,
             } => {
                 self.identity_deadline = None;
+                self.identity = Some((pid, start_time));
                 self.backend.send(Command::UnitIdentity {
                     pid,
                     start_time,
                     job,
                 });
             }
+            // The unit's run is over: viewers show Closed, and serving ends
+            // once this turn sent them that.
             ClientMessage::UnitExited { code } => {
                 self.backend.send(Command::UnitExited { code });
                 self.stopped = true;
                 for window in self.windows.values_mut() {
                     window.lock.service_stopped();
                 }
+                self.ending.get_or_insert(Ok(()));
             }
             ClientMessage::LaneFrozen | ClientMessage::LaneThawed => {
                 let frozen = matches!(message, ClientMessage::LaneFrozen);
@@ -1700,12 +1766,6 @@ impl Hub {
     /// The backend stopped: every window is Closed, and connections send what
     /// is queued and close.
     fn backend_gone(&mut self) {
-        self.service_ended();
-    }
-
-    /// Reports every window Closed, then closes every connection after what
-    /// is queued for it.
-    fn service_ended(&mut self) {
         self.stopped = true;
         for window in self.windows.values_mut() {
             window.lock.service_stopped();

@@ -137,18 +137,46 @@ pub struct ServeOptions {
     pub write_queue_cap: usize,
     /// Called on input from viewers and tools.
     pub on_activity: Option<ActivityCallback>,
-    /// Stops the host with [`ServeError::NoUnitIdentity`] when no control
-    /// connection told it the unit's process identity this long after
-    /// [`serve`] began. The daemon tells it right after the unit starts, so a
-    /// host whose daemon is gone before then does not run on forever.
-    pub identity_timeout: Option<Duration>,
-    /// Stops the host when cancelled.
+    /// For a host the daemon started: when it stops by itself because its
+    /// daemon is gone. `None` serves until shutdown.
+    pub daemon: Option<DaemonWatch>,
+    /// Stops the host when cancelled. Connections are closed without
+    /// reporting windows Closed, so viewers reconnect to the next host of a
+    /// restarted unit.
     pub shutdown: CancellationToken,
 }
 
+/// Whether the unit with a process id and start time still runs. Called on
+/// the host task, so it must return at once.
+pub type UnitAlive = Arc<dyn Fn(u32, u64) -> bool + Send + Sync>;
+
+/// How a host the daemon started notices that its daemon is gone, so it
+/// never runs on with nobody to stop it:
+///
+/// - No unit identity within `identity_timeout` after [`serve`] began:
+///   [`ServeError::NoUnitIdentity`]. A daemon that cannot tell the unit's
+///   identity leaves its host to stop this way. The deadline is on the
+///   monotonic clock, which on Windows keeps counting while the machine
+///   sleeps.
+/// - A control connection that closes before the identity came:
+///   [`ServeError::NoUnitIdentity`] at once.
+/// - Once the identity came and every control connection closed, the host
+///   checks the unit with `unit_alive` every [`UNIT_POLL`] and ends without
+///   an error when it is gone.
+#[derive(Clone)]
+pub struct DaemonWatch {
+    /// How long the host waits for the unit's identity.
+    pub identity_timeout: Duration,
+    /// Whether the unit still runs.
+    pub unit_alive: UnitAlive,
+}
+
+/// How often a host whose control connection closed checks its unit.
+pub const UNIT_POLL: Duration = Duration::from_secs(2);
+
 impl ServeOptions {
     /// Options for `service` with the defaults: `raw` only, no control
-    /// token, [`DEFAULT_WRITE_QUEUE_CAP`], no callback, no identity timeout.
+    /// token, [`DEFAULT_WRITE_QUEUE_CAP`], no callback, no daemon watch.
     pub fn new(service: impl Into<String>) -> Self {
         Self {
             service: service.into(),
@@ -156,7 +184,7 @@ impl ServeOptions {
             encoders: vec![Arc::new(RawBackend)],
             write_queue_cap: DEFAULT_WRITE_QUEUE_CAP,
             on_activity: None,
-            identity_timeout: None,
+            daemon: None,
             shutdown: CancellationToken::new(),
         }
     }
@@ -172,7 +200,10 @@ impl std::fmt::Debug for ServeOptions {
             .field("encoders", &encoders)
             .field("write_queue_cap", &self.write_queue_cap)
             .field("on_activity", &self.on_activity.is_some())
-            .field("identity_timeout", &self.identity_timeout)
+            .field(
+                "identity_timeout",
+                &self.daemon.as_ref().map(|daemon| daemon.identity_timeout),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -191,9 +222,9 @@ pub enum ServeError {
     /// Every window was reported Closed and the connections were closed.
     #[error("the GUI backend stopped")]
     BackendStopped,
-    /// No control connection told the unit's identity within
-    /// [`ServeOptions::identity_timeout`]. The connections were closed.
-    #[error("no unit identity came in time, so the daemon that started this host is gone")]
+    /// The unit's identity did not come in time, or the control connection
+    /// closed before it did ([`DaemonWatch`]). The connections were closed.
+    #[error("the daemon that started this host went away before its unit ran")]
     NoUnitIdentity,
 }
 
@@ -289,10 +320,10 @@ pub async fn start_backend<B: Backend>(backend: B) -> Result<RunningBackend, Ser
 /// until [`ServeOptions::shutdown`] is cancelled or the backend stops. A
 /// connection past [`MAX_PENDING_HELLOS`] closes the oldest one still
 /// without a hello, and one past [`MAX_CONNECTIONS`] is refused once its
-/// hello is read. On the
-/// way out every window is reported Closed, since a host stops with its
-/// service, the connections get two seconds to send what is queued, and the
-/// backend is dropped, which stops it.
+/// hello is read. A control connection's `UnitExited` reports every window
+/// Closed and ends serving without an error: a host serves one run of its
+/// unit. On the way out the connections get two seconds to send what is
+/// queued, and the backend is dropped, which stops it.
 pub async fn serve<L: Listener>(
     mut listener: L,
     backend: RunningBackend,

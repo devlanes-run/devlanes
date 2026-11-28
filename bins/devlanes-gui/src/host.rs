@@ -7,10 +7,11 @@
 
 use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use devlanes_gui_host::{
-    BackendError, RunningBackend, ServeError, ServeOptions, TestPattern, TestPatternOptions,
-    Unavailable, serve, start_backend,
+    BackendError, DaemonWatch, RunningBackend, ServeError, ServeOptions, TestPattern,
+    TestPatternOptions, Unavailable, serve, start_backend,
 };
 use devlanes_gui_proto::{
     Token,
@@ -19,25 +20,20 @@ use devlanes_gui_proto::{
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken as Shutdown;
 
-/// The variable that carries the control token, which the daemon's control
-/// connection must present. The token keeps other accounts on the machine,
-/// which can reach the loopback port, from taking the control role. It does
-/// not protect against processes of the same account, which can read this
-/// process's environment and can already do everything through the daemon.
-/// It is an environment variable and never a flag, since other accounts can
-/// read a process's arguments but not its environment. It stays in this
-/// process's environment (removing it takes `unsafe` code), so a backend
-/// that starts a process should start it without the variable where the
-/// spawning API allows it.
-pub const TOKEN_ENV: &str = "DEVLANES_GUI_TOKEN";
+// The token travels in `TOKEN_ENV` and stays in this process's environment
+// (removing it takes `unsafe` code), so a backend that starts a process
+// should start it without the variable where the spawning API allows it.
+use devlanes_gui_proto::ready::TOKEN_ENV;
 
 /// The variable that sets the log filter, as for the daemon.
 const LOG_ENV: &str = "DEVLANES_LOG";
 
 /// How long a host the daemon started (one with a token) waits for the
-/// unit's identity once it listens. The daemon sends it within seconds; a host
-/// that never gets it lost its daemon before the unit ran, and nothing else
-/// would ever stop it.
+/// unit's identity once it listens. The daemon sends it within seconds of the
+/// ready line. Two cases reach the deadline: a daemon that could not tell the
+/// unit's identity (its runner did not know it), and a daemon that died
+/// without closing its control connection. It is measured on the monotonic
+/// clock, which on Windows keeps counting while the machine sleeps.
 const IDENTITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The arguments of `devlanes-gui host`.
@@ -146,7 +142,10 @@ pub fn run(args: HostArgs) -> Result<(), HostError> {
 async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Result<(), HostError> {
     let mut options = ServeOptions::new(args.service);
     // Only the daemon passes a token, and only it sends the unit's identity.
-    options.identity_timeout = token.is_some().then_some(IDENTITY_TIMEOUT);
+    options.daemon = token.is_some().then(|| DaemonWatch {
+        identity_timeout: IDENTITY_TIMEOUT,
+        unit_alive: Arc::new(unit_alive),
+    });
     options.control_token = token;
     // Watched first, so a stop that comes while the backend starts still ends
     // the host cleanly.
@@ -185,6 +184,18 @@ async fn host(backend: BackendKind, args: HostArgs, token: Option<Token>) -> Res
     serve(listener, running, options).await?;
     tracing::info!("GUI host stopped");
     Ok(())
+}
+
+/// Whether the unit's process still runs, by pid and start time, for a host
+/// whose daemon is gone. A process table that cannot be read counts as
+/// running, so a passing error never stops a host under a live unit.
+fn unit_alive(pid: u32, start_time: u64) -> bool {
+    let unit = devlanes_core::ProcessIdentity {
+        pid,
+        sid: 0,
+        start_time,
+    };
+    devlanes_sys::matches(&unit).unwrap_or(true)
 }
 
 /// Writes `line` and a newline to standard output and flushes it, since the

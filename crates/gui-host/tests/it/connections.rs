@@ -3,8 +3,11 @@
 
 use devlanes_gui_client::{ClientError, connect};
 use devlanes_gui_host::conformance::{self, TestPatternProbe};
+use std::sync::atomic::AtomicBool;
+
 use devlanes_gui_host::{
-    Command, HELLO_TIMEOUT, MAX_CONNECTIONS, MAX_PENDING_HELLOS, MAX_SCREENSHOTS_IN_FLIGHT,
+    Command, DaemonWatch, HELLO_TIMEOUT, MAX_CONNECTIONS, MAX_PENDING_HELLOS,
+    MAX_SCREENSHOTS_IN_FLIGHT,
 };
 use devlanes_gui_proto::{
     Buttons, HEADER_LEN, MAGIC, Point, Pointer, RefusalReason, ScreenshotResult, WindowId,
@@ -89,29 +92,55 @@ async fn the_control_role_needs_the_token_and_unserved_roles_are_refused() {
     tokenless.stop().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_host_without_a_unit_identity_in_time_stops() {
-    let timeout = Duration::from_secs(30);
-    let host = Host::start(TestPatternOptions::default(), |o| {
-        o.identity_timeout = Some(timeout)
+/// A host the daemon started, whose unit counts as running while `alive` is set.
+async fn watched(timeout: Duration, alive: Arc<AtomicBool>) -> Host {
+    Host::start(TestPatternOptions::default(), |o| {
+        o.daemon = Some(DaemonWatch {
+            identity_timeout: timeout,
+            unit_alive: Arc::new(move |_, _| alive.load(Ordering::SeqCst)),
+        })
     })
-    .await;
-    let started = tokio::time::Instant::now();
-    let result = tokio::time::timeout(PATIENCE, host.served)
+    .await
+}
+
+/// How `served` ended, within [`PATIENCE`].
+async fn ended(served: JoinHandle<Result<(), ServeError>>) -> Result<(), ServeError> {
+    tokio::time::timeout(PATIENCE, served)
         .await
         .expect("the host stops")
-        .expect("the host task did not panic");
+        .expect("the host task did not panic")
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_host_stops_by_itself_once_its_daemon_is_gone() {
+    let timeout = Duration::from_secs(30);
+    let alive = Arc::new(AtomicBool::new(true));
+
+    // No control connection at all: the deadline.
+    let host = watched(timeout, alive.clone()).await;
+    let started = tokio::time::Instant::now();
+    let result = ended(host.served).await;
     assert!(
         matches!(result, Err(ServeError::NoUnitIdentity)),
         "{result:?}"
     );
     assert!(started.elapsed() >= timeout);
 
-    // The identity, sent before the deadline, keeps the host serving past it.
-    let host = Host::start(TestPatternOptions::default(), |o| {
-        o.identity_timeout = Some(timeout)
-    })
-    .await;
+    // A control connection that closes before the identity: at once.
+    let host = watched(timeout, alive.clone()).await;
+    let (daemon, _events) = host.control().await;
+    let started = tokio::time::Instant::now();
+    daemon.close();
+    let result = ended(host.served).await;
+    assert!(
+        matches!(result, Err(ServeError::NoUnitIdentity)),
+        "{result:?}"
+    );
+    assert!(started.elapsed() < timeout);
+
+    // After the identity the host outlives the deadline and its control
+    // connection while the unit runs, and ends once the unit is gone.
+    let host = watched(timeout, alive.clone()).await;
     let (daemon, _events) = host.control().await;
     daemon.unit_process(4242, 7, None).expect("sends");
     eventually("the identity reaches the backend", || {
@@ -121,9 +150,46 @@ async fn a_host_without_a_unit_identity_in_time_stops() {
             .any(|c| matches!(c, Command::UnitIdentity { pid: 4242, .. }))
     })
     .await;
+    daemon.close();
     tokio::time::sleep(timeout * 2).await;
     assert!(!host.served.is_finished());
-    host.stop().await;
+    alive.store(false, Ordering::SeqCst);
+    assert!(ended(host.served).await.is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_units_exit_closes_windows_and_a_plain_stop_does_not() {
+    // A stop without the unit's exit, as for a restart: the viewer's window
+    // is not Closed when the connection goes.
+    let host = Host::default().await;
+    let (_viewer, mut events) = host.viewer("ada").await;
+    host.shutdown.cancel();
+    let mut closed = false;
+    while let Some(event) = events.next().await {
+        match event {
+            Event::Lock {
+                state: devlanes_gui_proto::LockState::Closed,
+                ..
+            } => closed = true,
+            Event::Closed(_) => break,
+            _ => {}
+        }
+    }
+    assert!(!closed, "a stop without the unit's exit closed the window");
+    assert!(ended(host.served).await.is_ok());
+
+    // The unit's exit: Closed, and the host ends by itself.
+    let host = Host::default().await;
+    let window = host.pattern.first_window();
+    let (_viewer, mut events) = host.viewer("ada").await;
+    let (daemon, _control) = host.control().await;
+    daemon.unit_exited(Some(0)).expect("sends");
+    until(&mut events, |e| {
+        matches!(e, Event::Lock { window: w, state: devlanes_gui_proto::LockState::Closed } if *w == window)
+            .then_some(())
+    })
+    .await;
+    assert!(ended(host.served).await.is_ok());
 }
 
 #[tokio::test(start_paused = true)]
