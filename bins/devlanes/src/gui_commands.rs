@@ -443,16 +443,15 @@ fn select(found: &Found, names: &[String], many: bool) -> Result<Vec<Service>, R
         let replicas: Vec<&Service> = found
             .services
             .iter()
-            .filter(|s| {
-                s.unit
-                    .strip_prefix(name.as_str())
-                    .and_then(|rest| rest.strip_prefix('.'))
-                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-            })
+            .filter(|s| replica_of(&s.unit, name))
             .collect();
         let matched = if exact.is_empty() { replicas } else { exact };
+        let exists = found
+            .units
+            .iter()
+            .any(|unit| unit == name || replica_of(unit, name));
         match matched.as_slice() {
-            [] if found.units.contains(name) => {
+            [] if exists => {
                 return Err(RpcError::new(
                     "gui_not_gui_service",
                     json!({
@@ -487,6 +486,13 @@ fn select(found: &Found, names: &[String], many: bool) -> Result<Vec<Service>, R
         }
     }
     Ok(picked)
+}
+
+/// Whether `unit` is a replica of the service `name`: `name.N`.
+fn replica_of(unit: &str, name: &str) -> bool {
+    unit.strip_prefix(name)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Where `service`'s host can be reached, or why not.

@@ -288,8 +288,8 @@ pub fn encode_png(frame: &Frame) -> Result<Vec<u8>, ToolError> {
         let row = frame
             .row(y)
             .ok_or_else(|| ToolError::Png(format!("row {y} is missing")))?;
-        for pixel in row.chunks_exact(4).take(width as usize) {
-            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        for [b, g, r, a] in row.as_chunks::<4>().0.iter().take(width as usize) {
+            rgba.extend_from_slice(&[*r, *g, *b, *a]);
         }
     }
     let mut out = Vec::new();

@@ -177,12 +177,20 @@ fn json_out_copies_json_output() {
     let error = RpcError::new("needs_env", json!({"lane": "acme@1"}), 1);
     let shown = runtime.reporter().error(&error, None);
     assert_eq!(shown.exit_code, 1);
+    // A `gui screenshot`, whose file `devlanes mcp` reads from the copy.
+    let shot = json!({"lane": "acme@1", "unit": "desktop", "box": null,
+                      "window": {"id": 1, "title": "x"}, "path": "/tmp/x.png", "width": 2, "height": 2});
+    let rendered = runtime
+        .reporter()
+        .gui(GuiOutput::Screenshot, &shot)
+        .expect("render");
+    assert!(rendered.stdout.starts_with("wrote "), "{}", rendered.stdout);
     let written = std::fs::read_to_string(&path).expect("json out");
     let lines: Vec<Value> = written
         .lines()
         .map(|line| serde_json::from_str(line).expect("json line"))
         .collect();
-    assert_eq!(lines, [data, json!({"error": error})]);
+    assert_eq!(lines, [data, json!({"error": error}), shot]);
     // Without the variable nothing is written anywhere.
     let plain = hooked(None, false);
     assert!(plain.json_out.is_none());
