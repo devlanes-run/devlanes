@@ -20,6 +20,8 @@
 //! composition root names no backend runs GUI services without a host, as
 //! before, with a note.
 
+pub mod lookup;
+
 use std::{
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
