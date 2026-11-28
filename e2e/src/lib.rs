@@ -496,8 +496,18 @@ impl Lab {
         };
         let temporary = self.home.path().join("config.yaml.e2e-guard");
         fs::write(&temporary, text)?;
-        fs::rename(&temporary, &path)?;
-        Ok(())
+        // On Windows the rename fails while the daemon has the file open.
+        let mut tries = 0;
+        loop {
+            match fs::rename(&temporary, &path) {
+                Ok(()) => return Ok(()),
+                Err(_) if tries < 10 => {
+                    tries += 1;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
 
     /// Like [`Lab::command`] for another `devlanes` executable, such as a copy

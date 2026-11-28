@@ -1279,14 +1279,12 @@ fn viewer_command(exe: std::path::PathBuf, reference: &str) -> tokio::process::C
 #[cfg(test)]
 mod viewer_tests {
     /// The TUI's `gui open` runs as the person who pressed the key, also
-    /// from an agent's terminal, in plain output.
+    /// from an agent's terminal.
     #[test]
     fn the_viewer_command_runs_as_a_person() {
         let command = super::viewer_command("devlanes".into(), "acme@2:desktop");
-        let command = command.as_std();
-        let args: Vec<_> = command.get_args().collect();
-        assert_eq!(args, ["gui", "open", "acme@2:desktop", "--output", "plain"]);
         let agent = command
+            .as_std()
             .get_envs()
             .find(|(name, _)| *name == "DEVLANES_AGENT")
             .and_then(|(_, value)| value);

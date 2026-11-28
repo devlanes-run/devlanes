@@ -279,7 +279,10 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             let mut message = if away.is_empty() {
                 format!("{name} not found")
             } else {
-                format!("{name} is not a lane of this machine or of a connected box")
+                format!(
+                    "{name} is not a lane of this machine or of a connected box (not connected: {})",
+                    away.join(", ")
+                )
             };
             if let Some(guess) = did_you_mean(name.rsplit(':').next().unwrap_or(&name), options) {
                 message.push_str(&format!("; did you mean {}?", super::clean(guess)));
@@ -302,12 +305,7 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 message.push_str(&format!("; {name} is lane {lane}"));
             }
             if !away.is_empty() {
-                let hint = format!(
-                    "not connected: {}; {}",
-                    away.join(", "),
-                    Hint::command(["remote", "ls"]).0
-                );
-                return (message, Some(Hint(hint)));
+                return (message, Some(Hint::command(["remote", "ls"])));
             }
             (message, Some(Hint::command(["lane", "ls"])))
         }
@@ -2348,7 +2346,11 @@ fn gui_command_error(code: &str, data: &Value) -> (String, Option<Hint>) {
                 "devlanes gui open does not run for an agent: {}",
                 crate::args::GUI_OPEN_FOR_PEOPLE
             ),
-            Some(Hint::command(["gui", "screenshot", "UNIT"])),
+            // A person whose terminal inherited an agent's variables.
+            Some(Hint(format!(
+                "a person can run it with DEVLANES_AGENT=0 {}",
+                Hint::command(["gui", "open", "UNIT"]).0
+            ))),
         ),
         _ => (
             format!(

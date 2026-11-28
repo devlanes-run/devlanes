@@ -284,7 +284,7 @@ async fn unit_check(check: &UnitCheck) -> Check {
         return answer;
     }
     match run_json(&check.devlanes, &["remote", "ls", "--json"]).await {
-        Some((Some(0), boxes)) if !box_away(&boxes, host_box) => Check::Gone,
+        Some((Some(0), boxes)) if box_away(&boxes, host_box) == Some(false) => Check::Gone,
         _ => Check::Unknown,
     }
 }
@@ -327,18 +327,17 @@ fn answer(code: Option<i32>, stdout: &[u8]) -> Check {
 }
 
 /// Whether `remote ls --json` (`stdout`) lists `host_box` as known but not
-/// connected. A box no longer known is not away: its lanes are gone.
-fn box_away(stdout: &[u8], host_box: &str) -> bool {
-    serde_json::from_slice::<serde_json::Value>(stdout)
-        .ok()
-        .and_then(|list| {
-            list["items"]
-                .as_array()?
-                .iter()
-                .find(|item| item["host"] == host_box)
-                .map(|item| item["state"] != "connected")
-        })
-        .unwrap_or(false)
+/// connected. A box no longer known is not away: its lanes are gone. `None`
+/// when the output says nothing readable.
+fn box_away(stdout: &[u8], host_box: &str) -> Option<bool> {
+    let list = serde_json::from_slice::<serde_json::Value>(stdout).ok()?;
+    let items = list["items"].as_array()?;
+    Some(
+        items
+            .iter()
+            .find(|item| item["host"] == host_box)
+            .is_some_and(|item| item["state"] != "connected"),
+    )
 }
 
 #[cfg(test)]
@@ -363,12 +362,18 @@ mod tests {
     fn a_missing_box_lane_is_gone_unless_its_own_box_is_away() {
         // The lane was cleaned while another box is offline.
         let other_offline = boxes(&[("hetzner", "connected"), ("other", "disconnected")]);
-        assert!(!box_away(&other_offline, "hetzner"));
+        assert_eq!(box_away(&other_offline, "hetzner"), Some(false));
         // The viewer's own box is offline.
         let own_offline = boxes(&[("hetzner", "connecting"), ("other", "connected")]);
-        assert!(box_away(&own_offline, "hetzner"));
+        assert_eq!(box_away(&own_offline, "hetzner"), Some(true));
         // The box was removed.
-        assert!(!box_away(&boxes(&[("other", "disconnected")]), "hetzner"));
+        assert_eq!(
+            box_away(&boxes(&[("other", "disconnected")]), "hetzner"),
+            Some(false)
+        );
+        // Output that says nothing readable is no answer either way.
+        assert_eq!(box_away(b"not json", "hetzner"), None);
+        assert_eq!(box_away(b"{}", "hetzner"), None);
         assert_eq!(answer(Some(NOT_FOUND_EXIT), b""), Check::Gone);
     }
 

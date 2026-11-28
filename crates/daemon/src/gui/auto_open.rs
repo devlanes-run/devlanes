@@ -58,6 +58,9 @@ pub(crate) struct Candidate {
     pub real_desktop: Option<bool>,
     /// The box it runs on, for a box's lane.
     pub host_box: Option<String>,
+    /// When its current run started (Unix ms), for a local service: a new
+    /// value is a new run. A box's registry has none.
+    pub run: Option<u64>,
 }
 
 /// Who holds the viewer lock of a service.
@@ -118,6 +121,8 @@ struct Opened {
     /// when it runs again: a viewer that ended meanwhile is no window the
     /// user closed in this run.
     stopped: Option<Option<Instant>>,
+    /// The run of the service the viewer is for, by [`Candidate::run`].
+    run: Option<u64>,
 }
 
 /// The bookkeeping of auto-open.
@@ -153,6 +158,12 @@ impl Planner {
         for candidate in candidates.iter().filter(|c| c.runs) {
             if let Some(opened) = self.opened.get_mut(&candidate.label) {
                 opened.gone_since = None;
+                // A stop and start quicker than one pass is a new run all
+                // the same: the service's start time changed.
+                if opened.run.is_some() && candidate.run.is_some() && opened.run != candidate.run {
+                    opened.stopped.get_or_insert(None);
+                }
+                opened.run = candidate.run.or(opened.run);
                 let Some(stopped) = &mut opened.stopped else {
                     continue;
                 };
@@ -204,6 +215,7 @@ impl Planner {
                     host_box: candidate.host_box.clone(),
                     gone_since: None,
                     stopped: None,
+                    run: candidate.run,
                 },
             );
         }
@@ -254,6 +266,7 @@ impl Planner {
             host_box,
             gone_since: None,
             stopped: None,
+            run: None,
         });
     }
 
@@ -347,12 +360,18 @@ impl Inner {
                 crate::model::lane_summary(&project.name(), &st)
             };
             candidates.extend(lookup::lane_services(&summary).into_iter().map(|service| {
+                let run = summary
+                    .units
+                    .iter()
+                    .find(|unit| unit.name == service.unit)
+                    .and_then(|unit| unit.started_at_ms);
                 Candidate {
                     label: format!("{}:{}", summary.reference, service.unit),
                     address: service.address,
                     runs: service.runs,
                     real_desktop: service.real_desktop,
                     host_box: None,
+                    run,
                 }
             }));
         }
@@ -367,6 +386,7 @@ impl Inner {
                     runs: service.runs,
                     real_desktop: None,
                     host_box: found.host_box.clone(),
+                    run: None,
                 }));
             }
             away = boxes["items"]
@@ -542,6 +562,7 @@ mod tests {
             runs: true,
             real_desktop,
             host_box: None,
+            run: None,
         }
     }
 
@@ -553,6 +574,7 @@ mod tests {
             runs: false,
             real_desktop: None,
             host_box: None,
+            run: None,
         }
     }
 
@@ -717,6 +739,34 @@ mod tests {
         viewer.set(Holder::Free);
         let t4 = t3 + CARRY_OVER + Duration::from_secs(1);
         assert_eq!(planner.plan(&services, holder, true, t4), []);
+    }
+
+    /// A stop and start between two passes is a new run by its start time:
+    /// once the old viewer ended (after its host's Closed) a new one opens.
+    /// A viewer the user ended in the same run, with the same start time,
+    /// is not reopened.
+    #[test]
+    fn a_restart_between_passes_is_a_new_run() {
+        let t0 = Instant::now();
+        let viewer = std::cell::Cell::new(Holder::Free);
+        let holder = |_: &str| viewer.get();
+        let run = |started| Candidate {
+            run: Some(started),
+            ..running("acme@1:desktop", 26002, Some(false))
+        };
+        let opens = |actions: &[Action]| matches!(actions, [Action::Open { .. }]);
+        let mut planner = Planner::default();
+        assert!(opens(&planner.plan(&[run(1)], holder, true, t0)));
+        viewer.set(Holder::Daemon);
+        // The user ends the viewer: the same run, nothing reopens.
+        viewer.set(Holder::Free);
+        assert_eq!(planner.plan(&[run(1)], holder, true, t0), []);
+        // Restarted between passes; the old viewer still lingers on Closed.
+        viewer.set(Holder::Daemon);
+        let t1 = t0 + POLL;
+        assert_eq!(planner.plan(&[run(2)], holder, true, t1), []);
+        viewer.set(Holder::Free);
+        assert!(opens(&planner.plan(&[run(2)], holder, true, t1 + POLL)));
     }
 
     /// The grace of a box's viewer counts only while the box is connected:
