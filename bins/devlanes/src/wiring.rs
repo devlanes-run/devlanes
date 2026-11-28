@@ -1148,7 +1148,11 @@ impl RemoteConnector for BoxConnector {
 }
 
 /// The relays a peer-to-peer endpoint uses until `remote.relays` exists.
-const DEFAULT_RELAYS: [&str; 1] = ["https://relay.devlanes.run"];
+/// Two, because iroh tells whether a NAT changes ports per destination only
+/// from the answers of two relays. Numbered, with no region in the name,
+/// because the list is compiled into released binaries and a server may
+/// move without its name changing.
+const DEFAULT_RELAYS: [&str; 2] = ["https://relay1.devlanes.run", "https://relay2.devlanes.run"];
 
 /// This machine's peer-to-peer endpoint. Building it binds nothing and
 /// reads no key: the daemon binds it only once a ticket is minted or a

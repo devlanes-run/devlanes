@@ -89,7 +89,7 @@ pub struct PeerIdError;
 pub struct PeerAddr {
     /// The peer's key.
     pub id: PeerId,
-    /// The relay the peer was on, such as `https://relay.devlanes.run`.
+    /// The relay the peer was on, such as `https://relay1.devlanes.run`.
     pub relay: Option<String>,
     /// IP addresses the peer reported, tried directly.
     pub direct: Vec<SocketAddr>,
@@ -505,7 +505,7 @@ mod tests {
         let eight: Vec<&str> = eight.iter().map(String::as_str).collect();
         let tickets = [
             ticket(None, &[], false),
-            ticket(Some("https://relay.devlanes.run"), &[], false),
+            ticket(Some("https://relay1.devlanes.run"), &[], false),
             ticket(None, &["192.0.2.7:4433", "[2001:db8::1]:1"], true),
             ticket(Some(&longest), &eight, true),
         ];
@@ -517,7 +517,7 @@ mod tests {
             assert_eq!(Ticket::parse(&pasted).as_ref(), Ok(ticket), "{pasted}");
         }
         // The sizes the CLI's ticket detection and the docs rely on.
-        assert_eq!(tickets[1].encode().len(), 134);
+        assert_eq!(tickets[1].encode().len(), 136);
         assert_eq!(tickets[3].encode().len(), 656);
         assert!(
             !format!("{tickets:?}").contains("11, 22"),
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn damaged_tickets_are_refused() {
         let text = ticket(
-            Some("https://relay.devlanes.run"),
+            Some("https://relay1.devlanes.run"),
             &["192.0.2.7:4433"],
             false,
         )
