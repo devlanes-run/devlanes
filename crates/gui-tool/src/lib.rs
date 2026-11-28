@@ -1,30 +1,35 @@
-//! What the `devlanes gui` commands do on a GUI host's port: connect as a
-//! tool, pick a window, send input and wait for the host to apply it, take
-//! screenshots and encode them as PNG.
+//! The tool side of the GUI protocol for the `devlanes gui` commands: connect
+//! to a GUI host as a tool, pick a window, send input and wait for the host
+//! to apply it, take screenshots and encode them as PNG.
 //!
 //! Every wait after input is the protocol's `Sync`. A host answers it once
-//! it applied the input and captured a frame after it, or after 3 seconds at
-//! the latest, so an answer says the input reached the app, not that the app
-//! drew anything.
+//! it passed the input to the app and captured a frame after it, or after 3
+//! seconds at the latest, so an answer says the input reached the app, not
+//! that the app drew its result.
 
 pub mod keys;
 
+use std::io::Write;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use devlanes_gui_client::{Client, ClientError, ClientOptions, Event, Events};
 use devlanes_gui_codec::Frame;
 use devlanes_gui_proto::{
-    Buttons, LockState, Point, Size, Wheel, WheelUnit, WindowId, WindowInfo, WindowKind,
+    Buttons, LockState, MAX_DIMENSION, MAX_TEXT, Point, Size, Wheel, WheelUnit, WindowId,
+    WindowInfo, WindowKind,
 };
 
-pub use devlanes_gui_proto::MAX_DIMENSION;
 pub use keys::{Chord, KeyError, known_names, parse_chord};
 
 /// How long one step may take: connecting, a sync, a screenshot, a resize.
 /// A host answers a sync within 3 seconds and waits up to 3 seconds for a
 /// frame after a resize, so a step past this means the host is stuck.
 pub const STEP_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long to wait before the one retry of a screenshot the host answered
+/// with `Failed`, which it does while it encodes too many at once.
+const RETRY_AFTER: Duration = Duration::from_millis(150);
 
 /// Why a command could not do what it was asked.
 #[derive(Debug, thiserror::Error)]
@@ -57,12 +62,37 @@ pub enum ToolError {
         /// The windows there are.
         windows: Vec<WindowInfo>,
     },
+    /// A click or scroll position outside the window.
+    #[error("{point:?} is outside the {size:?} window")]
+    OutsideWindow {
+        /// The position asked for.
+        point: Point,
+        /// The window's size.
+        size: Size,
+    },
+    /// A resize to a side above [`MAX_DIMENSION`].
+    #[error("each side may be at most {max} pixels")]
+    TooLarge {
+        /// The largest side.
+        max: u32,
+    },
     /// The host closed the connection while a step waited.
     #[error("the GUI host closed the connection")]
     Closed,
-    /// A picture could not be encoded as PNG.
-    #[error("encoding the PNG failed: {0}")]
+    /// A picture could not be encoded or written as PNG.
+    #[error("writing the PNG failed: {0}")]
     Png(String),
+}
+
+/// What became of the window by the time the host applied the input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum After {
+    /// It is open and takes input.
+    Open,
+    /// It closed, such as after a click on its close button.
+    Closed,
+    /// It is locked now, so later input is dropped until it unlocks.
+    Locked(LockState),
 }
 
 /// A tool connection to one GUI host.
@@ -103,7 +133,7 @@ impl Session {
         self.client.welcome().real_desktop
     }
 
-    /// The windows the host had open when the session started.
+    /// The windows the host has open, as of the last step.
     pub fn windows(&self) -> &[WindowInfo] {
         &self.windows
     }
@@ -116,10 +146,11 @@ impl Session {
     }
 
     /// A picture of `window`. A host busy with other screenshots answers
-    /// `Failed`, so that answer is tried once more.
+    /// `Failed`, so that answer is tried once more after a moment.
     pub async fn screenshot(&self, window: WindowId) -> Result<Frame, ToolError> {
         let shot = match step("the screenshot", self.client.screenshot(Some(window))).await? {
             Err(ClientError::ScreenshotFailed(_)) => {
+                tokio::time::sleep(RETRY_AFTER).await;
                 step("the screenshot", self.client.screenshot(Some(window))).await?
             }
             other => other,
@@ -128,33 +159,37 @@ impl Session {
     }
 
     /// Clicks `button` at `at` in `window`, twice for `double`, and waits
-    /// until the host applied it.
+    /// until the host applied it. A point outside the window is refused.
     pub async fn click(
-        &self,
+        &mut self,
         window: WindowId,
         at: Point,
         button: Buttons,
         double: bool,
-    ) -> Result<(), ToolError> {
+    ) -> Result<After, ToolError> {
+        self.inside(window, at)?;
         self.client.click(window, at, button)?;
         if double {
             self.client.click(window, at, button)?;
         }
-        self.sync().await
+        self.finish(window).await
     }
 
-    /// Types `text` into `window`. It waits for a frame first: toolkits drop
-    /// keys that arrive in the same instant as the click that focused a field,
-    /// and that click may have come from the command just before.
-    pub async fn type_text(&self, window: WindowId, text: &str) -> Result<(), ToolError> {
+    /// Types `text` into `window`, in pieces of at most the protocol's
+    /// [`MAX_TEXT`] bytes. It waits for a frame first: toolkits drop keys that
+    /// arrive in the same instant as the click that focused a field, and that
+    /// click may have come from the command just before.
+    pub async fn type_text(&mut self, window: WindowId, text: &str) -> Result<After, ToolError> {
         self.sync().await?;
-        self.client.text(window, text)?;
-        self.sync().await
+        for piece in pieces(text, MAX_TEXT) {
+            self.client.text(window, piece)?;
+        }
+        self.finish(window).await
     }
 
     /// Presses each chord in turn: its keys down in order, then up in
     /// reverse. Waits for a frame first, as [`Session::type_text`] does.
-    pub async fn keys(&self, window: WindowId, chords: &[Chord]) -> Result<(), ToolError> {
+    pub async fn keys(&mut self, window: WindowId, chords: &[Chord]) -> Result<After, ToolError> {
         self.sync().await?;
         for chord in chords {
             for key in &chord.keys {
@@ -164,17 +199,19 @@ impl Session {
                 self.client.key(window, *key, false)?;
             }
         }
-        self.sync().await
+        self.finish(window).await
     }
 
-    /// Scrolls `window` by `dx`, `dy` lines with the pointer at `at`.
+    /// Scrolls `window` by `dx`, `dy` lines with the pointer at `at`, which
+    /// must be inside the window.
     pub async fn scroll(
-        &self,
+        &mut self,
         window: WindowId,
         at: Point,
         dx: f32,
         dy: f32,
-    ) -> Result<(), ToolError> {
+    ) -> Result<After, ToolError> {
+        self.inside(window, at)?;
         self.client.wheel(Wheel {
             window,
             position: at,
@@ -182,25 +219,22 @@ impl Session {
             delta_y: dy,
             unit: WheelUnit::Lines,
         })?;
-        self.sync().await
+        self.finish(window).await
     }
 
     /// Asks for `window` at `size`, waits until the host applied it and a
-    /// frame came, and returns the size the window took, which an app that
-    /// clamps its size may make another one; `None` when the host did not
-    /// say.
-    pub async fn resize(
-        &mut self,
-        window: WindowId,
-        size: Size,
-    ) -> Result<Option<Size>, ToolError> {
+    /// frame came, and returns the size the window has then, which an app
+    /// that clamps its size may make another one.
+    pub async fn resize(&mut self, window: WindowId, size: Size) -> Result<Size, ToolError> {
+        if !size.is_valid() {
+            return Err(ToolError::TooLarge { max: MAX_DIMENSION });
+        }
         let request = self.client.resize(window, size)?;
-        let mut taken = None;
         let events = &mut self.events;
+        let windows = &mut self.windows;
         step("the resize", async {
             while let Some(event) = events.next().await {
                 match event {
-                    Event::WindowChanged(info) if info.id == window => taken = Some(info.size),
                     Event::ResizeApplied {
                         window: id,
                         request: answered,
@@ -208,24 +242,52 @@ impl Session {
                     } if id == window && answered == request => return Ok(()),
                     Event::Closed(Some(error)) => return Err(ToolError::Client(error)),
                     Event::Closed(None) => return Err(ToolError::Closed),
-                    _ => {}
+                    other => track(windows, other),
                 }
             }
             Err(ToolError::Closed)
         })
         .await??;
-        self.sync().await?;
-        // A backend may describe the new size after it answered the resize.
-        // Both reached the event queue before the sync's answer, so what is
-        // queued now is read without waiting (a zero timeout polls once).
-        while let Ok(Some(event)) = tokio::time::timeout(Duration::ZERO, self.events.next()).await {
-            if let Event::WindowChanged(info) = event
-                && info.id == window
-            {
-                taken = Some(info.size);
-            }
+        self.finish(window).await?;
+        let taken = self.windows.iter().find(|info| info.id == window);
+        Ok(taken.map_or(size, |info| info.size))
+    }
+
+    /// Refuses `at` when it is outside `window`'s size.
+    fn inside(&self, window: WindowId, at: Point) -> Result<(), ToolError> {
+        let size = self
+            .windows
+            .iter()
+            .find(|info| info.id == window)
+            .map(|info| info.size)
+            .unwrap_or_default();
+        let fits = |value: i32, side: u32| u32::try_from(value).is_ok_and(|value| value < side);
+        if fits(at.x, size.width) && fits(at.y, size.height) {
+            Ok(())
+        } else {
+            Err(ToolError::OutsideWindow { point: at, size })
         }
-        Ok(taken)
+    }
+
+    /// Waits until the host applied what this session sent, and says what
+    /// became of `window` meanwhile.
+    async fn finish(&mut self, window: WindowId) -> Result<After, ToolError> {
+        self.sync().await?;
+        // What the host said before it answered the sync is queued already,
+        // so it is read without waiting (a zero timeout polls once).
+        while let Ok(Some(event)) = tokio::time::timeout(Duration::ZERO, self.events.next()).await
+        {
+            track(&mut self.windows, event);
+        }
+        if !self.windows.iter().any(|info| info.id == window) {
+            return Ok(After::Closed);
+        }
+        Ok(match self.client.lock_state(window) {
+            None => After::Closed,
+            Some(LockState::Unlocked) => After::Open,
+            Some(LockState::Closed) => After::Closed,
+            Some(lock) => After::Locked(lock),
+        })
     }
 
     /// Waits until the host applied what this session sent.
@@ -238,6 +300,36 @@ impl Session {
     pub fn close(self) {
         self.client.close();
     }
+}
+
+/// Keeps `windows` up to date with a window event.
+fn track(windows: &mut Vec<WindowInfo>, event: Event) {
+    match event {
+        Event::WindowAdded(info) | Event::WindowChanged(info) => {
+            match windows.iter_mut().find(|known| known.id == info.id) {
+                Some(known) => *known = info,
+                None => windows.push(info),
+            }
+        }
+        Event::WindowRemoved(id) => windows.retain(|known| known.id != id),
+        _ => {}
+    }
+}
+
+/// `text` in pieces of at most `limit` bytes, split between characters.
+fn pieces(text: &str, limit: usize) -> Vec<&str> {
+    let mut pieces = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let mut end = rest.len().min(limit);
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        let (piece, tail) = rest.split_at(end);
+        pieces.push(piece);
+        rest = tail;
+    }
+    pieces
 }
 
 /// [`Session::window`] over `windows`.
@@ -278,34 +370,30 @@ fn pick(windows: &[WindowInfo], wanted: Option<&str>) -> Result<WindowInfo, Tool
     }
 }
 
-/// `frame` as a PNG file's bytes, RGBA without its alpha changes. CPU work of
-/// a few milliseconds per megapixel; callers on an async runtime run it on
-/// the blocking pool.
-pub fn encode_png(frame: &Frame) -> Result<Vec<u8>, ToolError> {
+/// Writes `frame` to `out` as a PNG, RGBA with the frame's alpha, one row at
+/// a time, so no second copy of the picture is held. CPU work of a few
+/// milliseconds per megapixel; callers on an async runtime run it on the
+/// blocking pool.
+pub fn write_png(frame: &Frame, out: impl Write) -> Result<(), ToolError> {
+    let png = |error: &dyn std::fmt::Display| ToolError::Png(error.to_string());
     let (width, height) = (frame.width(), frame.height());
-    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    let mut encoder = png::Encoder::new(out, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|error| png(&error))?;
+    let mut stream = writer.stream_writer().map_err(|error| png(&error))?;
+    let mut rgba = Vec::with_capacity(width as usize * 4);
     for y in 0..height {
         let row = frame
             .row(y)
             .ok_or_else(|| ToolError::Png(format!("row {y} is missing")))?;
+        rgba.clear();
         for [b, g, r, a] in row.as_chunks::<4>().0.iter().take(width as usize) {
             rgba.extend_from_slice(&[*r, *g, *b, *a]);
         }
+        stream.write_all(&rgba).map_err(|error| png(&error))?;
     }
-    let mut out = Vec::new();
-    let mut encoder = png::Encoder::new(&mut out, width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder
-        .write_header()
-        .map_err(|error| ToolError::Png(error.to_string()))?;
-    writer
-        .write_image_data(&rgba)
-        .map_err(|error| ToolError::Png(error.to_string()))?;
-    writer
-        .finish()
-        .map_err(|error| ToolError::Png(error.to_string()))?;
-    Ok(out)
+    stream.finish().map_err(|error| png(&error))
 }
 
 /// The middle of `window`, where a scroll without `--at` points.
@@ -314,16 +402,6 @@ pub fn centre(window: &WindowInfo) -> Point {
         i32::try_from(window.size.width / 2).unwrap_or(0),
         i32::try_from(window.size.height / 2).unwrap_or(0),
     )
-}
-
-/// The button `name` names: `left`, `right` or `middle`.
-pub fn button(name: &str) -> Option<Buttons> {
-    match name {
-        "left" => Some(Buttons::LEFT),
-        "right" => Some(Buttons::RIGHT),
-        "middle" => Some(Buttons::MIDDLE),
-        _ => None,
-    }
 }
 
 // Compiles the README's example with the doc tests, so it keeps matching the API.
@@ -383,5 +461,18 @@ mod tests {
             pick(&windows[..2], None),
             Err(ToolError::NoMainWindow { windows }) if windows.len() == 2
         ));
+    }
+
+    /// Text splits between characters into pieces within the limit, and the
+    /// pieces put back together are the text.
+    #[test]
+    fn text_splits_between_characters() {
+        // 'é' is two bytes, so a 5-byte limit falls inside one at "aé|é".
+        let text = "aééé€b";
+        let split = pieces(text, 5);
+        assert!(split.iter().all(|piece| piece.len() <= 5), "{split:?}");
+        assert_eq!(split, ["aéé", "é€", "b"]);
+        assert_eq!(split.concat(), text);
+        assert!(pieces("", 5).is_empty());
     }
 }

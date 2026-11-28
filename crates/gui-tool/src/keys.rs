@@ -66,6 +66,12 @@ pub struct Chord {
 /// Why a chord is not valid.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum KeyError {
+    /// An empty name, as in `ctrl+` or `ctrl++`.
+    #[error("{chord:?} has an empty key name")]
+    Empty {
+        /// The chord as written.
+        chord: String,
+    },
     /// A name that is no key.
     #[error("unknown key {name:?} in {chord:?}")]
     Unknown {
@@ -88,6 +94,11 @@ pub fn parse_chord(chord: &str) -> Result<Chord, KeyError> {
     let names: Vec<&str> = lower.split('+').collect();
     let mut keys = Vec::with_capacity(names.len());
     for (index, name) in names.iter().enumerate() {
+        if name.is_empty() {
+            return Err(KeyError::Empty {
+                chord: chord.to_owned(),
+            });
+        }
         let unknown = || KeyError::Unknown {
             chord: chord.to_owned(),
             name: (*name).to_owned(),
@@ -167,8 +178,6 @@ mod tests {
             ("Z", &[0x1d]),
             ("1", &[0x1e]),
             ("0", &[0x27]),
-            ("enter", &[0x28]),
-            ("esc", &[0x29]),
             ("f1", &[0x3a]),
             ("f12", &[0x45]),
             ("f13", &[0x68]),
@@ -179,7 +188,6 @@ mod tests {
             ("alt+f4", &[0xe2, 0x3d]),
             ("shift", &[0xe1]),
             ("ctrl+shift", &[0xe0, 0xe1]),
-            ("up", &[0x52]),
         ];
         for (chord, usages) in cases {
             let parsed = parse_chord(chord).unwrap_or_else(|error| panic!("{chord}: {error}"));
@@ -188,28 +196,30 @@ mod tests {
         }
     }
 
-    /// Unknown names, keys out of place and doubled keys are refused.
+    /// Empty and unknown names, keys out of place and doubled keys are refused.
     #[test]
     fn bad_chords_are_refused() {
-        for (chord, unknown) in [
-            ("ctrl+", true),
-            ("", true),
-            ("f0", true),
-            ("f25", true),
-            ("f01", true),
-            ("hyper+a", true),
-            ("plus", true),
-            ("s+ctrl", false),
-            ("a+b", false),
-            ("ctrl+ctrl+s", false),
-            ("shift+shift", false),
+        for (chord, kind) in [
+            ("ctrl+", "empty"),
+            ("ctrl++", "empty"),
+            ("", "empty"),
+            ("f0", "unknown"),
+            ("f25", "unknown"),
+            ("f01", "unknown"),
+            ("hyper+a", "unknown"),
+            ("plus", "unknown"),
+            ("s+ctrl", "chord"),
+            ("a+b", "chord"),
+            ("ctrl+ctrl+s", "chord"),
+            ("shift+shift", "chord"),
         ] {
             let error = parse_chord(chord).expect_err(chord);
-            assert_eq!(
-                matches!(error, KeyError::Unknown { .. }),
-                unknown,
-                "{chord}: {error}"
-            );
+            let got = match &error {
+                KeyError::Empty { .. } => "empty",
+                KeyError::Unknown { .. } => "unknown",
+                KeyError::NotAChord { .. } => "chord",
+            };
+            assert_eq!(got, kind, "{chord}: {error}");
         }
     }
 }

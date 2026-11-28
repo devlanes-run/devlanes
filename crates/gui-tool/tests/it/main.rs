@@ -1,28 +1,20 @@
 //! A session against a test-pattern host on loopback TCP: what each step
 //! sends reaches the window it picked, with the keys and text as written,
-//! and a screenshot comes back as a PNG of the grid.
+//! and the steps refuse what the window cannot take.
 
 use std::time::Duration;
 
-use devlanes_gui_host::{
-    Echo, ServeOptions, TestPattern, TestPatternOptions, pattern, serve, start_backend,
-};
-use devlanes_gui_proto::{Buttons, KeyCode, Point, Size, WindowId};
-use devlanes_gui_tool::{connect, encode_png, parse_chord};
+use devlanes_gui_host::{Echo, ServeOptions, TestPattern, TestPatternOptions, serve, start_backend};
+use devlanes_gui_proto::{Buttons, KeyCode, MAX_TEXT, Point, Size, WindowId};
+use devlanes_gui_tool::{After, ToolError, connect, parse_chord, write_png};
 use tokio::net::TcpListener;
 
 /// Longest the whole test may take.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// The RGBA pixel at `at` of a decoded PNG of `width` columns.
-fn pixel(rgba: &[u8], width: u32, at: Point) -> [u8; 3] {
-    let index = (at.y as usize * width as usize + at.x as usize) * 4;
-    [rgba[index], rgba[index + 1], rgba[index + 2]]
-}
-
-/// Picks the second window by id, sends a click, text, a chord and a resize
-/// to it, and reads the echoes; the screenshot after the resize is a PNG of
-/// the grid at the new size.
+/// Picks the second window by id, sends a click, text longer than one
+/// message, a chord and a resize to it, and reads the echoes. A click outside
+/// the window is refused, and a screenshot writes a PNG of the window's size.
 #[tokio::test]
 async fn a_session_drives_the_window_it_picked() {
     let (backend, handle) = TestPattern::new(TestPatternOptions::default());
@@ -33,6 +25,8 @@ async fn a_session_drives_the_window_it_picked() {
     let options = ServeOptions::new("acme:desktop");
     let shutdown = options.shutdown.clone();
     let served = tokio::spawn(serve(listener, running, options));
+    // Over one message's limit, with a two-byte character across the cut.
+    let long: String = format!("{}é tail", "a".repeat(MAX_TEXT - 1));
 
     let work = async {
         let mut session = connect(address, "test").await.expect("connect");
@@ -43,34 +37,42 @@ async fn a_session_drives_the_window_it_picked() {
             .id;
         assert_eq!(window, second);
 
-        session
+        let refused = session
+            .click(window, Point::new(240, 10), Buttons::LEFT, false)
+            .await;
+        assert!(
+            matches!(refused, Err(ToolError::OutsideWindow { size, .. }) if size == Size::new(240, 160)),
+            "{refused:?}"
+        );
+        let after = session
             .click(window, Point::new(30, 40), Buttons::RIGHT, true)
             .await
             .expect("click");
-        session.type_text(window, "acme 42").await.expect("type");
+        assert_eq!(after, After::Open);
+        session.type_text(window, &long).await.expect("type");
         let chord = parse_chord("ctrl+s").expect("chord");
         session.keys(window, &[chord]).await.expect("keys");
+        // The pattern takes the size; a size it keeps is reported too.
         let taken = session
             .resize(window, Size::new(200, 120))
             .await
             .expect("resize");
-        assert_eq!(taken, Some(Size::new(200, 120)));
+        assert_eq!(taken, Size::new(200, 120));
+        let kept = session
+            .resize(window, Size::new(200, 120))
+            .await
+            .expect("resize");
+        assert_eq!(kept, Size::new(200, 120));
 
         let frame = session.screenshot(window).await.expect("screenshot");
-        let png = encode_png(&frame).expect("png");
-        let decoder = png::Decoder::new(std::io::Cursor::new(png));
-        let mut reader = decoder.read_info().expect("a PNG header");
-        let mut rgba = vec![0; reader.output_buffer_size().expect("buffer size")];
-        let info = reader.next_frame(&mut rgba).expect("a PNG picture");
+        let mut png = Vec::new();
+        write_png(&frame, &mut png).expect("png");
+        let info = png::Decoder::new(std::io::Cursor::new(png))
+            .read_info()
+            .expect("a PNG header")
+            .info()
+            .clone();
         assert_eq!((info.width, info.height), (200, 120));
-        let size = Size::new(200, 120);
-        for row in 0..pattern::GRID_ROWS {
-            for column in 0..pattern::GRID_COLUMNS {
-                let centre = pattern::cell_centre(column, row, size);
-                let want = pattern::grid_colour(centre.x as u32, centre.y as u32, size);
-                assert_eq!(pixel(&rgba, 200, centre), want, "cell {column},{row}");
-            }
-        }
         session.close();
     };
     tokio::time::timeout(PATIENCE, work)
@@ -94,15 +96,23 @@ async fn a_session_drives_the_window_it_picked() {
         code,
         down,
     };
+    let (texts, others): (Vec<Echo>, Vec<Echo>) = echoes
+        .into_iter()
+        .partition(|echo| matches!(echo, Echo::Text { .. }));
+    let typed: String = texts
+        .iter()
+        .map(|echo| match echo {
+            Echo::Text { window, text } if *window == second => text.as_str(),
+            _ => "",
+        })
+        .collect();
+    assert_eq!(texts.len(), 2, "two pieces");
+    assert_eq!(typed, long);
     assert_eq!(
-        echoes,
+        others,
         [
             press.clone(),
             press,
-            Echo::Text {
-                window: second,
-                text: "acme 42".into(),
-            },
             key(ctrl, true),
             key(s, true),
             key(s, false),

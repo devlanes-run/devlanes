@@ -862,6 +862,30 @@ impl Hub {
                 return;
             }
         };
+        // A press, plain motion or a scroll outside the window's geometry is
+        // dropped, so a backend on the real desktop never sends it to whatever
+        // lies there. A drag that leaves the window and its release go on.
+        let outside = |position: Point| {
+            let size = self
+                .windows
+                .get(&window)
+                .map(|w| w.info.size)
+                .unwrap_or_default();
+            !(0..i64::from(size.width)).contains(&i64::from(position.x))
+                || !(0..i64::from(size.height)).contains(&i64::from(position.y))
+        };
+        let stray = match &message {
+            ClientMessage::Pointer(p) if !only_release => {
+                outside(p.position)
+                    && (self.buttons.is_empty() || !p.buttons.pressed_since(self.buttons).is_empty())
+            }
+            ClientMessage::Wheel(w) => outside(w.position),
+            _ => false,
+        };
+        if stray {
+            self.arbiter.alive(session, now);
+            return;
+        }
         let mut message = message;
         if only_release && let ClientMessage::Pointer(pointer) = &mut message {
             // A press that came with the release is dropped; the release stays.

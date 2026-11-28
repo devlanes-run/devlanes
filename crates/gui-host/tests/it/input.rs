@@ -275,3 +275,52 @@ async fn sync_answers_only_after_a_frame_captured_after_the_input() {
     assert_eq!(&row[x..x + 4], &[0, 0, 0, 0xff], "the click marker");
     host.stop().await;
 }
+
+/// Presses, motion and scrolls outside the window's 320x200 never reach the
+/// backend, while a drag that leaves the window keeps going until its release.
+#[tokio::test(start_paused = true)]
+async fn input_outside_the_window_is_dropped() {
+    let host = Host::default().await;
+    let window = host.pattern.first_window();
+    let (tool, _events) = host.tool("ada").await;
+    let wheel = |position| devlanes_gui_proto::Wheel {
+        window,
+        position,
+        delta_x: 0.0,
+        delta_y: 1.0,
+        unit: devlanes_gui_proto::WheelUnit::Lines,
+    };
+    for outside in [Point::new(320, 10), Point::new(10, 200), Point::new(-1, 0)] {
+        tool.click(window, outside, Buttons::LEFT).expect("sends");
+        tool.wheel(wheel(outside)).expect("sends");
+    }
+    tool.wheel(wheel(Point::new(5, 5))).expect("sends");
+    let (inside, beyond) = (Point::new(300, 190), Point::new(400, 300));
+    tool.pointer(pointer(window, inside, Buttons::LEFT))
+        .expect("sends");
+    tool.pointer(pointer(window, beyond, Buttons::LEFT))
+        .expect("sends");
+    tool.pointer(pointer(window, beyond, Buttons::NONE))
+        .expect("sends");
+    tool.sync().await.expect("synced");
+    let input: Vec<(Point, bool)> = host
+        .pattern
+        .commands()
+        .into_iter()
+        .filter_map(|command| match command {
+            Command::Pointer(p) => Some((p.position, true)),
+            Command::Wheel(w) => Some((w.position, false)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        input,
+        [
+            (Point::new(5, 5), false),
+            (inside, true),
+            (beyond, true),
+            (beyond, true)
+        ]
+    );
+    host.stop().await;
+}
