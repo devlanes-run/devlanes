@@ -63,6 +63,11 @@ tempfile = "3"
 # std's); the browser's clock in wasm32 builds, where std's clock panics.
 web-time = "1"
 windows-sys = { version = "0.61", default-features = false }
+# The GUI viewer's windows and software presenting (crates/gui-viewer). Both load
+# the X11, Wayland and xkbcommon libraries at run time on Linux, so devlanes-gui
+# links none of them.
+winit = "0.30"
+softbuffer = "0.4"
 zstd = { version = "0.14", default-features = false }
 
 [workspace.lints.rust]

@@ -14,6 +14,7 @@
 mod driver;
 mod error;
 mod events;
+pub mod instance;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};

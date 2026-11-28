@@ -43,6 +43,7 @@ async fn watch(port: u16) -> Result<(), ClientError> {
 - `Client`: typed input (`pointer`, `click`, `key`, `text`, `wheel`, `resize`, `focus`, `clipboard`), `screenshot`, `sync`, and the control messages.
 - `Events`, `Event`: windows, decoded frames, lock states, the input holder, cursor, clipboard, activity, and the end of the connection.
 - `ClientError`: typed failures, including refusals and `DecodeError::VersionMismatch`.
+- `instance`: the lock that keeps one viewer process per GUI service on a machine (`claim`, `running`, `holder`, `ask_to_show`), shared by the viewer, `devlanes gui open` and the daemon's auto-open.
 
 ## Behaviour
 

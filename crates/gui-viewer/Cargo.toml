@@ -1,0 +1,29 @@
+[package]
+name = "devlanes-gui-viewer"
+description = "The native devlanes GUI viewer: one local window per window of a GUI service"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+devlanes-gui-client = { path = "../gui-client" }
+devlanes-gui-codec = { path = "../gui-codec" }
+devlanes-gui-proto = { path = "../gui-proto" }
+# Text only: image support would pull in an image decoder. On Linux it talks to
+# X11 in Rust (x11rb), with nothing linked.
+arboard = { version = "3.7", default-features = false }
+serde_json.workspace = true
+softbuffer.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+winit.workspace = true
+
+[dev-dependencies]
+devlanes-gui-host = { path = "../gui-host" }
+devlanes-gui-tool = { path = "../gui-tool" }
