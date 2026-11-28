@@ -1498,6 +1498,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "devlanes-gui"
+version = "0.17.0"
+dependencies = [
+ "clap",
+ "devlanes-gui-client",
+ "devlanes-gui-host",
+ "devlanes-gui-proto",
+ "devlanes-version",
+ "embed-resource",
+ "rustix",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "devlanes-gui-client"
 version = "0.1.0"
 dependencies = [
