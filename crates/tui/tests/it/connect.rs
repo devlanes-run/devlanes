@@ -131,6 +131,11 @@ fn paired(app: &App, result: Result<Value, ApiError>) -> Msg {
     }
 }
 
+/// Moves the app's clock past the wait after a pairing answer.
+fn after_a_while(app: &mut App) {
+    app.clock = Some(app.now() + devlanes_tui::connect::PAIR_AGAIN_AFTER);
+}
+
 /// The notice's text, empty without one.
 fn notice(app: &App) -> String {
     app.notice
@@ -224,11 +229,11 @@ async fn the_form_sends_a_pasted_ticket() -> TestResult {
     let other = if ticket.ends_with('a') { 'b' } else { 'a' };
     let changed = format!("{}{other}", &ticket[..ticket.len() - 1]);
     for (typed, refusal) in [
-        (cut, "cut short"),
-        (changed.as_str(), "cut short"),
+        (cut, "This ticket is not complete yet."),
+        (changed.as_str(), "This ticket is not complete yet."),
         (
             "dlp1box",
-            "This is not a pairing ticket, which starts with dlp1.",
+            "This starts like a pairing ticket but is too short for one.",
         ),
     ] {
         let mut app = boxes_app(100, 30, json!([])).await;
@@ -271,40 +276,138 @@ async fn the_form_sends_a_pasted_ticket() -> TestResult {
     Ok(())
 }
 
-/// A ticket copied from the pair dialog's three bordered lines, as Windows
-/// delivers every paste: key presses, each line break an Enter. The first
-/// parts are refused and stay, the rest appends, and the Enter after the
-/// last part sends the whole ticket once. None of its letters (`n`, `p`,
-/// `f`, `t`, `y`, `d` among them) reaches another field or key binding.
-/// A bracketed paste of the same lines gives the same ticket.
-#[tokio::test]
-async fn a_ticket_typed_as_key_presses_is_sent_whole_once() -> TestResult {
-    let ticket = test_ticket();
+/// The keys of a ticket as Windows delivers a paste: the first as a key, the
+/// rest as keys of the paste. Copied with `y` it is the ticket alone, which
+/// starts with `d`; copied with the mouse from the pair dialog it is three
+/// bordered lines, each line break an Enter.
+fn pasted_keys(ticket: &str, bordered: bool) -> Vec<Msg> {
     let third = ticket.len() / 3;
-    let lines = [
-        &ticket[..third],
-        &ticket[third..2 * third],
-        &ticket[2 * third..],
-    ];
+    let text = if bordered {
+        [
+            &ticket[..third],
+            &ticket[third..2 * third],
+            &ticket[2 * third..],
+        ]
+        .map(|line| format!("│ {line} │"))
+        .join("\r")
+    } else {
+        format!("{ticket}\r")
+    };
+    text.chars()
+        .enumerate()
+        .map(|(index, c)| {
+            let code = if c == '\r' {
+                KeyCode::Enter
+            } else {
+                KeyCode::Char(c)
+            };
+            let key = KeyEvent::new(code, KeyModifiers::NONE);
+            if index == 0 {
+                Msg::Key(key)
+            } else {
+                Msg::PastedKey(key)
+            }
+        })
+        .collect()
+}
+
+/// Effects that act on a box, a client or pairing, which a paste must
+/// never produce.
+fn acts(effects: &[Effect]) -> Vec<&Effect> {
+    effects
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Effect::Disconnect { .. }
+                    | Effect::Forget { .. }
+                    | Effect::RevokeClient { .. }
+                    | Effect::Pair { .. }
+                    | Effect::MintTicket { .. }
+                    | Effect::Connect { .. }
+                    | Effect::ConnectTicket { .. }
+            )
+        })
+        .collect()
+}
+
+/// A ticket pasted as key presses into the bare Boxes view, with a connected
+/// box selected and a box paired by ticket listed, opens at most what its
+/// first letter opens, the disconnect question for `d`, and its other
+/// letters (`y`, `n`, `p`, `f`, `x` and digits among them) answer nothing
+/// and run no binding. The same paste into an open question confirms
+/// nothing.
+#[tokio::test]
+async fn a_paste_as_key_presses_runs_no_bindings() -> TestResult {
+    let hosts = json!([
+        {"host": "hetzner", "state": "connected", "transport": "ssh"},
+        {"host": "studio", "state": "failed", "transport": "p2p"},
+    ]);
+    let ticket = test_ticket();
+    let mut app = boxes_app(100, 30, hosts.clone()).await;
+    let mut effects = Vec::new();
+    for msg in pasted_keys(&ticket, false) {
+        effects.extend(app.update(msg));
+    }
+    assert!(acts(&effects).is_empty(), "{effects:?}");
+    assert!(
+        matches!(&app.dialog, Some(Dialog::Confirm { prompt, .. }) if prompt == "Disconnect hetzner?"),
+        "{:?}",
+        app.dialog
+    );
+    assert_eq!(app.view, View::Boxes);
+
+    let mut app = boxes_app(100, 30, hosts).await;
+    app.update(key(KeyCode::Char('j')));
+    app.update(key(KeyCode::Char('f')));
+    let mut effects = Vec::new();
+    for msg in pasted_keys(&ticket, false) {
+        effects.extend(app.update(msg));
+    }
+    assert!(acts(&effects).is_empty(), "{effects:?}");
+    assert!(
+        matches!(&app.dialog, Some(Dialog::Confirm { prompt, .. }) if prompt == "Forget studio?")
+    );
+    // Keys pressed one by one still answer it.
+    let effects = app.update(key(KeyCode::Char('y')));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Forget { host } if host == "studio")),
+        "{effects:?}"
+    );
+    Ok(())
+}
+
+/// The same paste into the ticket row is one text: its line breaks are
+/// dropped instead of submitting, the row is masked and says the ticket is
+/// whole, and only an Enter pressed afterwards sends it, once.
+#[tokio::test]
+async fn a_ticket_pasted_as_key_presses_waits_for_enter() -> TestResult {
+    let ticket = test_ticket();
     let mut app = boxes_app(100, 30, json!([])).await;
     app.update(key(KeyCode::Char('n')));
-    let mut sent = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        for c in format!("│ {line} │").chars() {
-            let effects = app.update(key(KeyCode::Char(c)));
-            assert!(effects.is_empty(), "{c:?}: {effects:?}");
-        }
-        let effects = app.update(key(KeyCode::Enter));
-        if index < 2 {
-            assert!(effects.is_empty(), "{effects:?}");
-            assert!(matches!(step(&app), Some(Step::Form)));
-            assert!(screen(&render(&app)?).contains("cut short"));
-        }
-        sent.extend(sent_ticket(&effects));
+    let mut effects = Vec::new();
+    for msg in pasted_keys(&ticket, true) {
+        effects.extend(app.update(msg));
     }
-    assert_eq!(sent, [(ticket.clone(), None)]);
-    assert!(matches!(step(&app), Some(Step::Waiting)));
+    assert!(acts(&effects).is_empty(), "{effects:?}");
+    assert!(matches!(step(&app), Some(Step::Form)));
+    let text = screen(&render(&app)?);
+    assert!(text.contains("Press enter to pair."), "{text}");
+    assert!(!text.contains(&ticket[..20]), "{text}");
+    let effects = app.update(key(KeyCode::Enter));
+    assert_eq!(sent_ticket(&effects), Some((ticket.clone(), None)));
 
+    // Half of one, as a person may press Enter on, says it is not whole.
+    let mut app = boxes_app(100, 30, json!([])).await;
+    app.update(key(KeyCode::Char('n')));
+    type_text(&mut app, &ticket[..ticket.len() / 2]);
+    assert!(screen(&render(&app)?).contains("This ticket is not complete yet."));
+    let effects = app.update(key(KeyCode::Enter));
+    assert_eq!(sent_ticket(&effects), None, "{effects:?}");
+
+    let lines = [&ticket[..40], &ticket[40..80], &ticket[80..]];
     let mut app = boxes_app(100, 30, json!([])).await;
     app.update(key(KeyCode::Char('n')));
     let bordered: Vec<String> = lines.iter().map(|line| format!("│ {line} │")).collect();
@@ -819,6 +922,7 @@ async fn the_pairing_code_modal() -> TestResult {
         "{effects:?}"
     );
     // A reply without `valid_ms` still counts down from 10 minutes.
+    after_a_while(&mut app);
     app.update(key(KeyCode::Char('p')));
     app.update(paired(&app, Ok(json!({"code": "K7QM-3XWD"}))));
     app.update(Msg::Tick);
@@ -829,6 +933,7 @@ async fn the_pairing_code_modal() -> TestResult {
         json!({"message": "the box paused pairing", "retry_after_ms": 252_000}),
         4,
     );
+    after_a_while(&mut app);
     app.update(key(KeyCode::Char('p')));
     app.update(paired(&app, Err(ApiError::Rpc(paused))));
     assert!(matches!(
@@ -843,6 +948,7 @@ async fn the_pairing_code_modal() -> TestResult {
     assert!(text.contains("again in 4m 12s"), "{text}");
 
     let off = RpcError::new("connections_off", json!({"invalid": false}), 4);
+    after_a_while(&mut app);
     app.update(key(KeyCode::Char('p')));
     app.update(paired(&app, Err(ApiError::Rpc(off))));
     let text = screen(&render(&app)?);
@@ -889,7 +995,7 @@ async fn the_pairing_modal_asks_for_a_ticket_only_when_told() -> TestResult {
     let ticket_at = text.find(&test_ticket()[..40]).ok_or("no ticket")?;
     let code_at = text.find("--code K7QM-3XWD").ok_or("no code")?;
     assert!(ticket_at < code_at, "{text}");
-    assert!(text.contains("without SSH"), "{text}");
+    assert!(text.contains("or after devlanes remote connect"), "{text}");
     let effects = app.update(key(KeyCode::Char('y')));
     assert!(
         effects
@@ -898,7 +1004,11 @@ async fn the_pairing_modal_asks_for_a_ticket_only_when_told() -> TestResult {
         "{effects:?}"
     );
 
-    app.update(key(KeyCode::Char('p')));
+    // Within a second of the answer, p asks nothing: a held p on Windows
+    // comes as presses, not repeats.
+    assert_eq!(asks(&app.update(key(KeyCode::Char('p')))), 0);
+    after_a_while(&mut app);
+    assert_eq!(asks(&app.update(key(KeyCode::Char('p')))), 1);
     // A late answer to the replaced modal's request is not shown.
     let mut stale = pair_reply("STAL-E000");
     stale["ticket"] = json!(test_ticket());

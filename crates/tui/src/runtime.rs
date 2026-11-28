@@ -27,7 +27,7 @@ use crossterm::{
 };
 use devlanes_proto::{AttachParams, Method, Selection};
 use devlanes_term::{Notifications, Notifier, Progress, ProgressBar, TitleGuard, Wrap};
-use futures_util::{Stream, StreamExt};
+use futures_util::{FutureExt, Stream, StreamExt};
 use ratatui::{Terminal, backend::Backend};
 use tokio::{
     sync::{Notify, mpsc},
@@ -177,7 +177,8 @@ where
     B::Error: Send + Sync + 'static,
     E: Stream<Item = io::Result<TermEvent>> + Unpin,
 {
-    run_loop(terminal, api, options, events, clipboard, None)
+    // Its events come from a script, which sends keys as fast as a paste.
+    run_loop(terminal, api, options, events, clipboard, None, false)
         .await
         .map(|app| app.relaunch())
 }
@@ -197,7 +198,16 @@ where
     B::Error: Send + Sync + 'static,
     E: Stream<Item = io::Result<TermEvent>> + Unpin,
 {
-    let app = run_loop(terminal, api, options, events, clipboard, Some(start)).await?;
+    let app = run_loop(
+        terminal,
+        api,
+        options,
+        events,
+        clipboard,
+        Some(start),
+        false,
+    )
+    .await?;
     Ok(app.start_exit().unwrap_or(StartExit::Pending))
 }
 
@@ -214,7 +224,8 @@ async fn next_start(start: &mut Option<mpsc::Receiver<StartFrame>>) -> StartFram
 }
 
 /// The event loop behind [`drive`] and [`drive_start`]; returns the app as it
-/// was when the user quit.
+/// was when the user quit. `pastes_are_keys` turns on the paste rule of
+/// [`mark_paste`] for a terminal that delivers pastes as key presses.
 pub(crate) async fn run_loop<B, E>(
     terminal: &mut Terminal<B>,
     api: Arc<dyn DaemonApi>,
@@ -222,6 +233,7 @@ pub(crate) async fn run_loop<B, E>(
     mut events: E,
     clipboard: Box<dyn Write + Send>,
     start: Option<StartHandoff>,
+    pastes_are_keys: bool,
 ) -> Result<App, Error>
 where
     B: Backend,
@@ -286,6 +298,9 @@ where
     spin.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut dirty = true;
     let mut last_draw = Instant::now() - FRAME;
+    // When the last key was read, for telling a paste from typing.
+    let mut last_key = None;
+    let mut events_ended = false;
     executor.show_title(&app.tab_title());
     loop {
         // Unfocused, the screen is drawn a few times a second, not sixty.
@@ -301,34 +316,64 @@ where
             last_draw = Instant::now();
         }
         let next_frame = last_draw + frame_time;
-        let msg = tokio::select! {
+        let msgs = tokio::select! {
             event = events.next() => match event {
-                Some(Ok(event)) => terminal_msg(event),
+                Some(Ok(event)) => {
+                    // What is queued already is read now, before a frame is
+                    // drawn, so the keys of a paste are read as close
+                    // together as the terminal sent them.
+                    let mut read = vec![(Instant::now(), event)];
+                    while read.len() < MAX_EVENT_BATCH {
+                        match events.next().now_or_never() {
+                            Some(Some(Ok(event))) => read.push((Instant::now(), event)),
+                            Some(Some(Err(error))) => return Err(error.into()),
+                            // An ended stream is not polled again.
+                            Some(None) => {
+                                events_ended = true;
+                                break;
+                            }
+                            None => break,
+                        }
+                    }
+                    read.into_iter()
+                        .filter_map(|(at, event)| {
+                            let msg = terminal_msg(event)?;
+                            Some(mark_paste(msg, at, &mut last_key, pastes_are_keys))
+                        })
+                        .collect()
+                }
                 Some(Err(error)) => return Err(error.into()),
                 None => return Ok(app),
             },
-            msg = receiver.recv() => msg,
-            frame = next_start(&mut start_stream) => Some(Msg::Start(frame)),
-            _ = tick.tick() => Some(Msg::Tick),
+            msg = receiver.recv() => msg.into_iter().collect(),
+            frame = next_start(&mut start_stream) => vec![Msg::Start(frame)],
+            _ = tick.tick() => vec![Msg::Tick],
             // Spinners advance between ticks only while one is on screen.
-            _ = spin.tick(), if app.spinning() && app.focused => Some(Msg::Spin),
-            _ = sleep_until(next_frame), if dirty => None,
+            _ = spin.tick(), if app.spinning() && app.focused => vec![Msg::Spin],
+            _ = sleep_until(next_frame), if dirty => Vec::new(),
             // The panic hook already restored the terminal; a UI drawing over
             // the shell afterwards would only make things worse.
             () = panicked.notified() => return Err(Error::Panicked),
         };
-        let Some(msg) = msg else {
+        if msgs.is_empty() {
             continue;
-        };
+        }
         dirty = true;
         // The bar is written again every second and after anything the user
         // does (switching lanes, pages, resizing), so a terminal that dropped
         // it gets it back at once.
-        let resend = matches!(
-            msg,
-            Msg::Tick | Msg::Key(_) | Msg::Mouse(_) | Msg::Resize(..)
-        );
-        if !executor.apply(&mut app, msg) {
+        let resend = msgs.iter().any(|msg| {
+            matches!(
+                msg,
+                Msg::Tick | Msg::Key(_) | Msg::PastedKey(_) | Msg::Mouse(_) | Msg::Resize(..)
+            )
+        });
+        for msg in msgs {
+            if !executor.apply(&mut app, msg) {
+                return Ok(app);
+            }
+        }
+        if events_ended {
             return Ok(app);
         }
         // Drain what is already queued so a burst of output costs one frame,
@@ -349,6 +394,31 @@ where
 /// Converts backend errors into the crate error.
 fn backend_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> Error {
     Error::Io(io::Error::other(error))
+}
+
+/// Most terminal events read in one go: a ticket of the longest kind pasted
+/// as key presses, with room to spare.
+const MAX_EVENT_BATCH: usize = 4_096;
+
+/// Whether pastes reach the TUI as key presses: on Windows, where crossterm
+/// has no paste event. Elsewhere a paste arrives as [`Msg::Paste`], and
+/// keys a script sends through a pty, as fast as a paste, stay keys.
+pub(crate) const PASTES_ARE_KEYS: bool = cfg!(windows);
+
+/// `msg` as the app takes it: where `pastes_are_keys`, a key read at `at`
+/// within [`crate::keys::PASTE_GAP`] of the key before it becomes
+/// [`Msg::PastedKey`]. `last_key` is when the previous key was read.
+fn mark_paste(msg: Msg, at: Instant, last_key: &mut Option<Instant>, pastes_are_keys: bool) -> Msg {
+    let Msg::Key(key) = msg else {
+        return msg;
+    };
+    let gap = last_key.map(|last: Instant| at.saturating_duration_since(last));
+    *last_key = Some(at);
+    if pastes_are_keys && crate::keys::in_paste(gap) {
+        Msg::PastedKey(key)
+    } else {
+        Msg::Key(key)
+    }
 }
 
 /// Maps crossterm events; key releases are dropped (kitty protocol reports them).
@@ -1341,5 +1411,45 @@ mod tests {
         assert_eq!(container_line(&plain).as_deref(), Some(&b"ready\r\n"[..]));
         let other = event(devlanes_proto::events::DIAGNOSTIC, serde_json::json!({}));
         assert_eq!(container_line(&other), None);
+    }
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
+
+    /// Where pastes are key presses, a key read within the paste gap of the
+    /// one before is part of a paste, and keys at a person's pace or a held
+    /// key's repeat are keys; elsewhere every key is a key.
+    #[test]
+    fn keys_close_together_are_a_paste_where_pastes_are_keys() {
+        let start = Instant::now();
+        let key = || Msg::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        let read = |at_ms: u64, pastes_are_keys: bool, last: &mut Option<Instant>| {
+            let at = start + Duration::from_millis(at_ms);
+            match mark_paste(key(), at, last, pastes_are_keys) {
+                Msg::Key(_) => "key",
+                Msg::PastedKey(_) => "pasted",
+                _ => "other",
+            }
+        };
+        let mut last = None;
+        let marked: Vec<&str> = [0, 0, 1, 31, 32, 200]
+            .into_iter()
+            .map(|at| read(at, true, &mut last))
+            .collect();
+        assert_eq!(marked, ["key", "pasted", "pasted", "key", "pasted", "key"]);
+        let mut last = None;
+        assert_eq!(
+            [read(0, false, &mut last), read(0, false, &mut last)],
+            ["key", "key"]
+        );
+        // Other messages pass as they are.
+        assert!(matches!(
+            mark_paste(Msg::Tick, start, &mut last, true),
+            Msg::Tick
+        ));
     }
 }

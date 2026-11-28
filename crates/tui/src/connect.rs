@@ -108,9 +108,22 @@ fn pasted_ticket(typed: &str) -> String {
 
 /// Whether typed text holds a ticket or the start of one, cleaned as
 /// [`pasted_ticket`] cleans it: what no row may show or send as a name.
+/// The prefix counts anywhere when 20 or more base32 characters follow,
+/// so text in front of a ticket (`it:dlp1…`) does not hide it.
 fn ticket_like(typed: &str) -> bool {
     let cleaned = pasted_ticket(typed);
-    devlanes_proto::remote::holds_ticket(&cleaned) || devlanes_cli::cut_ticket(&cleaned)
+    if devlanes_proto::remote::holds_ticket(&cleaned) || devlanes_cli::cut_ticket(&cleaned) {
+        return true;
+    }
+    let lower = cleaned.to_ascii_lowercase();
+    let prefix = devlanes_proto::remote::TICKET_PREFIX;
+    lower.match_indices(prefix).any(|(at, _)| {
+        lower[at + prefix.len()..]
+            .chars()
+            .take_while(|c| matches!(c, 'a'..='z' | '2'..='7'))
+            .count()
+            >= 20
+    })
 }
 
 /// A name or command row's text as the form shows it: masked like the
@@ -130,21 +143,42 @@ pub fn row_shown(typed: &str, command: bool) -> String {
     }
 }
 
-/// Whether `ticket` is a whole ticket: its checksum matches. A ticket that
-/// arrives as key presses, as every paste on Windows does, comes with its
-/// line breaks as Enter, so the first part reaches the form on its own and
-/// must not be sent. The browser build has no ticket parser, so it goes by
-/// the shape and leaves the checksum to the daemon.
-fn whole_ticket(ticket: &str) -> bool {
-    #[cfg(not(target_family = "wasm"))]
-    {
-        devlanes_transport::Ticket::parse(ticket).is_ok()
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        devlanes_cli::is_ticket(ticket)
-    }
+/// Characters the ticket row takes: twice the longest ticket, which leaves
+/// room for the borders and line breaks of a copy and keeps the cleaning of
+/// each typed character cheap when a huge paste arrives as key presses.
+const TICKET_ROW_MAX: usize = 2 * devlanes_proto::remote::TICKET_TEXT_MAX;
+
+/// Whether `ticket`, cleaned, starts with the ticket prefix.
+fn prefixed(ticket: &str) -> bool {
+    let prefix = devlanes_proto::remote::TICKET_PREFIX;
+    ticket
+        .get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
 }
+
+/// The ticket row's text cleaned, and what the row's note says about it.
+fn ticket_note(typed: &str) -> Option<&'static str> {
+    let ticket = pasted_ticket(typed);
+    if ticket.len() > devlanes_proto::remote::TICKET_TEXT_MAX {
+        return Some(
+            "This is longer than any ticket. Press ctrl+u to clear it, then paste the ticket again.",
+        );
+    }
+    if !prefixed(&ticket) {
+        return None;
+    }
+    if devlanes_proto::remote::is_whole_ticket(&ticket) {
+        return Some(READY_TO_PAIR);
+    }
+    (devlanes_cli::cut_ticket(&ticket) || devlanes_cli::is_ticket(&ticket)).then_some(NOT_WHOLE)
+}
+
+/// The note on a whole ticket.
+pub const READY_TO_PAIR: &str = "Press enter to pair.";
+
+/// The note on a ticket that starts right but is not whole yet.
+const NOT_WHOLE: &str = "This ticket is not complete yet. Paste the rest, or copy it again on the box (y in its pair \
+     dialog).";
 
 /// The new connection form.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -201,6 +235,22 @@ impl Form {
         }
     }
 
+    /// After an edit of the ticket row: what Enter said last is gone, and
+    /// the row's note says what the text is now.
+    fn edited(&mut self) {
+        if self.field == Field::Ticket {
+            self.error = None;
+        }
+    }
+
+    /// What the ticket row's note says while nothing else is shown: whether
+    /// the text is a whole ticket yet.
+    pub fn ticket_note(&self) -> Option<&'static str> {
+        (self.reach == Reach::Ticket && self.error.is_none())
+            .then(|| ticket_note(&self.ticket.0))
+            .flatten()
+    }
+
     /// The configured command of the SSH name typed, which `connect` uses
     /// instead of ssh.
     pub fn configured(&self) -> Option<&Vec<String>> {
@@ -221,11 +271,8 @@ impl Form {
                 "Paste the ticket from the box here: p in its Boxes view gives one.".into(),
             );
         }
-        let prefixed = ticket
-            .get(..devlanes_proto::remote::TICKET_PREFIX.len())
-            .is_some_and(|start| start.eq_ignore_ascii_case(devlanes_proto::remote::TICKET_PREFIX));
         // The form opens on this row, so a typed SSH name lands here first.
-        if !prefixed && !devlanes_proto::remote::holds_ticket(&ticket) {
+        if !prefixed(&ticket) && !devlanes_proto::remote::holds_ticket(&ticket) {
             self.name = self.ticket.0.trim().to_owned();
             self.ticket = TicketText::default();
             self.reach = Reach::Ssh;
@@ -235,21 +282,23 @@ impl Form {
                     .into(),
             );
         }
-        // The rest of a ticket that arrives as key presses follows its
-        // first Enter; it stays here and the next Enter sends the whole.
-        if devlanes_cli::cut_ticket(&ticket)
-            || (devlanes_cli::is_ticket(&ticket) && !whole_ticket(&ticket))
-        {
+        // Only a whole ticket goes out; Enter on part of one says so.
+        if let Some(note) = ticket_note(&self.ticket.0).filter(|note| *note != READY_TO_PAIR) {
+            return Err(note.into());
+        }
+        // A mistyped prefix in front of most of a ticket.
+        if !prefixed(&ticket) {
             return Err(
-                "This looks like a pairing ticket cut short. Copy the whole ticket again on the \
-                 box (y in its pair dialog)."
+                "This is not a pairing ticket, which starts with dlp1. Copy the whole ticket \
+                 again on the box (y in its pair dialog)."
                     .into(),
             );
         }
-        if !devlanes_cli::is_ticket(&ticket) {
+        if !devlanes_proto::remote::is_whole_ticket(&ticket) {
             return Err(
-                "This is not a pairing ticket, which starts with dlp1. To reach the box over SSH \
-                 or a command, choose that in the Reach by row."
+                "This starts like a pairing ticket but is too short for one. Copy the whole \
+                 ticket again on the box (y in its pair dialog), or choose SSH name in the Reach \
+                 by row for a box called that."
                     .into(),
             );
         }
@@ -281,7 +330,9 @@ impl Form {
         }
         // A ticket typed or pasted as key presses into the name or the
         // command row would be shown and sent as a host: it moves to its row.
-        let in_command = devlanes_proto::remote::holds_ticket(&self.command);
+        // A command moves only when it is nothing but ticket text, so one
+        // that carries a long token keeps what was typed.
+        let in_command = devlanes_proto::remote::is_ticket_text(self.command.trim());
         if ticket_like(&self.name) || in_command {
             let text = if in_command {
                 std::mem::take(&mut self.command)
@@ -576,6 +627,16 @@ impl ConnectDialog {
         matches!(self.step, Step::Waiting | Step::Prompt(_))
     }
 
+    /// Whether a text field has the keys: a row of the form other than how
+    /// the box is reached, or the answer to a question.
+    pub fn takes_text(&self) -> bool {
+        match self.step {
+            Step::Form => self.form.field != Field::Reach,
+            Step::Prompt(_) => true,
+            _ => false,
+        }
+    }
+
     /// Whether a spinner turns in the modal.
     pub fn busy(&self) -> bool {
         matches!(self.step, Step::Saving | Step::Waiting)
@@ -681,21 +742,24 @@ impl ConnectDialog {
                 if let Some(text) = form.text() {
                     text.pop();
                 }
+                form.edited();
             }
             KeyCode::Char('u') if ctrl => {
                 if let Some(text) = form.text() {
                     text.clear();
                 }
+                form.edited();
             }
+            // A huge paste that arrives as key presses stops at the limit.
+            KeyCode::Char(_)
+                if !ctrl
+                    && form.field == Field::Ticket
+                    && form.ticket.0.chars().count() >= TICKET_ROW_MAX => {}
             KeyCode::Char(c) if !ctrl => {
                 if let Some(text) = form.text() {
                     text.push(c);
                 }
-                // The rest of a ticket typed after a refused first part
-                // makes it whole, and the next Enter sends it.
-                if form.field == Field::Ticket && whole_ticket(&pasted_ticket(&form.ticket.0)) {
-                    form.error = None;
-                }
+                form.edited();
             }
             _ => {}
         }
@@ -713,12 +777,22 @@ impl ConnectDialog {
                 form.reach = Reach::Ticket;
                 form.field = Field::Ticket;
                 form.error = None;
-                form.ticket = TicketText(pasted_ticket(&pasted));
+                form.ticket = TicketText(
+                    pasted_ticket(&pasted)
+                        .chars()
+                        .take(TICKET_ROW_MAX)
+                        .collect(),
+                );
             }
             Step::Form => {
+                let ticket_row = self.form.field == Field::Ticket;
                 if let Some(text) = self.form.text() {
                     text.push_str(&pasted);
+                    if ticket_row && text.chars().count() > TICKET_ROW_MAX {
+                        *text = text.chars().take(TICKET_ROW_MAX).collect();
+                    }
                 }
+                self.form.edited();
             }
             // A ticket is never an answer to ssh, which may be a passphrase.
             Step::Prompt(_) if devlanes_proto::remote::holds_ticket(&pasted) => {}
@@ -929,7 +1003,15 @@ pub struct PairDialog {
     pub age: u64,
     /// Which request's answers this modal takes.
     pub generation: u64,
+    /// When the last answer arrived, for [`PairDialog::too_soon`].
+    pub answered_at: Option<web_time::Instant>,
 }
+
+/// How long `p` waits after an answer before it asks again. Each request
+/// mints a ticket and a code, and crossterm on Windows reports no key
+/// repeat, so a held `p` would ask again after every answer, about ten
+/// times a second; nobody reads a ticket in less than this.
+pub const PAIR_AGAIN_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// `remote.pair`'s `ticket` in `value`, valid for its `valid_ms` from now.
 fn ticket_of(value: &Value, since: u64) -> Option<OfferedTicket> {
@@ -963,7 +1045,15 @@ impl PairDialog {
             state: PairState::Loading,
             age: 0,
             generation: 0,
+            answered_at: None,
         }
+    }
+
+    /// Whether `p` at `now` comes within [`PAIR_AGAIN_AFTER`] of the last
+    /// answer, so it asks nothing.
+    pub fn too_soon(&self, now: web_time::Instant) -> bool {
+        self.answered_at
+            .is_some_and(|at| now.saturating_duration_since(at) < PAIR_AGAIN_AFTER)
     }
 
     /// Whether a request of this modal is out: the first one, or `t`'s.
@@ -1241,6 +1331,53 @@ mod tests {
         );
         assert!(form(Reach::Command, "me@box", "x").is_err());
         assert!(form(Reach::Command, "acme", "  ").is_err());
+        // A ticket behind other text is still a ticket, never an SSH host.
+        let behind = format!("it:dlp1{}", "a".repeat(25));
+        let mut moved = Form {
+            reach: Reach::Ssh,
+            name: behind,
+            ..Form::default()
+        };
+        assert!(moved.submit().is_err());
+        assert_eq!((moved.reach, moved.name.as_str()), (Reach::Ticket, ""));
+        // A command that carries a long token keeps what was typed.
+        let token = format!("acme-run --token {}", "a".repeat(70));
+        assert_eq!(
+            form(Reach::Command, "acme", &token),
+            Ok(Submit::Save(
+                "acme".into(),
+                ["acme-run", "--token", &"a".repeat(70)]
+                    .map(String::from)
+                    .to_vec()
+            ))
+        );
+    }
+
+    /// The ticket row takes no more than twice the longest ticket, so a huge
+    /// paste that arrives as key presses stops there.
+    #[test]
+    fn the_ticket_row_stops_at_its_limit() {
+        let mut dialog = ConnectDialog::new();
+        dialog.form.ticket = TicketText("a".repeat(TICKET_ROW_MAX));
+        dialog.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(dialog.form.ticket.0.len(), TICKET_ROW_MAX);
+        assert!(
+            dialog
+                .form
+                .ticket_note()
+                .is_some_and(|note| note.starts_with("This is longer than any ticket."))
+        );
+    }
+
+    /// `p` waits a second after an answer before it asks again.
+    #[test]
+    fn p_waits_after_an_answer() {
+        let at = web_time::Instant::now();
+        let mut dialog = PairDialog::loading();
+        assert!(!dialog.too_soon(at));
+        dialog.answered_at = Some(at);
+        assert!(dialog.too_soon(at + std::time::Duration::from_millis(900)));
+        assert!(!dialog.too_soon(at + PAIR_AGAIN_AFTER));
     }
 
     /// A command already in the config is asked about before it is replaced,

@@ -1,15 +1,15 @@
  devlanes  1 acme   2 billing   3 shop   starting feat…  M  D · 2 issues  Boxes
 ┌ boxes ───────────────────────────────────────────────────────────────────────┐
 │ no b┌ pair another machine ────────────────────────────────────────────┐     │
-│     │ Press y to copy this ticket, then on the other machine press n   │     │
-│   n │ in its Boxes view and paste it:                                  │     │
+│     │ Press y to copy this ticket. On the other machine, paste it into │     │
+│   n │ n in its Boxes view, or after devlanes remote connect:           │     │
 │     │                                                                  │     │
 │ A bo│ dlp1q7xkexamplem2vz4h3dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3 │ top │
 │ bar.│ dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3dexamplew6yr5jtnexampl │     │
 │     │ epq7xkexamplem2vz4h3dexamplew6yr5jtnexamplepq7xkexam             │     │
 │     │                                                                  │     │
-│     │ It works once, within 10m, and pairs that machine with this one  │     │
-│     │ without SSH.                                                     │     │
+│     │ It works once, within 10m. That machine reaches this one only    │     │
+│     │ while the daemon here runs.                                      │     │
 │     │ If your terminal does not copy, run devlanes daemon pair         │     │
 │     │ --ticket in a shell here.                                        │     │
 │     │                                                                  │     │
@@ -34,8 +34,8 @@
 7: 0 darkgray, 2-5 dim, 6 bold yellow, 8-71 bold yellow, 73 bold yellow, 79 darkgray
 8: 0 darkgray, 6 bold yellow, 8-59 bold yellow, 73 bold yellow, 79 darkgray
 9: 0 darkgray, 6 bold yellow, 73 bold yellow, 79 darkgray
-10: 0 darkgray, 6 bold yellow, 8-70 dim, 73 bold yellow, 79 darkgray
-11: 0 darkgray, 6 bold yellow, 8-19 dim, 73 bold yellow, 79 darkgray
+10: 0 darkgray, 6 bold yellow, 8-68 dim, 73 bold yellow, 79 darkgray
+11: 0 darkgray, 6 bold yellow, 8-34 dim, 73 bold yellow, 79 darkgray
 12: 0 darkgray, 6 bold yellow, 8-63 dim, 73 bold yellow, 79 darkgray
 13: 0 darkgray, 6 bold yellow, 8-32 dim, 73 bold yellow, 79 darkgray
 14: 0 darkgray, 6 bold yellow, 73 bold yellow, 79 darkgray

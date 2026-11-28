@@ -210,6 +210,11 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Whether a value is being typed, so a pasted character is text.
+    pub fn takes_text(&self) -> bool {
+        self.edit.as_ref().is_some_and(|edit| edit.text.is_some())
+    }
+
     /// Every setting of the user config schema, waiting for the file.
     pub fn new() -> Self {
         Self {

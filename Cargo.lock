@@ -2096,9 +2096,11 @@ dependencies = [
 name = "devlanes-proto"
 version = "0.13.1"
 dependencies = [
+ "data-encoding",
  "devlanes-version",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
 ]
 
 [[package]]

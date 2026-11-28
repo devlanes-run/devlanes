@@ -345,6 +345,15 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
         body.push(Line::from(""));
         body.extend(wrapped(error, width, theme.tone(Tone::Attention)));
     }
+    if let Some(note) = form.ticket_note() {
+        let tone = if note == crate::connect::READY_TO_PAIR {
+            Tone::Ok
+        } else {
+            Tone::Attention
+        };
+        body.push(Line::from(""));
+        body.extend(wrapped(note, width, theme.tone(tone)));
+    }
     let mut pairs = vec![("tab", "next field")];
     if focused {
         pairs.push(("space", "switch"));
@@ -541,8 +550,8 @@ fn offer(app: &App, dialog: &PairDialog, offer: &Offer, width: usize) -> Parts {
         // A mouse copy of the wrapped ticket brings the modal's borders and
         // line breaks, which the connect form drops; `y` copies it whole.
         body.extend(wrapped(
-            "Press y to copy this ticket, then on the other machine press n in its Boxes view \
-             and paste it:",
+            "Press y to copy this ticket. On the other machine, paste it into n in its Boxes \
+             view, or after devlanes remote connect:",
             width,
             Style::new(),
         ));
@@ -555,7 +564,8 @@ fn offer(app: &App, dialog: &PairDialog, offer: &Offer, width: usize) -> Parts {
         body.push(Line::from(""));
         body.extend(wrapped(
             &format!(
-                "It works once, within {}, and pairs that machine with this one without SSH.",
+                "It works once, within {}. That machine reaches this one only while the daemon \
+                 here runs.",
                 countdown(dialog.ticket_left(ticket))
             ),
             width,

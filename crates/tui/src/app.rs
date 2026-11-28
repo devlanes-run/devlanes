@@ -721,6 +721,11 @@ pub enum Msg {
         error: Option<String>,
     },
     Key(KeyEvent),
+    /// A key that came as part of a paste, as on Windows, where a paste is
+    /// key presses ([`crate::keys::in_paste`]): text for the field that
+    /// takes typing, and nothing else, so a pasted ticket never runs key
+    /// bindings or confirms a dialog.
+    PastedKey(KeyEvent),
     Mouse(MouseEvent),
     Paste(String),
     /// A frame of the start this TUI was opened for (`devlanes start`).
@@ -1882,6 +1887,7 @@ impl App {
                 self.on_quit = OnQuit::Keep;
             }
             Msg::Key(key) => self.key(key, &mut effects),
+            Msg::PastedKey(key) => self.pasted_key(key, &mut effects),
             Msg::Mouse(mouse) => self.mouse(mouse, &mut effects),
             Msg::Paste(text) => self.paste(&text, &mut effects),
             Msg::Resize(width, height) => {
@@ -2454,17 +2460,21 @@ impl App {
             // An answer for a modal that closed or was replaced is dropped:
             // only the open one's ticket and code are still shown as valid.
             Msg::Paired { generation, result } => {
+                let now = self.now();
                 if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut()
                     && dialog.generation == generation
                 {
                     dialog.answered(result);
+                    dialog.answered_at = Some(now);
                 }
             }
             Msg::TicketMinted { generation, result } => {
+                let now = self.now();
                 if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut()
                     && dialog.generation == generation
                 {
                     dialog.ticket_answered(result);
+                    dialog.answered_at = Some(now);
                 }
             }
             Msg::LaneUsed { lane, host, result } => {
@@ -6266,6 +6276,41 @@ impl App {
         }
     }
 
+    /// A key of a paste: a character for the text field that takes typing,
+    /// as typed; anything else, and every key where no text field has the
+    /// keys, is dropped, so a paste never submits, moves the focus, closes
+    /// or confirms anything. A unit being typed into gets the paste whole,
+    /// line breaks included, as a terminal passes one on.
+    fn pasted_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) {
+        if self.dialog.is_none() && self.focus == Focus::Terminal && self.view == View::Project {
+            self.key(key, effects);
+            return;
+        }
+        let text = matches!(key.code, KeyCode::Char(_))
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        if text && self.takes_text() {
+            self.key(key, effects);
+        }
+    }
+
+    /// Whether a text field has the keys: a row of the connect form or a
+    /// question it asks, an option being typed, or a filter.
+    fn takes_text(&self) -> bool {
+        match &self.dialog {
+            Some(Dialog::Connect(dialog)) => dialog.takes_text(),
+            Some(Dialog::Settings(settings)) => settings.takes_text(),
+            Some(_) => false,
+            None => match self.view {
+                View::Project => self.filter.as_ref().is_some_and(|f| f.editing),
+                View::Daemon => self.daemon.filter_editing,
+                View::Monitor => self.monitor.editing,
+                View::Boxes => false,
+            },
+        }
+    }
+
     /// Keys while a dialog is open.
     fn dialog_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) {
         let Some(dialog) = self.dialog.take() else {
@@ -6394,6 +6439,9 @@ impl App {
         let repeat = key.kind == crate::keys::KeyEventKind::Repeat;
         match key.code {
             KeyCode::Char('p' | 't') if repeat || dialog.asking() => {
+                self.dialog = Some(Dialog::Pair(dialog));
+            }
+            KeyCode::Char('p') if dialog.too_soon(self.now()) => {
                 self.dialog = Some(Dialog::Pair(dialog));
             }
             KeyCode::Char('p') => self.pair(effects),

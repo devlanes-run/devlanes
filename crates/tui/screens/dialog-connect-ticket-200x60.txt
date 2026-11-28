@@ -21,7 +21,6 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
 │                                                                 ┌ connect a box ───────────────────────────────────────────────────┐                                                                 │
 │                                                                 │   Reach by   (•) ticket    ( ) SSH name    ( ) command           │                                                                 │
 │                                                                 │   Ticket     dlp1… 150 characters                                │                                                                 │
@@ -32,9 +31,10 @@
 │                                                                 │ devlanes pairs with the box and reaches it peer to peer, without │                                                                 │
 │                                                                 │ SSH.                                                             │                                                                 │
 │                                                                 │                                                                  │                                                                 │
+│                                                                 │ Press enter to pair.                                             │                                                                 │
+│                                                                 │                                                                  │                                                                 │
 │                                                                 │ tab next field   enter pair   esc cancel                         │                                                                 │
 │                                                                 └──────────────────────────────────────────────────────────────────┘                                                                 │
-│                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -83,20 +83,20 @@
 20: 0 darkgray, 199 darkgray
 21: 0 darkgray, 199 darkgray
 22: 0 darkgray, 199 darkgray
-23: 0 darkgray, 199 darkgray
-24: 0 darkgray, 66-133 bold yellow, 199 darkgray
-25: 0 darkgray, 66 bold yellow, 68 bold yellow, 80-91 bold, 92-122 dim, 133 bold yellow, 199 darkgray
-26: 0 darkgray, 66 bold yellow, 68 bold yellow, 133 bold yellow, 199 darkgray
-27: 0 darkgray, 66 bold yellow, 68 bold reversed yellow, 69-79 reversed, 80-131 bold yellow, 133 bold yellow, 199 darkgray
-28: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
-29: 0 darkgray, 66 bold yellow, 68-125 dim, 133 bold yellow, 199 darkgray
-30: 0 darkgray, 66 bold yellow, 68-94 dim, 133 bold yellow, 199 darkgray
-31: 0 darkgray, 66 bold yellow, 68-131 dim, 133 bold yellow, 199 darkgray
-32: 0 darkgray, 66 bold yellow, 68-71 dim, 133 bold yellow, 199 darkgray
-33: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
-34: 0 darkgray, 66 bold yellow, 68-70 bold, 71-81 dim, 85-89 bold, 90-94 dim, 98-100 bold, 101-107 dim, 133 bold yellow, 199 darkgray
-35: 0 darkgray, 66-133 bold yellow, 199 darkgray
-36: 0 darkgray, 199 darkgray
+23: 0 darkgray, 66-133 bold yellow, 199 darkgray
+24: 0 darkgray, 66 bold yellow, 68 bold yellow, 80-91 bold, 92-122 dim, 133 bold yellow, 199 darkgray
+25: 0 darkgray, 66 bold yellow, 68 bold yellow, 133 bold yellow, 199 darkgray
+26: 0 darkgray, 66 bold yellow, 68 bold reversed yellow, 69-79 reversed, 80-131 bold yellow, 133 bold yellow, 199 darkgray
+27: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
+28: 0 darkgray, 66 bold yellow, 68-125 dim, 133 bold yellow, 199 darkgray
+29: 0 darkgray, 66 bold yellow, 68-94 dim, 133 bold yellow, 199 darkgray
+30: 0 darkgray, 66 bold yellow, 68-131 dim, 133 bold yellow, 199 darkgray
+31: 0 darkgray, 66 bold yellow, 68-71 dim, 133 bold yellow, 199 darkgray
+32: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
+33: 0 darkgray, 66 bold yellow, 68-87 green, 133 bold yellow, 199 darkgray
+34: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
+35: 0 darkgray, 66 bold yellow, 68-70 bold, 71-81 dim, 85-89 bold, 90-94 dim, 98-100 bold, 101-107 dim, 133 bold yellow, 199 darkgray
+36: 0 darkgray, 66-133 bold yellow, 199 darkgray
 37: 0 darkgray, 199 darkgray
 38: 0 darkgray, 199 darkgray
 39: 0 darkgray, 199 darkgray

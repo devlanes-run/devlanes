@@ -36,8 +36,6 @@ web-time.workspace = true
 crossterm = { version = "0.29", features = ["event-stream"] }
 # The `o` key opens URLs with the same opener as `devlanes url open`.
 devlanes-sys = { path = "../sys" }
-# The connect form sends a pasted ticket only once its checksum matches.
-devlanes-transport = { path = "../transport" }
 # daemon.log timestamps shown in local time.
 jiff = "1.0"
 ratatui = "0.30"
@@ -61,6 +59,8 @@ devlanes-sys-windows = { path = "../sys-windows" }
 ab_glyph = "0.2"
 # A fake daemon socket records what the client sends.
 devlanes-ipc = { path = "../ipc" }
+# Whole tickets for the connect form's tests and screens.
+devlanes-transport = { path = "../transport" }
 insta = { version = "1", features = ["filters"] }
 png = "0.18"
 tempfile.workspace = true

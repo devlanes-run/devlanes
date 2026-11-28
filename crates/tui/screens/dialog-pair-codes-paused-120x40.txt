@@ -10,15 +10,15 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                         ┌ pair another machine ────────────────────────────────────────────┐                         │
-│                         │ Press y to copy this ticket, then on the other machine press n   │                         │
-│                         │ in its Boxes view and paste it:                                  │                         │
+│                         │ Press y to copy this ticket. On the other machine, paste it into │                         │
+│                         │ n in its Boxes view, or after devlanes remote connect:           │                         │
 │                         │                                                                  │                         │
 │                         │ dlp1q7xkexamplem2vz4h3dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3 │                         │
 │                         │ dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3dexamplew6yr5jtnexampl │                         │
 │                         │ epq7xkexamplem2vz4h3dexamplew6yr5jtnexamplepq7xkexam             │                         │
 │                         │                                                                  │                         │
-│                         │ It works once, within 10m, and pairs that machine with this one  │                         │
-│                         │ without SSH.                                                     │                         │
+│                         │ It works once, within 10m. That machine reaches this one only    │                         │
+│                         │ while the daemon here runs.                                      │                         │
 │                         │ If your terminal does not copy, run devlanes daemon pair         │                         │
 │                         │ --ticket in a shell here.                                        │                         │
 │                         │                                                                  │                         │
@@ -59,8 +59,8 @@
 16: 0 darkgray, 26 bold yellow, 28-91 bold yellow, 93 bold yellow, 119 darkgray
 17: 0 darkgray, 26 bold yellow, 28-79 bold yellow, 93 bold yellow, 119 darkgray
 18: 0 darkgray, 26 bold yellow, 93 bold yellow, 119 darkgray
-19: 0 darkgray, 26 bold yellow, 28-90 dim, 93 bold yellow, 119 darkgray
-20: 0 darkgray, 26 bold yellow, 28-39 dim, 93 bold yellow, 119 darkgray
+19: 0 darkgray, 26 bold yellow, 28-88 dim, 93 bold yellow, 119 darkgray
+20: 0 darkgray, 26 bold yellow, 28-54 dim, 93 bold yellow, 119 darkgray
 21: 0 darkgray, 26 bold yellow, 28-83 dim, 93 bold yellow, 119 darkgray
 22: 0 darkgray, 26 bold yellow, 28-52 dim, 93 bold yellow, 119 darkgray
 23: 0 darkgray, 26 bold yellow, 93 bold yellow, 119 darkgray

@@ -17,6 +17,22 @@ pub use crossterm::event::{
 #[cfg(target_family = "wasm")]
 pub use browser::*;
 
+/// Longest gap between two keys of one paste. crossterm on Windows has no
+/// paste event: a paste lands in the console's input buffer as one key event
+/// per character, and its event stream hands out what is queued with a
+/// zero-timeout poll, one record at a time (`crossterm-0.29.0`
+/// `event/stream.rs` and `crossterm_winapi` `read_single_input_event`), so
+/// the runtime reads them microseconds apart. A held key repeats every 30 ms
+/// or more and nobody types two keys 10 ms apart, so a key closer than this
+/// to the one before it was pasted.
+pub const PASTE_GAP: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Whether a key read `gap` after the key before it is part of a paste;
+/// `None` when no key came before.
+pub fn in_paste(gap: Option<std::time::Duration>) -> bool {
+    gap.is_some_and(|gap| gap < PASTE_GAP)
+}
+
 #[cfg(target_family = "wasm")]
 mod browser {
     bitflags::bitflags! {

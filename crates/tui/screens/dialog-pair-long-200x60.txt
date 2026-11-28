@@ -19,16 +19,16 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                 ┌ pair another machine ────────────────────────────────────────────┐                                                                 │
-│                                                                 │ Press y to copy this ticket, then on the other machine press n   │                                                                 │
-│                                                                 │ in its Boxes view and paste it:                                  │                                                                 │
+│                                                                 │ Press y to copy this ticket. On the other machine, paste it into │                                                                 │
+│                                                                 │ n in its Boxes view, or after devlanes remote connect:           │                                                                 │
 │                                                                 │                                                                  │                                                                 │
 │                                                                 │ dlp1q7xkexamplem2vz4h3dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3 │                                                                 │
 │                                                                 │ dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3dexamplew6yr5jtnexampl │                                                                 │
 │                                                                 │ epq7xkexamplem2vz4h3dexamplew6yr5jtnexamplepq7xkexamplem2vz4h3de │                                                                 │
 │                                                                 │ xamplew6yr5jtnexamplepq7xkexamplem2vz4h3dexamplew6yr5jtnex       │                                                                 │
 │                                                                 │                                                                  │                                                                 │
-│                                                                 │ It works once, within 10m, and pairs that machine with this one  │                                                                 │
-│                                                                 │ without SSH.                                                     │                                                                 │
+│                                                                 │ It works once, within 10m. That machine reaches this one only    │                                                                 │
+│                                                                 │ while the daemon here runs.                                      │                                                                 │
 │                                                                 │ If your terminal does not copy, run devlanes daemon pair         │                                                                 │
 │                                                                 │ --ticket in a shell here.                                        │                                                                 │
 │                                                                 │                                                                  │                                                                 │
@@ -89,8 +89,8 @@
 26: 0 darkgray, 66 bold yellow, 68-131 bold yellow, 133 bold yellow, 199 darkgray
 27: 0 darkgray, 66 bold yellow, 68-125 bold yellow, 133 bold yellow, 199 darkgray
 28: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
-29: 0 darkgray, 66 bold yellow, 68-130 dim, 133 bold yellow, 199 darkgray
-30: 0 darkgray, 66 bold yellow, 68-79 dim, 133 bold yellow, 199 darkgray
+29: 0 darkgray, 66 bold yellow, 68-128 dim, 133 bold yellow, 199 darkgray
+30: 0 darkgray, 66 bold yellow, 68-94 dim, 133 bold yellow, 199 darkgray
 31: 0 darkgray, 66 bold yellow, 68-123 dim, 133 bold yellow, 199 darkgray
 32: 0 darkgray, 66 bold yellow, 68-92 dim, 133 bold yellow, 199 darkgray
 33: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
