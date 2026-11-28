@@ -274,9 +274,13 @@ fn update_installs_a_missing_devlanes_gui_of_the_running_release() -> Result<()>
     let first = update()?;
     assert_eq!(first["updated"], false, "{first}");
     let installed = install.join(format!("devlanes-gui{EXE_SUFFIX}"));
+    // devlanes names its install by the resolved path of its executable, as
+    // the archive update's "installed ... in DIR" does; macOS reaches the
+    // temporary directory through a link (/var is /private/var).
+    let reported = first["gui"]["installed"].as_str().map(Path::new);
     assert_eq!(
-        first["gui"]["installed"].as_str().map(PathBuf::from),
-        Some(installed.clone()),
+        reported.map(dunce_like),
+        Some(dunce_like(&installed)),
         "{first}"
     );
     assert_eq!(std::fs::read(&installed)?, std::fs::read(&gui)?);
