@@ -2614,6 +2614,7 @@ dependencies = [
  "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-term",
+ "devlanes-transport",
  "devlanes-update",
  "devlanes-version",
  "futures-util",

@@ -36,6 +36,8 @@ web-time.workspace = true
 crossterm = { version = "0.29", features = ["event-stream"] }
 # The `o` key opens URLs with the same opener as `devlanes url open`.
 devlanes-sys = { path = "../sys" }
+# The connect form sends a pasted ticket only once its checksum matches.
+devlanes-transport = { path = "../transport" }
 # daemon.log timestamps shown in local time.
 jiff = "1.0"
 ratatui = "0.30"

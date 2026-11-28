@@ -164,7 +164,16 @@ async fn the_header_always_shows_boxes() -> TestResult {
 
 /// A ticket-shaped test string, `dlp1` and 98 base32 letters and digits.
 fn test_ticket() -> String {
-    format!("dlp1{}", "abcdefgh234567".repeat(7))
+    devlanes_transport::Ticket {
+        addr: devlanes_transport::PeerAddr {
+            id: devlanes_transport::PeerId([7; 32]),
+            relay: Some("https://relay.example.invalid".into()),
+            direct: vec![std::net::SocketAddr::from(([192, 0, 2, 4], 4242))],
+        },
+        secret: devlanes_transport::TicketSecret([9; 16]),
+        ephemeral: false,
+    }
+    .encode()
 }
 
 /// The ticket the connect form sends, with the name: `None` when nothing
@@ -212,9 +221,15 @@ async fn the_form_sends_a_pasted_ticket() -> TestResult {
         assert!(!text.contains("dlp1"), "{text}");
     }
     let cut = &ticket[..50];
+    let other = if ticket.ends_with('a') { 'b' } else { 'a' };
+    let changed = format!("{}{other}", &ticket[..ticket.len() - 1]);
     for (typed, refusal) in [
         (cut, "cut short"),
-        ("hetzner", "This is not a pairing ticket."),
+        (changed.as_str(), "cut short"),
+        (
+            "dlp1box",
+            "This is not a pairing ticket, which starts with dlp1.",
+        ),
     ] {
         let mut app = boxes_app(100, 30, json!([])).await;
         app.update(key(KeyCode::Char('n')));
@@ -223,8 +238,27 @@ async fn the_form_sends_a_pasted_ticket() -> TestResult {
         assert_eq!(sent_ticket(&effects), None, "{effects:?}");
         let text = screen(&render(&app)?);
         assert!(text.contains(refusal), "{text}");
-        assert!(!text.contains(&typed[4..]), "{text}");
+        assert!(
+            !text.contains(&typed[4..20.min(typed.len())]) || typed.len() < 20,
+            "{text}"
+        );
     }
+    // A typed SSH name moves to its row, and Enter then connects over SSH.
+    let mut app = boxes_app(100, 30, json!([])).await;
+    app.update(key(KeyCode::Char('n')));
+    type_text(&mut app, "hetzner");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(effects.is_empty(), "{effects:?}");
+    assert!(
+        screen(&render(&app)?).contains("That is not a ticket, so it is now the SSH name."),
+        "{}",
+        screen(&render(&app)?)
+    );
+    let effects = app.update(key(KeyCode::Enter));
+    assert_eq!(
+        opened(&effects).map(|(_, host)| host).as_deref(),
+        Some("hetzner")
+    );
     // A name the daemon would refuse is refused here, before the ticket goes.
     let mut app = boxes_app(100, 30, json!([])).await;
     app.update(key(KeyCode::Char('n')));
@@ -234,6 +268,89 @@ async fn the_form_sends_a_pasted_ticket() -> TestResult {
     let effects = app.update(key(KeyCode::Enter));
     assert_eq!(sent_ticket(&effects), None, "{effects:?}");
     assert!(screen(&render(&app)?).contains("A box name is 1 to 63 letters"));
+    Ok(())
+}
+
+/// A ticket copied from the pair dialog's three bordered lines, as Windows
+/// delivers every paste: key presses, each line break an Enter. The first
+/// parts are refused and stay, the rest appends, and the Enter after the
+/// last part sends the whole ticket once. None of its letters (`n`, `p`,
+/// `f`, `t`, `y`, `d` among them) reaches another field or key binding.
+/// A bracketed paste of the same lines gives the same ticket.
+#[tokio::test]
+async fn a_ticket_typed_as_key_presses_is_sent_whole_once() -> TestResult {
+    let ticket = test_ticket();
+    let third = ticket.len() / 3;
+    let lines = [
+        &ticket[..third],
+        &ticket[third..2 * third],
+        &ticket[2 * third..],
+    ];
+    let mut app = boxes_app(100, 30, json!([])).await;
+    app.update(key(KeyCode::Char('n')));
+    let mut sent = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        for c in format!("│ {line} │").chars() {
+            let effects = app.update(key(KeyCode::Char(c)));
+            assert!(effects.is_empty(), "{c:?}: {effects:?}");
+        }
+        let effects = app.update(key(KeyCode::Enter));
+        if index < 2 {
+            assert!(effects.is_empty(), "{effects:?}");
+            assert!(matches!(step(&app), Some(Step::Form)));
+            assert!(screen(&render(&app)?).contains("cut short"));
+        }
+        sent.extend(sent_ticket(&effects));
+    }
+    assert_eq!(sent, [(ticket.clone(), None)]);
+    assert!(matches!(step(&app), Some(Step::Waiting)));
+
+    let mut app = boxes_app(100, 30, json!([])).await;
+    app.update(key(KeyCode::Char('n')));
+    let bordered: Vec<String> = lines.iter().map(|line| format!("│ {line} │")).collect();
+    app.update(Msg::Paste(bordered.join("\n")));
+    let effects = app.update(key(KeyCode::Enter));
+    assert_eq!(sent_ticket(&effects), Some((ticket.clone(), None)));
+    Ok(())
+}
+
+/// A ticket typed into the SSH name or the command row is masked there,
+/// never in the title, and Enter moves it to the ticket row instead of
+/// sending it as a host.
+#[tokio::test]
+async fn a_ticket_in_another_row_moves_to_the_ticket_row() -> TestResult {
+    let ticket = test_ticket();
+    for command in [false, true] {
+        let mut app = boxes_app(100, 30, json!([])).await;
+        new_ssh_box(&mut app);
+        if command {
+            type_text(&mut app, "acme");
+            app.update(Msg::Key(KeyEvent::new(
+                KeyCode::BackTab,
+                KeyModifiers::SHIFT,
+            )));
+            app.update(key(KeyCode::Char(' ')));
+            app.update(key(KeyCode::Tab));
+            app.update(key(KeyCode::Tab));
+        }
+        type_text(&mut app, &ticket);
+        let text = screen(&render(&app)?);
+        assert!(!text.contains(&ticket[..20]), "{text}");
+        let effects = app.update(key(KeyCode::Enter));
+        assert!(opened(&effects).is_none(), "{effects:?}");
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::SaveBoxCommand { .. })),
+            "{effects:?}"
+        );
+        let text = screen(&render(&app)?);
+        assert!(text.contains("it is now in the Ticket row"), "{text}");
+        assert!(!text.contains(&ticket[..20]), "{text}");
+        let effects = app.update(key(KeyCode::Enter));
+        let name = command.then(|| "acme".to_owned());
+        assert_eq!(sent_ticket(&effects), Some((ticket.clone(), name)));
+    }
     Ok(())
 }
 

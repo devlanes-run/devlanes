@@ -13,7 +13,7 @@ use super::fit;
 use crate::app::App;
 use crate::connect::{
     ConnectDialog, Field, NoTicket, Offer, PairDialog, PairState, Prompt, Reach, Step, countdown,
-    ticket_shown,
+    row_shown, ticket_shown,
 };
 use crate::text::{self, clean};
 use crate::theme::{Glyph, Glyphs, Theme, Tone};
@@ -287,10 +287,12 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
         Reach::Ssh => "hetzner or me@203.0.113.4",
         Reach::Command => "a name for it, like acme",
     };
+    // A ticket typed into the other rows is masked there too.
+    let name_shown = row_shown(&form.name, false);
     body.push(input_row(
         theme,
         "Name",
-        &form.name,
+        &name_shown,
         name_hint,
         form.field == Field::Name,
         width,
@@ -299,7 +301,7 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
         body.push(input_row(
             theme,
             "Command",
-            &form.command,
+            &row_shown(&form.command, true),
             "docker exec -i acme devlanes tunnel --stdio",
             form.field == Field::Command,
             width,
@@ -307,7 +309,7 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
     }
     body.push(Line::from(""));
     let name = match clean(form.name.trim()) {
-        name if name.is_empty() => "<name>".to_owned(),
+        name if name.is_empty() || name_shown != form.name => "<name>".to_owned(),
         name => name,
     };
     let about = match form.reach {

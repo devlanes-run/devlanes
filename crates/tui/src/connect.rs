@@ -92,13 +92,58 @@ pub fn ticket_shown(typed: &str) -> String {
     format!("{}… {count} characters", text::clean(&start))
 }
 
-/// A ticket as pasted: no whitespace anywhere, since a terminal that wraps
-/// a long line may add line breaks or spaces inside it and no ticket holds
-/// any, and without the quotes or backticks a copy from Markdown brings at
-/// its ends, as the CLI trims them.
+/// A ticket as pasted: no whitespace or box-drawing characters anywhere,
+/// since a terminal that wraps a long line adds line breaks or spaces
+/// inside it, a mouse copy from the pair dialog picks up its borders (`│`,
+/// or `|` with ASCII glyphs), and no ticket holds any of them; and without
+/// the quotes or backticks a copy from Markdown brings at its ends, as the
+/// CLI trims them.
 fn pasted_ticket(typed: &str) -> String {
-    let joined: String = typed.chars().filter(|c| !c.is_whitespace()).collect();
+    let joined: String = typed
+        .chars()
+        .filter(|c| !c.is_whitespace() && !('\u{2500}'..='\u{257f}').contains(c) && *c != '|')
+        .collect();
     devlanes_cli::pasted(&joined).to_owned()
+}
+
+/// Whether typed text holds a ticket or the start of one, cleaned as
+/// [`pasted_ticket`] cleans it: what no row may show or send as a name.
+fn ticket_like(typed: &str) -> bool {
+    let cleaned = pasted_ticket(typed);
+    devlanes_proto::remote::holds_ticket(&cleaned) || devlanes_cli::cut_ticket(&cleaned)
+}
+
+/// A name or command row's text as the form shows it: masked like the
+/// ticket row when it holds a ticket, so a ticket typed or pasted there is
+/// never on screen. The command row is checked as typed, words apart, so a
+/// long command never reads as a ticket.
+pub fn row_shown(typed: &str, command: bool) -> String {
+    let masked = if command {
+        devlanes_proto::remote::holds_ticket(typed)
+    } else {
+        ticket_like(typed)
+    };
+    if masked {
+        ticket_shown(typed)
+    } else {
+        typed.to_owned()
+    }
+}
+
+/// Whether `ticket` is a whole ticket: its checksum matches. A ticket that
+/// arrives as key presses, as every paste on Windows does, comes with its
+/// line breaks as Enter, so the first part reaches the form on its own and
+/// must not be sent. The browser build has no ticket parser, so it goes by
+/// the shape and leaves the checksum to the daemon.
+fn whole_ticket(ticket: &str) -> bool {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        devlanes_transport::Ticket::parse(ticket).is_ok()
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        devlanes_cli::is_ticket(ticket)
+    }
 }
 
 /// The new connection form.
@@ -172,19 +217,39 @@ impl Form {
     fn submit_ticket(&mut self) -> Result<Submit, String> {
         let ticket = pasted_ticket(&self.ticket.0);
         if ticket.is_empty() {
-            return Err("Paste the ticket from devlanes daemon pair on the box.".into());
-        }
-        if devlanes_cli::cut_ticket(&ticket) {
             return Err(
-                "This looks like a pairing ticket cut short. Copy the whole ticket again from \
-                 devlanes daemon pair on the box."
+                "Paste the ticket from the box here: p in its Boxes view gives one.".into(),
+            );
+        }
+        let prefixed = ticket
+            .get(..devlanes_proto::remote::TICKET_PREFIX.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(devlanes_proto::remote::TICKET_PREFIX));
+        // The form opens on this row, so a typed SSH name lands here first.
+        if !prefixed && !devlanes_proto::remote::holds_ticket(&ticket) {
+            self.name = self.ticket.0.trim().to_owned();
+            self.ticket = TicketText::default();
+            self.reach = Reach::Ssh;
+            self.field = Field::Name;
+            return Err(
+                "That is not a ticket, so it is now the SSH name. Press enter to connect over SSH."
+                    .into(),
+            );
+        }
+        // The rest of a ticket that arrives as key presses follows its
+        // first Enter; it stays here and the next Enter sends the whole.
+        if devlanes_cli::cut_ticket(&ticket)
+            || (devlanes_cli::is_ticket(&ticket) && !whole_ticket(&ticket))
+        {
+            return Err(
+                "This looks like a pairing ticket cut short. Copy the whole ticket again on the \
+                 box (y in its pair dialog)."
                     .into(),
             );
         }
         if !devlanes_cli::is_ticket(&ticket) {
             return Err(
-                "This is not a pairing ticket. A ticket starts with dlp1; to reach the box over \
-                 SSH or a command, choose that at Reach by."
+                "This is not a pairing ticket, which starts with dlp1. To reach the box over SSH \
+                 or a command, choose that in the Reach by row."
                     .into(),
             );
         }
@@ -213,6 +278,24 @@ impl Form {
     pub(crate) fn submit(&mut self) -> Result<Submit, String> {
         if self.reach == Reach::Ticket {
             return self.submit_ticket();
+        }
+        // A ticket typed or pasted as key presses into the name or the
+        // command row would be shown and sent as a host: it moves to its row.
+        let in_command = devlanes_proto::remote::holds_ticket(&self.command);
+        if ticket_like(&self.name) || in_command {
+            let text = if in_command {
+                std::mem::take(&mut self.command)
+            } else {
+                std::mem::take(&mut self.name)
+            };
+            self.ticket = TicketText(pasted_ticket(&text));
+            self.reach = Reach::Ticket;
+            self.field = Field::Ticket;
+            return Err(
+                "That is a pairing ticket, so it is now in the Ticket row. Press enter to pair \
+                 with it."
+                    .into(),
+            );
         }
         let name = self.name.trim().to_owned();
         if name.is_empty() {
@@ -608,6 +691,11 @@ impl ConnectDialog {
                 if let Some(text) = form.text() {
                     text.push(c);
                 }
+                // The rest of a ticket typed after a refused first part
+                // makes it whole, and the next Enter sends it.
+                if form.field == Field::Ticket && whole_ticket(&pasted_ticket(&form.ticket.0)) {
+                    form.error = None;
+                }
             }
             _ => {}
         }
@@ -632,6 +720,8 @@ impl ConnectDialog {
                     text.push_str(&pasted);
                 }
             }
+            // A ticket is never an answer to ssh, which may be a passphrase.
+            Step::Prompt(_) if devlanes_proto::remote::holds_ticket(&pasted) => {}
             Step::Prompt(prompt) => prompt.input.push_str(&pasted),
             _ => {}
         }
@@ -1241,6 +1331,8 @@ mod tests {
         assert_eq!(dialog.prompt(&secret), None);
         dialog.key(key(KeyCode::Char('h')));
         dialog.key(key(KeyCode::Char('i')));
+        // A ticket pasted by mistake never joins a passphrase.
+        dialog.paste(&format!("dlp1{}", "a".repeat(70)));
         assert!(matches!(&dialog.step, Step::Prompt(p) if p.masked() && p.input == "hi"));
         assert!(!format!("{:?}", dialog.step).contains("hi\""));
         let answer = dialog.key(key(KeyCode::Enter));
