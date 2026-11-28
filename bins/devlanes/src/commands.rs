@@ -677,6 +677,13 @@ async fn rpc_start(
                                 // daemon runs, and the login start is this user's.
                                 // Only a sure `false` is added: an installed unit
                                 // may still be turned off.
+                                // Answered as an error, with its exit code, in
+                                // every output mode.
+                                if let Some(error) = devlanes_cli::nothing_minted(&data) {
+                                    let rendered = reporter.error(&error, None);
+                                    emit(&rendered);
+                                    return Ok(rendered.exit_code);
+                                }
                                 if data.get("ticket").is_some() {
                                     if crate::daemon::starts_at_login(&paths.home).await
                                         == Some(false)

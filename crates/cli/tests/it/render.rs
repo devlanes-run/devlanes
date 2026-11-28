@@ -2886,6 +2886,37 @@ fn daemon_pair_prints_the_ticket_and_code_in_every_mode() {
         alone_failed.contains("error: no pairing ticket: this machine has no network address"),
         "{alone_failed}"
     );
+    // An answer with neither a code nor a ticket, which this release's
+    // daemon sends as an error instead: `devlanes` turns it into one, and
+    // the renderer says the same and never prints an empty code.
+    let paused_only = json!({"expires_at_ms": now + 10 * 60_000, "code_paused_ms": 4 * 60_000 - 5,
+        "ticket_error": {"code": "p2p_unavailable", "message": "this machine has no network address"}});
+    let empty = json!({"expires_at_ms": now + 10 * 60_000});
+    assert_eq!(
+        devlanes_cli::nothing_minted(&paused_only).map(|error| error.code),
+        Some("pairing_paused".to_owned())
+    );
+    assert_eq!(
+        devlanes_cli::nothing_minted(&empty).map(|error| error.code),
+        Some("pairing_empty".to_owned())
+    );
+    for mode in [OutputMode::Human, OutputMode::Agent] {
+        let text = render(mode, &paused_only);
+        assert!(
+            text.contains("pairing is paused for 4 minutes after 5 wrong codes; no ticket: this machine has no network address"),
+            "{text}"
+        );
+        let text = render(mode, &empty);
+        assert!(
+            text.contains("neither a pairing code nor a ticket")
+                && text.contains("devlanes daemon restart"),
+            "{text}"
+        );
+    }
+    for answer in [&paused_only, &empty] {
+        assert_eq!(render(OutputMode::Plain, answer), "", "no empty code");
+    }
+
     // Codes paused and the ticket failed too: nothing went out, and both
     // reasons are said.
     let neither = error(
