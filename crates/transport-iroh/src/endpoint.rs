@@ -191,6 +191,9 @@ struct Bound {
     /// addresses: once per bind, so a relay that does not answer costs the
     /// first ticket the wait and no later one.
     settled_by: tokio::time::Instant,
+    /// `p2p-port` existed but could not be read when this bound, so its
+    /// ports are unknown and `keep_ports` must not write over it.
+    ports_unread: bool,
     /// When a call last needed the endpoint or ended, for the idle release.
     /// Set when the bind made it, and after that written only under
     /// `Inner::phase`.
@@ -809,9 +812,19 @@ impl Inner {
         // Ports are asked for only when a bind that listened saved them; a
         // missing file, as on a machine that only dials, means any ports.
         let port_file = ports::path(&self.options.key_file);
-        let saved = tokio::task::spawn_blocking(move || ports::load(&port_file))
+        // A file that cannot be read still binds, on any ports: failing the
+        // bind would also cut off the clients that come through the relay
+        // and every dial. The file is then left alone (`ports_unread`), so
+        // the next start that can read it gets the old ports back.
+        let loaded = tokio::task::spawn_blocking(move || ports::load(&port_file))
             .await
-            .unwrap_or_default();
+            .map_err(std::io::Error::other)
+            .and_then(|loaded| loaded);
+        let ports_unread = loaded.is_err();
+        let saved = loaded.unwrap_or_else(|error| {
+            tracing::warn!(%error, "reading the saved peer-to-peer ports failed; binding any ports and keeping the file");
+            ports::Ports::default()
+        });
         // iroh binds a port it is given or fails the whole bind (`is_required`
         // sockets; a socket that may fail is left out instead, which would
         // drop that family), and each family's socket binds on its own. So a
@@ -889,6 +902,7 @@ impl Inner {
             endpoint,
             accepting,
             settled_by: tokio::time::Instant::now() + ONLINE_WAIT,
+            ports_unread,
             last_use: Mutex::new(tokio::time::Instant::now()),
         })
     }
@@ -900,8 +914,10 @@ impl Inner {
     /// `listen` has nothing left to await once it changed state, and a
     /// caller's timeout cannot leave it half done. A write that runs after
     /// the endpoint stopped listening does nothing, so it cannot bring back a
-    /// file `forget_ports` removed. Never fails anyone: without the file the
-    /// next start binds any port.
+    /// file `forget_ports` removed. A file this bind could not read is left
+    /// as it is while it exists: it may hold the ports clients stored, which
+    /// a start that can read it binds again. Never fails anyone: without the
+    /// file the next start binds any port.
     fn keep_ports(self: &Arc<Self>, bound: Arc<Bound>) {
         let inner = self.clone();
         self.port_task(async move {
@@ -911,8 +927,19 @@ impl Inner {
             }
             let ports = ports::Ports::of(&bound.endpoint.bound_sockets());
             let path = ports::path(&inner.options.key_file);
-            match tokio::task::spawn_blocking(move || ports::save(&path, ports)).await {
-                Ok(Ok(())) => {}
+            let unread = bound.ports_unread;
+            let saved = tokio::task::spawn_blocking(move || {
+                // An error asking counts as there: overwriting is what to avoid.
+                if unread && path.try_exists().unwrap_or(true) {
+                    return Ok(false);
+                }
+                ports::save(&path, ports).map(|()| true)
+            });
+            match saved.await {
+                Ok(Ok(true)) => {}
+                Ok(Ok(false)) => tracing::warn!(
+                    "not saving the peer-to-peer ports over a file that could not be read"
+                ),
                 Ok(Err(error)) => tracing::warn!(%error, "saving the peer-to-peer ports failed"),
                 Err(error) => tracing::warn!(%error, "saving the peer-to-peer ports failed"),
             }
@@ -1991,7 +2018,7 @@ mod tests {
             until("the removal", || !port_file.exists()).await?;
             second.listen(Some(Arc::new(Everyone))).await?;
             until("the ports saved again", || port_file.exists()).await?;
-            assert_eq!(ports::load(&port_file), saved);
+            assert_eq!(ports::load(&port_file)?, saved);
             second.close().await;
             Ok(())
         })
