@@ -839,7 +839,15 @@ pub async fn repair_gui(
         Ok(lock) => lock,
         Err(done) => return Ok(done),
     };
-    if reported_version(&dir.join(BINARIES[0])).await.as_deref() != Some(version) {
+    let mut probe = tokio::process::Command::new(dir.join(BINARIES[0]));
+    // The installed devlanes reports its own version, not the one this
+    // process pretends to run.
+    probe.env_remove(crate::version::RUNNING_ENV);
+    if probe_version(probe, "--version", "devlanes")
+        .await
+        .as_deref()
+        != Some(version)
+    {
         return Ok(GuiRepair::Nothing);
     }
     let release = Release::of(version);

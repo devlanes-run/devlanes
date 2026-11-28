@@ -923,7 +923,7 @@ impl GuiRepair {
     fn problem(&self) -> Option<String> {
         match self {
             Self::Unwritable(command) => Some(format!(
-                "devlanes-gui is missing and this user cannot write its directory; run {command}"
+                "devlanes-gui is missing and this user cannot write its directory; run {command} (this repeats until then)"
             )),
             Self::Failed(error) => Some(format!(
                 "devlanes-gui is missing and was not installed: {error}"

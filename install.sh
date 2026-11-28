@@ -354,7 +354,7 @@ for bin in $bins; do
 		if [ "$restored" = all ]; then
 			fail "cannot install $dir/$bin; the files it replaced are back in place"
 		fi
-		fail "cannot install $dir/$bin, and some of the files it replaced could not be put back; run this script again"
+		fail "cannot install $dir/$bin, and not every file it replaced is back; run this script again to finish the install"
 	fi
 	swapped="$swapped $bin"
 done
