@@ -5,7 +5,8 @@
 //! Viewers get decoded frames: each window decodes on the blocking pool, a
 //! frame is acknowledged once [`Events::next`] hands it over, and a frame
 //! that fails to decode is acknowledged as discarded and answered with a
-//! keyframe request. While the client holds a button or key it sends
+//! keyframe request; a codec whose keyframe fails too is reported with
+//! [`Event::CodecFailed`]. While the client holds a button or key it sends
 //! keep-alives, so the host does not release them. Each window's lock state
 //! comes from a [`devlanes_gui_proto::ViewerLock`] fed with everything that
 //! arrives. Nothing here draws or reads a local input device; the agent

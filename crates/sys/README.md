@@ -41,6 +41,10 @@ All functions block. Call them from `spawn_blocking` in async code.
 - `windows_drives`, `windows_system32`: the Windows drives mounted into a WSL distro, and where Windows' `System32` is among them. Empty outside WSL.
 - `url_opener`: the command that opens a URL in the user's browser: `open`, `xdg-open`, or inside WSL with interop `wslview` or Windows' `rundll32.exe`.
 - `macos` (macOS only): safe rusage, mach time, host CPU and sysctl readings for `devlanes-metrics-macos`, and a process's base priority, which shows whether it is in the background band.
+- `openh264` (Linux, feature `openh264`): the system's OpenH264 loaded at run time (`Library::load` tries `libopenh264.so.8`, `.7`, `.6` and `libopenh264.so`), its `Encoder` and `Decoder` over I420 pictures. Versions 2.2 to 2.7 are accepted and others refused with `LoadError::Unsupported`, because 2.6 changed the layout of the encoder's output; nothing links the library.
+- `videotoolbox` (macOS, feature `videotoolbox`): the VideoToolbox H.264 `Decoder`, Annex B in, NV12 out.
+
+Only `devlanes-gui` enables the two features, through `devlanes-gui-codec`; each module is empty on other platforms.
 
 ## Behaviour
 
@@ -48,7 +52,7 @@ Start times are clock ticks since boot on Linux and microseconds since the epoch
 
 On macOS, `listening_tcp` runs `/usr/sbin/lsof`, and zombies are read through `sysctl` because libproc no longer reports them. `tcp_connections` reads the `net.inet.tcp.pcblist_n` sysctl that `netstat` uses; its layout is private, so the parser checks every length and fails with `Error::Malformed` instead of guessing. Linux reads everything from procfs.
 
-`unsafe` code is confined to the macOS modules (libproc, mach and sysctl calls).
+`unsafe` code is confined to the macOS modules (libproc, mach and sysctl calls, VideoToolbox) and the OpenH264 loader.
 
 On Windows the queries delegate to `devlanes-sys-windows`. Start times are creation `FILETIME`s, a zombie is a process that exited while a handle to it is still open, and `sid` is always `None`, so the tracker and session helpers only follow parent links there. `terminate_verified` replaces `signal_verified`, and checks the start time on the handle it terminates through. Both open-file limit functions report no limit, and process groups, user IDs, sessions and descriptor holders do not exist.
 

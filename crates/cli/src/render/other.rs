@@ -1279,7 +1279,80 @@ fn gui_checks(gui: &Value) -> Vec<Check> {
             "this machine has no GUI backend: GUI services run without a host, with their windows on this desktop",
         ),
     };
-    vec![binary, backend]
+    let mut checks = vec![binary, backend];
+    checks.extend(codec_checks(&gui["codecs"]));
+    checks
+}
+
+/// The video codecs `devlanes-gui codecs` reports (`codecs`: `{h264:
+/// {version, encoders, decoders}, problems: [{codec, reason, library, found,
+/// supported, detail}]}`): H.264 and its library, or why it is missing, in
+/// which case GUI windows stream as whole pictures (`raw`). Nothing when
+/// `devlanes-gui` did not answer.
+fn codec_checks(codecs: &Value) -> Vec<Check> {
+    if !codecs.is_object() {
+        return Vec::new();
+    }
+    let mut checks = Vec::new();
+    let h264 = &codecs["h264"];
+    let can = |key: &str| h264.get(key).and_then(Value::as_bool) == Some(true);
+    if let Some(version) = h264.get("version").and_then(Value::as_str) {
+        // "the software encoder", "the software and hardware encoders".
+        let kinds = |key: &str, noun: &str| {
+            let kinds: Vec<String> = list(h264, key).iter().map(display_value).collect();
+            let plural = if kinds.len() > 1 { "s" } else { "" };
+            format!("the {} {noun}{plural}", kinds.join(" and "))
+        };
+        let mut ends = Vec::new();
+        if can("encode") {
+            ends.push(format!("encodes with {}", kinds("encoders", "encoder")));
+        }
+        if can("decode") {
+            ends.push(format!("decodes with {}", kinds("decoders", "decoder")));
+        }
+        checks.push(Check::new(
+            "gui",
+            Outcome::Ok,
+            format!("H.264 through {}: {}", clean(version), ends.join(", ")),
+        ));
+    }
+    let problems = list(codecs, "problems");
+    let facts =
+        |problem: &Value| ["reason", "library", "found", "supported"].map(|key| text(problem, key));
+    for (index, problem) in problems.iter().enumerate() {
+        // The same reason on both sides is one row.
+        let same = |other: &&Value| facts(other) == facts(problem);
+        if problems[..index].iter().any(|earlier| same(&earlier)) {
+            continue;
+        }
+        let both = problems.iter().filter(|other| same(other)).count() > 1;
+        let [reason, library, found, supported] = facts(problem);
+        let why = words::codec_problem(&reason, &library, &found, &supported);
+        let codec = words::codec_name(&text(problem, "codec"));
+        let what = match (both, text(problem, "side").as_str()) {
+            (true, _) => format!(
+                "no {codec}: {why}, so GUI windows stream as whole pictures, which is slow over a network"
+            ),
+            (false, "decode") => format!(
+                "no {codec} decoding: {why}; GUI windows shown on this machine come as whole pictures, which is slow over a network"
+            ),
+            _ => format!(
+                "no {codec} encoding: {why}, so GUI services on this machine stream whole pictures, which is slow over a network"
+            ),
+        };
+        let mut check = Check::new("gui", Outcome::Skip, what);
+        let detail = text(problem, "detail");
+        if !detail.is_empty() {
+            check = check.detail(clean(&detail));
+        }
+        // Install lines only where nothing is installed: a version devlanes
+        // does not use is already the package the lines would install.
+        if reason == devlanes_proto::GUI_CODEC_MISSING_LIBRARY && library == "OpenH264" {
+            check = check.fix(words::OPENH264_INSTALL);
+        }
+        checks.push(check);
+    }
+    checks
 }
 
 /// The embedded DNS server of the `resolver` hostname strategy (`dns`:

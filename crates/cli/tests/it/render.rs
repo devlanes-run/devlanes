@@ -966,6 +966,88 @@ fn doctor_without_a_daemon() {
     );
 }
 
+/// A GUI host that cannot encode H.264 is noted on its unit in status;
+/// doctor names the H.264 library a machine has and the sides it works for,
+/// warns (exit 0) without OpenH264 with the install lines of the common
+/// package managers, and names a refused version, or an old decoder, with
+/// what devlanes needs, without install lines for a package already there.
+#[test]
+fn missing_h264_is_worded_in_status_and_doctor() {
+    let page = |items: Vec<Value>| json!({"items": items, "truncated": false, "next_cursor": null});
+    let mut desktop = unit("desktop", "ready");
+    desktop["gui"] = json!({"host": "running", "real_desktop": false, "codecs": [
+        {"codec": "h264", "reason": "missing_library", "library": "OpenH264"}]});
+    let status = render_text(
+        Method::Status,
+        &page(vec![lane(Some(2), "main", "running", vec![desktop])]),
+    );
+    let gui = |codecs: Value| {
+        json!({
+            "running": false, "version": "0.3.0", "home": "/home/u/.devlanes",
+            "socket": "/home/u/.devlanes/run/daemon.sock", "db_path": "/home/u/.devlanes/state.db",
+            "home_check": {"path": "/home/u/.devlanes", "exists": true, "mode": "700", "problem": null},
+            "sandbox": {"codex_sandbox": false, "app_sandbox": false},
+            "gui": {"path": "/opt/devlanes/devlanes-gui", "installed": true, "version": "0.3.0",
+                    "expected": "0.3.0", "error": null, "backend": "test-pattern",
+                    "fix": "devlanes update", "codecs": codecs},
+        })
+    };
+    let none =
+        json!({"version": null, "encode": false, "decode": false, "encoders": [], "decoders": []});
+    let loader = "OpenH264 is not installed: none of libopenh264.so.8, libopenh264.so.7, libopenh264.so.6, libopenh264.so loads";
+    let missing = render_text(
+        Method::Doctor,
+        &gui(json!({"h264": none, "problems": [
+            {"codec": "h264", "side": "encode", "reason": "missing_library", "library": "OpenH264", "detail": loader},
+            {"codec": "h264", "side": "decode", "reason": "missing_library", "library": "OpenH264", "detail": loader}]})),
+    );
+    assert!(missing.contains("--- plain (exit 0)"), "{missing}");
+    // Ubuntu 24.04's OpenH264 encodes, and its decoder is refused.
+    let old = render_text(
+        Method::Doctor,
+        &gui(
+            json!({"h264": {"version": "OpenH264 2.4.1", "encode": true, "decode": false,
+                             "encoders": ["software"], "decoders": []}, "problems": [
+            {"codec": "h264", "side": "decode", "reason": "decoder_too_old", "library": "OpenH264",
+             "found": "2.4.1", "supported": "2.6 to 2.7", "detail": ""}]}),
+        ),
+    );
+    assert!(
+        !old.contains("apt install"),
+        "no install line for an installed package: {old}"
+    );
+    let refused = render_text(
+        Method::Doctor,
+        &gui(json!({"h264": none, "problems": [
+            {"codec": "h264", "side": "encode", "reason": "unsupported_version", "library": "OpenH264",
+             "found": "3.0.0", "supported": "2.2 to 2.7", "detail": ""},
+            {"codec": "h264", "side": "decode", "reason": "unsupported_version", "library": "OpenH264",
+             "found": "3.0.0", "supported": "2.6 to 2.7", "detail": ""}]})),
+    );
+    assert!(!refused.contains("apt install"), "{refused}");
+    let windows = render_text(
+        Method::Doctor,
+        &gui(
+            json!({"h264": {"version": "Media Foundation", "encode": true, "decode": true,
+                             "encoders": ["software", "hardware"], "decoders": ["software"]},
+                    "problems": []}),
+        ),
+    );
+    // A reason from a newer devlanes-gui is named neutrally, with its detail.
+    let unknown = render_text(
+        Method::Doctor,
+        &gui(json!({"h264": none, "problems": [
+            {"codec": "h264", "side": "encode", "reason": "a_future_reason",
+             "detail": "what that devlanes-gui says"}]})),
+    );
+    insta::assert_snapshot!(
+        "render_missing_h264",
+        format!(
+            "{status}=== doctor without OpenH264\n{missing}=== doctor with OpenH264 2.4.1\n{old}=== doctor with OpenH264 3.0\n{refused}=== doctor on Windows\n{windows}=== doctor with an unknown reason\n{unknown}"
+        )
+    );
+}
+
 /// Windows facts: an elevated daemon or terminal and a terminal job that kills
 /// on close are warnings (exit 0); a home other accounts can reach is a warning
 /// while the daemon can tighten it and a failure with the `icacls` fix after.

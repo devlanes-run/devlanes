@@ -14,6 +14,8 @@ DEVLANES_GUI_TOKEN=... devlanes-gui host --backend test-pattern --listen 127.0.0
 
 `version` prints the name and the devlanes release version first, then the build kind.
 
+`codecs` prints one JSON line with this machine's H.264, which `devlanes doctor` reads: `{"h264":{"version":"OpenH264 2.6.0","encode":true,"decode":true,"encoders":["software"],"decoders":["software"]},"problems":[]}`, with a problem per missing side (`"side"` is `encode` or `decode`; `"reason"` is `missing_library`, `unsupported_version`, `decoder_too_old` or `unavailable`).
+
 `host` starts the backend, binds the address and prints one line on standard output once it listens, then serves the GUI protocol until it gets SIGINT, SIGTERM or SIGHUP (on Windows Ctrl-C, Ctrl-Break or the console closing) or the backend stops. Logs go to standard error, filtered by `DEVLANES_LOG` (default `info`). It exits with 0 after a stop, 1 when it cannot run (an unknown backend, an address that is not loopback, a port in use), 2 for a malformed command line and 3 when the backend cannot run on this machine, after printing an unready line instead of the ready line. It also ends with 0 once the daemon says the unit exited, after showing viewers its windows Closed. A host started with a token watches for its daemon going away: it exits with 1 when the control connection closes before the unit's identity came, or when no identity came within 60 seconds of the ready line (a daemon that could not tell it, or one that died without closing the connection; on Windows the clock keeps counting while the machine sleeps). Once it has the identity and the control connection closes, it checks the unit by pid and start time every 2 seconds and exits with 0 when the unit is gone.
 
 ## Viewer
@@ -36,8 +38,13 @@ One JSON object, written and read with `devlanes_gui_proto::ready::Ready` (featu
 - `set`: the variables the unit gets, as names and string values.
 - `remove`: the names of variables the unit must not inherit.
 - `real_desktop`: whether the display is the machine's real desktop, as on a Windows host.
+- `codecs`: left out when empty; the codecs the host lacks here, such as `{"codec":"h264","reason":"missing_library","library":"OpenH264","detail":"..."}`, which the daemon shows as a note on the unit.
 
 A backend that cannot run here prints `{"unready":1,"devlanes":"0.17.0","protocol":1,"reason":"no_desktop_session","message":"..."}` instead, read with `devlanes_gui_proto::ready::HostLine`. The reasons are `no_desktop_session`, `elevated`, `missing_library`, `unsupported_os` and `other`.
+
+## Codecs
+
+`host` offers H.264 where this machine has it and `raw` always; `view` offers the same decoders. The H.264 backends come from `devlanes-gui-codec`'s `h264` feature, which only this binary enables: the system's OpenH264 on Linux, loaded at run time (versions 2.2 to 2.7 encode, 2.6 and 2.7 decode; nothing links it, so the binary starts without it and streams `raw`), Media Foundation on Windows (looked up in `mfplat.dll` at run time, so a Windows without it starts too), and the VideoToolbox decoder on macOS. The host looks for them on a blocking thread before it listens, the viewer on a thread of its own, so its window thread never joins COM's multithreaded apartment.
 
 ## Control token
 

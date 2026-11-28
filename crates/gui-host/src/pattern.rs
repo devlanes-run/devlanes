@@ -57,8 +57,15 @@ pub fn draw_grid(size: Size) -> Vec<u8> {
     pixels
 }
 
-/// Whether `frame` shows the grid: the centre of every cell has its colour.
+/// Whether `frame` shows the grid: the centre of every cell has its colour,
+/// within a tolerance loose enough for any codec at a low rate.
 pub fn shows_grid(frame: &Frame) -> bool {
+    shows_grid_within(frame, TOLERANCE)
+}
+
+/// Whether the centre of every cell of `frame` has its colour with each
+/// channel at most `tolerance` off.
+fn shows_grid_within(frame: &Frame, tolerance: u8) -> bool {
     let size = Size::new(frame.width(), frame.height());
     (0..GRID_ROWS).all(|row| {
         (0..GRID_COLUMNS).all(|column| {
@@ -70,7 +77,7 @@ pub fn shows_grid(frame: &Frame) -> bool {
             let Some(&[b, g, r, _]) = pixels.get(at..at + 4) else {
                 return false;
             };
-            let close = |got: u8, want: u8| got.abs_diff(want) <= TOLERANCE;
+            let close = |got: u8, want: u8| got.abs_diff(want) <= tolerance;
             let [wr, wg, wb] = grid_colour(centre.x as u32, centre.y as u32, size);
             close(r, wr) && close(g, wg) && close(b, wb)
         })

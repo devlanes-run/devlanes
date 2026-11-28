@@ -29,37 +29,42 @@ fn rank(codec: CodecId) -> Option<u8> {
 /// share one encoder and one pacer; a viewer that gets another codec has an
 /// encoder and a pacer of its own for that window.
 ///
-/// The order is fixed, with no user setting: more ends in hardware first, then
-/// the newer codec, so hardware H.264 beats software H.264, which beats `raw`.
-/// For each codec, an end that lists both a hardware and a software
-/// implementation counts as hardware. `None` only when the lists share no
-/// codec, which cannot happen between devlanes builds since both have `raw`.
+/// The order is fixed, with no user setting: the newer codec first, so H.264
+/// beats `raw`. Within a codec the host's encoders are tried in the order it
+/// passes them, which for each window follows `EncoderBackend::rank` at the
+/// window's size (on Windows Microsoft's software encoder first for windows
+/// up to about 2.5 megapixels, since it was measured faster there and has
+/// no session cap and no driver to hang, and the hardware one first above),
+/// and the viewer decodes with its hardware decoder where it lists one. `None` only when the lists
+/// share no codec, which cannot happen between devlanes builds since both
+/// have `raw`.
 pub fn select(encoders: &[CodecOffer], decoders: &[CodecOffer]) -> Option<Selection> {
-    let best = |offers: &[CodecOffer], codec: CodecId| {
-        offers
+    let best_decoder = |codec: CodecId| {
+        decoders
             .iter()
             .filter(|offer| offer.codec == codec)
             .map(|offer| offer.hardware)
             .max()
     };
-    encoders
-        .iter()
-        .filter_map(|offer| {
-            let rank = rank(offer.codec)?;
-            let encoder_hardware = best(encoders, offer.codec)?;
-            let decoder_hardware = best(decoders, offer.codec)?;
-            let hardware_ends = u8::from(encoder_hardware) + u8::from(decoder_hardware);
-            Some((
-                (hardware_ends, rank),
+    let mut chosen: Option<(u8, Selection)> = None;
+    for offer in encoders {
+        let (Some(rank), Some(decoder_hardware)) = (rank(offer.codec), best_decoder(offer.codec))
+        else {
+            continue;
+        };
+        // The first encoder listed for a codec wins among its codec's.
+        if chosen.is_none_or(|(best, _)| rank > best) {
+            chosen = Some((
+                rank,
                 Selection {
                     codec: offer.codec,
-                    encoder_hardware,
+                    encoder_hardware: offer.hardware,
                     decoder_hardware,
                 },
-            ))
-        })
-        .max_by_key(|(key, _)| *key)
-        .map(|(_, selection)| selection)
+            ));
+        }
+    }
+    chosen.map(|(_, selection)| selection)
 }
 
 #[cfg(test)]
@@ -71,8 +76,11 @@ mod tests {
         CodecOffer { codec, hardware }
     }
 
+    /// The newer codec wins, the host's first encoder of it is the one used,
+    /// the viewer's hardware decoder is preferred, and unknown codecs never
+    /// win.
     #[test]
-    fn hardware_wins_then_the_newer_codec_and_unknown_codecs_never() {
+    fn the_newer_codec_wins_in_the_host_order_and_unknown_codecs_never() {
         let raw = offer(CodecId::RAW, false);
         let h264_sw = offer(CodecId::H264, false);
         let h264_hw = offer(CodecId::H264, true);
@@ -88,14 +96,15 @@ mod tests {
                 &[raw, h264_sw],
                 Some((CodecId::H264, false, false)),
             ),
+            // Windows lists its software encoder first.
             (
                 &[raw, h264_sw, h264_hw],
                 &[raw, h264_sw],
-                Some((CodecId::H264, true, false)),
+                Some((CodecId::H264, false, false)),
             ),
             (
-                &[raw, h264_hw],
-                &[h264_hw, raw],
+                &[h264_hw, h264_sw, raw],
+                &[raw, h264_sw, h264_hw],
                 Some((CodecId::H264, true, true)),
             ),
             // A Linux viewer without OpenH264 falls back to raw.

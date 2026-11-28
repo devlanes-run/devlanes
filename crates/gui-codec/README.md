@@ -1,6 +1,6 @@
 # devlanes-gui-codec
 
-Video codecs for devlanes GUI streaming: the BGRA frame type, the `VideoEncoder` and `VideoDecoder` traits that each OS backend implements, the `raw` codec every build has, and the selector that picks the codec a window streams in. `devlanes-gui-host` encodes with it and `devlanes-gui-client` decodes with it; the message types come from `devlanes-gui-proto`.
+Video codecs for devlanes GUI streaming: the BGRA frame type, the `VideoEncoder` and `VideoDecoder` traits that each OS backend implements, the `raw` codec every build has, the H.264 backends of each OS, and the selector that picks the codec a window streams in. `devlanes-gui-host` encodes with it and `devlanes-gui-client` decodes with it; the message types come from `devlanes-gui-proto`.
 
 ## Usage
 
@@ -28,6 +28,7 @@ fn stream_one_frame(pixels: Vec<u8>, captured: Duration) -> Result<(), CodecErro
         frame_interval: Duration::from_millis(33),
         quality: 60,
         keyframe: true,
+        refine: false,
     };
     let encoded = encoder.encode(&frame, &params)?.expect("a keyframe is never skipped");
 
@@ -49,7 +50,14 @@ fn stream_one_frame(pixels: Vec<u8>, captured: Duration) -> Result<(), CodecErro
 - `VideoEncoder`, `VideoDecoder`: one per window and codec; `Send` and synchronous (each call returns the output for its input), so they run on a thread of their own.
 - `EncoderBackend`, `DecoderBackend`: what a host or viewer registers per codec implementation, with its `CodecOffer` (codec and whether it is hardware).
 - `RawBackend`, `RawEncoder`, `RawDecoder`: full frames compressed with zstd; the encoder skips a picture identical to the previous one.
-- `select`: the best codec both ends have, hardware before software and `h264` before `raw`.
+- `select`: the best codec both ends have, `h264` before `raw`, with the first of the host's encoders of that codec and the viewer's hardware decoder where it has one. The host orders its encoders per window by `EncoderBackend::rank` at the window's size: on Windows the software encoder first up to about 2.5 megapixels and the hardware one above, each the other's fallback.
+- `h264()` (feature `h264`): this machine's H.264 backends and why a part is missing: `OpenH264` on Linux, `MediaFoundationEncoder` (hardware and software) and `MediaFoundationDecoder` on Windows, the `VideoToolbox` decoder on macOS. Only `devlanes-gui` enables the feature; the FFI lives in `devlanes-sys` and `devlanes-sys-windows`.
+
+## H.264
+
+Every H.264 backend converts BGRA to 4:2:0 and back here, with one BT.709 limited-range matrix. H.264 needs even sides: the encoder pads an odd side by repeating the last column or row, the frame message carries the real size, and the decoder crops to it. A new size starts a new encoder, whose first frame is a keyframe. Each encoder backend says through `EncoderBackend::fits` which sizes it takes (level 5.2 for OpenH264 and GPU encoders, 4096x2304 for Microsoft's software encoder); the GUI host streams a larger window in the next codec until it fits again. A refinement (`EncodeParams::refine`, asked for by the pacer once a lossy picture stops changing) is a predicted frame at the quality the pacer gives it, never coarser than the stream and at most 15 quantizer steps finer, which keeps it within about 1.5 times the stream's keyframe. Decoders decode every frame, refuse an empty payload and pictures with a side above 8192; the viewer shows the newest.
+
+The OpenH264 decoder is used with versions 2.6 and 2.7 only, since older versions have a known flaw in it (CVE-2025-27091); their encoder is used, from 2.2 to 2.7. `h264()` reports each side's problem in `H264::encode` and `H264::decode`.
 
 ## License
 

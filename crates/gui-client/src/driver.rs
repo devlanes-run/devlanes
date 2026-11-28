@@ -148,7 +148,7 @@ impl Reader {
     /// Handles every complete message in `buf`.
     fn drain(&mut self, buf: &mut BytesMut) -> Result<(), ClientError> {
         while let Some(message) = HostMessage::decode(buf)? {
-            self.handle(message);
+            self.handle(message)?;
         }
         Ok(())
     }
@@ -162,8 +162,10 @@ impl Reader {
         }
     }
 
-    /// Handles one message from the host.
-    fn handle(&mut self, message: HostMessage) {
+    /// Handles one message from the host. A frame in a codec this client did
+    /// not offer breaks the protocol, since the host only sends one it chose
+    /// among the offered, and ends the connection.
+    fn handle(&mut self, message: HostMessage) -> Result<(), ClientError> {
         let at = now();
         let shared = self.shared.clone();
         shared.data_arrived(at);
@@ -190,6 +192,9 @@ impl Reader {
                 Event::WindowRemoved(window)
             }
             HostMessage::VideoFrame(frame) => {
+                if !self.backends.iter().any(|b| b.offer().codec == frame.codec) {
+                    return Err(ClientError::UnsupportedCodec(frame.codec));
+                }
                 let window = frame.window;
                 let Some(win) = state.windows.get_mut(&window) else {
                     drop(state);
@@ -198,13 +203,13 @@ impl Reader {
                         window,
                         seq: frame.seq,
                     });
-                    return;
+                    return Ok(());
                 };
                 win.lock.frame(frame.seq, at);
                 self.shared.refresh_lock(window, win, at);
                 drop(state);
                 self.decode(frame);
-                return;
+                return Ok(());
             }
             HostMessage::LockChanged {
                 window,
@@ -214,7 +219,7 @@ impl Reader {
                     win.lock.host_state(host);
                     self.shared.refresh_lock(window, win, at);
                 }
-                return;
+                return Ok(());
             }
             HostMessage::ResizeApplied {
                 window,
@@ -234,13 +239,13 @@ impl Reader {
                 if let Some(reply) = state.screenshots.remove(&request) {
                     let _ = reply.send(result);
                 }
-                return;
+                return Ok(());
             }
             HostMessage::Synced { request } => {
                 if let Some(reply) = state.syncs.remove(&request) {
                     let _ = reply.send(());
                 }
-                return;
+                return Ok(());
             }
             HostMessage::Cursor(cursor) => Event::Cursor(cursor),
             HostMessage::MoveResizeStarted(started) => Event::MoveResizeStarted(started),
@@ -249,9 +254,12 @@ impl Reader {
             HostMessage::Activity => Event::Activity,
             // A heartbeat only proves the link, which `data` above recorded.
             // A second welcome or refusal has no meaning mid-connection.
-            HostMessage::Heartbeat | HostMessage::Welcome(_) | HostMessage::Refused(_) => return,
+            HostMessage::Heartbeat | HostMessage::Welcome(_) | HostMessage::Refused(_) => {
+                return Ok(());
+            }
         };
         self.shared.emit(event);
+        Ok(())
     }
 
     /// Hands `frame` to its window's decoder task, starting one if needed,
@@ -282,8 +290,11 @@ type Job = (VideoFrame, oneshot::Sender<DecodedFrame>);
 type Decoder = (CodecId, Box<dyn VideoDecoder>);
 
 /// Decodes one window's frames in order on the blocking pool. A frame that
-/// fails is acknowledged as discarded and followed by a keyframe request; a
-/// decoded one fills its event's place and is acknowledged when read.
+/// fails is acknowledged as discarded and answered with one keyframe request;
+/// frames after it are discarded undecoded until a keyframe comes, since they
+/// need the picture that failed. When that keyframe fails too, the codec is
+/// broken here and [`Event::CodecFailed`] says so. A decoded frame fills its
+/// event's place and is acknowledged when read.
 async fn decode_loop(
     window: WindowId,
     mut rx: mpsc::UnboundedReceiver<Job>,
@@ -291,8 +302,15 @@ async fn decode_loop(
     shared: Arc<Shared>,
 ) {
     let mut decoder: Option<Decoder> = None;
+    // The codec whose failure asked for a keyframe that has not come yet.
+    let mut awaiting_keyframe: Option<CodecId> = None;
+    let mut reported = false;
     while let Some((frame, slot)) = rx.recv().await {
-        let (seq, keyframe) = (frame.seq, frame.keyframe);
+        let (seq, keyframe, codec) = (frame.seq, frame.keyframe, frame.codec);
+        if awaiting_keyframe == Some(codec) && !keyframe {
+            let _ = shared.send(&ClientMessage::FrameAck { window, seq });
+            continue;
+        }
         let backends = backends.clone();
         let current = decoder.take();
         let job = move || decode_one(current, &backends, &frame);
@@ -301,6 +319,9 @@ async fn decode_loop(
             Err(_) => (None, Err(())),
         };
         decoder = kept;
+        if outcome.is_ok() {
+            awaiting_keyframe = None;
+        }
         match outcome {
             Ok(Some(picture)) => {
                 let _ = slot.send(DecodedFrame {
@@ -315,7 +336,15 @@ async fn decode_loop(
             }
             Err(()) => {
                 let _ = shared.send(&ClientMessage::FrameAck { window, seq });
-                let _ = shared.send(&ClientMessage::KeyframeRequest { window });
+                if awaiting_keyframe == Some(codec) {
+                    if !reported {
+                        reported = true;
+                        shared.emit(Event::CodecFailed(codec));
+                    }
+                } else {
+                    awaiting_keyframe = Some(codec);
+                    let _ = shared.send(&ClientMessage::KeyframeRequest { window });
+                }
             }
         }
     }

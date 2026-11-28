@@ -1,6 +1,8 @@
 //! Video streams: pacing between viewers, keyframes for late joiners, one
 //! encoder per codec, and screenshots.
 
+use std::sync::Mutex;
+
 use bytes::Bytes;
 use devlanes_gui_client::ClientError;
 use devlanes_gui_codec::{
@@ -126,6 +128,16 @@ impl EncoderBackend for Counting {
         self.made.fetch_add(1, Ordering::SeqCst);
         self.inner.encoder()
     }
+
+    /// The wrapped backend's limits.
+    fn fits(&self, width: u32, height: u32) -> bool {
+        self.inner.fits(width, height)
+    }
+
+    /// The wrapped backend's rank.
+    fn rank(&self, width: u32, height: u32) -> u8 {
+        self.inner.rank(width, height)
+    }
 }
 
 /// Stands in for H.264: uncompressed pixels under the H.264 codec id.
@@ -248,28 +260,396 @@ async fn viewers_of_another_codec_get_an_encoder_of_their_own() {
     host.stop().await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn viewers_of_an_encoder_that_cannot_start_fall_back_to_another_codec() {
-    let encoders: Vec<Arc<dyn EncoderBackend>> = vec![Arc::new(Broken), Arc::new(RawBackend)];
-    let host = Host::start(TestPatternOptions::default(), |o| o.encoders = encoders).await;
-    let decoded = Arc::new(AtomicUsize::new(0));
-    let both = ClientOptions::new(Role::Viewer, "ada", "ada").with_decoders(vec![
+/// The next frame of `window`, skipping the other windows'.
+async fn frame_of(events: &mut Events, window: WindowId) -> devlanes_gui_client::DecodedFrame {
+    loop {
+        let frame = next_frame(events).await;
+        if frame.window == window {
+            return frame;
+        }
+    }
+}
+
+/// A viewer that decodes [`PLAIN`] and `raw`, counting what came as plain.
+fn plain_or_raw(name: &str, decoded: &Arc<AtomicUsize>) -> ClientOptions {
+    ClientOptions::new(Role::Viewer, name, name).with_decoders(vec![
         Arc::new(PlainDecoder(decoded.clone())),
         Arc::new(RawBackend),
-    ]);
-    let (_ada, mut events) = host.connect(both).await;
+    ])
+}
+
+/// A window whose encoder cannot start is watched in the next codec; after
+/// three such failures nobody is given that encoder again.
+#[tokio::test(start_paused = true)]
+async fn viewers_of_an_encoder_that_cannot_start_fall_back_to_another_codec() {
+    let made = Arc::new(AtomicUsize::new(0));
+    let encoders: Vec<Arc<dyn EncoderBackend>> = vec![
+        Arc::new(Counting {
+            inner: Arc::new(Broken),
+            made: made.clone(),
+        }),
+        Arc::new(RawBackend),
+    ];
+    let host = Host::start(TestPatternOptions::default(), |o| o.encoders = encoders).await;
+    let decoded = Arc::new(AtomicUsize::new(0));
+    let (_ada, mut events) = host.connect(plain_or_raw("ada", &decoded)).await;
     let frame = next_frame(&mut events).await;
     assert!(shows_grid(&frame.frame));
     assert_eq!(decoded.load(Ordering::SeqCst), 0, "the frame came as raw");
+    assert_eq!(made.load(Ordering::SeqCst), 1, "one strike");
 
-    // A viewer joining later gets raw straight away.
-    let both = ClientOptions::new(Role::Viewer, "bob", "bob").with_decoders(vec![
-        Arc::new(PlainDecoder(decoded.clone())),
-        Arc::new(RawBackend),
-    ]);
-    let (_bob, mut events) = host.connect(both).await;
-    assert!(shows_grid(&next_frame(&mut events).await.frame));
+    // Each new window tries the encoder again, up to the third strike.
+    for _ in 0..2 {
+        let window = host.pattern.open_window(Size::new(320, 200));
+        assert!(shows_grid(&frame_of(&mut events, window).await.frame));
+    }
+    assert_eq!(made.load(Ordering::SeqCst), 3);
+
+    // Past it, a new viewer and a new window get raw without another try.
+    let (_bob, mut bob) = host.connect(plain_or_raw("bob", &decoded)).await;
+    assert!(shows_grid(&next_frame(&mut bob).await.frame));
+    let window = host.pattern.open_window(Size::new(320, 200));
+    assert!(shows_grid(&frame_of(&mut bob, window).await.frame));
+    assert_eq!(made.load(Ordering::SeqCst), 3);
     assert_eq!(decoded.load(Ordering::SeqCst), 0);
+    host.stop().await;
+}
+
+/// Start failures count towards turning an encoder off only within ten
+/// minutes: three spread over longer leave it in use, three close together
+/// turn it off.
+#[tokio::test(start_paused = true)]
+async fn start_failures_far_apart_do_not_turn_an_encoder_off() {
+    let made = Arc::new(AtomicUsize::new(0));
+    let encoders: Vec<Arc<dyn EncoderBackend>> = vec![
+        Arc::new(Counting {
+            inner: Arc::new(Broken),
+            made: made.clone(),
+        }),
+        Arc::new(RawBackend),
+    ];
+    let host = Host::start(TestPatternOptions::default(), |o| o.encoders = encoders).await;
+    let decoded = Arc::new(AtomicUsize::new(0));
+    let (_ada, mut events) = host.connect(plain_or_raw("ada", &decoded)).await;
+    next_frame(&mut events).await;
+    let open = async |events: &mut Events| {
+        let window = host.pattern.open_window(Size::new(320, 200));
+        frame_of(events, window).await;
+    };
+    // Failures at 0, 6 and 12 minutes: the first no longer counts.
+    for _ in 0..2 {
+        tokio::time::sleep(Duration::from_secs(360)).await;
+        open(&mut events).await;
+    }
+    assert_eq!(made.load(Ordering::SeqCst), 3);
+    // A fourth now is the third within ten minutes.
+    open(&mut events).await;
+    assert_eq!(made.load(Ordering::SeqCst), 4, "still tried");
+    open(&mut events).await;
+    assert_eq!(made.load(Ordering::SeqCst), 4, "turned off");
+    assert_eq!(decoded.load(Ordering::SeqCst), 0);
+    host.stop().await;
+}
+
+/// [`Plain`], taking frames up to 400 pixels wide, as a hardware encoder
+/// has a largest size.
+struct Small;
+
+impl EncoderBackend for Small {
+    /// [`PLAIN`].
+    fn offer(&self) -> CodecOffer {
+        PLAIN
+    }
+
+    /// A [`Plain`] encoder.
+    fn encoder(&self) -> Result<Box<dyn VideoEncoder>, CodecError> {
+        Ok(Box::new(Plain))
+    }
+
+    /// Up to 400 pixels wide.
+    fn fits(&self, width: u32, _height: u32) -> bool {
+        width <= 400
+    }
+}
+
+/// Decodes [`Plain`] and keeps the width of every frame it decoded.
+#[derive(Clone, Default)]
+struct Widths(Arc<Mutex<Vec<u32>>>);
+
+impl Widths {
+    /// The widths decoded so far.
+    fn seen(&self) -> Vec<u32> {
+        self.0.lock().expect("widths").clone()
+    }
+}
+
+impl DecoderBackend for Widths {
+    /// [`PLAIN`].
+    fn offer(&self) -> CodecOffer {
+        PLAIN
+    }
+
+    /// A decoder sharing this one's list.
+    fn decoder(&self) -> Result<Box<dyn VideoDecoder>, CodecError> {
+        Ok(Box::new(self.clone()))
+    }
+}
+
+impl VideoDecoder for Widths {
+    /// [`PLAIN`].
+    fn offer(&self) -> CodecOffer {
+        PLAIN
+    }
+
+    /// Keeps the width and takes the bytes as packed pixels.
+    fn decode(&mut self, packet: &Packet<'_>) -> Result<Option<Frame>, CodecError> {
+        self.0.lock().expect("widths").push(packet.width);
+        let pixels = Bytes::copy_from_slice(packet.payload);
+        Frame::packed(packet.width, packet.height, pixels).map(Some)
+    }
+}
+
+/// The next frame of `window` at `size`, skipping the others.
+async fn frame_at(
+    events: &mut Events,
+    window: WindowId,
+    size: Size,
+) -> devlanes_gui_client::DecodedFrame {
+    loop {
+        let frame = frame_of(events, window).await;
+        if Size::new(frame.frame.width(), frame.frame.height()) == size {
+            return frame;
+        }
+    }
+}
+
+/// A window that grows past an encoder's limits is watched in the next
+/// codec while it is that large and comes back, with a keyframe, once it
+/// fits again with a macroblock to spare; another window stays with the
+/// encoder throughout.
+#[tokio::test(start_paused = true)]
+async fn a_window_too_large_for_its_encoder_returns_once_it_fits() {
+    let made = Arc::new(AtomicUsize::new(0));
+    let encoders: Vec<Arc<dyn EncoderBackend>> = vec![
+        Arc::new(Counting {
+            inner: Arc::new(Small),
+            made: made.clone(),
+        }),
+        Arc::new(RawBackend),
+    ];
+    let host = Host::start(TestPatternOptions::default(), |o| o.encoders = encoders).await;
+    let widths = Widths::default();
+    let viewer = ClientOptions::new(Role::Viewer, "ada", "ada")
+        .with_decoders(vec![Arc::new(widths.clone()), Arc::new(RawBackend)]);
+    let (ada, mut events) = host.connect(viewer).await;
+    let window = host.pattern.first_window();
+    assert!(shows_grid(&frame_of(&mut events, window).await.frame));
+    let other = host.pattern.open_window(Size::new(320, 200));
+    assert!(shows_grid(&frame_of(&mut events, other).await.frame));
+    assert_eq!(widths.seen(), [320, 320], "both small windows are plain");
+
+    let (small, large) = (Size::new(320, 200), Size::new(640, 400));
+    ada.resize(window, large).expect("sends");
+    let grown = frame_at(&mut events, window, large).await;
+    assert!(grown.keyframe && shows_grid(&grown.frame));
+    assert!(
+        !widths.seen().contains(&640),
+        "the large window came as raw"
+    );
+
+    ada.resize(window, small).expect("sends");
+    let back = frame_at(&mut events, window, small).await;
+    assert!(
+        back.keyframe,
+        "the codec it returns to starts with a keyframe"
+    );
+    host.pattern.redraw(other);
+    frame_of(&mut events, other).await;
+    let seen = widths.seen();
+    assert!(seen.len() >= 4 && !seen.contains(&640), "{seen:?}");
+    assert_eq!(
+        made.load(Ordering::SeqCst),
+        3,
+        "the other window kept its encoder"
+    );
+
+    // Back under the limit by less than a macroblock, it stays in the next
+    // codec; with a macroblock to spare, it returns.
+    for (width, plain) in [(410, false), (396, false), (384, true)] {
+        ada.resize(window, Size::new(width, 200)).expect("sends");
+        frame_at(&mut events, window, Size::new(width, 200)).await;
+        assert_eq!(widths.seen().contains(&width), plain, "at {width} wide");
+    }
+    host.stop().await;
+}
+
+/// A backend of [`PLAIN`] ranked by window size, as Media Foundation's
+/// software encoder comes first for small windows and the hardware one for
+/// large ones.
+struct Ranked {
+    hardware: bool,
+}
+
+/// The window size, in pixels, above which [`Ranked`]'s hardware comes first.
+const LARGE: u64 = 100_000;
+
+impl EncoderBackend for Ranked {
+    /// [`PLAIN`], in hardware or not.
+    fn offer(&self) -> CodecOffer {
+        CodecOffer {
+            hardware: self.hardware,
+            ..PLAIN
+        }
+    }
+
+    /// A [`Plain`] encoder.
+    fn encoder(&self) -> Result<Box<dyn VideoEncoder>, CodecError> {
+        Ok(Box::new(Plain))
+    }
+
+    /// Software first up to [`LARGE`], hardware above.
+    fn rank(&self, width: u32, height: u32) -> u8 {
+        let large = u64::from(width) * u64::from(height) > LARGE;
+        u8::from(large == self.hardware)
+    }
+}
+
+/// The encoder a window uses follows its size: crossing the backends'
+/// threshold moves it, with a keyframe, and a size change too small to
+/// count does not, so a window dragged around the threshold stays put.
+#[tokio::test(start_paused = true)]
+async fn the_encoder_order_follows_the_window_size_with_hysteresis() {
+    let (software, hardware) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let encoders: Vec<Arc<dyn EncoderBackend>> = vec![
+        Arc::new(Counting {
+            inner: Arc::new(Ranked { hardware: false }),
+            made: software.clone(),
+        }),
+        Arc::new(Counting {
+            inner: Arc::new(Ranked { hardware: true }),
+            made: hardware.clone(),
+        }),
+        Arc::new(RawBackend),
+    ];
+    let host = Host::start(TestPatternOptions::default(), |o| o.encoders = encoders).await;
+    let widths = Widths::default();
+    let viewer = ClientOptions::new(Role::Viewer, "ada", "ada")
+        .with_decoders(vec![Arc::new(widths.clone()), Arc::new(RawBackend)]);
+    let (ada, mut events) = host.connect(viewer).await;
+    let window = host.pattern.first_window();
+    next_frame(&mut events).await;
+    let made = || {
+        (
+            software.load(Ordering::SeqCst),
+            hardware.load(Ordering::SeqCst),
+        )
+    };
+    assert_eq!(made(), (1, 0), "a small window starts in software");
+
+    // Resizes `window` and waits for its first frame at the new size.
+    async fn resize(ada: &Client, events: &mut Events, window: WindowId, size: Size) -> bool {
+        ada.resize(window, size).expect("sends");
+        frame_at(events, window, size).await.keyframe
+    }
+
+    // 104,000 pixels: past the threshold.
+    assert!(resize(&ada, &mut events, window, Size::new(400, 260)).await);
+    assert_eq!(made(), (1, 1), "a large window moves to hardware");
+
+    // 96,000 pixels, below the threshold, and back above it: each within
+    // 8% of the size it was ranked at, too little to count.
+    resize(&ada, &mut events, window, Size::new(400, 240)).await;
+    resize(&ada, &mut events, window, Size::new(410, 250)).await;
+    resize(&ada, &mut events, window, Size::new(384, 250)).await;
+    assert_eq!(
+        made(),
+        (1, 1),
+        "a window dragged around the threshold stays"
+    );
+
+    // 64,000 pixels: far enough to count.
+    let small = resize(&ada, &mut events, window, Size::new(320, 200)).await;
+    assert!(small, "the move starts with a keyframe");
+    assert_eq!(made(), (2, 1), "small again, it moves back to software");
+    host.stop().await;
+}
+
+/// A backend of [`PLAIN`] whose encoders fail after their first frame, like a
+/// hardware encoder that loses its device mid-stream.
+struct Failing;
+
+impl EncoderBackend for Failing {
+    /// [`PLAIN`].
+    fn offer(&self) -> CodecOffer {
+        PLAIN
+    }
+
+    /// An encoder with one good frame in it.
+    fn encoder(&self) -> Result<Box<dyn VideoEncoder>, CodecError> {
+        Ok(Box::new(Failing))
+    }
+}
+
+impl VideoEncoder for Failing {
+    /// [`PLAIN`].
+    fn offer(&self) -> CodecOffer {
+        PLAIN
+    }
+
+    /// The first frame as [`Plain`] does, then an error for every frame.
+    fn encode(
+        &mut self,
+        frame: &Frame,
+        params: &EncodeParams,
+    ) -> Result<Option<Encoded>, CodecError> {
+        match params.keyframe {
+            true => Plain.encode(frame, params),
+            false => Err(CodecError::Backend {
+                codec: "h264",
+                source: "the device was removed".into(),
+            }),
+        }
+    }
+}
+
+/// An encoder failing mid-stream is replaced once, with a keyframe; when the
+/// new one fails too, its viewers go on in the next codec.
+#[tokio::test(start_paused = true)]
+async fn viewers_of_an_encoder_that_fails_mid_stream_go_on_in_another_codec() {
+    let made = Arc::new(AtomicUsize::new(0));
+    let encoders: Vec<Arc<dyn EncoderBackend>> = vec![
+        Arc::new(Counting {
+            inner: Arc::new(Failing),
+            made: made.clone(),
+        }),
+        Arc::new(RawBackend),
+    ];
+    let host = Host::start(TestPatternOptions::default(), |o| o.encoders = encoders).await;
+    let window = host.pattern.first_window();
+    let decoded = Arc::new(AtomicUsize::new(0));
+    let (_ada, mut events) = host.connect(plain_or_raw("ada", &decoded)).await;
+    assert!(shows_grid(&next_frame(&mut events).await.frame));
+    assert_eq!(
+        decoded.load(Ordering::SeqCst),
+        1,
+        "the first frame was plain"
+    );
+
+    animate(&host, window, Duration::from_secs(1));
+    let restarted = next_frame(&mut events).await;
+    assert!(restarted.keyframe, "the new encoder starts with a keyframe");
+    assert_eq!(decoded.load(Ordering::SeqCst), 2, "from the new encoder");
+    let after = next_frame(&mut events).await;
+    assert!(after.keyframe, "the new codec starts with a keyframe");
+    assert!(shows_grid(&after.frame));
+    let (more, _) = count_frames(&mut events, Duration::from_secs(1), Duration::ZERO).await;
+    assert!(more > 0, "frames go on after the switch");
+    assert_eq!(
+        decoded.load(Ordering::SeqCst),
+        2,
+        "every later frame came as raw"
+    );
+    assert_eq!(made.load(Ordering::SeqCst), 2, "replaced once");
     host.stop().await;
 }
 

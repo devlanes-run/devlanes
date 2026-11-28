@@ -91,11 +91,16 @@ pub async fn add_wsl(data: &mut Value) {
 /// How long `devlanes-gui version` may take.
 const GUI_VERSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Adds `gui` (`{path, installed, version, expected, error, backend, fix}`)
-/// to doctor `data` while GUI services are on, by running `devlanes-gui
-/// version`; otherwise `data` is left as it is, since users cannot reach the
-/// feature yet. `fix` is the command that installs `devlanes-gui` again the
-/// way devlanes was installed.
+/// How long `devlanes-gui codecs` may take. It loads OpenH264 and starts an
+/// encoder and a decoder, or enumerates Media Foundation's transforms, which
+/// took well under a second where it was measured; a slow driver gets more.
+const GUI_CODECS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Adds `gui` (`{path, installed, version, expected, error, backend, fix,
+/// codecs}`) to doctor `data` while GUI services are on, by running
+/// `devlanes-gui version` and `devlanes-gui codecs`; otherwise `data` is
+/// left as it is, since users cannot reach the feature yet. `fix` is the
+/// command that installs `devlanes-gui` again the way devlanes was installed.
 pub async fn add_gui(data: &mut Value) {
     let options = crate::gui::options().await;
     if !options.enabled {
@@ -124,6 +129,12 @@ pub async fn add_gui(data: &mut Value) {
     } else {
         (None, None)
     };
+    // The codecs only from a devlanes-gui that runs; an older one without
+    // the subcommand reports nothing.
+    let codecs = match version {
+        Some(_) => gui_codecs(&path).await,
+        None => Value::Null,
+    };
     if let Some(data) = data.as_object_mut() {
         data.insert(
             "gui".into(),
@@ -135,8 +146,28 @@ pub async fn add_gui(data: &mut Value) {
                 "error": error,
                 "backend": options.backend,
                 "fix": fix,
+                "codecs": codecs,
             }),
         );
+    }
+}
+
+/// What `devlanes-gui codecs` at `path` prints (`{h264, problems}`: the
+/// H.264 library this machine has, or why there is none), or `null` when it
+/// did not answer. It loads OpenH264 or asks Media Foundation, which
+/// `devlanes` itself never does.
+async fn gui_codecs(path: &Path) -> Value {
+    let mut command = tokio::process::Command::new(path);
+    command
+        .arg("codecs")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    match tokio::time::timeout(GUI_CODECS_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) if output.status.success() => {
+            serde_json::from_slice(&output.stdout).unwrap_or(Value::Null)
+        }
+        _ => Value::Null,
     }
 }
 

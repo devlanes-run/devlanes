@@ -60,6 +60,98 @@ pub struct Ready {
     /// Whether the display is the machine's real desktop, so a local viewer
     /// is not needed.
     pub real_desktop: bool,
+    /// Codecs the host lacks on this machine, such as H.264 without
+    /// OpenH264; its viewers then get the next codec both ends have, `raw`
+    /// at worst. Left out of the line when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub codecs: Vec<CodecProblem>,
+}
+
+/// The most [`CodecProblem`]s a ready line may carry.
+pub const MAX_CODEC_PROBLEMS: usize = 8;
+
+/// A codec a GUI host or viewer machine lacks, and why: in the host's ready
+/// line, and in `devlanes-gui codecs`, which `devlanes doctor` reads.
+/// Clients word it; the fields are facts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodecProblem {
+    /// The codec's name, such as `h264`.
+    pub codec: String,
+    /// Which side is missing: a host needs to encode, a viewer to decode.
+    #[serde(default)]
+    pub side: CodecSide,
+    /// Why it is missing.
+    pub reason: CodecReason,
+    /// The library that is missing or refused, such as `OpenH264`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
+    /// The version found, for [`CodecReason::UnsupportedVersion`] and
+    /// [`CodecReason::DecoderTooOld`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub found: Option<String>,
+    /// The versions devlanes uses on that side, such as `2.2 to 2.7`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported: Option<String>,
+    /// The loader's or the OS's own message, for logs.
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// Why a codec is missing. Unknown words read as [`CodecReason::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodecReason {
+    /// Its library is not installed.
+    MissingLibrary,
+    /// Its library is a version devlanes cannot use.
+    UnsupportedVersion,
+    /// Its library encodes, but its decoder has a known security flaw
+    /// (OpenH264 before 2.6), so this machine does not decode with it.
+    DecoderTooOld,
+    /// The OS has no such codec, or it did not start.
+    Unavailable,
+    /// Anything else; `detail` says what.
+    #[serde(other)]
+    Other,
+}
+
+impl CodecReason {
+    /// The word on the line, such as `missing_library`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::MissingLibrary => "missing_library",
+            Self::UnsupportedVersion => "unsupported_version",
+            Self::DecoderTooOld => "decoder_too_old",
+            Self::Unavailable => "unavailable",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Which side of a codec a [`CodecProblem`] is about. Unknown words read as
+/// [`CodecSide::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodecSide {
+    /// Encoding, which a GUI host does.
+    Encode,
+    /// Decoding, which a viewer does.
+    Decode,
+    /// A side this build does not know, or none given.
+    #[default]
+    #[serde(other)]
+    Other,
+}
+
+impl CodecSide {
+    /// The word on the line, such as `encode`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Encode => "encode",
+            Self::Decode => "decode",
+            Self::Other => "other",
+        }
+    }
 }
 
 /// Why [`Ready::parse`] refused a line.
@@ -83,6 +175,9 @@ pub enum ReadyError {
     /// A variable set twice, removed twice, or both set and removed.
     #[error("the GUI host names the variable {0:?} more than once")]
     Repeated(String),
+    /// More than [`MAX_CODEC_PROBLEMS`] codec problems.
+    #[error("the GUI host lists {0} codec problems, more than {MAX_CODEC_PROBLEMS}")]
+    Codecs(usize),
 }
 
 /// The line as it is read, before the checks of [`Ready::parse`]. Unknown
@@ -96,6 +191,9 @@ struct Wire {
     set: Pairs,
     remove: Vec<String>,
     real_desktop: bool,
+    /// Added after the first release of the format, so a line without it reads.
+    #[serde(default)]
+    codecs: Vec<CodecProblem>,
 }
 
 /// Just the format version, read before anything else.
@@ -172,6 +270,7 @@ impl Ready {
             set,
             remove,
             real_desktop,
+            codecs: Vec::new(),
         }
     }
 
@@ -225,6 +324,9 @@ impl Ready {
             }
             remove.push(name);
         }
+        if wire.codecs.len() > MAX_CODEC_PROBLEMS {
+            return Err(ReadyError::Codecs(wire.codecs.len()));
+        }
         Ok(Self {
             ready: wire.ready,
             devlanes: wire.devlanes,
@@ -233,6 +335,7 @@ impl Ready {
             set,
             remove,
             real_desktop: wire.real_desktop,
+            codecs: wire.codecs,
         })
     }
 }
@@ -420,6 +523,31 @@ mod tests {
         let mut value: serde_json::Value = serde_json::from_str(&line).expect("json");
         value["later"] = serde_json::json!({"field": 1});
         assert_eq!(Ready::parse(&value.to_string()).expect("reads"), ready);
+
+        // Codec problems read back; a reason this build does not know reads
+        // as other, and more than the cap is refused.
+        let mut lacking = ready.clone();
+        lacking.codecs = vec![CodecProblem {
+            codec: "h264".into(),
+            side: CodecSide::Encode,
+            reason: CodecReason::UnsupportedVersion,
+            library: Some("OpenH264".into()),
+            found: Some("3.0.0".into()),
+            supported: Some("2.2 to 2.7".into()),
+            detail: String::new(),
+        }];
+        let line = lacking.to_line();
+        assert_eq!(Ready::parse(&line).expect("reads"), lacking);
+        let mut value: serde_json::Value = serde_json::from_str(&line).expect("json");
+        value["codecs"][0]["reason"] = serde_json::json!("gone_fishing");
+        let read = Ready::parse(&value.to_string()).expect("reads");
+        assert_eq!(read.codecs[0].reason, CodecReason::Other);
+        value["codecs"] =
+            serde_json::json!(vec![value["codecs"][0].clone(); MAX_CODEC_PROBLEMS + 1]);
+        assert!(matches!(
+            Ready::parse(&value.to_string()),
+            Err(ReadyError::Codecs(_))
+        ));
     }
 
     #[test]

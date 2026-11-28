@@ -5,7 +5,7 @@ use devlanes_core::paths::names_a_path;
 use devlanes_proto::{LaneSummary, RpcError, UnitDrift};
 use serde_json::{Value, json};
 
-use super::{compact_fields, display_value, list, text};
+use super::{clean, compact_fields, display_value, list, text};
 use crate::Hint;
 
 /// A field as text, `unknown` when absent.
@@ -2053,6 +2053,63 @@ pub(crate) fn gui_note(gui: &devlanes_proto::GuiStatus) -> Option<String> {
         _ => None,
     }
 }
+
+/// What a running GUI host's missing codecs mean for its windows: a note per
+/// codec, such as H.264 without OpenH264, after which viewers get the whole
+/// pictures of `raw`, which every host has.
+pub(crate) fn gui_codec_notes(gui: &devlanes_proto::GuiStatus) -> Vec<String> {
+    gui.codecs
+        .iter()
+        .map(|problem| {
+            let why = codec_problem(
+                &problem.reason,
+                problem.library.as_deref().unwrap_or_default(),
+                problem.found.as_deref().unwrap_or_default(),
+                problem.supported.as_deref().unwrap_or_default(),
+            );
+            format!(
+                "its GUI host cannot encode {} ({why}), so its windows stream as whole pictures, which is slow over a network; devlanes doctor on the machine that runs it has the details",
+                codec_name(&problem.codec)
+            )
+        })
+        .collect()
+}
+
+/// A codec's name for people, such as `H.264` for `h264`.
+pub(crate) fn codec_name(codec: &str) -> String {
+    match codec {
+        "h264" => "H.264".to_owned(),
+        other => clean(other),
+    }
+}
+
+/// Why a side of a codec is missing, from the facts `devlanes-gui` reports
+/// (`reason`, the library, the version found and the ones devlanes uses).
+pub(crate) fn codec_problem(reason: &str, library: &str, found: &str, supported: &str) -> String {
+    let (library, found, supported) = (clean(library), clean(found), clean(supported));
+    match reason {
+        devlanes_proto::GUI_CODEC_MISSING_LIBRARY if !library.is_empty() => {
+            format!("{library} is not installed")
+        }
+        devlanes_proto::GUI_CODEC_UNSUPPORTED_VERSION if !library.is_empty() => {
+            format!("{library} {found} is installed, and devlanes uses {supported}")
+        }
+        devlanes_proto::GUI_CODEC_DECODER_TOO_OLD if !library.is_empty() => format!(
+            "{library} {found} is installed, and devlanes decodes with {supported} only, since older versions have a security flaw in their decoder"
+        ),
+        devlanes_proto::GUI_CODEC_UNAVAILABLE => "the OS has none, or it did not start".to_owned(),
+        // A reason from another devlanes-gui version; the detail, where
+        // there is one, says more.
+        _ => "devlanes-gui reports it unavailable".to_owned(),
+    }
+}
+
+/// How to install OpenH264 with the package managers of the common Linux
+/// distributions, for `doctor`, only where it is missing. Package names are
+/// each distribution's own: Debian and Ubuntu name the library package after
+/// its soname, which changes between releases; Fedora's package comes from
+/// its `fedora-cisco-openh264` repository; Alpine has it in `community`.
+pub(crate) const OPENH264_INSTALL: &str = "install it with the package manager: apt install libopenh264-8 (libopenh264-7 on Debian 12 and Ubuntu 24.04, libopenh264-6 on Ubuntu 22.04), dnf install openh264 (from Fedora's fedora-cisco-openh264 repository), pacman -S openh264 or apk add openh264; then restart the GUI services. The versions in Debian 12 and Ubuntu 22.04 and 24.04 only encode; showing GUI windows on this machine needs OpenH264 2.6 or 2.7, as in Debian 13 and Ubuntu 26.04";
 
 /// For a GUI service whose host did not start, why (the end of `couldn't
 /// start: ...`) and the command that helps, for the CLI and the TUI; `None`

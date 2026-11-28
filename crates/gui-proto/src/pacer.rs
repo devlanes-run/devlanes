@@ -26,6 +26,10 @@ pub const MAX_IN_FLIGHT: usize = 3;
 /// only stops one viewer from holding back the others, it does not end anything.
 pub const STALL_AFTER: Duration = Duration::from_secs(2);
 
+/// How long the picture must stay unchanged, with every frame acknowledged,
+/// before a lossy stream sends its sharp-text refinement.
+const REFINE_AFTER: Duration = Duration::from_millis(400);
+
 /// What the encoder aims for. Derived from acknowledgement timing; there are
 /// no user settings.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,6 +52,9 @@ pub struct Encode<F> {
     pub seq: u64,
     /// Whether the encoder must make a keyframe.
     pub keyframe: bool,
+    /// Whether this is the sharp-text refinement: the last frame again, once
+    /// the picture stopped changing, coded at the finer quality in `target`.
+    pub refine: bool,
     /// The viewers to send it to.
     pub recipients: Vec<SessionId>,
     /// The rate to encode at.
@@ -66,6 +73,24 @@ struct Viewer {
     /// The viewer's last honored keyframe request.
     key_request: KeyRequest,
     rate: RateController,
+    /// Bytes a second this viewer's link carries, from large frames (keyframes,
+    /// refinements, frames whose acknowledgement took several round trips):
+    /// their size over the time from sending to acknowledgement less the
+    /// base delay. `None` until one was measured.
+    throughput: Option<f64>,
+    /// When `throughput` was last measured; older than [`RATE_MAX_AGE`] it
+    /// counts as unmeasured.
+    measured_at: Option<Instant>,
+}
+
+impl Viewer {
+    /// The throughput measured within [`RATE_MAX_AGE`] of `now`.
+    fn fresh_rate(&self, now: Instant) -> Option<f64> {
+        let fresh = self
+            .measured_at
+            .is_some_and(|at| now.saturating_duration_since(at) < RATE_MAX_AGE);
+        self.throughput.filter(|_| fresh)
+    }
 }
 
 /// Where a viewer's last honored keyframe request stands.
@@ -93,7 +118,110 @@ pub struct Pacer<F> {
     next_seq: u64,
     last_encode: Option<Instant>,
     dropped: u64,
+    /// Whether the stream's codec is lossy, so a still picture gets a refinement.
+    refinement: bool,
+    /// The quantizer the picture in `last` was refined at; `None` while it
+    /// was not.
+    refined_qp: Option<u8>,
+    /// Recent frames: what was asked of each and, once the host reported
+    /// it, its size, for throughput samples and refinement estimates.
+    sent: VecDeque<Sent>,
+    /// The size and quality of the stream's last keyframe at its current
+    /// size, which a refinement's size is estimated from.
+    last_keyframe: Option<(usize, u8)>,
+    /// The first sequence number at the window's current size.
+    size_from: u64,
+    /// What refinements of this stream really cost against their raw
+    /// estimate ([`Pacer::estimate`]), a running average.
+    refine_ratio: f64,
+    /// When a refinement was last sent as a probe of a link too slow for one.
+    last_probe: Option<Instant>,
 }
+
+/// One frame the pacer asked for.
+#[derive(Debug, Clone, Copy)]
+struct Sent {
+    seq: u64,
+    quality: u8,
+    refine: bool,
+    /// For a refinement, the raw estimate of its bytes.
+    estimate: Option<f64>,
+    /// The bytes sent and whether it was a keyframe, once reported.
+    size: Option<(usize, bool)>,
+}
+
+/// The longest a refinement may occupy the slowest viewer's link; a slower
+/// link gets a coarser refinement or none, since the next change would wait
+/// behind it.
+const REFINE_LINK_BUDGET: Duration = Duration::from_millis(300);
+
+/// How many quality points apart the refinement qualities tried are, from
+/// 100 down.
+const REFINE_QUALITY_STEP: u8 = 20;
+
+/// What a refinement costs against a keyframe at its quantizer, before a
+/// refinement of the stream measured it: a refinement is a predicted frame
+/// of the same picture. Microsoft's and NVIDIA's encoders measured 0.26 on
+/// text at 640x360.
+const REFINE_RATIO: f64 = 0.3;
+
+/// When no refinement fits the link, or a viewer's link is not measured,
+/// the lowest one is still sent this often, so the link is measured again
+/// and refinements come back when it is faster.
+const PROBE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The most of a measured link's time a probe may take: on a slower link
+/// no probe goes out, since it would sit in front of the user's next input.
+const PROBE_ALLOWANCE: Duration = Duration::from_secs(1);
+
+/// How long a measured throughput counts. An older one counts as unmeasured,
+/// so a link measured once very low is probed again.
+const RATE_MAX_AGE: Duration = Duration::from_secs(300);
+
+/// The lowest the calibration of refinement estimates goes, so one estimate
+/// inflated by a large frame among the recent ones cannot make the next
+/// refinements look much cheaper than they are.
+const MIN_REFINE_RATIO: f64 = 0.1;
+
+/// The refinement qualities tried, finest first: 100, 80, 60 and so on down
+/// to one step above the stream's `quality`.
+fn refine_candidates(quality: u8) -> Vec<u8> {
+    let lowest = quality.saturating_add(REFINE_QUALITY_STEP).min(100);
+    (0..)
+        .map(|n| 100u8.saturating_sub(n * REFINE_QUALITY_STEP))
+        .take_while(|q| *q > lowest)
+        .chain([lowest])
+        .collect()
+}
+
+/// How many frames the pacer remembers for throughput samples.
+const KEPT_FRAMES: usize = 16;
+
+/// The quantizer steps a refinement is at most finer than its stream: a
+/// refinement of text at 640x360 cost Microsoft's and NVIDIA's encoders
+/// twice the stream's keyframe at 21 steps finer and under 1.5 times it at
+/// 15, which still took three quarters of the blur away.
+pub const MAX_REFINE_STEPS: u8 = 15;
+
+/// The H.264 quantizer (0 best to 51 worst) for a quality from 0 to 100: 44,
+/// blocky but small, at 0, down to 18 at 100. The encoders code at it; six
+/// steps double a frame's size.
+pub fn quantizer(quality: u8) -> u8 {
+    44 - (u32::from(quality.min(100)) * 26 / 100) as u8
+}
+
+/// The quantizer of a refinement at `quality` of a stream coded at
+/// `stream_qp`: at most [`MAX_REFINE_STEPS`] finer than the stream, and
+/// never coarser.
+pub fn refine_qp(quality: u8, stream_qp: u8) -> u8 {
+    quantizer(quality)
+        .max(stream_qp.saturating_sub(MAX_REFINE_STEPS))
+        .min(stream_qp)
+}
+
+/// A frame whose acknowledgement took this many times the link's base delay
+/// is large enough that the time measures the link's throughput.
+const LARGE_FRAME_DELAY: f64 = 3.0;
 
 impl<F: Clone> Default for Pacer<F> {
     /// A pacer with no viewers.
@@ -113,7 +241,156 @@ impl<F: Clone> Pacer<F> {
             next_seq: 1,
             last_encode: None,
             dropped: 0,
+            refinement: false,
+            refined_qp: None,
+            sent: VecDeque::new(),
+            last_keyframe: None,
+            size_from: 1,
+            refine_ratio: REFINE_RATIO,
+            last_probe: None,
         }
+    }
+
+    /// The same pacer for a lossy codec: once the picture has not changed
+    /// for 400 ms and every viewer acknowledged the last frame, it asks for
+    /// that frame again as a refinement at the best quality the slowest
+    /// viewer's link carries in 300 ms. When none fits, or a link is not
+    /// measured yet, the lowest refinement still goes out at most every 30
+    /// seconds, which measures the links again; a refinement that measured
+    /// them fast is followed by a finer one.
+    pub fn with_refinement(mut self) -> Self {
+        self.refinement = true;
+        self
+    }
+
+    /// The host sent frame `seq` as `bytes` bytes, a keyframe or not. Sizes
+    /// give the throughput of each viewer when it acknowledges a large frame
+    /// and estimate what a refinement would cost; a refinement's own size
+    /// calibrates those estimates.
+    pub fn encoded(&mut self, seq: u64, bytes: usize, keyframe: bool) {
+        let Some(sent) = self.sent.iter_mut().find(|s| s.seq == seq) else {
+            return;
+        };
+        sent.size = Some((bytes, keyframe));
+        if keyframe && seq >= self.size_from {
+            self.last_keyframe = Some((bytes, sent.quality));
+        }
+        if let Some(estimate) = sent.estimate.filter(|e| *e > 0.0) {
+            let ratio = (bytes as f64 / estimate).clamp(MIN_REFINE_RATIO, 4.0);
+            self.refine_ratio = average(Some(self.refine_ratio), ratio, 0.5);
+        }
+    }
+
+    /// The raw estimate of a refinement's bytes at `quality` of a stream
+    /// at `stream_quality`: what a keyframe would cost at the refinement's
+    /// quantizer, scaled in quantizer steps (six double the size) from the
+    /// last keyframe or, when larger, from a recent frame at this size,
+    /// since a keyframe of an early, emptier picture understates the
+    /// picture now.
+    fn estimate(&self, stream_quality: u8, quality: u8) -> Option<f64> {
+        let target = refine_qp(quality, quantizer(stream_quality));
+        let scaled = |bytes: usize, at: u8| {
+            let steps = f64::from(quantizer(at)) - f64::from(target);
+            bytes as f64 * (steps / 6.0).exp2()
+        };
+        let recent = self
+            .sent
+            .iter()
+            .filter(|s| s.seq >= self.size_from && !s.refine)
+            .filter_map(|s| s.size.map(|(bytes, _)| scaled(bytes, s.quality)));
+        self.last_keyframe
+            .map(|(bytes, at)| scaled(bytes, at))
+            .into_iter()
+            .chain(recent)
+            .reduce(f64::max)
+    }
+
+    /// The refinement to send now, its quality and whether it is a probe:
+    /// the finest of 100, 80, 60 and so on down to one step above the
+    /// stream's quality whose calibrated estimate the slowest viewer's link
+    /// carries within [`REFINE_LINK_BUDGET`], when finer than the one the
+    /// picture had; otherwise the lowest step as a probe, when the picture
+    /// has had no refinement, [`PROBE_INTERVAL`] has passed since the last
+    /// probe, and a link is unmeasured or the slowest carries the probe
+    /// within [`PROBE_ALLOWANCE`]. `None` with nothing at this size to
+    /// judge by.
+    fn refine_plan(&self, now: Instant) -> Option<(u8, bool)> {
+        let stream = self.target().quality;
+        let candidates = refine_candidates(stream);
+        let lowest = *candidates.last()?;
+        let (slowest, slowest_measured) = self.slowest_rate(now);
+        let fits = |quality: u8, within: Duration, rate: Option<f64>| {
+            matches!(
+                (self.refine_cost(stream, quality), rate),
+                (Some(cost), Some(rate)) if cost <= rate * within.as_secs_f64()
+            )
+        };
+        let fitting = candidates
+            .iter()
+            .copied()
+            .find(|q| fits(*q, REFINE_LINK_BUDGET, slowest));
+        let qp = |quality: u8| refine_qp(quality, quantizer(stream));
+        match fitting {
+            // Finer than the picture had: a lower quantizer, since qualities
+            // above the cap share one.
+            Some(quality) if self.refined_qp.is_none_or(|at| qp(quality) < at) => {
+                Some((quality, false))
+            }
+            Some(_) => None,
+            None => {
+                // With no link measured the probe goes out unchecked; with any
+                // measured, only when the lowest step takes at most
+                // PROBE_ALLOWANCE of the slowest of them, so a slow link is
+                // not held up by probes. A keyframe measures it again.
+                let worth =
+                    slowest_measured.is_none() || fits(lowest, PROBE_ALLOWANCE, slowest_measured);
+                let probe = worth
+                    && self.last_keyframe.is_some()
+                    && self.refined_qp.is_none()
+                    && self.last_probe.is_none_or(|at| now >= at + PROBE_INTERVAL);
+                probe.then_some((lowest, true))
+            }
+        }
+    }
+
+    /// The throughput of the slowest viewer not set aside, `None` while one
+    /// of them is not measured within [`RATE_MAX_AGE`] of `now`; and the
+    /// slowest of those that are, `None` when none is.
+    fn slowest_rate(&self, now: Instant) -> (Option<f64>, Option<f64>) {
+        let active = || self.viewers.iter().filter(|v| !v.stalled);
+        let every = active()
+            .map(|v| v.fresh_rate(now))
+            .try_fold(f64::INFINITY, |slowest, rate| Some(slowest.min(rate?)));
+        let measured = active().filter_map(|v| v.fresh_rate(now)).reduce(f64::min);
+        (every, measured)
+    }
+
+    /// The calibrated estimate of a refinement's bytes at `quality` of a
+    /// stream at `stream_quality`.
+    fn refine_cost(&self, stream_quality: u8, quality: u8) -> Option<f64> {
+        self.estimate(stream_quality, quality)
+            .map(|estimate| estimate * self.refine_ratio)
+    }
+
+    /// Whether the picture has settled for a refinement at `now`: a lossy
+    /// stream, nothing new waiting, every viewer caught up, and the last
+    /// frame [`REFINE_AFTER`] old.
+    fn settled(&self, now: Instant) -> bool {
+        self.refinement
+            && self.last.is_some()
+            && self.pending.is_none()
+            && self.last_stale_since.is_none()
+            && self.last_encode.is_some_and(|at| now >= at + REFINE_AFTER)
+            && self
+                .viewers
+                .iter()
+                .filter(|v| !v.stalled)
+                .all(|v| v.in_flight.is_empty())
+    }
+
+    /// The refinement due at `now`, its quality and whether it is a probe.
+    fn refine_due(&self, now: Instant) -> Option<(u8, bool)> {
+        self.settled(now).then(|| self.refine_plan(now)).flatten()
     }
 
     /// Adds a viewer, which gets a keyframe next.
@@ -126,6 +403,8 @@ impl<F: Clone> Pacer<F> {
             stalled: false,
             key_request: KeyRequest::Idle,
             rate: RateController::new(),
+            throughput: None,
+            measured_at: None,
         });
     }
 
@@ -166,6 +445,16 @@ impl<F: Clone> Pacer<F> {
         viewer.key_request = KeyRequest::Waiting;
     }
 
+    /// The stream's encoder was replaced: every viewer needs a keyframe, and
+    /// what is on its way will never be acknowledged as part of the stream
+    /// the new encoder starts.
+    pub fn restart(&mut self) {
+        for viewer in &mut self.viewers {
+            viewer.needs_keyframe = true;
+            viewer.in_flight.clear();
+        }
+    }
+
     /// The host applied a size change to the window at `now`. Returns the
     /// first sequence number of frames captured after the change, for
     /// [`crate::HostMessage::ResizeApplied`].
@@ -181,6 +470,9 @@ impl<F: Clone> Pacer<F> {
     pub fn resize_applied(&mut self, now: Instant) -> u64 {
         self.pending = None;
         self.last_stale_since = Some(now);
+        // Frames of the old size say nothing about refinements at the new one.
+        self.last_keyframe = None;
+        self.size_from = self.next_seq;
         self.next_seq
     }
 
@@ -219,7 +511,7 @@ impl<F: Clone> Pacer<F> {
         if active.any(|v| v.in_flight.len() >= MAX_IN_FLIGHT) {
             return None;
         }
-        let target = self.target();
+        let mut target = self.target();
         if self
             .last_encode
             .is_some_and(|last| now < last + target.frame_interval)
@@ -227,13 +519,40 @@ impl<F: Clone> Pacer<F> {
             return None;
         }
         let keyframe = self.viewers.iter().any(|v| !v.stalled && v.needs_keyframe);
+        let plan = if keyframe { None } else { self.refine_due(now) };
         let frame = match self.pending.take() {
             Some(frame) => frame,
             None if keyframe => self.cached(now)?.clone(),
+            None if plan.is_some() => self.last.clone()?,
             None => return None,
         };
+        // A keyframe (a viewer joining, say) is coded at the stream's quality
+        // and goes to every viewer, so the picture is refined again after it.
+        let refine = plan.is_some();
+        let mut estimate = None;
+        match plan {
+            Some((quality, probe)) => {
+                estimate = self.estimate(target.quality, quality);
+                self.refined_qp = Some(refine_qp(quality, quantizer(target.quality)));
+                if probe {
+                    self.last_probe = Some(now);
+                }
+                target.quality = quality;
+            }
+            None => self.refined_qp = None,
+        }
         let seq = self.next_seq;
         self.next_seq += 1;
+        if self.sent.len() >= KEPT_FRAMES {
+            self.sent.pop_front();
+        }
+        self.sent.push_back(Sent {
+            seq,
+            quality: target.quality,
+            refine,
+            estimate,
+            size: None,
+        });
         let mut recipients = Vec::new();
         for viewer in self.viewers.iter_mut().filter(|v| !v.stalled) {
             viewer.in_flight.push_back((seq, now));
@@ -252,6 +571,7 @@ impl<F: Clone> Pacer<F> {
             frame,
             seq,
             keyframe,
+            refine,
             recipients,
             target,
         })
@@ -267,9 +587,28 @@ impl<F: Clone> Pacer<F> {
 
     /// The viewer decoded every frame up to `seq`.
     pub fn ack(&mut self, id: SessionId, seq: u64, now: Instant) {
+        let frame = self.sent.iter().find(|s| s.seq == seq).copied();
         let Some(viewer) = self.viewer(id) else {
             return;
         };
+        let sent = viewer
+            .in_flight
+            .iter()
+            .find(|(sent, _)| *sent == seq)
+            .map(|(_, at)| *at);
+        // Only a large frame measures the link: a small one's time is the
+        // round trip. The base delay is taken off what remains, so there is
+        // no sample before it is known.
+        if let (Some(frame), Some(at), Some(base)) = (frame, sent, viewer.rate.base_delay())
+            && let Some((bytes, keyframe)) = frame.size
+        {
+            let delay = now.saturating_duration_since(at).as_secs_f64();
+            if keyframe || frame.refine || delay >= LARGE_FRAME_DELAY * base.max(0.001) {
+                let sample = bytes as f64 / (delay - base).max(0.001);
+                viewer.throughput = Some(average(viewer.throughput, sample, SHORT_WEIGHT));
+                viewer.measured_at = Some(now);
+            }
+        }
         let mut sent_at = None;
         while let Some(&(sent, at)) = viewer.in_flight.front() {
             if sent > seq {
@@ -312,8 +651,28 @@ impl<F: Clone> Pacer<F> {
         if self.pending.is_some() {
             return Some(interval);
         }
-        if self.last.is_none() || !active().any(|v| v.needs_keyframe) {
-            return None;
+        self.last.as_ref()?;
+        if !active().any(|v| v.needs_keyframe) {
+            // The refinement, once the picture has been still long enough;
+            // an acknowledgement still out makes it wait for that instead.
+            let last = self.last_encode?;
+            let still = (last + REFINE_AFTER).max(interval);
+            if !self.settled(still) {
+                return None;
+            }
+            // A probe that is not due yet is due once its interval passed.
+            let probe = self
+                .last_probe
+                .map_or(still, |at| (at + PROBE_INTERVAL).max(still));
+            // So is one held back by a slow rate once that rate is too old to count.
+            let aged = active()
+                .filter_map(|v| v.measured_at)
+                .map(|at| (at + RATE_MAX_AGE).max(probe))
+                .min()
+                .unwrap_or(probe);
+            return [still, probe, aged]
+                .into_iter()
+                .find(|at| self.refine_plan(*at).is_some());
         }
         // A keyframe from the cache, once a resize no longer holds it back.
         let usable = self
@@ -437,6 +796,11 @@ impl RateController {
     /// The target at the current level.
     fn target(&self) -> Target {
         level_target(self.level)
+    }
+
+    /// The lowest delay seen over [`BASE_WINDOW`], in seconds.
+    fn base_delay(&self) -> Option<f64> {
+        self.base.front().map(|(_, delay)| *delay)
     }
 
     /// One frame's delay from sending to decode.
@@ -757,6 +1121,309 @@ mod tests {
         let next = step(&mut pacer, 99, now + ms(100), &[]).expect("frame for A");
         assert!(!next.keyframe);
         assert_eq!(next.recipients, vec![A]);
+    }
+
+    /// A lossy stream whose picture stops changing sends the last frame once
+    /// more as a refinement, only after every viewer acknowledged it and
+    /// [`REFINE_AFTER`] passed; a lossless stream never does.
+    #[test]
+    fn a_still_picture_is_refined_once_after_it_settles() {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new().with_refinement();
+        pacer.add_viewer(A);
+        let first = step(&mut pacer, 1, t0, &[]).expect("first frame");
+        assert!(!first.refine);
+        pacer.encoded(first.seq, 10_000, true);
+        // Unacknowledged, the frame may still be on its way: no refinement.
+        assert_eq!(pacer.wake_at(t0 + REFINE_AFTER), None);
+        assert_eq!(pacer.poll(t0 + REFINE_AFTER * 2), None);
+        pacer.ack(A, first.seq, t0 + ms(10));
+        measured(&mut pacer, A, 1_000_000.0);
+        assert_eq!(pacer.wake_at(t0 + ms(20)), Some(t0 + REFINE_AFTER));
+        assert_eq!(pacer.poll(t0 + REFINE_AFTER - ms(1)), None);
+        let refined = pacer.poll(t0 + REFINE_AFTER).expect("the refinement");
+        assert!(refined.refine && !refined.keyframe);
+        assert_eq!((refined.frame, refined.target.quality), (1, 100));
+        pacer.ack(A, refined.seq, t0 + REFINE_AFTER + ms(5));
+        assert_eq!(pacer.wake_at(t0 + REFINE_AFTER * 3), None, "only once");
+        assert_eq!(pacer.poll(t0 + REFINE_AFTER * 3), None);
+
+        // A new picture is refined again once it settles.
+        let t1 = t0 + REFINE_AFTER * 4;
+        let next = step(&mut pacer, 2, t1, &[(A, ms(5))]).expect("new picture");
+        assert!(!next.refine);
+        let again = pacer.poll(t1 + REFINE_AFTER).expect("refined again");
+        assert_eq!((again.frame, again.refine), (2, true));
+
+        let mut lossless = Pacer::new();
+        lossless.add_viewer(A);
+        step(&mut lossless, 1, t0, &[(A, ms(5))]).expect("frame");
+        assert_eq!(lossless.wake_at(t0 + ms(10)), None);
+        assert_eq!(lossless.poll(t0 + REFINE_AFTER * 2), None);
+    }
+
+    /// Sets `viewer`'s measured throughput to `rate` bytes a second, as
+    /// measured now.
+    fn measured(pacer: &mut Pacer<u32>, viewer: SessionId, rate: f64) {
+        measured_at(pacer, viewer, rate, Instant::now());
+    }
+
+    /// Sets `viewer`'s measured throughput to `rate`, as measured at `at`.
+    fn measured_at(pacer: &mut Pacer<u32>, viewer: SessionId, rate: f64, at: Instant) {
+        let viewer = pacer.viewer(viewer).expect("the viewer");
+        viewer.throughput = Some(rate);
+        viewer.measured_at = Some(at);
+    }
+
+    /// The refinement after a keyframe of `bytes` at the stream's quality,
+    /// `level` setting it (0.0 is quality 20, 0.5 quality 55), on a link
+    /// measured at `rate` bytes a second: its quality and whether it is a
+    /// probe, or `None` when it is skipped.
+    fn refinement_after(level: f64, bytes: usize, rate: f64) -> Option<(u8, bool)> {
+        let (pacer, refined) = refined_after(level, bytes, rate);
+        let probe = pacer.last_probe.is_some();
+        refined.map(|r| (r.target.quality, probe))
+    }
+
+    /// The pacer and its refinement after a keyframe of `bytes` at `level`
+    /// on a link measured at `rate`, as [`refinement_after`].
+    fn refined_after(level: f64, bytes: usize, rate: f64) -> (Pacer<u32>, Option<Encode<u32>>) {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new().with_refinement();
+        pacer.add_viewer(A);
+        pacer.viewer(A).expect("A").rate.level = level;
+        let first = step(&mut pacer, 1, t0, &[]).expect("first frame");
+        pacer.encoded(first.seq, bytes, true);
+        pacer.ack(A, first.seq, t0 + ms(10));
+        pacer.viewer(A).expect("A").rate.level = level;
+        measured(&mut pacer, A, rate);
+        let at = t0 + REFINE_AFTER;
+        let due = pacer.wake_at(at) == Some(at);
+        let refined = pacer.poll(at);
+        assert_eq!(due, refined.is_some(), "the timer agrees with poll");
+        if let Some(r) = &refined {
+            assert!(r.refine && !r.keyframe);
+        }
+        (pacer, refined)
+    }
+
+    /// Checks that `quality`, chosen for a stream at `stream` on a link at
+    /// `rate`, is finer than the stream, fits the budget, and is the finest
+    /// candidate that does.
+    fn assert_finest(pacer: &Pacer<u32>, stream: u8, quality: u8, rate: f64) {
+        let budget = rate * REFINE_LINK_BUDGET.as_secs_f64();
+        let cost = |q: u8| pacer.refine_cost(stream, q).expect("an estimate");
+        assert!(
+            refine_qp(quality, quantizer(stream)) < quantizer(stream),
+            "{quality} is not finer than the stream's {stream}"
+        );
+        assert!(cost(quality) <= budget, "{quality} costs {}", cost(quality));
+        let candidates = refine_candidates(stream);
+        let at = candidates
+            .iter()
+            .position(|q| *q == quality)
+            .expect("a candidate");
+        if let Some(finer) = at.checked_sub(1).map(|i| candidates[i]) {
+            assert!(cost(finer) > budget, "{finer} fits too");
+        }
+    }
+
+    /// The refinement takes the finest quality whose estimate, a keyframe at
+    /// the refinement's capped quantizer times what refinements cost against
+    /// one, the link carries within [`REFINE_LINK_BUDGET`]. Without anything
+    /// to judge by there is no refinement.
+    #[test]
+    fn a_refinement_takes_the_best_quality_the_link_carries() {
+        // A 73 KB keyframe at quality 20 on 1 MB/s: the capped quantizer,
+        // and not the coarser step that would not sharpen.
+        let (pacer, refined) = refined_after(0.0, 73_000, 1_000_000.0);
+        let quality = refined.expect("a refinement").target.quality;
+        assert_finest(&pacer, 20, quality, 1_000_000.0);
+        let capped = quantizer(20) - MAX_REFINE_STEPS;
+        assert_eq!(refine_qp(quality, quantizer(20)), capped);
+        // A larger picture on the same link, at quality 55.
+        let (pacer, refined) = refined_after(0.5, 300_000, 1_000_000.0);
+        let quality = refined.expect("a refinement").target.quality;
+        assert_finest(&pacer, 55, quality, 1_000_000.0);
+        assert!(quality < 100, "the finest does not fit");
+
+        let t0 = Instant::now();
+        let mut unmeasured = Pacer::new().with_refinement();
+        unmeasured.add_viewer(A);
+        step(&mut unmeasured, 1, t0, &[(A, ms(10))]).expect("frame");
+        assert_eq!(unmeasured.wake_at(t0 + ms(20)), None);
+        assert_eq!(
+            unmeasured.poll(t0 + REFINE_AFTER * 2),
+            None,
+            "no size known"
+        );
+    }
+
+    /// When no refinement fits a measured link, the lowest goes out as a
+    /// probe only if it takes at most [`PROBE_ALLOWANCE`] of the link: never
+    /// in front of the user's input on a link as slow as 256 kbit/s.
+    #[test]
+    fn a_probe_goes_out_only_on_a_link_that_carries_it() {
+        // A 150 KB keyframe; the lowest refinement is estimated at 80 KB.
+        assert_eq!(refinement_after(0.5, 150_000, 32_000.0), None, "32 KB/s");
+        assert_eq!(
+            refinement_after(0.5, 150_000, 150_000.0).map(|(_, probe)| probe),
+            Some(true),
+            "150 KB/s: too slow for a refinement, fast enough for a probe"
+        );
+        assert!(
+            refinement_after(0.5, 150_000, 300_000.0).is_some(),
+            "300 KB/s"
+        );
+    }
+
+    /// A probe is checked against the slowest viewer that is measured, even
+    /// while another is not; a rate measured more than [`RATE_MAX_AGE`] ago
+    /// counts as unmeasured, so a link measured once very low is probed
+    /// again.
+    #[test]
+    fn a_probe_checks_measured_links_and_old_rates_count_as_unmeasured() {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new().with_refinement();
+        pacer.add_viewer(A);
+        pacer.add_viewer(B);
+        let first = step(&mut pacer, 1, t0, &[]).expect("first frame");
+        pacer.encoded(first.seq, 150_000, true);
+        pacer.ack(A, first.seq, t0 + ms(10));
+        pacer.ack(B, first.seq, t0 + ms(10));
+        for viewer in [A, B] {
+            pacer.viewer(viewer).expect("viewer").rate.level = 0.5;
+        }
+        // A is measured at 32 KB/s, B not at all: no probe for A's sake.
+        measured_at(&mut pacer, A, 32_000.0, t0 + ms(10));
+        assert_eq!(pacer.poll(t0 + REFINE_AFTER), None);
+        let aged = t0 + ms(10) + RATE_MAX_AGE;
+        assert_eq!(pacer.wake_at(t0 + REFINE_AFTER), Some(aged));
+        // Five minutes on, A's rate no longer counts, and a probe measures again.
+        let probe = pacer.poll(aged).expect("a probe");
+        assert!(probe.refine && pacer.last_probe == Some(aged), "{probe:?}");
+    }
+
+    /// A viewer that joins a refined picture gets its keyframe at the
+    /// stream's quality, as does everybody else; the refinement follows under
+    /// the same rule once the joiner's link is measured too.
+    #[test]
+    fn a_joiner_gets_the_stream_quality_and_then_the_refinement() {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new().with_refinement();
+        pacer.add_viewer(A);
+        let first = step(&mut pacer, 1, t0, &[]).expect("first frame");
+        pacer.encoded(first.seq, 10_000, true);
+        pacer.ack(A, first.seq, t0 + ms(10));
+        measured(&mut pacer, A, 1_000_000.0);
+        let refined = pacer.poll(t0 + REFINE_AFTER).expect("the refinement");
+        pacer.encoded(refined.seq, 30_000, false);
+        pacer.ack(A, refined.seq, t0 + REFINE_AFTER + ms(30));
+
+        let t1 = t0 + REFINE_AFTER * 2;
+        pacer.add_viewer(B);
+        let joined = pacer.poll(t1).expect("the joiner's keyframe");
+        assert!(joined.keyframe && !joined.refine, "{joined:?}");
+        assert_eq!(joined.target.quality, first.target.quality);
+        assert_eq!(joined.recipients, vec![A, B]);
+        pacer.encoded(joined.seq, 10_000, true);
+        pacer.ack(A, joined.seq, t1 + ms(10));
+        pacer.ack(B, joined.seq, t1 + ms(20));
+        let again = pacer.poll(t1 + REFINE_AFTER).expect("refined again");
+        assert!(again.refine && !again.keyframe);
+        assert_eq!(again.recipients, vec![A, B]);
+    }
+
+    /// A link too slow for any refinement gets the lowest as a probe at most
+    /// every [`PROBE_INTERVAL`]: a picture in between is not refined, and once
+    /// a probe measures the link fast, a finer refinement follows.
+    #[test]
+    fn a_skipped_refinement_comes_back_once_a_probe_measures_the_link_fast() {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new().with_refinement();
+        pacer.add_viewer(A);
+        let first = step(&mut pacer, 1, t0, &[]).expect("first frame");
+        pacer.encoded(first.seq, 100_000, true);
+        pacer.ack(A, first.seq, t0 + ms(10));
+        // 100 KB/s: the lowest refinement (53 KB) fits the probe's second
+        // of link but not the refinement's 300 ms.
+        measured(&mut pacer, A, 100_000.0);
+        let probe = pacer.poll(t0 + REFINE_AFTER).expect("the probe");
+        assert!(probe.refine && pacer.last_probe.is_some(), "{probe:?}");
+        assert_eq!(
+            probe.target.quality,
+            *refine_candidates(55).last().expect("one")
+        );
+        pacer.encoded(probe.seq, 50_000, false);
+        // The probe took a second: the link is as slow as measured.
+        pacer.ack(A, probe.seq, t0 + REFINE_AFTER + ms(1_010));
+
+        // A new picture is not refined before the probe interval passed.
+        let t1 = t0 + Duration::from_secs(5);
+        step(&mut pacer, 2, t1, &[(A, ms(10))]).expect("new picture");
+        assert_eq!(pacer.poll(t1 + REFINE_AFTER), None);
+        let due = pacer.last_probe.expect("probed") + PROBE_INTERVAL;
+        assert_eq!(pacer.wake_at(t1 + REFINE_AFTER), Some(due));
+
+        // The next probe goes out at the interval and measures the link fast.
+        // (The slow acknowledgement lowered the stream's quality, and the
+        // probe's with it.)
+        let again = pacer.poll(due).expect("the next probe");
+        assert!(again.refine && again.target.quality <= 75, "{again:?}");
+        pacer.encoded(again.seq, 50_000, false);
+        pacer.ack(A, again.seq, due + ms(20));
+        let finer = pacer.poll(due + REFINE_AFTER).expect("a finer refinement");
+        assert!(
+            finer.refine && finer.target.quality > again.target.quality,
+            "{finer:?}"
+        );
+    }
+
+    /// A keyframe of an early, mostly empty picture does not set the
+    /// estimate once larger frames filled the window: on a slow link the
+    /// refinement stays within what those frames say it would cost.
+    #[test]
+    fn a_small_early_keyframe_does_not_allow_a_large_refinement() {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new().with_refinement();
+        pacer.add_viewer(A);
+        let first = step(&mut pacer, 1, t0, &[]).expect("first frame");
+        pacer.encoded(first.seq, 2_000, true);
+        pacer.ack(A, first.seq, t0 + ms(10));
+        let mut at = t0;
+        for frame in 2..5 {
+            at += ms(100);
+            let drawn = step(&mut pacer, frame, at, &[(A, ms(10))]).expect("frame");
+            pacer.encoded(drawn.seq, 80_000, false);
+        }
+        pacer.viewer(A).expect("A").rate.level = 0.5;
+        // 300 KB/s: the keyframe alone would allow the finest refinement;
+        // the frames after it rule it out.
+        measured(&mut pacer, A, 300_000.0);
+        let refined = pacer.poll(at + REFINE_AFTER).expect("the refinement");
+        assert!(refined.refine);
+        assert_finest(&pacer, 55, refined.target.quality, 300_000.0);
+        assert!(refined.target.quality < 100, "{refined:?}");
+    }
+
+    /// The first keyframe's acknowledgement measures no throughput: before
+    /// the base delay is known, its time would count the whole round trip.
+    #[test]
+    fn no_throughput_is_measured_before_the_base_delay() {
+        let t0 = Instant::now();
+        let mut pacer = Pacer::new().with_refinement();
+        pacer.add_viewer(A);
+        let first = step(&mut pacer, 1, t0, &[]).expect("first frame");
+        pacer.encoded(first.seq, 100_000, true);
+        pacer.ack(A, first.seq, t0 + ms(50));
+        assert_eq!(pacer.viewer(A).expect("A").throughput, None);
+        pacer.offer(2);
+        let key = pacer.poll(t0 + ms(100)).expect("frame");
+        pacer.encoded(key.seq, 100_000, true);
+        pacer.ack(A, key.seq, t0 + ms(200));
+        let rate = pacer.viewer(A).expect("A").throughput.expect("measured");
+        // 100 KB in the 50 ms beyond the 50 ms base delay.
+        assert!((rate - 2_000_000.0).abs() < 1.0, "{rate}");
     }
 
     #[test]

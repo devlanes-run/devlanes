@@ -580,6 +580,7 @@ async fn w_opens_the_windows_of_a_gui_service() -> TestResult {
     api_unit.gui = Some(devlanes_proto::GuiStatus {
         host: devlanes_proto::GUI_HOST_RUNNING.into(),
         real_desktop: Some(false),
+        ..devlanes_proto::GuiStatus::default()
     });
     let api = FakeApi::with_lanes(lanes);
     let (mut app, _) = loaded(&api, 100, 24).await;

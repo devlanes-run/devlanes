@@ -51,6 +51,15 @@ mod os;
 #[path = "darwin.rs"]
 pub mod macos;
 
+// The GUI codecs' FFI, behind features only `devlanes-gui` enables.
+#[cfg(all(target_os = "linux", feature = "openh264"))]
+#[allow(unsafe_code)]
+pub mod openh264;
+
+#[cfg(all(target_os = "macos", feature = "videotoolbox"))]
+#[allow(unsafe_code)]
+pub mod videotoolbox;
+
 pub use rlimit::{NofileLimit, child_nofile_limit, raise_nofile_limit};
 pub use tree::{DescendantTracker, session_members, session_members_known};
 pub use wsl::{

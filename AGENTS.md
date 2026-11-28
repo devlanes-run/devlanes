@@ -1,6 +1,6 @@
 # Repository conventions
 
-Rust 2024, pinned stable toolchain, macOS, Linux and Windows 11 24H2 or later. Packages live in `crates/<name>` as `devlanes-<name>`; the composition root is `bins/devlanes`, and `bins/devlanes-gui` is the composition root of the GUI hosts, a second binary shipped next to it so `devlanes` never links GUI libraries. Add crates when needed. Shared dependencies and lints belong in the root manifest.
+Rust 2024, pinned stable toolchain, macOS, Linux and Windows 11 24H2 or later. Packages live in `crates/<name>` as `devlanes-<name>`; the composition root is `bins/devlanes`, and `bins/devlanes-gui` is the composition root of the GUI hosts, a second binary shipped next to it so `devlanes` never links GUI libraries; `sys` and `sys-windows` also hold the GUI codec FFI (OpenH264, VideoToolbox, Media Foundation) behind features only `devlanes-gui` enables. Add crates when needed. Shared dependencies and lints belong in the root manifest.
 
 `core` owns domain types and traits; integrations implement them; only the binaries register concrete integrations (GUI backends in `devlanes-gui`, everything else in `devlanes`). `testing` provides isolated homes, Git repositories and `fixture-server`, initially without a core dependency. Core unit tests must not depend on testing. Keep integration tests in one binary per crate at `tests/it/main.rs`.
 

@@ -36,11 +36,14 @@ devlanes-version = { path = "../../crates/version" }
 devlanes-core = { path = "../../crates/core" }
 devlanes-sys = { path = "../../crates/sys" }
 devlanes-gui-client = { path = "../../crates/gui-client" }
-devlanes-gui-codec = { path = "../../crates/gui-codec" }
+# The H.264 backends: the system's OpenH264 on Linux, Media Foundation on
+# Windows, VideoToolbox on macOS. Only this binary enables them.
+devlanes-gui-codec = { path = "../../crates/gui-codec", features = ["h264"] }
 devlanes-gui-host = { path = "../../crates/gui-host" }
 devlanes-gui-proto = { path = "../../crates/gui-proto", features = ["serde"] }
 devlanes-gui-viewer = { path = "../../crates/gui-viewer" }
 clap.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -48,7 +51,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true
 
 # The test stops the host with SIGTERM or Ctrl-Break, as the runner does.

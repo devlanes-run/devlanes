@@ -2,10 +2,10 @@
 //! by the connections, the backend and the encoders, and woken by a timer
 //! for whatever the state machines say happens next.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
 use devlanes_gui_codec::{
@@ -32,6 +32,27 @@ use crate::{
 /// Resize requests kept per window while the backend has not answered; the
 /// oldest goes first, and its viewer ends Resizing on its timeout.
 const MAX_PENDING_RESIZES: usize = 64;
+
+/// Failures of one encoder at sizes it takes, within [`STRIKE_WINDOW`],
+/// after which nobody is given it again. Fewer move only the failed
+/// stream's viewers to the next codec for that window: a start can fail on a
+/// vendor's cap on concurrent hardware sessions, which the next window need
+/// not hit.
+const START_STRIKES: usize = 3;
+
+/// How long a start failure counts towards [`START_STRIKES`], so failures
+/// days apart do not add up.
+const STRIKE_WINDOW: Duration = Duration::from_secs(600);
+
+/// How far, as a share of its pixels, a window's size must move from the
+/// size its encoder order was chosen for before the order is chosen again,
+/// so a window dragged around a backend's preferred sizes does not switch
+/// encoders on every step.
+const RERANK_CHANGE: f64 = 0.15;
+
+/// The pixels, one macroblock, a window must have to spare under an
+/// encoder's size limit to go back to that encoder.
+const FITS_MARGIN: u32 = 16;
 
 /// What the connections send the host task.
 pub(crate) enum Inbox {
@@ -68,8 +89,15 @@ struct Session {
     outbox: Arc<Outbox>,
     /// The decoders a viewer offered, for choosing again when an encoder fails.
     decoders: Vec<CodecOffer>,
-    /// A viewer's codec.
+    /// A viewer's codec as chosen at the hello, which says it shares one with
+    /// the host; each window's comes from [`Hub::preferred`].
     codec: Option<CodecOffer>,
+    /// The codec this viewer watches each window in.
+    window_codecs: HashMap<WindowId, CodecOffer>,
+    /// Encoders that failed to start for a window; this viewer is not given
+    /// them again for it. Size limits are not kept here: they are checked
+    /// against the window's size each time.
+    excluded: HashMap<WindowId, HashSet<CodecOffer>>,
     /// When the last message was queued, for heartbeats.
     last_sent: Instant,
     /// The window its last input went to, which `Sync` waits on.
@@ -104,12 +132,38 @@ struct Window {
     gone: bool,
     /// What the backend was last told with [`Command::Watch`].
     watched: bool,
+    /// The size the order of its encoders was last chosen for; see
+    /// [`RERANK_CHANGE`].
+    ranked: Option<Size>,
 }
 
 impl Window {
     /// Whether it is a main window.
     fn is_toplevel(&self) -> bool {
         self.info.kind == WindowKind::Toplevel && self.info.parent.is_none()
+    }
+
+    /// The size of its pictures: the last frame's, or the announced one
+    /// before any came.
+    fn picture_size(&self) -> Size {
+        self.frame
+            .as_ref()
+            .map_or(self.info.size, |f| Size::new(f.width(), f.height()))
+    }
+
+    /// Follows a picture of `size`: the order of the encoders is chosen
+    /// again once the size moved [`RERANK_CHANGE`] away from the one it was
+    /// chosen for. Returns whether it was.
+    fn rerank(&mut self, size: Size) -> bool {
+        let pixels = |s: Size| u64::from(s.width) * u64::from(s.height);
+        let moved = self.ranked.is_none_or(|ranked| {
+            let (now, then) = (pixels(size) as f64, pixels(ranked).max(1) as f64);
+            (now - then).abs() / then >= RERANK_CHANGE
+        });
+        if moved {
+            self.ranked = Some(size);
+        }
+        moved
     }
 }
 
@@ -122,6 +176,10 @@ struct Stream {
     /// Away on the blocking pool while `busy`; created there on first use.
     encoder: Option<Box<dyn VideoEncoder>>,
     busy: bool,
+    /// Whether the encoder gave a frame since it was created.
+    produced: bool,
+    /// Whether the encoder was replaced once after failing mid-stream.
+    restarted: bool,
     viewers: Vec<SessionId>,
     /// The first sequence number after a size change, until a frame from it on is queued.
     awaiting_from: Option<u64>,
@@ -174,6 +232,8 @@ enum EncodeFailure {
     Message(#[from] EncodeError),
     #[error("the encoder panicked")]
     Panicked,
+    #[error("the encoder does not take {width}x{height} frames")]
+    TooLarge { width: u32, height: u32 },
 }
 
 /// Work finished on the blocking pool.
@@ -185,8 +245,9 @@ enum Done {
         keyframe: bool,
         recipients: Vec<SessionId>,
         encoder: Option<Box<dyn VideoEncoder>>,
-        /// The encoded frame message, or `None` when the picture did not change.
-        result: Result<Option<Bytes>, EncodeFailure>,
+        /// The encoded frame message and whether it is a keyframe, or `None`
+        /// when the picture did not change.
+        result: Result<Option<(Bytes, bool)>, EncodeFailure>,
     },
     Screenshot {
         session: SessionId,
@@ -203,8 +264,11 @@ pub(crate) struct Hub {
     service: String,
     real_desktop: bool,
     encoders: Vec<Arc<dyn EncoderBackend>>,
-    /// Encoders that could not start; nobody is given them again.
+    /// Encoders that failed [`START_STRIKES`] times; nobody is given them again.
     failed_encoders: HashSet<CodecOffer>,
+    /// When each encoder failed at a size it takes, within the last
+    /// [`STRIKE_WINDOW`], towards [`START_STRIKES`].
+    strikes: HashMap<CodecOffer, VecDeque<Instant>>,
     on_activity: Option<ActivityCallback>,
     shutdown: CancellationToken,
     backend: Box<dyn BackendControl>,
@@ -268,6 +332,7 @@ impl Hub {
             real_desktop,
             encoders: options.encoders.clone(),
             failed_encoders: HashSet::new(),
+            strikes: HashMap::new(),
             on_activity: options.on_activity.clone(),
             shutdown: options.shutdown.clone(),
             backend,
@@ -563,16 +628,111 @@ impl Hub {
 
     /// The best codec for `decoders` among the encoders that still start.
     fn choose(&self, decoders: &[CodecOffer]) -> Option<CodecOffer> {
-        let available: Vec<_> = self
-            .encoders
+        choose(
+            &self.encoders,
+            |offer| self.failed_encoders.contains(offer),
+            decoders,
+        )
+    }
+
+    /// The codec `session` watches `window` in.
+    fn codec_of(&self, session: SessionId, window: WindowId) -> Option<CodecOffer> {
+        self.sessions
+            .get(&session)?
+            .window_codecs
+            .get(&window)
+            .copied()
+    }
+
+    /// The codec `session` should watch `window` in now: the best both ends
+    /// share among the encoders that take the window's size and neither
+    /// failed for good nor failed to start for this window, the encoders
+    /// ordered by their rank for the size the order was last chosen for.
+    fn preferred(&self, session: SessionId, window: WindowId) -> Option<CodecOffer> {
+        let s = self.sessions.get(&session)?;
+        s.codec?;
+        let win = self.windows.get(&window)?;
+        let size = win.picture_size();
+        let ranked = win.ranked.unwrap_or(size);
+        // An encoder the viewer left for this window takes it back only with
+        // a macroblock to spare, so a window at its limit that the app
+        // changes by a few pixels does not move on every change.
+        let current = s.window_codecs.get(&window);
+        let fits = |e: &Arc<dyn EncoderBackend>| {
+            let margin = match current {
+                Some(codec) if *codec != e.offer() => FITS_MARGIN,
+                _ => 0,
+            };
+            e.fits(size.width + margin, size.height + margin)
+        };
+        let mut encoders: Vec<_> = self.encoders.iter().filter(|e| fits(e)).cloned().collect();
+        // Stable, so equal ranks keep the order the host listed them in.
+        encoders.sort_by_key(|e| std::cmp::Reverse(e.rank(ranked.width, ranked.height)));
+        let excluded = s.excluded.get(&window);
+        let skip = |offer: &CodecOffer| {
+            self.failed_encoders.contains(offer) || excluded.is_some_and(|x| x.contains(offer))
+        };
+        choose(&encoders, skip, &s.decoders)
+    }
+
+    /// Moves every viewer of `window` whose codec is no longer the one it
+    /// should watch the window in to that one, starting with a keyframe;
+    /// one left with none is closed.
+    fn reassign(&mut self, window: WindowId) {
+        let viewers: Vec<_> = self
+            .sessions
             .iter()
-            .map(|e| e.offer())
-            .filter(|offer| !self.failed_encoders.contains(offer))
+            .filter(|(_, s)| s.role == Role::Viewer && s.window_codecs.contains_key(&window))
+            .map(|(id, _)| *id)
             .collect();
-        select(&available, decoders).map(|chosen| CodecOffer {
-            codec: chosen.codec,
-            hardware: chosen.encoder_hardware,
-        })
+        let mut moved = false;
+        for session in viewers {
+            let current = self.codec_of(session, window);
+            let next = self.preferred(session, window);
+            if current == next {
+                continue;
+            }
+            moved = true;
+            if let Some(current) = current {
+                self.unwatch(window, current, session);
+            }
+            if let Some(s) = self.sessions.get_mut(&session) {
+                s.window_codecs.remove(&window);
+            }
+            let Some(codec) = next else {
+                // It would wait for frames forever; closing lets it see why.
+                tracing::warn!(
+                    session = session.0,
+                    "closing a GUI viewer that has no codec left"
+                );
+                if !self.closing.contains(&session) {
+                    self.closing.push(session);
+                }
+                continue;
+            };
+            let key = (window, codec);
+            let new_stream = !self.streams.contains_key(&key);
+            self.watch_in(window, session, codec);
+            self.resize_again(window, session, key, new_stream);
+        }
+        if moved {
+            self.refresh_watch(window);
+            self.check_resize_done(window);
+        }
+    }
+
+    /// Takes `session` off the stream of `window` in `codec`, ending the
+    /// stream when it was the last viewer.
+    fn unwatch(&mut self, window: WindowId, codec: CodecOffer, session: SessionId) {
+        let key = (window, codec);
+        let Some(stream) = self.streams.get_mut(&key) else {
+            return;
+        };
+        stream.viewers.retain(|v| *v != session);
+        stream.pacer.remove_viewer(session);
+        if stream.viewers.is_empty() {
+            self.streams.remove(&key);
+        }
     }
 
     /// Welcomes a connection and, for a viewer, adds it to every window's stream.
@@ -613,6 +773,8 @@ impl Hub {
                 outbox,
                 decoders: hello.decoders,
                 codec,
+                window_codecs: HashMap::new(),
+                excluded: HashMap::new(),
                 last_sent: now(),
                 last_input_window: None,
                 screenshots: 0,
@@ -661,12 +823,20 @@ impl Hub {
         self.waits.retain(|w| w.session != session);
     }
 
-    /// Adds viewer `session` to the stream of `window` in its codec,
-    /// starting the stream with the cached frame when there is one.
+    /// Adds viewer `session` to the stream of `window` in the codec it
+    /// should watch it in, starting the stream with the cached frame when
+    /// there is one.
     fn watch(&mut self, window: WindowId, session: SessionId) {
-        let Some(codec) = self.sessions.get(&session).and_then(|s| s.codec) else {
-            return;
-        };
+        if let Some(codec) = self.preferred(session, window) {
+            self.watch_in(window, session, codec);
+        }
+    }
+
+    /// Adds viewer `session` to the stream of `window` in `codec`.
+    fn watch_in(&mut self, window: WindowId, session: SessionId, codec: CodecOffer) {
+        if let Some(s) = self.sessions.get_mut(&session) {
+            s.window_codecs.insert(window, codec);
+        }
         let Some(win) = self.windows.get(&window) else {
             return;
         };
@@ -675,12 +845,19 @@ impl Hub {
             let Some(backend) = self.encoders.iter().find(|e| e.offer() == codec).cloned() else {
                 return;
             };
+            // Lossy codecs blur thin text; `raw` is exact already.
+            let pacer = match codec.codec {
+                CodecId::RAW => Pacer::new(),
+                _ => Pacer::new().with_refinement(),
+            };
             let mut stream = Stream {
                 generation: self.next_generation,
-                pacer: Pacer::new(),
+                pacer,
                 backend,
                 encoder: None,
                 busy: false,
+                produced: false,
+                restarted: false,
                 viewers: Vec::new(),
                 awaiting_from: None,
                 seed_at: None,
@@ -726,7 +903,7 @@ impl Hub {
 
     /// The stream `session` watches `window` in.
     fn stream_of(&mut self, session: SessionId, window: WindowId) -> Option<&mut Stream> {
-        let codec = self.sessions.get(&session)?.codec?;
+        let codec = self.codec_of(session, window)?;
         self.streams.get_mut(&(window, codec))
     }
 
@@ -1385,6 +1562,7 @@ impl Hub {
             win.frozen_resize = None;
             // The new backend window has not been told anything yet.
             win.watched = false;
+            win.ranked = None;
             win.lock.window_back();
             win.sent_lock = win.lock.state(now);
             info.lock = win.sent_lock;
@@ -1422,6 +1600,7 @@ impl Hub {
                 frozen_resize: None,
                 gone: false,
                 watched: false,
+                ranked: None,
             },
         );
         self.broadcast(sees_windows, &HostMessage::WindowAdded(info));
@@ -1485,6 +1664,10 @@ impl Hub {
             self.by_backend.remove(&win.backend_id);
         }
         self.streams.retain(|(id, _), _| *id != window);
+        for session in self.sessions.values_mut() {
+            session.window_codecs.remove(&window);
+            session.excluded.remove(&window);
+        }
         self.resizes.retain(|r| r.window != window);
         self.complete_all(window);
         self.broadcast(sees_windows, &HostMessage::WindowRemoved { window });
@@ -1499,8 +1682,19 @@ impl Hub {
         let Some(win) = self.windows.get_mut(&shown) else {
             return;
         };
+        let size = Size::new(captured.frame.width(), captured.frame.height());
+        let resized = win
+            .frame
+            .as_ref()
+            .is_none_or(|f| (f.width(), f.height()) != (size.width, size.height));
         win.frame = Some(captured.frame.clone());
         win.frame_after_resize = true;
+        // A new size can change which encoders take the window and their
+        // order; the frame is offered first, so a stream it moves to starts
+        // from it.
+        if resized {
+            win.rerank(size);
+        }
         let mut streams = 0;
         for ((window, _), stream) in &mut self.streams {
             if *window == shown {
@@ -1512,6 +1706,9 @@ impl Hub {
         if streams == 0 && win.awaiting_frame {
             win.awaiting_frame = false;
             win.lock.frame_queued();
+        }
+        if resized {
+            self.reassign(shown);
         }
         if let Some(id) = captured.answers {
             self.frame_answered(shown, id, now());
@@ -1678,7 +1875,9 @@ impl Hub {
                 // change, which ends Resizing as much as a sent one.
                 let after_resize = stream.awaiting_from.is_some_and(|from| seq >= from);
                 match result {
-                    Ok(Some(message)) => {
+                    Ok(Some((message, coded_keyframe))) => {
+                        stream.produced = true;
+                        stream.pacer.encoded(seq, message.len(), coded_keyframe);
                         let targets: Vec<_> = recipients
                             .into_iter()
                             .filter(|r| stream.viewers.contains(r))
@@ -1696,8 +1895,27 @@ impl Hub {
                             stream.awaiting_from = None;
                         }
                     }
+                    // Past the encoder's limits: this window's viewers of it
+                    // take the next codec while it is that large, and the
+                    // encoder stays offered. Frames are checked as they
+                    // arrive, so this is a frame that raced that check.
+                    Err(error @ EncodeFailure::TooLarge { .. }) => {
+                        tracing::info!(%error, window = key.0.0, codec = ?key.1.codec.name(), hardware = key.1.hardware, "a GUI window is too large for its encoder; its viewers take the next codec");
+                        stream.pacer.skipped(seq);
+                        return self.reassign(key.0);
+                    }
+                    // A timeout or a lost device after frames came out: one
+                    // new encoder, with a keyframe for everybody.
+                    Err(error)
+                        if stream.encoder.is_none() && stream.produced && !stream.restarted =>
+                    {
+                        tracing::warn!(%error, window = key.0.0, "a GUI encoder failed mid-stream; starting a new one");
+                        stream.restarted = true;
+                        stream.produced = false;
+                        stream.pacer.restart();
+                    }
                     Err(error) if stream.encoder.is_none() => {
-                        return self.encoder_failed(key.1, &error);
+                        return self.stream_failed(key, &error);
                     }
                     Err(error) => {
                         tracing::warn!(%error, window = key.0.0, "a GUI frame was not encoded");
@@ -1726,51 +1944,66 @@ impl Hub {
         }
     }
 
-    /// An encoder of `offer` could not start (or panicked and was lost):
-    /// nobody gets that encoder again, and its viewers move to the next
-    /// codec both ends share. Frames name their codec, so clients follow.
+    /// The encoder of stream `key` could not start, or failed again after
+    /// its one restart: a strike against the encoder, and the stream's
+    /// viewers take the next codec for that window. At [`START_STRIKES`]
+    /// nobody gets the encoder again.
+    fn stream_failed(&mut self, key: StreamKey, error: &EncodeFailure) {
+        let offer = key.1;
+        let now = now();
+        let strikes = self.strikes.entry(offer).or_default();
+        strikes.retain(|at| now.saturating_duration_since(*at) < STRIKE_WINDOW);
+        strikes.push_back(now);
+        let count = strikes.len();
+        if count >= START_STRIKES {
+            return self.encoder_failed(offer, error);
+        }
+        tracing::warn!(%error, window = key.0.0, codec = ?offer.codec.name(), hardware = offer.hardware, strikes = count, "a GUI encoder did not start; this window's viewers take the next codec");
+        self.exclude(key);
+    }
+
+    /// Nobody gets the encoder of `offer` again, and its viewers move to the
+    /// next codec both ends share, starting with a keyframe. Frames name
+    /// their codec, so clients follow.
     fn encoder_failed(&mut self, offer: CodecOffer, error: &EncodeFailure) {
         if !self.failed_encoders.insert(offer) {
             return;
         }
-        tracing::warn!(%error, codec = ?offer.codec.name(), hardware = offer.hardware, "a GUI encoder failed to start; its viewers fall back to another codec");
-        self.streams.retain(|(_, codec), _| *codec != offer);
-        let moved: Vec<_> = self
-            .sessions
-            .iter()
-            .filter(|(_, s)| s.codec == Some(offer))
-            .map(|(id, s)| (*id, self.choose(&s.decoders)))
-            .collect();
-        let mut moved_to = Vec::new();
-        for (session, codec) in moved {
-            match codec {
-                Some(codec) => {
-                    if let Some(s) = self.sessions.get_mut(&session) {
-                        s.codec = Some(codec);
-                    }
-                    moved_to.push((session, codec));
-                }
-                // It would wait for frames forever; closing lets it see why.
-                None => {
+        tracing::warn!(%error, codec = ?offer.codec.name(), hardware = offer.hardware, "a GUI encoder failed; its viewers fall back to another codec");
+        let (encoders, failed) = (&self.encoders, &self.failed_encoders);
+        for (id, s) in &mut self.sessions {
+            if s.codec == Some(offer) {
+                s.codec = choose(encoders, |o| failed.contains(o), &s.decoders);
+                if s.codec.is_none() && s.role == Role::Viewer {
                     tracing::warn!(
-                        session = session.0,
+                        session = id.0,
                         "closing a GUI viewer that has no codec left"
                     );
-                    self.closing.push(session);
+                    self.closing.push(*id);
                 }
             }
         }
         let windows: Vec<_> = self.windows.keys().copied().collect();
         for window in windows {
-            for (session, codec) in &moved_to {
-                let key = (window, *codec);
-                let new_stream = !self.streams.contains_key(&key);
-                self.watch(window, *session);
-                self.resize_again(window, *session, key, new_stream);
-            }
-            self.refresh_watch(window);
-            self.check_resize_done(window);
+            self.reassign(window);
         }
+    }
+
+    /// The viewers of stream `key` are not given its encoder for that window
+    /// again, and move to the next codec, starting with a keyframe.
+    fn exclude(&mut self, key: StreamKey) {
+        let (window, offer) = key;
+        let viewers = self
+            .streams
+            .get(&key)
+            .map(|s| s.viewers.clone())
+            .unwrap_or_default();
+        for session in viewers {
+            if let Some(s) = self.sessions.get_mut(&session) {
+                s.excluded.entry(window).or_default().insert(offer);
+            }
+        }
+        self.reassign(window);
     }
 
     /// Tells a viewer moved to the stream `key` from which sequence number
@@ -1824,6 +2057,24 @@ impl Hub {
     }
 }
 
+/// The best codec for `decoders` among `encoders`, without those `skip`
+/// rules out.
+fn choose(
+    encoders: &[Arc<dyn EncoderBackend>],
+    skip: impl Fn(&CodecOffer) -> bool,
+    decoders: &[CodecOffer],
+) -> Option<CodecOffer> {
+    let available: Vec<_> = encoders
+        .iter()
+        .map(|e| e.offer())
+        .filter(|offer| !skip(offer))
+        .collect();
+    select(&available, decoders).map(|chosen| CodecOffer {
+        codec: chosen.codec,
+        hardware: chosen.encoder_hardware,
+    })
+}
+
 /// Roles that get window descriptions, lock changes and the input holder.
 fn sees_windows(role: Role) -> bool {
     matches!(role, Role::Viewer | Role::Tool)
@@ -1865,10 +2116,11 @@ fn truncate(text: &mut String, max: usize) {
     }
 }
 
-/// The encoder to keep, if any, and the frame message or why there is none.
+/// The encoder to keep, if any, and the frame message with whether it is a
+/// keyframe, or why there is none.
 type Encoded = (
     Option<Box<dyn VideoEncoder>>,
-    Result<Option<Bytes>, EncodeFailure>,
+    Result<Option<(Bytes, bool)>, EncodeFailure>,
 );
 
 /// Encodes one frame of a stream and writes its message. Runs on the
@@ -1879,6 +2131,10 @@ fn encode_frame(
     (window, offer): StreamKey,
     job: Encode<Frame>,
 ) -> Encoded {
+    let (width, height) = (job.frame.width(), job.frame.height());
+    if !backend.fits(width, height) {
+        return (None, Err(EncodeFailure::TooLarge { width, height }));
+    }
     let mut encoder = match encoder {
         Some(encoder) => encoder,
         None => match backend.encoder() {
@@ -1891,6 +2147,7 @@ fn encode_frame(
         frame_interval: job.target.frame_interval,
         quality: job.target.quality,
         keyframe: job.keyframe,
+        refine: job.refine,
     };
     let result = match encoder.encode(&job.frame, &params) {
         Ok(Some(encoded)) => {
@@ -1906,11 +2163,15 @@ fn encode_frame(
             let mut out = BytesMut::new();
             message
                 .encode(&mut out)
-                .map(|()| Some(out.freeze()))
+                .map(|()| Some((out.freeze(), encoded.keyframe)))
                 .map_err(Into::into)
         }
         Ok(None) => Ok(None),
-        Err(error) => Err(error.into()),
+        // A frame the encoder cannot take is that frame's problem; any other
+        // error means the encoder broke mid-stream (a hardware encoder's
+        // device went away), and losing it moves its viewers to another codec.
+        Err(error @ CodecError::InvalidFrame(_)) => Err(error.into()),
+        Err(error) => return (None, Err(error.into())),
     };
     (Some(encoder), result)
 }
@@ -1922,6 +2183,7 @@ fn screenshot_result(window: WindowId, frame: &Frame) -> ScreenshotResult {
         frame_interval: std::time::Duration::ZERO,
         quality: 100,
         keyframe: true,
+        refine: false,
     };
     match RawEncoder::new().encode(frame, &params) {
         Ok(Some(encoded)) => ScreenshotResult::Image(Screenshot {

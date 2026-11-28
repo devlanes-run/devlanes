@@ -5,15 +5,43 @@
 //! Encoders and decoders are `Send` and own everything they return, so a host
 //! can run its encoder on a thread of its own and a viewer its decoder off the
 //! UI thread.
+//!
+//! The `h264` feature adds the H.264 backends of each OS (`h264()`): the
+//! system's OpenH264 on Linux, Media Foundation on Windows, the VideoToolbox
+//! decoder on macOS. Their FFI lives in `devlanes-sys` and
+//! `devlanes-sys-windows`; only `devlanes-gui` enables the feature, so the
+//! main `devlanes` binary never carries them.
 
 mod frame;
 mod raw;
 mod select;
+#[cfg(all(
+    feature = "h264",
+    any(target_os = "linux", windows, target_os = "macos")
+))]
+mod yuv;
+
+#[cfg(feature = "h264")]
+mod h264;
+#[cfg(all(feature = "h264", windows))]
+mod media_foundation;
+#[cfg(all(feature = "h264", target_os = "linux"))]
+mod openh264;
+#[cfg(all(feature = "h264", target_os = "macos"))]
+mod videotoolbox;
 
 pub use devlanes_gui_proto::{CodecId, CodecOffer};
 pub use frame::Frame;
+#[cfg(feature = "h264")]
+pub use h264::{H264, Unavailable, h264};
+#[cfg(all(feature = "h264", windows))]
+pub use media_foundation::{MediaFoundationDecoder, MediaFoundationEncoder};
+#[cfg(all(feature = "h264", target_os = "linux"))]
+pub use openh264::OpenH264;
 pub use raw::{RawBackend, RawDecoder, RawEncoder};
 pub use select::{Selection, select};
+#[cfg(all(feature = "h264", target_os = "macos"))]
+pub use videotoolbox::VideoToolbox;
 
 use std::time::Duration;
 
@@ -66,6 +94,11 @@ pub struct EncodeParams {
     pub quality: u8,
     /// Whether the output must decode on its own, without earlier frames.
     pub keyframe: bool,
+    /// A sharp-text refinement: the picture stopped changing and this is
+    /// the last one again, to be coded at a high quality so thin text loses
+    /// the blur of the lossy frames before it. Lossless codecs see the
+    /// previous picture and send nothing.
+    pub refine: bool,
 }
 
 /// One encoded frame.
@@ -138,6 +171,25 @@ pub trait VideoDecoder: Send {
 pub trait EncoderBackend: Send + Sync {
     /// What encoders of this backend offer.
     fn offer(&self) -> CodecOffer;
+
+    /// Whether its encoders take frames of `width` by `height`. The host
+    /// checks it before encoding, so a window past the limit streams in
+    /// another codec without counting against this one. Any size by default.
+    fn fits(&self, width: u32, height: u32) -> bool {
+        let _ = (width, height);
+        true
+    }
+
+    /// Where this backend stands among the host's encoders for a window of
+    /// `width` by `height`, higher first; equal ranks keep the order the host
+    /// lists them in. The host ranks a window again only once its size moved
+    /// well away from the size it last ranked for, so a window dragged
+    /// across a backend's preferred sizes does not switch on every step.
+    /// Every size the same by default.
+    fn rank(&self, width: u32, height: u32) -> u8 {
+        let _ = (width, height);
+        0
+    }
 
     /// A new encoder, for one window.
     fn encoder(&self) -> Result<Box<dyn VideoEncoder>, CodecError>;

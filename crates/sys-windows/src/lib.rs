@@ -35,6 +35,9 @@ pub mod console;
 pub mod file;
 #[allow(unsafe_code)]
 pub mod job;
+#[cfg(feature = "media-foundation")]
+#[allow(unsafe_code)]
+pub mod media_foundation;
 #[allow(unsafe_code)]
 pub mod net;
 #[allow(unsafe_code)]

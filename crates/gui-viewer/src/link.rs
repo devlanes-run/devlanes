@@ -10,10 +10,10 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use devlanes_gui_client::{Client, ClientError, ClientOptions, DecodedFrame, Event, connect};
-use devlanes_gui_proto::{RECONNECT_AFTER, WindowId, WindowInfo};
+use devlanes_gui_proto::{CodecId, RECONNECT_AFTER, WindowId, WindowInfo};
 use tokio::sync::mpsc;
 
 use crate::model::{Check, Out};
@@ -92,9 +92,64 @@ const FIRST_BACKOFF: Duration = Duration::from_millis(200);
 /// The longest wait between attempts.
 const MAX_BACKOFF: Duration = Duration::from_secs(2);
 
+/// How long a connection must last for the backoff to start over.
+const STABLE_AFTER: Duration = Duration::from_secs(5);
+
 /// How long a connection may stay silent before it is given up and dialed
 /// again: twice as long as the windows take to show Reconnecting.
 const SILENCE: Duration = Duration::from_secs(RECONNECT_AFTER.as_secs() * 2);
+
+/// How long to wait before dialing again.
+#[derive(Debug)]
+struct Backoff {
+    /// The wait after the next failure.
+    next: Duration,
+    /// When the connection up now was made.
+    connected_at: Option<Instant>,
+}
+
+impl Backoff {
+    /// The first wait at [`FIRST_BACKOFF`].
+    fn new() -> Self {
+        Self {
+            next: FIRST_BACKOFF,
+            connected_at: None,
+        }
+    }
+
+    /// A dial failed: the wait before the next, which doubles up to
+    /// [`MAX_BACKOFF`].
+    fn failed(&mut self) -> Duration {
+        let wait = self.next;
+        self.next = (self.next * 2).min(MAX_BACKOFF);
+        wait
+    }
+
+    /// A connection was made at `now`.
+    fn connected(&mut self, now: Instant) {
+        self.connected_at = Some(now);
+    }
+
+    /// The connection ended at `now`: the wait before dialing again. A host
+    /// that broke the protocol is waited for like a failed dial, and the
+    /// wait does not start over until a connection ends for another reason,
+    /// so one that keeps doing it is dialed at most every [`MAX_BACKOFF`].
+    /// Another close is followed by a dial at once, and one of a connection
+    /// that lasted [`STABLE_AFTER`] starts the backoff over.
+    fn closed(&mut self, now: Instant, broke_protocol: bool) -> Duration {
+        let lasted = self
+            .connected_at
+            .take()
+            .is_some_and(|at| now.saturating_duration_since(at) >= STABLE_AFTER);
+        if lasted && !broke_protocol {
+            self.next = FIRST_BACKOFF;
+        }
+        match broke_protocol {
+            true => self.failed(),
+            false => Duration::ZERO,
+        }
+    }
+}
 
 /// The channel to the window thread: false once the window thread is gone.
 pub type Tell = Arc<dyn Fn(FromLink) -> bool + Send + Sync>;
@@ -103,14 +158,14 @@ pub type Tell = Arc<dyn Fn(FromLink) -> bool + Send + Sync>;
 /// to stop reconnecting, reporting through `tell`, frames through `frames`.
 pub async fn run(
     address: SocketAddr,
-    options: ClientOptions,
+    mut options: ClientOptions,
     check: Option<UnitCheck>,
     mut rx: mpsc::UnboundedReceiver<Out>,
     tell: Tell,
     frames: Frames,
 ) {
     let mut first = true;
-    let mut backoff = FIRST_BACKOFF;
+    let mut backoff = Backoff::new();
     let mut reconnect = true;
     loop {
         let (client, mut events) = match connect(address, options.clone()).await {
@@ -121,27 +176,44 @@ pub async fn run(
             }
             Err(error) => {
                 tracing::debug!(%error, "the GUI host did not answer; trying again");
-                if !wait(&mut rx, backoff, &tell, &check, &mut reconnect).await || !reconnect {
+                let delay = backoff.failed();
+                if !wait(&mut rx, delay, &tell, &check, &mut reconnect).await || !reconnect {
                     return;
                 }
-                backoff = (backoff * 2).min(MAX_BACKOFF);
                 continue;
             }
         };
         first = false;
-        backoff = FIRST_BACKOFF;
+        backoff.connected(Instant::now());
         if !tell(FromLink::Connected(client.welcome().windows.clone())) {
             return;
         }
+        let mut broke_protocol = false;
         let mut watch = tokio::time::interval(MAX_BACKOFF);
         loop {
             tokio::select! {
                 event = events.next() => match event {
+                    // A host that breaks the protocol is dialed again after
+                    // the backoff; the decoders stay, since none of them
+                    // failed.
+                    Some(Event::Closed(Some(error @ ClientError::UnsupportedCodec(_)))) => {
+                        tracing::warn!(%error, "the GUI host sent a frame in a codec this viewer did not offer");
+                        broke_protocol = true;
+                        break;
+                    }
                     Some(Event::Closed(Some(error))) => {
                         tracing::info!(%error, "the GUI connection closed");
                         break;
                     }
                     Some(Event::Closed(None)) | None => break,
+                    // The protocol has no way to change codecs on a live
+                    // connection, so the viewer dials again without the
+                    // decoder; `raw`, which every host has, always stays.
+                    Some(Event::CodecFailed(codec)) if codec != CodecId::RAW => {
+                        tracing::warn!(codec = ?codec.name(), "a GUI decoder failed twice; reconnecting without it");
+                        options.decoders.retain(|decoder| decoder.offer().codec != codec);
+                        break;
+                    }
                     Some(Event::Frame(frame)) => {
                         let window = frame.window;
                         if frames.put(frame) && !tell(FromLink::Frame(window)) {
@@ -175,7 +247,8 @@ pub async fn run(
             return;
         }
         // The viewer answers a final close with StopReconnecting right away.
-        if !wait(&mut rx, Duration::ZERO, &tell, &check, &mut reconnect).await || !reconnect {
+        let delay = backoff.closed(Instant::now(), broke_protocol);
+        if !wait(&mut rx, delay, &tell, &check, &mut reconnect).await || !reconnect {
             return;
         }
     }
@@ -375,6 +448,39 @@ mod tests {
         assert_eq!(box_away(b"not json", "hetzner"), None);
         assert_eq!(box_away(b"{}", "hetzner"), None);
         assert_eq!(answer(Some(NOT_FOUND_EXIT), b""), Check::Gone);
+    }
+
+    /// A host that keeps breaking the protocol is dialed after a doubling
+    /// wait, up to the longest; a connection that lasted starts it over, and
+    /// an ordinary close is followed by a dial at once.
+    #[test]
+    fn protocol_errors_back_off_until_a_connection_lasts() {
+        let t0 = Instant::now();
+        let mut backoff = Backoff::new();
+        let mut waits = Vec::new();
+        for n in 0..6 {
+            let at = t0 + Duration::from_secs(n);
+            backoff.connected(at);
+            waits.push(
+                backoff
+                    .closed(at + Duration::from_millis(50), true)
+                    .as_millis(),
+            );
+        }
+        assert_eq!(waits, [200, 400, 800, 1600, 2000, 2000]);
+        // A host that lasts a while before breaking the protocol again
+        // stays at the longest wait.
+        let later = t0 + Duration::from_secs(60);
+        backoff.connected(later);
+        let wait = backoff.closed(later + STABLE_AFTER * 2, true);
+        assert_eq!(wait, MAX_BACKOFF, "a protocol error never starts over");
+        // A connection that lasted and ended otherwise starts it over.
+        let after = later + STABLE_AFTER * 3;
+        backoff.connected(after);
+        assert_eq!(backoff.closed(after + STABLE_AFTER, false), Duration::ZERO);
+        backoff.connected(after + STABLE_AFTER);
+        let wait = backoff.closed(after + STABLE_AFTER, true);
+        assert_eq!(wait, FIRST_BACKOFF);
     }
 
     /// A unit that exists is gone only when it does not run.

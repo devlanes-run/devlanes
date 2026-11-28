@@ -10,12 +10,23 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `openh264`: OpenH264 loaded at run time on Linux, for the GUI host and viewer.
+# Empty on other platforms. Only devlanes-gui enables it.
+openh264 = ["dep:libloading"]
+# `videotoolbox`: the VideoToolbox H.264 decoder on macOS, for the GUI viewer.
+# Empty on other platforms. Only devlanes-gui enables it.
+videotoolbox = []
+
 [dependencies]
 devlanes-core = { path = "../core" }
 thiserror.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs", "process", "std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = { version = "0.8", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 devlanes-sys-windows = { path = "../sys-windows" }
