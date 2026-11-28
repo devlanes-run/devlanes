@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use devlanes_transport::conformance::{self, Pair};
-use devlanes_transport::{Alpn, BoxError, PeerEndpoint};
+use devlanes_transport::{Alpn, BoxError, PeerAddr, PeerEndpoint, PeerId, TUNNEL_ALPN};
+use iroh::endpoint::{QuicTransportConfig, VarInt, presets};
+use iroh::{Endpoint, Watcher};
 
 use super::{Everyone, Home, TestResult, bounded};
 
@@ -32,6 +34,73 @@ async fn iroh() -> Result<Pair, BoxError> {
             boxed.close_peer(&peer);
         }),
     })
+}
+
+/// A box whose process vanishes sends no close, so only QUIC's idle timeout
+/// can end the client's connection; it does, with a reason to show. The box
+/// is a raw iroh endpoint in its own runtime, shut down without closing
+/// anything, with an idle timeout of 2 s, which the client's connection
+/// takes as the lower of the two sides' timeouts.
+#[tokio::test]
+async fn a_box_that_vanishes_ends_the_connection_with_a_reason() -> TestResult {
+    bounded(Duration::from_secs(10), async {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()?;
+        let (addr_tx, addr) = tokio::sync::oneshot::channel();
+        runtime.spawn(async move {
+            let config = QuicTransportConfig::builder()
+                .max_idle_timeout(Some(VarInt::from_u32(2_000).into()))
+                // Keeps the connection alive while the box runs.
+                .keep_alive_interval(Duration::from_millis(500))
+                .build();
+            let Ok(boxed) = Endpoint::builder(presets::Minimal)
+                .clear_relay_transports()
+                .transport_config(config)
+                .alpns(vec![TUNNEL_ALPN.to_vec()])
+                .bind()
+                .await
+            else {
+                return;
+            };
+            let mut watcher = boxed.watch_addr();
+            while watcher.get().ip_addrs().next().is_none() {
+                if watcher.updated().await.is_err() {
+                    return;
+                }
+            }
+            let addr = boxed.addr();
+            let _ = addr_tx.send(PeerAddr {
+                id: PeerId(*boxed.id().as_bytes()),
+                relay: None,
+                direct: addr.ip_addrs().copied().collect(),
+            });
+            let mut held = Vec::new();
+            while let Some(incoming) = boxed.accept().await {
+                if let Ok(connection) = incoming.await {
+                    held.push(connection);
+                }
+            }
+        });
+        let addr = addr.await?;
+
+        let home = Home::new()?;
+        let client = home.endpoint("client", Vec::new());
+        let connection = client.connect(&addr, Alpn::Tunnel).await?;
+        let vanished = tokio::time::Instant::now();
+        runtime.shutdown_background();
+        connection.closed().await;
+        assert!(
+            vanished.elapsed() < Duration::from_secs(5),
+            "closed after {:?}",
+            vanished.elapsed()
+        );
+        let failure = connection.failure_within(Duration::ZERO).await;
+        assert!(failure.is_some(), "no reason for a box that vanished");
+        Ok(())
+    })
+    .await
 }
 
 #[tokio::test]

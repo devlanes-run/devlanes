@@ -3,6 +3,7 @@
 //! leaves the machine.
 
 mod connection;
+mod gate;
 mod peer;
 
 use std::future::Future;

@@ -20,8 +20,12 @@ use iroh::endpoint::{
 use iroh::{Endpoint, EndpointAddr, PublicKey, RelayMode, RelayUrl, SecretKey, Watcher};
 use tokio::sync::{OnceCell, mpsc};
 
-use crate::connection::{IrohConnection, IrohServerConnection, REFUSED};
+use crate::connection::{IrohConnection, IrohServerConnection, NO_DIRECT_PATH, REFUSED};
 use crate::key;
+
+/// How long a dial waits for a direct path: three of iroh's 5 s hole-punch
+/// rounds. Locally a direct path took 2 to 31 ms.
+const DIRECT_PATH_WAIT: Duration = Duration::from_secs(15);
 
 /// How long `addr` waits for the relay connection before it names the first
 /// configured relay instead of the home relay iroh picked.
@@ -397,6 +401,34 @@ fn closed_dial(error: &endpoint::ConnectionError) -> PeerError {
     }
 }
 
+/// The typed failure of a dial that never produced a connection: the box's
+/// refusal when the close arrived during the handshake, else the whole chain
+/// of causes, since iroh's outer message alone ("Unable to connect to
+/// remote") says nothing.
+fn dial_failed(error: endpoint::ConnectError) -> PeerError {
+    let closed = match &error {
+        endpoint::ConnectError::Connection { source, .. } => Some(source),
+        endpoint::ConnectError::Connecting {
+            source: endpoint::ConnectingError::ConnectionError { source, .. },
+            ..
+        } => Some(source),
+        _ => None,
+    };
+    if closed.is_some_and(is_refused) {
+        return PeerError::Refused;
+    }
+    let mut text = error.to_string();
+    let mut cause = std::error::Error::source(&error);
+    while let Some(next) = cause {
+        let next_text = next.to_string();
+        if !text.ends_with(&next_text) {
+            text = format!("{text}: {next_text}");
+        }
+        cause = next.source();
+    }
+    PeerError::Unreachable(text)
+}
+
 /// Accepts incoming connections until the endpoint closes, each in its own
 /// task so a slow handshake holds up no other.
 async fn accept_loop(endpoint: Endpoint, shared: Arc<Shared>, queue: mpsc::Sender<PeerIncoming>) {
@@ -483,20 +515,57 @@ impl PeerEndpoint for IrohEndpoint {
         })
     }
 
-    /// Dials `addr` and waits for the box's stream credit, which the box
-    /// grants only to a key it admitted.
+    /// Dials `addr`, then waits up to [`DIRECT_PATH_WAIT`] for the box to
+    /// admit this machine and for a direct path to be selected. Only then
+    /// is the connection handed out, so no session data crosses a relay.
+    ///
+    /// A refused key does not fail the dial itself: the connection opens
+    /// and the box closes it with the refused code, which both waits see.
     async fn connect(&self, addr: &PeerAddr, alpn: Alpn) -> Result<BoxConnection, TransportError> {
         let endpoint = self.bound().await?;
         let target = Self::target(addr)?;
         let connection = endpoint
             .connect(target, alpn.bytes())
             .await
-            .map_err(|error| PeerError::Unreachable(error.to_string()))?;
-        let first = connection
-            .open_bi()
-            .await
-            .map_err(|error| closed_dial(&error))?;
-        Ok(Box::new(IrohConnection::new(connection, first)))
+            .map_err(dial_failed)?;
+        let deadline = tokio::time::Instant::now() + DIRECT_PATH_WAIT;
+        // The box grants stream credit only once it admitted this key, so a
+        // stream that opens means no refusal is on its way.
+        let first = match tokio::time::timeout_at(deadline, connection.open_bi()).await {
+            Ok(Ok(first)) => first,
+            Ok(Err(error)) => return Err(closed_dial(&error).into()),
+            Err(_) => {
+                connection.close(VarInt::from_u32(NO_DIRECT_PATH), b"not admitted in time");
+                return Err(PeerError::Unreachable(format!(
+                    "the box did not admit this machine within {} seconds",
+                    DIRECT_PATH_WAIT.as_secs()
+                ))
+                .into());
+            }
+        };
+        let direct = tokio::time::timeout_at(deadline, async {
+            let mut paths = connection.paths_stream();
+            paths
+                .wait_any(|path| path.is_ip() && path.is_selected())
+                .await
+                .is_some()
+        })
+        .await;
+        match direct {
+            Ok(true) => Ok(Box::new(IrohConnection::new(connection, first))),
+            // The paths end when the connection closes.
+            Ok(false) => Err(connection
+                .close_reason()
+                .map_or(PeerError::Closed, |error| closed_dial(&error))
+                .into()),
+            Err(_) => {
+                connection.close(VarInt::from_u32(NO_DIRECT_PATH), b"no direct path");
+                Err(PeerError::NoDirectPath {
+                    waited: DIRECT_PATH_WAIT,
+                }
+                .into())
+            }
+        }
     }
 
     /// Sets the admission and the accepted ALPNs, and publishes or stops.
