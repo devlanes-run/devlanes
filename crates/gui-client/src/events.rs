@@ -6,7 +6,7 @@ use devlanes_gui_codec::Frame;
 use devlanes_gui_proto::{
     ClientMessage, Cursor, Holder, LockState, MoveResize, WindowId, WindowInfo,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{ClientError, Shared};
 
@@ -67,30 +67,48 @@ pub enum Event {
     Closed(Option<ClientError>),
 }
 
+/// One place in the order of events. A frame takes its place when it
+/// arrives and is filled in once decoded, so what came after it, such as the
+/// end of a lock, is not seen before it.
+#[derive(Debug)]
+pub(crate) enum Slot {
+    /// An event.
+    Event(Event),
+    /// A frame being decoded; dropped unfilled when it was discarded.
+    Frame(oneshot::Receiver<DecodedFrame>),
+}
+
 /// The events of one connection, in the order they happened.
 #[derive(Debug)]
 pub struct Events {
-    rx: mpsc::UnboundedReceiver<Event>,
+    rx: mpsc::UnboundedReceiver<Slot>,
     shared: Arc<Shared>,
 }
 
 impl Events {
     /// Events from `rx`, acknowledging frames on `shared`'s connection.
-    pub(crate) fn new(rx: mpsc::UnboundedReceiver<Event>, shared: Arc<Shared>) -> Self {
+    pub(crate) fn new(rx: mpsc::UnboundedReceiver<Slot>, shared: Arc<Shared>) -> Self {
         Self { rx, shared }
     }
 
     /// The next event, or `None` after [`Event::Closed`]. A frame is
-    /// acknowledged to the host as it is returned.
+    /// acknowledged to the host as it is returned; one that failed to decode
+    /// is skipped, since its decoder acknowledged it already.
     pub async fn next(&mut self) -> Option<Event> {
-        let event = self.rx.recv().await?;
-        if let Event::Frame(frame) = &event {
+        loop {
+            let frame = match self.rx.recv().await? {
+                Slot::Event(event) => return Some(event),
+                Slot::Frame(pending) => match pending.await {
+                    Ok(frame) => frame,
+                    Err(_) => continue,
+                },
+            };
             // Fails only once the connection is closed, when nobody waits for it.
             let _ = self.shared.send(&ClientMessage::FrameAck {
                 window: frame.window,
                 seq: frame.seq,
             });
+            return Some(Event::Frame(frame));
         }
-        Some(event)
     }
 }

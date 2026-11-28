@@ -274,7 +274,7 @@ struct State {
 struct Shared {
     welcome: Welcome,
     writer: mpsc::UnboundedSender<Bytes>,
-    events: mpsc::UnboundedSender<Event>,
+    events: mpsc::UnboundedSender<events::Slot>,
     state: Mutex<State>,
     /// Wakes the reader to recompute its timer after a resize request.
     wake: Notify,
@@ -298,12 +298,17 @@ impl Shared {
             .map_err(|_| ClientError::Closed)
     }
 
+    /// Queues `event` for [`Events`]; nobody may be reading any more.
+    fn emit(&self, event: Event) {
+        let _ = self.events.send(events::Slot::Event(event));
+    }
+
     /// Reports `window`'s lock state if it changed since it was last reported.
     fn refresh_lock(&self, window: WindowId, state: &mut WindowState, now: std::time::Instant) {
         let current = state.lock.state(now);
         if current != state.shown {
             state.shown = current;
-            let _ = self.events.send(Event::Lock {
+            self.emit(Event::Lock {
                 window,
                 state: current,
             });

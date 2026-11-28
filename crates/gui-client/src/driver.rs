@@ -11,8 +11,9 @@ use devlanes_gui_proto::{
     ClientMessage, CodecId, HEARTBEAT_INTERVAL, HostMessage, VideoFrame, WindowId,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
+use crate::events::Slot;
 use crate::{ClientError, DecodedFrame, Event, Shared, WindowState};
 
 /// The current time on tokio's clock, which tests pause and advance.
@@ -111,7 +112,7 @@ pub(crate) async fn read_loop<S: AsyncRead>(
         state.screenshots.clear();
         state.syncs.clear();
     }
-    let _ = shared.events.send(Event::Closed(error));
+    shared.emit(Event::Closed(error));
 }
 
 /// The reader's own state.
@@ -119,7 +120,7 @@ struct Reader {
     shared: Arc<Shared>,
     backends: Vec<Arc<dyn DecoderBackend>>,
     /// Frames to each window's decoder task.
-    decoders: HashMap<WindowId, mpsc::UnboundedSender<VideoFrame>>,
+    decoders: HashMap<WindowId, mpsc::UnboundedSender<Job>>,
 }
 
 impl Reader {
@@ -228,11 +229,14 @@ impl Reader {
             // A second welcome or refusal has no meaning mid-connection.
             HostMessage::Heartbeat | HostMessage::Welcome(_) | HostMessage::Refused(_) => return,
         };
-        let _ = self.shared.events.send(event);
+        self.shared.emit(event);
     }
 
-    /// Hands `frame` to its window's decoder task, starting one if needed.
+    /// Hands `frame` to its window's decoder task, starting one if needed,
+    /// and reserves its place among the events.
     fn decode(&mut self, frame: VideoFrame) {
+        let (slot, pending) = oneshot::channel();
+        let _ = self.shared.events.send(Slot::Frame(pending));
         let window = frame.window;
         let tx = self.decoders.entry(window).or_insert_with(|| {
             let (tx, rx) = mpsc::unbounded_channel();
@@ -245,24 +249,27 @@ impl Reader {
             tx
         });
         // The task ends only when this sender is dropped.
-        let _ = tx.send(frame);
+        let _ = tx.send((frame, slot));
     }
 }
+
+/// A frame to decode and the place its event fills.
+type Job = (VideoFrame, oneshot::Sender<DecodedFrame>);
 
 /// A decoder and the codec it decodes.
 type Decoder = (CodecId, Box<dyn VideoDecoder>);
 
 /// Decodes one window's frames in order on the blocking pool. A frame that
 /// fails is acknowledged as discarded and followed by a keyframe request; a
-/// decoded one goes to the events and is acknowledged there.
+/// decoded one fills its event's place and is acknowledged when read.
 async fn decode_loop(
     window: WindowId,
-    mut rx: mpsc::UnboundedReceiver<VideoFrame>,
+    mut rx: mpsc::UnboundedReceiver<Job>,
     backends: Vec<Arc<dyn DecoderBackend>>,
     shared: Arc<Shared>,
 ) {
     let mut decoder: Option<Decoder> = None;
-    while let Some(frame) = rx.recv().await {
+    while let Some((frame, slot)) = rx.recv().await {
         let (seq, keyframe) = (frame.seq, frame.keyframe);
         let backends = backends.clone();
         let current = decoder.take();
@@ -274,12 +281,12 @@ async fn decode_loop(
         decoder = kept;
         match outcome {
             Ok(Some(picture)) => {
-                let _ = shared.events.send(Event::Frame(DecodedFrame {
+                let _ = slot.send(DecodedFrame {
                     window,
                     seq,
                     keyframe,
                     frame: picture,
-                }));
+                });
             }
             Ok(None) => {
                 let _ = shared.send(&ClientMessage::FrameAck { window, seq });
