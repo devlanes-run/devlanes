@@ -260,8 +260,6 @@ impl PeerAttempts {
     }
 
     /// Set once the link stopped trying because the box stayed away.
-    // Read once ephemeral boxes are forgotten, two commits on.
-    #[allow(dead_code)]
     pub(super) fn gave_up(&self) -> Arc<AtomicBool> {
         self.gave_up.clone()
     }
@@ -578,6 +576,55 @@ impl Inner {
             .map_err(crate::registry::store_error)?;
         tracing::info!(host = %name, peer = %ticket.addr.id.short(), ephemeral = ticket.ephemeral, "paired with a box by ticket");
         Ok(name)
+    }
+
+    /// Forgets the box paired by ticket under `name`, whose link with
+    /// connect serial `serial` gave up: closes that link and deletes the
+    /// box's `remote_hosts` row, its lane choices and its `p2p_boxes` row,
+    /// and nothing else. A newer link of the name, which `remote connect`
+    /// opened meanwhile, keeps everything. The box keeps its own record of
+    /// this client until `daemon revoke` there.
+    pub(super) async fn forget_peer_box(self: &Arc<Self>, name: &str, serial: u64) {
+        if self.shutdown.is_cancelled() {
+            return;
+        }
+        // Held throughout, so a connect or the restore never opens the
+        // name halfway through.
+        let connecting = self.remote.connecting.lock().await;
+        let conn = {
+            let mut hosts = lock(&self.remote.hosts);
+            match hosts.get(name) {
+                Some(conn) if conn.serial != serial => return,
+                Some(_) => hosts.remove(name),
+                None => None,
+            }
+        };
+        if let Some(conn) = conn {
+            conn.close().await;
+            self.remote.wake_others(conn.serial);
+        }
+        // `remote_hosts` first, so a daemon that stops halfway never
+        // restores a box whose pairing is gone, and `p2p_boxes` last, so
+        // what is left is a pairing `remote ls` lists and that can be
+        // connected or forgotten again.
+        if let Err(error) = self.store.delete_remote_host(name.to_owned()).await {
+            tracing::warn!(%error, host = %name, "cannot forget the box's connection record");
+        }
+        self.forget_choices_of(name).await;
+        if let Err(error) = self.store.delete_p2p_box(name.to_owned()).await {
+            tracing::warn!(%error, host = %name, "cannot forget the pairing with the box");
+        }
+        lock(&self.remote.restore_errors).remove(name);
+        drop(connecting);
+        tracing::info!(host = %name, "forgot an ephemeral box that stayed unreachable");
+        self.bus.emit(
+            devlanes_proto::remote::STATE_EVENT,
+            json!({"host": name, "state": "stopped"}),
+        );
+        self.announce_findings();
+        self.reconcile_box_ports().await;
+        self.reassign();
+        self.publish_routes();
     }
 
     /// `base`, or the first of `base-2` to `base-9` no other box here has,

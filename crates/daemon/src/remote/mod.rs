@@ -530,6 +530,8 @@ struct Reach {
     /// How sessions present a token and ask for a code; `None` for a box
     /// paired by ticket.
     pairing: Option<Arc<dyn devlanes_transport::PairingClient>>,
+    /// [`HostConn::gave_up`].
+    gave_up: Option<Arc<AtomicBool>>,
 }
 
 /// One `connect`ed box: the link, its mirror and its syncs.
@@ -539,6 +541,9 @@ pub(crate) struct HostConn {
     /// What `remote_hosts.address` records: the name for SSH and command
     /// boxes, `p2p:` and the key's short form for a box paired by ticket.
     address: String,
+    /// For an ephemeral box paired by ticket, set once its link stopped
+    /// trying because the box stayed away, which forgets the box.
+    gave_up: Option<Arc<AtomicBool>>,
     state: watch::Receiver<LinkState>,
     registry: ClientRegistry,
     link: tokio::sync::Mutex<Option<Link>>,
@@ -1548,6 +1553,7 @@ impl Inner {
                 // ever sent to it; a refused session waits in
                 // `needs_pairing` for a new ticket.
                 Reach {
+                    gave_up: paired.ephemeral.then(|| attempts.gave_up()),
                     transport: Arc::new(attempts),
                     kind: P2P,
                     address: p2p_address(&paired.peer_key),
@@ -1581,6 +1587,7 @@ impl Inner {
                     kind: remote.kind,
                     address: host.to_owned(),
                     pairing: Some(pairing),
+                    gave_up: None,
                 }
             }
         };
@@ -1594,6 +1601,7 @@ impl Inner {
             name: host.to_owned(),
             kind: reach.kind,
             address: reach.address,
+            gave_up: reach.gave_up,
             state: link.state(),
             registry: link.registry().clone(),
             link: tokio::sync::Mutex::new(Some(link)),
@@ -2371,6 +2379,16 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
         } else if conn.ended() {
             inner.announce_findings();
             inner.reconcile_box_ports().await;
+            if conn
+                .gave_up
+                .as_ref()
+                .is_some_and(|gave_up| gave_up.swap(false, Ordering::SeqCst))
+            {
+                // In a task of its own: forgetting closes this link, and
+                // closing waits for this watcher.
+                let (engine, name, serial) = (inner.clone(), conn.name.clone(), conn.serial);
+                tokio::spawn(async move { engine.forget_peer_box(&name, serial).await });
+            }
         }
         drop(inner);
         tokio::select! {
@@ -2714,6 +2732,7 @@ mod tests {
             name: name.into(),
             kind: "memory",
             address: name.into(),
+            gave_up: None,
             state,
             registry: ClientRegistry::default(),
             link: tokio::sync::Mutex::new(None),

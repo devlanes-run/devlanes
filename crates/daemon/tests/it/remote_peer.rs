@@ -1,11 +1,13 @@
 //! A client paired by ticket over memory peer endpoints: `remote.connect`
 //! with a ticket pairs with the phase 2 box and keeps the box under its
 //! name, the link reconnects while the box has no direct path, and stops
-//! for good once the box refuses this machine. A child of `remote`, whose
-//! box and client harness it reuses.
+//! for good once the box refuses this machine. A starting daemon restores
+//! such a box and stops it, or forgets an ephemeral one, once it stayed
+//! away too long, from stored times. A child of `remote`, whose box and
+//! client harness it reuses.
 
 use devlanes_proto::{Context, Method};
-use devlanes_state::Store;
+use devlanes_state::{P2pBox, RemoteHost, RemoteLaneChoice, Store};
 use devlanes_transport::{PeerEndpoint, memory::MemoryPeers};
 use serde_json::{Value, json};
 
@@ -156,6 +158,120 @@ async fn a_ticket_pairs_and_connects_until_the_box_refuses_the_key() {
         store.close().await.expect("close");
         client.stop().await;
         side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A starting daemon restores a box paired by ticket that is offline,
+/// counting from when it was last reached. Away 25 hours, the first failed
+/// dial ends the link `failed` with the give-up text, keeping its pairing,
+/// and `remote.connect` tries again. Ephemeral and away 2 hours, it is
+/// forgotten: its connection record, lane choices and pairing are deleted,
+/// another box's lane choice stays, and `remote ls` no longer lists it.
+async fn a_restored_box_that_stayed_away_too_long_stops_or_is_forgotten() {
+    tokio::time::timeout(LIMIT, async {
+        let hour = 60 * 60 * 1000;
+        for (ephemeral, away, ports) in [
+            (false, 25 * hour, "11900-11949"),
+            (true, 2 * hour, "11950-11999"),
+        ] {
+            let tmp = temp();
+            let home = tmp.path.join("client");
+            std::fs::create_dir_all(&home).expect("home");
+            let store = Store::open(home.join("state.db")).await.expect("store");
+            let now = i64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock")
+                    .as_millis(),
+            )
+            .expect("millis");
+            let key = "e".repeat(64);
+            store
+                .upsert_remote_host(RemoteHost {
+                    name: "acme".into(),
+                    transport: "p2p".into(),
+                    address: "p2p:eeeeeeee".into(),
+                    daemon_version: None,
+                    last_connected: Some(now - away),
+                    wanted: true,
+                })
+                .await
+                .expect("connection record");
+            store
+                .add_p2p_box(P2pBox {
+                    name: "acme".into(),
+                    peer_key: key,
+                    relay_url: None,
+                    direct_addrs: Vec::new(),
+                    ephemeral,
+                    paired_at: now - 30 * hour,
+                })
+                .await
+                .expect("pairing");
+            for (lane, host) in [("boxapp@0", "acme"), ("otherapp@0", "other")] {
+                store
+                    .set_remote_lane_choice(RemoteLaneChoice {
+                        lane: lane.into(),
+                        host: host.into(),
+                        chosen_at: now,
+                    })
+                    .await
+                    .expect("lane choice");
+            }
+            store.close().await.expect("close");
+
+            // No endpoint has the stored key, so every dial is unreachable.
+            let client =
+                ClientSide::start_peer(&tmp, "client", ports, &[], MemoryPeers::new().endpoint())
+                    .await;
+            let store = Store::open(home.join("state.db")).await.expect("store");
+            if ephemeral {
+                let forgotten = eventually(SOON, || async {
+                    let boxes = store.p2p_boxes().await.ok()?;
+                    let hosts = store.remote_hosts().await.ok()?;
+                    (boxes.is_empty() && hosts.is_empty()).then_some(())
+                })
+                .await;
+                assert!(forgotten.is_some(), "{:?}", store.p2p_boxes().await);
+                let choices: Vec<String> = store
+                    .remote_lane_choices()
+                    .await
+                    .expect("choices")
+                    .into_iter()
+                    .map(|choice| choice.host)
+                    .collect();
+                assert_eq!(choices, ["other"]);
+                assert_eq!(client.host_named("acme").await, Value::Null);
+            } else {
+                let failed = host_when(&client, "acme", |host| host["state"] == "failed").await;
+                let Some(failed) = failed else {
+                    panic!("the link stops: {}", client.host_named("acme").await);
+                };
+                assert!(
+                    failed["error"]
+                        .as_str()
+                        .is_some_and(|error| error.contains("for 24 hours")),
+                    "{failed}"
+                );
+                assert_eq!(store.p2p_boxes().await.expect("boxes").len(), 1);
+                connect_unattended(&client, json!({"host": "acme"}))
+                    .await
+                    .expect("connect again");
+                let retrying = host_when(&client, "acme", |host| {
+                    host["state"] == "reconnecting"
+                        && host["error"]
+                            .as_str()
+                            .is_some_and(|error| error.contains("not reachable"))
+                })
+                .await;
+                assert!(retrying.is_some(), "{}", client.host_named("acme").await);
+            }
+            store.close().await.expect("close");
+            client.stop().await;
+        }
     })
     .await
     .expect("timeout");

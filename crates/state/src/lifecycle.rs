@@ -150,7 +150,8 @@ pub struct RemoteHost {
     pub transport: String,
     pub address: String,
     pub daemon_version: Option<String>,
-    /// Unix milliseconds of the last successful connection.
+    /// Unix milliseconds of the last successful connection; for a box
+    /// paired by ticket, of the end of its last session once one ended.
     pub last_connected: Option<i64>,
     /// Connected with `remote connect` and not disconnected since: a restarted
     /// daemon connects it again.
