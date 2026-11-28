@@ -191,12 +191,14 @@ impl Call {
     }
 
     /// The arguments as shown to the user and the client, with `<ticket>`
-    /// for a pairing ticket: a secret, and too long to read in a question.
+    /// for an argument that is a pairing ticket and nothing else: a secret,
+    /// and too long to read in a question. An argument with anything else in
+    /// it stays whole, so the user sees what they agree to.
     pub fn shown_args(&self) -> Vec<&str> {
         self.args
             .iter()
             .map(|arg| {
-                if devlanes_proto::remote::holds_ticket(devlanes_cli::pasted(arg)) {
+                if devlanes_proto::remote::is_ticket_text(devlanes_cli::pasted(arg)) {
                     "<ticket>"
                 } else {
                     arg.as_str()
@@ -296,7 +298,7 @@ impl Call {
             Command::Remote { command } => match command {
                 // The ticket is a secret, and too long to read in a question.
                 RemoteCommand::Connect { host, .. }
-                    if devlanes_proto::remote::holds_ticket(devlanes_cli::pasted(host)) =>
+                    if devlanes_proto::remote::is_ticket_text(devlanes_cli::pasted(host)) =>
                 {
                     "Pair with the box in this ticket and mirror its lanes here?".into()
                 }
@@ -350,10 +352,10 @@ impl Call {
     }
 }
 
-/// A box name for a question to the user, `<ticket>` when it holds a
-/// pairing ticket.
+/// A box name for a question to the user, `<ticket>` when it is a pairing
+/// ticket and nothing else.
 fn shown_host(host: &str) -> &str {
-    if devlanes_proto::remote::holds_ticket(devlanes_cli::pasted(host)) {
+    if devlanes_proto::remote::is_ticket_text(devlanes_cli::pasted(host)) {
         "<ticket>"
     } else {
         host

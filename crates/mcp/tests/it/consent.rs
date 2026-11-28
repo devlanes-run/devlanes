@@ -177,7 +177,9 @@ async fn named_tools_ask_too() {
 #[tokio::test]
 /// Pairing by ticket asks about the box in the ticket without showing the
 /// ticket, a secret, and runs with it after a yes; neither the result's
-/// structured content nor a declined answer shows it.
+/// structured content nor a declined answer shows it, nor a usage error
+/// about half of it. An argument that only contains a ticket-like run, such
+/// as a URL, is shown whole.
 async fn a_ticket_is_never_shown_in_the_question() {
     tokio::time::timeout(LIMIT, async {
         // Made up: right prefix and letters, nothing a box would accept.
@@ -230,6 +232,35 @@ async fn a_ticket_is_never_shown_in_the_question() {
             .await;
         assert!(failed(&result));
         assert!(!text(&result).contains(&ticket), "{}", text(&result));
+
+        // A ticket split in two by a paste is a usage error that does not
+        // quote the second half back to the model.
+        let (first, second) = ticket.split_at(70);
+        let result = declining
+            .call("devlanes", &["remote", "connect", first, second])
+            .await;
+        assert!(failed(&result));
+        assert!(!text(&result).contains(second), "{}", text(&result));
+
+        // Text that only contains a ticket-like run is shown whole: hiding
+        // it would hide what the user agrees to.
+        let url = format!("https://relay.example.invalid/{}", "a".repeat(64));
+        let asking = connect(
+            TestClient::new().answering(ElicitationAction::Accept),
+            Lifecycle::Initialize,
+            |_| {},
+        )
+        .await;
+        asking
+            .call("devlanes", &["config", "set", "remote.relays", &url])
+            .await;
+        let questions = asking.handler.questions();
+        assert!(
+            questions
+                .first()
+                .is_some_and(|question| question.contains(&url) && !question.contains("<ticket>")),
+            "{questions:?}"
+        );
 
         // The question asked again for a command's own confirmation.
         let confirming = connect(

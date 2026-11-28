@@ -1518,6 +1518,19 @@ pub mod remote {
     /// whose prefix was mistyped). No host name label, box name or user
     /// name in use is that long.
     pub fn holds_ticket(text: &str) -> bool {
+        holds(text)
+    }
+
+    /// Whether `text` is nothing but ticket text, letters and digits that
+    /// [`holds_ticket`]: what may be hidden from a person as `<ticket>`. Text
+    /// with anything else in it, such as a URL or `KEY=VALUE`, is never
+    /// ticket text, so hiding it cannot hide what a command does.
+    pub fn is_ticket_text(text: &str) -> bool {
+        !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric()) && holds(text)
+    }
+
+    /// [`holds_ticket`].
+    fn holds(text: &str) -> bool {
         let base32 = |c: char| matches!(c.to_ascii_lowercase(), 'a'..='z' | '2'..='7');
         let prefixed = text
             .get(..TICKET_PREFIX.len())
