@@ -684,11 +684,11 @@ fn listed(lab: &Lab, name: &str) -> Result<Option<serde_json::Value>> {
 /// On Windows a paste reaches the TUI as key presses, which ConPTY makes
 /// from the bytes written here. A ticket pasted into the Boxes view, with a
 /// connected box paired by ticket selected, and pasted again into the
-/// question its `d` opens, must leave the box connected and paired on both
-/// sides and must not open the pairing modal, whose `p` asks the daemon for
-/// a ticket. What runs depends on how ConPTY and the TUI split the paste
-/// into reads, so this runs by hand, before a release or after a change to
-/// how the TUI reads keys.
+/// question its `d` opens, and `dy` written at once, must leave the box
+/// connected and paired on both sides and must not make the client's daemon
+/// issue a ticket, as a pasted `p` would. What runs depends on how ConPTY
+/// and the TUI split the paste into reads, so this runs by hand, before a
+/// release or after a change to how the TUI reads keys.
 #[cfg(windows)]
 #[test]
 #[ignore = "needs a Windows console; timing-dependent"]
@@ -735,14 +735,26 @@ fn a_pasted_ticket_answers_no_question() -> Result<()> {
     // What a user pastes: a fresh ticket, which the box keeps open meanwhile,
     // as `y` copies it, with no line break.
     let pasted = ticket(&boxed)?;
-    for round in 1..=6 {
+    // A pasted `p` asks the client's daemon for a ticket, and a later letter
+    // may close the modal again, so the daemon's log tells, not the screen.
+    let daemon_log = client.home().join("logs").join("daemon.log");
+    let asked_for_a_ticket = || {
+        std::fs::read_to_string(&daemon_log)
+            .unwrap_or_default()
+            .contains("issued a pairing")
+    };
+    // Six pastes of a ticket, every other one into an open question, then
+    // `dy` in one write: the question `d` opens and the `y` that answers it,
+    // which confirms it whenever the guards are off.
+    for round in 1..=7 {
+        let bytes: &[u8] = if round == 7 { b"dy" } else { pasted.as_bytes() };
         if round % 2 == 0 {
             // The question is open before the paste arrives.
             tui.keys(b"d")?;
             tui.wait_for_text(&format!("Disconnect {name}?"))?;
             thread::sleep(Duration::from_millis(500));
         }
-        tui.keys(pasted.as_bytes())?;
+        tui.keys(bytes)?;
         thread::sleep(Duration::from_secs(2));
         let screen = tui.dump();
         let entry = listed(&client, &name)?
@@ -761,9 +773,9 @@ fn a_pasted_ticket_answers_no_question() -> Result<()> {
                 "round {round}: the box has no paired client: {clients}\n{screen}"
             )));
         }
-        if screen.contains("pair another machine") {
+        if asked_for_a_ticket() {
             return Err(Error::Unexpected(format!(
-                "round {round}: the paste opened the pairing modal\n{screen}"
+                "round {round}: the paste asked the daemon for a ticket\n{screen}"
             )));
         }
         // A question still open is declined with a typed `n`, after a pause;
