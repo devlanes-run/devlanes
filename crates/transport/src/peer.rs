@@ -89,7 +89,10 @@ pub struct PeerIdError;
 pub struct PeerAddr {
     /// The peer's key.
     pub id: PeerId,
-    /// The relay the peer was on, such as `https://relay1.devlanes.run`.
+    /// The relay the peer was on, such as `https://relay1.devlanes.run`. A
+    /// dial uses it only when it is one of the dialing endpoint's own
+    /// relays: it comes from a ticket someone pasted, so it must not make
+    /// this machine contact a host of the ticket's choosing.
     pub relay: Option<String>,
     /// IP addresses the peer reported, tried directly.
     pub direct: Vec<SocketAddr>,
@@ -270,18 +273,37 @@ pub struct Ticket {
 #[non_exhaustive]
 pub enum TicketError {
     /// It does not start with the ticket prefix.
-    #[error("a pairing ticket starts with `{TICKET_PREFIX}`")]
+    #[error(
+        "a pairing ticket starts with `{TICKET_PREFIX}`; copy the ticket again from `devlanes \
+         daemon pair` on the box"
+    )]
     Prefix,
+    /// It is longer than the largest ticket, so it is not decoded.
+    #[error(
+        "the pairing ticket is longer than any ticket can be; copy the ticket again from \
+         `devlanes daemon pair` on the box"
+    )]
+    TooLong,
     /// It has characters a ticket cannot have.
-    #[error("the pairing ticket has characters a ticket cannot have")]
+    #[error(
+        "the pairing ticket has characters a ticket cannot have; copy the ticket again from \
+         `devlanes daemon pair` on the box"
+    )]
     Base32,
     /// Its checksum does not match, as after a typing mistake.
-    #[error("the pairing ticket is damaged; copy it again from `devlanes daemon pair`")]
+    #[error(
+        "the pairing ticket is damaged; copy the ticket again from `devlanes daemon pair` on the \
+         box"
+    )]
     Checksum,
     /// The checksum matches but the fields do not fit together.
-    #[error("the pairing ticket's fields are invalid")]
+    #[error(
+        "the pairing ticket's fields are invalid; copy the ticket again from `devlanes daemon \
+         pair` on the box"
+    )]
     Layout,
     /// It sets flags this devlanes does not know, as a newer one would.
+    /// Copying it again would not help, so the action differs.
     #[error("the pairing ticket comes from a newer devlanes; update devlanes on this machine")]
     Flags,
 }
@@ -357,7 +379,7 @@ impl Ticket {
     pub fn parse(text: &str) -> Result<Self, TicketError> {
         let text = text.trim();
         if text.len() > MAX_TICKET_TEXT {
-            return Err(TicketError::Layout);
+            return Err(TicketError::TooLong);
         }
         let body = text
             .get(..TICKET_PREFIX.len())
@@ -567,7 +589,7 @@ mod tests {
             // Longer than any ticket: refused before it is decoded.
             (
                 format!("dlp1{}", "a".repeat(MAX_TICKET_TEXT)),
-                TicketError::Layout,
+                TicketError::TooLong,
             ),
         ];
         for (text, error) in cases {

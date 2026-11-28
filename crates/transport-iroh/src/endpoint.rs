@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::Duration;
@@ -13,16 +14,23 @@ use devlanes_transport::{
     Admission, Alpn, BoxConnection, PAIR_ALPN, PeerAddr, PeerEndpoint, PeerError, PeerId,
     PeerIncoming, TUNNEL_ALPN, TransportError,
 };
-use iroh::address_lookup::{DnsAddressLookup, PkarrPublisher, PkarrResolver};
+use futures_util::{Stream, StreamExt};
+use iroh::address_lookup::{
+    AddressLookup, DnsAddressLookup, EndpointData, EndpointInfo, Error as LookupError,
+    Item as LookupItem, PkarrPublisher, PkarrResolver,
+};
 use iroh::endpoint::{
     self, AfterHandshakeOutcome, EndpointHooks, PortmapperConfig, QuicTransportConfig, Side,
     VarInt, WeakConnectionHandle, presets,
 };
-use iroh::{Endpoint, EndpointAddr, PublicKey, RelayMode, RelayUrl, SecretKey, Watcher};
+use iroh::{
+    Endpoint, EndpointAddr, PublicKey, RelayMode, RelayUrl, SecretKey, TransportAddr, Watcher,
+};
 use tokio::sync::{OnceCell, mpsc};
 
 use crate::connection::{IrohConnection, IrohServerConnection, NO_DIRECT_PATH, REFUSED};
 use crate::key;
+use crate::text::peer_text;
 
 /// How long a dial waits for a direct path: three of iroh's 5 s hole-punch
 /// rounds. Locally a direct path took 2 to 31 ms.
@@ -83,8 +91,10 @@ pub struct IrohOptions {
     pub key_file: PathBuf,
     /// Relay URLs such as `https://relay1.devlanes.run`. Empty for none: then
     /// peers connect only through the addresses they know of each other.
-    /// The daemon's config validates them; one that does not parse here
-    /// fails the bind.
+    /// They are also the only relays a dial uses: a relay from a `PeerAddr`
+    /// or from a box's address record that is not in this list is dropped,
+    /// and the dial tries the direct addresses alone. The daemon's config
+    /// validates them; one that does not parse here fails the bind.
     pub relays: Vec<String>,
     /// Publish this endpoint's relay to n0's DNS while listening, and look
     /// peers up there when dialing. Its own option because iroh asks every
@@ -100,6 +110,9 @@ pub struct IrohOptions {
 /// This machine's peer-to-peer endpoint over iroh.
 pub struct IrohEndpoint {
     options: IrohOptions,
+    /// `options.relays` parsed: the only relays a dial or a lookup result
+    /// may lead to.
+    own_relays: Arc<[RelayUrl]>,
     key: OnceCell<SecretKey>,
     bound: OnceCell<Bound>,
     shared: Arc<Shared>,
@@ -332,6 +345,11 @@ impl IrohEndpoint {
         let (tunnel, tunnel_rx) = mpsc::channel(TUNNEL_QUEUE);
         let (pair, pair_rx) = mpsc::channel(PAIR_QUEUE);
         Self {
+            own_relays: options
+                .relays
+                .iter()
+                .filter_map(|url| url.parse().ok())
+                .collect(),
             options,
             key: OnceCell::new(),
             bound: OnceCell::new(),
@@ -412,7 +430,7 @@ impl IrohEndpoint {
         };
         // `Empty` sets nothing, so every choice is made here: ring like
         // crates/pki and crates/proxy, never a process-wide default.
-        let mut builder = Endpoint::builder(presets::Empty)
+        let builder = Endpoint::builder(presets::Empty)
             .crypto_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .secret_key(key)
             .relay_mode(relay_mode)
@@ -421,20 +439,16 @@ impl IrohEndpoint {
             .hooks(Gatekeeper {
                 shared: self.shared.clone(),
             });
-        if self.looks_up() {
-            // n0's DNS (dns.iroh.link); n0's docs allow production use "if you
-            // find performance acceptable", and tickets carry the relay and
-            // addresses, so pairing does not wait on it. Resolvers only: an
-            // endpoint publishes while it listens.
-            builder = builder
-                .address_lookup(PkarrResolver::n0_dns())
-                .address_lookup(DnsAddressLookup::n0_dns());
-        }
         let endpoint = builder
             .bind()
             .await
             .map_err(|error| PeerError::Bind(error.to_string()))?;
         tracing::debug!(sockets = ?endpoint.bound_sockets(), "peer-to-peer endpoint bound");
+        if self.looks_up() {
+            // Added after the bind rather than on the builder, so they can be
+            // wrapped in `OwnRelays`; nothing dials in between.
+            self.add_resolvers(&endpoint)?;
+        }
         let Some(queues) = self.queues() else {
             // Closed while binding: dropping an endpoint without closing it
             // aborts its connections and iroh logs that as an error.
@@ -460,52 +474,163 @@ impl IrohEndpoint {
             return Ok(());
         }
         let lookup = endpoint.address_lookup().map_err(|_| PeerError::Closed)?;
-        let resolver = endpoint.dns_resolver().map_err(|_| PeerError::Closed)?;
-        let tls = endpoint.tls_config().clone();
         if on {
+            let resolver = endpoint.dns_resolver().map_err(|_| PeerError::Closed)?;
             // Publishes the relay URL only (iroh's default filter), never the
             // IP addresses.
             lookup.add(
                 PkarrPublisher::n0_dns()
                     .dns_resolver(resolver.clone())
-                    .build(endpoint.secret_key().clone(), tls),
+                    .build(endpoint.secret_key().clone(), endpoint.tls_config().clone()),
             );
         } else {
             // No single removal exists, so the resolvers go back in after
             // the clear; dropping the publisher stops its task.
             lookup.clear();
-            lookup.add(
-                PkarrResolver::n0_dns()
-                    .dns_resolver(resolver.clone())
-                    .build(tls),
-            );
-            lookup.add(
-                DnsAddressLookup::n0_dns()
-                    .dns_resolver(resolver.clone())
-                    .build(),
-            );
+            self.add_resolvers(endpoint)?;
         }
         *publishing = on;
         Ok(())
     }
 
-    /// The iroh address of `addr`: its relay and direct addresses.
-    fn target(addr: &PeerAddr) -> Result<EndpointAddr, PeerError> {
+    /// Adds n0's resolvers (dns.iroh.link), each behind [`OwnRelays`]. n0's
+    /// docs allow production use "if you find performance acceptable", and
+    /// tickets carry the relay and addresses, so pairing does not wait on
+    /// it. Resolvers only: an endpoint publishes while it listens.
+    fn add_resolvers(&self, endpoint: &Endpoint) -> Result<(), PeerError> {
+        let lookup = endpoint.address_lookup().map_err(|_| PeerError::Closed)?;
+        let resolver = endpoint.dns_resolver().map_err(|_| PeerError::Closed)?;
+        let pkarr = PkarrResolver::n0_dns()
+            .dns_resolver(resolver.clone())
+            .build(endpoint.tls_config().clone());
+        let dns = DnsAddressLookup::n0_dns()
+            .dns_resolver(resolver.clone())
+            .build();
+        lookup.add(OwnRelays::new(pkarr, self.own_relays.clone()));
+        lookup.add(OwnRelays::new(dns, self.own_relays.clone()));
+        Ok(())
+    }
+
+    /// The iroh address of `addr`: its direct addresses, and its relay when
+    /// that is one of this endpoint's own. The second value is the relay's
+    /// cleaned host when it was dropped, for the log and the error.
+    ///
+    /// iroh opens a relay connection to any URL it is handed, also outside
+    /// its relay map: a WebSocket upgrade to `<url>/relay` that carries this
+    /// machine's public key, over plain `ws` for an `http` URL. A `PeerAddr`
+    /// comes from a ticket someone pasted, so a foreign relay could point
+    /// that request at localhost, a LAN device or an internal host.
+    fn target(&self, addr: &PeerAddr) -> Result<(EndpointAddr, Option<String>), PeerError> {
         let id = PublicKey::from_bytes(&addr.id.0).map_err(|_| PeerError::InvalidId(addr.id))?;
         let mut target = EndpointAddr::new(id);
+        let mut dropped = None;
         if let Some(relay) = &addr.relay {
-            match relay.parse::<RelayUrl>() {
-                Ok(url) => target = target.with_relay_url(url),
-                Err(error) => {
-                    tracing::debug!(%relay, %error, "ignoring a relay URL that does not parse")
+            match own_relay(&self.own_relays, relay) {
+                Some(url) => target = target.with_relay_url(url),
+                None => {
+                    let host = relay_host(relay);
+                    tracing::debug!(%host, "not dialing a relay this machine does not use");
+                    dropped = Some(host);
                 }
             }
         }
         for direct in &addr.direct {
             target = target.with_ip_addr(*direct);
         }
-        Ok(target)
+        Ok((target, dropped))
     }
+}
+
+/// `error` with the relay the dial dropped named in its cause, so the caller
+/// can tell the user why a box that is only reachable through its relay was
+/// not reached.
+fn with_dropped_relay(error: PeerError, dropped: Option<&str>) -> PeerError {
+    match (error, dropped) {
+        (PeerError::Unreachable(cause), Some(host)) => PeerError::Unreachable(format!(
+            "{cause}; the box's relay {host} is not one this machine uses"
+        )),
+        (error, _) => error,
+    }
+}
+
+/// `url` as one of `own`, the endpoint's configured relays, or `None`.
+/// Compared as parsed relay URLs, so the host's case, a default port and a
+/// trailing slash make no difference.
+fn own_relay(own: &[RelayUrl], url: &str) -> Option<RelayUrl> {
+    let url = url.parse::<RelayUrl>().ok()?;
+    own.contains(&url).then_some(url)
+}
+
+/// The host (and port) of a relay URL from a `PeerAddr`, cleaned for a
+/// message; the whole text, cleaned, when it does not parse.
+fn relay_host(url: &str) -> String {
+    let parsed = url.parse::<RelayUrl>().ok();
+    let host = parsed.as_ref().and_then(|url| {
+        let host = url.host_str()?;
+        Some(match url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_owned(),
+        })
+    });
+    peer_text(&host.unwrap_or_else(|| url.to_owned()))
+}
+
+/// A resolver whose results name only this endpoint's own relays. A box
+/// publishes its address record itself, so without this a hostile box found
+/// by id could make a dial open a relay connection to a URL of its choice,
+/// as a hostile ticket could (see `IrohEndpoint::target`). Direct addresses
+/// and user data pass unchanged.
+#[derive(Debug)]
+struct OwnRelays<L> {
+    inner: L,
+    own: Arc<[RelayUrl]>,
+}
+
+impl<L> OwnRelays<L> {
+    /// Wraps `inner`, letting through only relays in `own`.
+    fn new(inner: L, own: Arc<[RelayUrl]>) -> Self {
+        Self { inner, own }
+    }
+}
+
+/// What a resolver yields, as iroh's `AddressLookup::resolve` names it.
+type Resolved = Pin<Box<dyn Stream<Item = Result<LookupItem, LookupError>> + Send>>;
+
+impl<L: AddressLookup> AddressLookup for OwnRelays<L> {
+    /// Forwards to the inner service; the resolvers wrapped here publish nothing.
+    fn publish(&self, data: &EndpointData) {
+        self.inner.publish(data);
+    }
+
+    /// The inner resolver's items with foreign relay URLs removed.
+    fn resolve(&self, endpoint_id: iroh::EndpointId) -> Option<Resolved> {
+        let own = self.own.clone();
+        let items = self.inner.resolve(endpoint_id)?;
+        Some(Box::pin(items.map(move |item| {
+            item.map(|item| without_foreign_relays(item, &own))
+        })))
+    }
+}
+
+/// `item` with the relay URLs that are not in `own` removed.
+fn without_foreign_relays(item: LookupItem, own: &[RelayUrl]) -> LookupItem {
+    let info = item.endpoint_info();
+    let kept: Vec<TransportAddr> = info
+        .data
+        .addrs()
+        .filter(|addr| match addr {
+            TransportAddr::Relay(url) => own.contains(url),
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    let mut data = EndpointData::new(kept);
+    data.set_user_data(info.data.user_data().cloned());
+    LookupItem::new(
+        EndpointInfo::from_parts(info.endpoint_id, data),
+        item.provenance(),
+        item.last_updated(),
+    )
 }
 
 /// Whether `error` is the box refusing this machine's key.
@@ -514,19 +639,22 @@ fn is_refused(error: &endpoint::ConnectionError) -> bool {
         if close.error_code.into_inner() == u64::from(REFUSED))
 }
 
-/// The typed failure of a dial whose connection closed with `error`.
+/// The typed failure of a dial whose connection closed with `error`. The
+/// refusal is told by its close code; the text, which carries the box's
+/// reason bytes, is cleaned.
 fn closed_dial(error: &endpoint::ConnectionError) -> PeerError {
     if is_refused(error) {
         PeerError::Refused
     } else {
-        PeerError::Unreachable(error.to_string())
+        PeerError::Unreachable(peer_text(&error.to_string()))
     }
 }
 
 /// The typed failure of a dial that never produced a connection: the box's
 /// refusal when the close arrived during the handshake, else the whole chain
 /// of causes, since iroh's outer message alone ("Unable to connect to
-/// remote") says nothing.
+/// remote") says nothing. Each cause is cleaned on its own, since a close
+/// among them carries the box's text.
 fn dial_failed(error: endpoint::ConnectError) -> PeerError {
     let closed = match &error {
         endpoint::ConnectError::Connection { source, .. } => Some(source),
@@ -539,10 +667,10 @@ fn dial_failed(error: endpoint::ConnectError) -> PeerError {
     if closed.is_some_and(is_refused) {
         return PeerError::Refused;
     }
-    let mut text = error.to_string();
+    let mut text = peer_text(&error.to_string());
     let mut cause = std::error::Error::source(&error);
     while let Some(next) = cause {
-        let next_text = next.to_string();
+        let next_text = peer_text(&next.to_string());
         if !text.ends_with(&next_text) {
             text = format!("{text}: {next_text}");
         }
@@ -562,6 +690,7 @@ async fn accept_loop(endpoint: Endpoint, shared: Arc<Shared>, queues: Queues) {
             let connection = match incoming.await {
                 Ok(connection) => connection,
                 Err(error) => {
+                    let error = peer_text(&error.to_string());
                     tracing::debug!(%error, "incoming peer connection failed");
                     return;
                 }
@@ -640,11 +769,11 @@ impl PeerEndpoint for IrohEndpoint {
     /// and the box closes it with the refused code, which both waits see.
     async fn connect(&self, addr: &PeerAddr, alpn: Alpn) -> Result<BoxConnection, TransportError> {
         let endpoint = self.bound().await?;
-        let target = Self::target(addr)?;
+        let (target, dropped) = self.target(addr)?;
         let connection = endpoint
             .connect(target, alpn.bytes())
             .await
-            .map_err(dial_failed)?;
+            .map_err(|error| with_dropped_relay(dial_failed(error), dropped.as_deref()))?;
         // Subscribed before the gate: the subscription delivers only later
         // events, so a relay selected after the gate's snapshot is not missed.
         let events = connection.path_events();
@@ -749,5 +878,65 @@ impl PeerEndpoint for IrohEndpoint {
         if let Some(bound) = self.bound.get() {
             bound.endpoint.close().await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroh::RelayUrlParseError;
+    use iroh::address_lookup::MemoryLookup;
+
+    use super::*;
+
+    /// A relay URL counts as one of the endpoint's own when it names the same
+    /// relay in another spelling, and only then.
+    #[test]
+    fn a_relay_is_own_in_any_spelling_and_foreign_otherwise() -> Result<(), RelayUrlParseError> {
+        let own: Vec<RelayUrl> = vec![
+            "https://relay1.devlanes.run".parse()?,
+            "http://127.0.0.1:3340".parse()?,
+        ];
+        let cases = [
+            ("https://relay1.devlanes.run/", true),
+            ("https://RELAY1.devlanes.run:443", true),
+            ("http://127.0.0.1:3340/", true),
+            ("https://relay2.devlanes.run", false),
+            ("http://relay1.devlanes.run", false),
+            ("http://127.0.0.1:3341", false),
+            ("https://relay1.devlanes.run/elsewhere", false),
+            ("not a url", false),
+        ];
+        for (url, is_own) in cases {
+            assert_eq!(own_relay(&own, url).is_some(), is_own, "{url}");
+        }
+        Ok(())
+    }
+
+    /// An address record a box published reaches the dial without the
+    /// relays this machine does not use, and with its own relay and the
+    /// direct addresses as they were.
+    #[tokio::test]
+    async fn lookup_results_lose_foreign_relays_only() -> Result<(), Box<dyn std::error::Error>> {
+        let own: RelayUrl = "https://relay1.devlanes.run".parse()?;
+        let foreign: RelayUrl = "http://192.168.1.1:8080".parse()?;
+        let direct: SocketAddr = "192.0.2.7:4433".parse()?;
+        let id = SecretKey::generate().public();
+        let records = MemoryLookup::new();
+        records.add_endpoint_info(EndpointAddr::from_parts(
+            id,
+            [
+                TransportAddr::Relay(foreign),
+                TransportAddr::Relay(own.clone()),
+                TransportAddr::Ip(direct),
+            ],
+        ));
+        let lookup = OwnRelays::new(records, Arc::from([own.clone()]));
+        let mut items = lookup.resolve(id).ok_or("no lookup")?;
+        let item = items.next().await.ok_or("no item")??;
+        let relays: Vec<_> = item.relay_urls().cloned().collect();
+        let ips: Vec<_> = item.ip_addrs().copied().collect();
+        assert_eq!(relays, [own]);
+        assert_eq!(ips, [direct]);
+        Ok(())
     }
 }
