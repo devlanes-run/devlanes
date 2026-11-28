@@ -891,7 +891,7 @@ pub(crate) enum GuiStart {
     /// A GUI service on a machine without a GUI backend: it runs as before.
     NoBackend,
     /// The host runs and its variables are in the unit's launch.
-    Host(StartedHost),
+    Host(Box<StartedHost>),
 }
 
 impl Inner {
@@ -969,7 +969,7 @@ impl Inner {
         let mut launch = apply_env(&mut request.spec, &request.launch, started.ready());
         launch.notes.extend(started.note.clone());
         request.launch = Arc::new(launch);
-        Ok(GuiStart::Host(started))
+        Ok(GuiStart::Host(Box::new(started)))
     }
 
     /// Watches the host of the run `host` of unit `name` until the run ends:
