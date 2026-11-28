@@ -299,7 +299,10 @@ impl Fake {
             }],
             Effect::FetchBoxes => vec![Msg::Boxes(Ok(self.boxes.clone()))],
             Effect::FetchClients => vec![Msg::Clients(Ok(self.clients.clone()))],
-            Effect::Pair => vec![Msg::Paired(self.pairing.clone().map_err(ApiError::Rpc))],
+            Effect::Pair { generation } => vec![Msg::Paired {
+                generation,
+                result: self.pairing.clone().map_err(ApiError::Rpc),
+            }],
             Effect::Connect { generation, host } => (self.connect)(generation, &host),
             // The box in the ticket was paired before and keeps its name.
             Effect::ConnectTicket { generation, .. } => vec![connect_event(
@@ -308,7 +311,10 @@ impl Fake {
                 json!({"host": "studio", "state": "connecting", "attempt": 1,
                        "paired": {"name": "studio", "kept": true, "name_ignored": true}}),
             )],
-            Effect::MintTicket => vec![Msg::TicketMinted(Ok(data::ticket_alone()))],
+            Effect::MintTicket { generation } => vec![Msg::TicketMinted {
+                generation,
+                result: Ok(data::ticket_alone()),
+            }],
             Effect::SaveBoxCommand { generation, .. } => vec![Msg::BoxSaved {
                 generation,
                 result: Ok(()),

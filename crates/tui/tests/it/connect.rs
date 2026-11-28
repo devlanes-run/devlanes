@@ -115,6 +115,22 @@ fn click(column: u16, row: u16) -> Msg {
     })
 }
 
+/// The open pairing modal's generation, 0 without one.
+fn pair_generation(app: &App) -> u64 {
+    match &app.dialog {
+        Some(Dialog::Pair(dialog)) => dialog.generation,
+        _ => 0,
+    }
+}
+
+/// The answer to the open pairing modal's `remote.pair`.
+fn paired(app: &App, result: Result<Value, ApiError>) -> Msg {
+    Msg::Paired {
+        generation: pair_generation(app),
+        result,
+    }
+}
+
 /// The notice's text, empty without one.
 fn notice(app: &App) -> String {
     app.notice
@@ -616,10 +632,10 @@ async fn the_pairing_code_modal() -> TestResult {
     let mut app = boxes_app(100, 30, json!([])).await;
     let effects = app.update(key(KeyCode::Char('p')));
     assert!(
-        effects.iter().any(|e| matches!(e, Effect::Pair)),
+        effects.iter().any(|e| matches!(e, Effect::Pair { .. })),
         "{effects:?}"
     );
-    app.update(Msg::Paired(Ok(pair_reply("K7QM-3XWD"))));
+    app.update(paired(&app, Ok(pair_reply("K7QM-3XWD"))));
     let buffer = render(&app)?;
     assert_clean(&buffer, "the pairing code");
     // The code stands alone on its row, centered in the dialog, bold and in
@@ -687,7 +703,7 @@ async fn the_pairing_code_modal() -> TestResult {
     );
     // A reply without `valid_ms` still counts down from 10 minutes.
     app.update(key(KeyCode::Char('p')));
-    app.update(Msg::Paired(Ok(json!({"code": "K7QM-3XWD"}))));
+    app.update(paired(&app, Ok(json!({"code": "K7QM-3XWD"}))));
     app.update(Msg::Tick);
     assert!(screen(&render(&app)?).contains("expires in 9m 59s"));
 
@@ -697,7 +713,7 @@ async fn the_pairing_code_modal() -> TestResult {
         4,
     );
     app.update(key(KeyCode::Char('p')));
-    app.update(Msg::Paired(Err(ApiError::Rpc(paused))));
+    app.update(paired(&app, Err(ApiError::Rpc(paused))));
     assert!(matches!(
         &app.dialog,
         Some(Dialog::Pair(dialog)) if matches!(dialog.state, PairState::Paused { .. })
@@ -711,7 +727,7 @@ async fn the_pairing_code_modal() -> TestResult {
 
     let off = RpcError::new("connections_off", json!({"invalid": false}), 4);
     app.update(key(KeyCode::Char('p')));
-    app.update(Msg::Paired(Err(ApiError::Rpc(off))));
+    app.update(paired(&app, Err(ApiError::Rpc(off))));
     let text = screen(&render(&app)?);
     assert!(
         text.contains("Connections to this machine are off."),
@@ -737,13 +753,21 @@ async fn the_pairing_modal_asks_for_a_ticket_only_when_told() -> TestResult {
     let asks = |effects: &[Effect]| {
         effects
             .iter()
-            .filter(|e| matches!(e, Effect::Pair | Effect::MintTicket))
+            .filter(|e| matches!(e, Effect::Pair { .. } | Effect::MintTicket { .. }))
             .count()
     };
     assert_eq!(asks(&app.update(key(KeyCode::Char('p')))), 1);
+    // A held or repeated p while the answer is out asks nothing more.
+    let held = Msg::Key(KeyEvent {
+        kind: crossterm::event::KeyEventKind::Repeat,
+        ..KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)
+    });
+    assert_eq!(asks(&app.update(held)), 0);
+    assert_eq!(asks(&app.update(key(KeyCode::Char('p')))), 0);
+    let first = pair_generation(&app);
     let mut reply = pair_reply("K7QM-3XWD");
     reply["ticket"] = json!(test_ticket());
-    app.update(Msg::Paired(Ok(reply)));
+    app.update(paired(&app, Ok(reply)));
     let text = screen(&render(&app)?);
     let ticket_at = text.find(&test_ticket()[..40]).ok_or("no ticket")?;
     let code_at = text.find("--code K7QM-3XWD").ok_or("no code")?;
@@ -758,10 +782,21 @@ async fn the_pairing_modal_asks_for_a_ticket_only_when_told() -> TestResult {
     );
 
     app.update(key(KeyCode::Char('p')));
+    // A late answer to the replaced modal's request is not shown.
+    let mut stale = pair_reply("STAL-E000");
+    stale["ticket"] = json!(test_ticket());
+    app.update(Msg::Paired {
+        generation: first,
+        result: Ok(stale),
+    });
+    assert!(matches!(
+        &app.dialog,
+        Some(Dialog::Pair(dialog)) if dialog.state == PairState::Loading
+    ));
     let mut reply = pair_reply("K7QM-3XWD");
     reply["ticket_error"] = json!({"code": "ticket_not_ready",
         "message": "this machine was still reaching its relay; run devlanes daemon pair again"});
-    app.update(Msg::Paired(Ok(reply)));
+    app.update(paired(&app, Ok(reply)));
     for _ in 0..3 {
         assert_eq!(asks(&app.update(Msg::Tick)), 0);
         render(&app)?;
@@ -778,9 +813,10 @@ async fn the_pairing_modal_asks_for_a_ticket_only_when_told() -> TestResult {
         "one at a time"
     );
     assert!(screen(&render(&app)?).contains("K7QM-3XWD"));
-    app.update(Msg::TicketMinted(Ok(
-        json!({"ticket": test_ticket(), "valid_ms": 600_000}),
-    )));
+    app.update(Msg::TicketMinted {
+        generation: pair_generation(&app),
+        result: Ok(json!({"ticket": test_ticket(), "valid_ms": 600_000})),
+    });
     let text = screen(&render(&app)?);
     assert!(text.contains(&test_ticket()[..40]), "{text}");
     assert!(text.contains("--code K7QM-3XWD"), "{text}");
@@ -803,7 +839,7 @@ async fn o_opens_the_options_on_allow_connections() -> TestResult {
     assert!(row(&render(&app)?, 29).contains("o options"), "the footer");
     app.update(key(KeyCode::Char('p')));
     let off = RpcError::new("connections_off", json!({"invalid": false}), 4);
-    app.update(Msg::Paired(Err(ApiError::Rpc(off))));
+    app.update(paired(&app, Err(ApiError::Rpc(off))));
     assert!(screen(&render(&app)?).contains("o options"));
     app.update(key(KeyCode::Char('o')));
     match &app.dialog {

@@ -837,6 +837,8 @@ pub struct PairDialog {
     pub state: PairState,
     /// Seconds since the state arrived, for the countdowns.
     pub age: u64,
+    /// Which request's answers this modal takes.
+    pub generation: u64,
 }
 
 /// `remote.pair`'s `ticket` in `value`, valid for its `valid_ms` from now.
@@ -870,6 +872,16 @@ impl PairDialog {
         Self {
             state: PairState::Loading,
             age: 0,
+            generation: 0,
+        }
+    }
+
+    /// Whether a request of this modal is out: the first one, or `t`'s.
+    pub fn asking(&self) -> bool {
+        match &self.state {
+            PairState::Loading => true,
+            PairState::Offer(offer) => offer.no_ticket == Some(NoTicket::Fetching),
+            _ => false,
         }
     }
 
@@ -880,6 +892,15 @@ impl PairDialog {
     /// shown in words.
     pub fn answered(&mut self, result: Result<Value, crate::ApiError>) {
         self.age = 0;
+        // An answer with neither while codes are paused reads as the CLI's
+        // `pairing_paused`; with neither and no pause, as its empty answer.
+        let result = match result {
+            Ok(value) => match devlanes_cli::nothing_minted(&value) {
+                Some(error) if error.code != "pairing_empty" => Err(crate::ApiError::Rpc(error)),
+                _ => Ok(value),
+            },
+            error => error,
+        };
         self.state = match result {
             Ok(value) => {
                 let code = value.get("code").and_then(Value::as_str).map(text::clean);
@@ -889,7 +910,7 @@ impl PairDialog {
                     no_ticket(field("code"), field("message"))
                 });
                 if code.is_none() && ticket.is_none() {
-                    PairState::Failed(Worded::local("the daemon sent no code"))
+                    PairState::Failed(Worded::local("the daemon sent neither a ticket nor a code"))
                 } else {
                     PairState::Offer(Offer {
                         no_ticket: if ticket.is_some() {

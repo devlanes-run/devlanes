@@ -844,14 +844,16 @@ impl Executor {
                     deliver(&sender, Msg::Forgotten { host, result }).await;
                 });
             }
-            Effect::Pair => {
+            Effect::Pair { generation } => {
                 tokio::spawn(async move {
-                    deliver(&sender, Msg::Paired(api.pair().await)).await;
+                    let result = api.pair().await;
+                    deliver(&sender, Msg::Paired { generation, result }).await;
                 });
             }
-            Effect::MintTicket => {
+            Effect::MintTicket { generation } => {
                 tokio::spawn(async move {
-                    deliver(&sender, Msg::TicketMinted(api.mint_ticket().await)).await;
+                    let result = api.mint_ticket().await;
+                    deliver(&sender, Msg::TicketMinted { generation, result }).await;
                 });
             }
             Effect::UseLane { lane, host } => {

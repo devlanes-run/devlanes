@@ -889,9 +889,15 @@ pub enum Msg {
         result: Result<Value, ApiError>,
     },
     /// [`Effect::Pair`] is done.
-    Paired(Result<Value, ApiError>),
+    Paired {
+        generation: u64,
+        result: Result<Value, ApiError>,
+    },
     /// [`Effect::MintTicket`] is done.
-    TicketMinted(Result<Value, ApiError>),
+    TicketMinted {
+        generation: u64,
+        result: Result<Value, ApiError>,
+    },
     /// [`Effect::UseLane`] is done.
     LaneUsed {
         lane: String,
@@ -1029,11 +1035,16 @@ pub enum Effect {
     Forget {
         host: String,
     },
-    /// `remote.pair` for a ticket and a code, answered with [`Msg::Paired`].
-    Pair,
-    /// `remote.pair` for the ticket alone, answered with
-    /// [`Msg::TicketMinted`].
-    MintTicket,
+    /// `remote.pair` for a ticket and a code for the pairing modal
+    /// `generation`, answered with [`Msg::Paired`].
+    Pair {
+        generation: u64,
+    },
+    /// `remote.pair` for the ticket alone for the pairing modal
+    /// `generation`, answered with [`Msg::TicketMinted`].
+    MintTicket {
+        generation: u64,
+    },
     /// `remote.use` for lane `lane` (`acme@0`) of box `host`, or of this
     /// machine when `host` is `None`, answered with [`Msg::LaneUsed`].
     UseLane {
@@ -1204,6 +1215,8 @@ pub struct BoxesView {
     ticks: u8,
     /// The newest [`Effect::Connect`]; older ones' messages are stale.
     connects: u64,
+    /// The newest pairing modal; answers for an older one are dropped.
+    pairs: u64,
 }
 
 impl BoxesView {
@@ -2438,13 +2451,19 @@ impl App {
                 }
                 self.fetch_boxes(&mut effects);
             }
-            Msg::Paired(result) => {
-                if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut() {
+            // An answer for a modal that closed or was replaced is dropped:
+            // only the open one's ticket and code are still shown as valid.
+            Msg::Paired { generation, result } => {
+                if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut()
+                    && dialog.generation == generation
+                {
                     dialog.answered(result);
                 }
             }
-            Msg::TicketMinted(result) => {
-                if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut() {
+            Msg::TicketMinted { generation, result } => {
+                if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut()
+                    && dialog.generation == generation
+                {
                     dialog.ticket_answered(result);
                 }
             }
@@ -4350,7 +4369,9 @@ impl App {
             KeyCode::Enter => self.box_enter(effects),
             KeyCode::Char('m') if plain => self.box_use_lane(effects),
             KeyCode::Char('n') if plain => self.new_box(effects),
-            KeyCode::Char('p') if plain => self.pair(effects),
+            KeyCode::Char('p') if plain && key.kind != crate::keys::KeyEventKind::Repeat => {
+                self.pair(effects);
+            }
             KeyCode::Char('o') if plain => self.open_options("remote.allow_connections", effects),
             KeyCode::Char('d') if plain => self.disconnect_prompt(),
             KeyCode::Char('f') if plain => self.forget_prompt(),
@@ -4555,8 +4576,12 @@ impl App {
 
     /// Opens the pairing code modal and asks for a code.
     fn pair(&mut self, effects: &mut Vec<Effect>) {
-        self.dialog = Some(Dialog::Pair(crate::connect::PairDialog::loading()));
-        effects.push(Effect::Pair);
+        self.boxes.pairs += 1;
+        let generation = self.boxes.pairs;
+        let mut dialog = crate::connect::PairDialog::loading();
+        dialog.generation = generation;
+        self.dialog = Some(Dialog::Pair(dialog));
+        effects.push(Effect::Pair { generation });
     }
 
     /// Takes an event of the attached `connect`: a link state, which closes
@@ -6354,7 +6379,13 @@ impl App {
             KeyCode::Char('c') if dialog.ticket().is_some() => dialog.code(),
             _ => None,
         };
+        // Each request mints a ticket and a code and starts this machine's
+        // networking, so a held key or a press while one is out asks nothing.
+        let repeat = key.kind == crate::keys::KeyEventKind::Repeat;
         match key.code {
+            KeyCode::Char('p' | 't') if repeat || dialog.asking() => {
+                self.dialog = Some(Dialog::Pair(dialog));
+            }
             KeyCode::Char('p') => self.pair(effects),
             KeyCode::Char('y' | 'c') => {
                 if let Some(text) = copied {
@@ -6365,7 +6396,9 @@ impl App {
             }
             KeyCode::Char('t') => {
                 if dialog.fetch_ticket() {
-                    effects.push(Effect::MintTicket);
+                    effects.push(Effect::MintTicket {
+                        generation: dialog.generation,
+                    });
                 }
                 self.dialog = Some(Dialog::Pair(dialog));
             }
