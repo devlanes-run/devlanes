@@ -2,9 +2,8 @@
 //! over loopback with no relay. They prove `MemoryPeers`, which the daemon's
 //! tests use, behaves like the real endpoint.
 
-use std::time::Duration;
-
 use std::sync::Arc;
+use std::time::Duration;
 
 use devlanes_transport::PeerEndpoint;
 use devlanes_transport::conformance::{self, Peers};
@@ -32,16 +31,19 @@ fn iroh(home: &Home) -> Peers {
 #[tokio::test]
 async fn stopping_an_endpoint_that_never_listened_binds_nothing() -> TestResult {
     let home = Home::new()?;
-    let endpoint = home.endpoint("box", Vec::new());
-    endpoint.listen(None).await?;
-    assert!(
-        !home.key_file("box").exists(),
-        "listen(None) created the key, so it bound"
-    );
-    endpoint.listen(Some(Arc::new(Everyone))).await?;
-    assert!(home.key_file("box").exists(), "listen(Some) did not bind");
-    endpoint.close().await;
-    Ok(())
+    bounded(CHECK, async {
+        let endpoint = home.endpoint("box", Vec::new());
+        endpoint.listen(None).await?;
+        assert!(
+            !home.key_file("box").exists(),
+            "listen(None) created the key, so it bound"
+        );
+        endpoint.listen(Some(Arc::new(Everyone))).await?;
+        assert!(home.key_file("box").exists(), "listen(Some) did not bind");
+        endpoint.close().await;
+        Ok(())
+    })
+    .await
 }
 
 #[tokio::test]

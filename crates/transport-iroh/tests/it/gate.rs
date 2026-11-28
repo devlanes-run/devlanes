@@ -1,14 +1,13 @@
 //! The direct-path gate against a box only a relay can reach, with the relay
 //! running in this process on loopback over plain HTTP.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use devlanes_transport::{Alpn, BoxError, PeerAddr, PeerEndpoint, PeerError, PeerId, TUNNEL_ALPN};
 use iroh::endpoint::{PortmapperConfig, presets};
 use iroh::{Endpoint, RelayMode, RelayUrl};
 use iroh_relay::server::{RelayConfig, Server, ServerConfig};
-use std::sync::Arc;
-
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
