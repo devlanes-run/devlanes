@@ -7,6 +7,7 @@
 //! at once when the box no longer accepts this machine's key.
 
 use std::{
+    net::SocketAddr,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -15,14 +16,17 @@ use std::{
 };
 
 use async_trait::async_trait;
+use devlanes_proto::RpcError;
+use devlanes_state::P2pBox;
 use devlanes_transport::{
     Alpn, BoxConnection, BoxDuplex, Connection, ConnectionError, PeerAddr, PeerEndpoint, PeerError,
-    Transport, TransportError,
+    PeerId, Transport, TransportError,
 };
 use futures_util::FutureExt as _;
+use serde_json::json;
 use tokio::time::Instant;
 
-use crate::model::lock;
+use crate::{engine::Inner, model::lock};
 
 /// How long a box paired by ticket may stay unreachable before its link
 /// stops trying.
@@ -255,6 +259,8 @@ impl PeerAttempts {
     }
 
     /// Set once the link stopped trying because the box stayed away.
+    // Read once ephemeral boxes are forgotten, two commits on.
+    #[allow(dead_code)]
     pub(super) fn gave_up(&self) -> Arc<AtomicBool> {
         self.gave_up.clone()
     }
@@ -292,6 +298,70 @@ impl Transport for PeerAttempts {
         } else {
             PeerLinkError::GaveUp { name }
         }))
+    }
+}
+
+impl Inner {
+    /// The bounded transport of box `paired`: a link a person started gets
+    /// the whole window, a link the restore opens (`connected_before`) what
+    /// is left of it since the box was last reached, from
+    /// `remote_hosts.last_connected`, or the pairing when it never connected.
+    pub(super) async fn peer_attempts(
+        &self,
+        paired: &P2pBox,
+        connected_before: bool,
+    ) -> Result<PeerAttempts, RpcError> {
+        let Some(endpoint) = self.integ.peer.clone() else {
+            return Err(RpcError::new(
+                "not_supported_yet",
+                json!({"feature": "boxes paired by ticket"}),
+                1,
+            ));
+        };
+        let Ok(id) = paired.peer_key.parse::<PeerId>() else {
+            tracing::warn!(host = %paired.name, "the stored key of a box paired by ticket is damaged");
+            return Err(super::pairing_missing(&paired.name));
+        };
+        let direct = paired
+            .direct_addrs
+            .iter()
+            .filter_map(|addr| match addr.parse::<SocketAddr>() {
+                Ok(addr) => Some(addr),
+                Err(_) => {
+                    tracing::debug!(host = %paired.name, %addr, "skipping a stored box address that does not parse");
+                    None
+                }
+            })
+            .collect();
+        let addr = PeerAddr {
+            id,
+            relay: paired.relay_url.clone(),
+            direct,
+        };
+        let away = if connected_before {
+            let last = self
+                .store
+                .remote_hosts()
+                .await
+                .map_err(crate::registry::store_error)?
+                .into_iter()
+                .find(|host| host.name == paired.name)
+                .and_then(|host| host.last_connected)
+                .unwrap_or(paired.paired_at);
+            // Stored times are wall-clock milliseconds; a time ahead of the
+            // clock, after the clock stepped back, counts as just now.
+            let now = i64::try_from(super::now_ms()).unwrap_or(i64::MAX);
+            Duration::from_millis(u64::try_from(now.saturating_sub(last)).unwrap_or(0))
+        } else {
+            Duration::ZERO
+        };
+        let transport = Arc::new(PeerTransport::new(endpoint, addr));
+        Ok(PeerAttempts::new(
+            transport,
+            &paired.name,
+            paired.ephemeral,
+            away,
+        ))
     }
 }
 
