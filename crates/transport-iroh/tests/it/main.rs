@@ -7,6 +7,7 @@ mod gate;
 mod peer;
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,11 +35,16 @@ impl Home {
         })
     }
 
+    /// Where the endpoint named `name` keeps its key.
+    fn key_file(&self, name: &str) -> PathBuf {
+        self.directory.path().join(name).join("p2p-key")
+    }
+
     /// An endpoint named `name` with `relays`, without n0's address lookup
     /// or port mapping, both of which would reach hosts outside this machine.
     fn endpoint(&self, name: &str, relays: Vec<String>) -> Arc<IrohEndpoint> {
         Arc::new(IrohEndpoint::new(IrohOptions {
-            key_file: self.directory.path().join(name).join("p2p-key"),
+            key_file: self.key_file(name),
             relays,
             address_lookup: false,
             port_mapping: false,

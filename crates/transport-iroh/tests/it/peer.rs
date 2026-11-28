@@ -4,9 +4,12 @@
 
 use std::time::Duration;
 
+use std::sync::Arc;
+
+use devlanes_transport::PeerEndpoint;
 use devlanes_transport::conformance::{self, Peers};
 
-use super::{Home, TestResult, bounded};
+use super::{Everyone, Home, TestResult, bounded};
 
 /// Every check dials a few times on loopback.
 const CHECK: Duration = Duration::from_secs(10);
@@ -20,6 +23,25 @@ fn iroh(home: &Home) -> Peers {
         ],
         listener: home.endpoint("box", Vec::new()),
     }
+}
+
+/// Stopping a listener that never started touches nothing: the daemon stops
+/// listening after every revoke and ticket expiry, also on a machine that
+/// never used P2P, and binding there would contact the relay and the router.
+/// The key file is the trace binding leaves, since a bind reads the key first.
+#[tokio::test]
+async fn stopping_an_endpoint_that_never_listened_binds_nothing() -> TestResult {
+    let home = Home::new()?;
+    let endpoint = home.endpoint("box", Vec::new());
+    endpoint.listen(None).await?;
+    assert!(
+        !home.key_file("box").exists(),
+        "listen(None) created the key, so it bound"
+    );
+    endpoint.listen(Some(Arc::new(Everyone))).await?;
+    assert!(home.key_file("box").exists(), "listen(Some) did not bind");
+    endpoint.close().await;
+    Ok(())
 }
 
 #[tokio::test]

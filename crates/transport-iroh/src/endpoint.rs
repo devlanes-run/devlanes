@@ -31,10 +31,14 @@ const DIRECT_PATH_WAIT: Duration = Duration::from_secs(15);
 /// configured relay instead of the home relay iroh picked.
 const ONLINE_WAIT: Duration = Duration::from_secs(5);
 
-/// Admitted connections waiting for `accept`. A full queue drops new ones:
-/// pairing admits any key while a ticket is outstanding, so the queue must
-/// not grow with whatever connects.
-const ACCEPT_QUEUE: usize = 64;
+/// Admitted session connections waiting for `accept`. A full queue drops new
+/// ones, so whatever connects cannot grow the daemon's memory.
+const TUNNEL_QUEUE: usize = 64;
+
+/// Admitted pairing connections waiting for `accept`, in a queue of their
+/// own: pairing admits any key while a ticket is outstanding, and a flood of
+/// those must not push paired clients' sessions out.
+const PAIR_QUEUE: usize = 16;
 
 /// Socket addresses a ticket carries at most.
 const MAX_DIRECT_ADDRS: usize = 8;
@@ -74,10 +78,14 @@ pub struct IrohOptions {
     pub key_file: PathBuf,
     /// Relay URLs such as `https://relay.devlanes.run`. Empty for none: then
     /// peers connect only through the addresses they know of each other.
+    /// The daemon's config validates them; one that does not parse here
+    /// fails the bind.
     pub relays: Vec<String>,
     /// Publish this endpoint's relay to n0's DNS while listening, and look
-    /// peers up there when dialing. Ignored without relays, since the
-    /// published record holds only the relay URL.
+    /// peers up there when dialing. Its own option because iroh asks every
+    /// lookup service on each dial, so tests and machines that must stay off
+    /// third-party services turn it off while still using a relay. Ignored
+    /// without relays, since the published record holds only the relay URL.
     pub address_lookup: bool,
     /// Ask the router for a port mapping (UPnP, NAT-PMP, PCP). Read when the
     /// endpoint binds.
@@ -90,12 +98,40 @@ pub struct IrohEndpoint {
     key: OnceCell<SecretKey>,
     bound: OnceCell<Bound>,
     shared: Arc<Shared>,
-    /// Where the accept task queues admitted connections; `None` once closed,
-    /// which ends `accept` after the queue drains.
-    incoming_tx: Mutex<Option<mpsc::Sender<PeerIncoming>>>,
-    incoming: tokio::sync::Mutex<mpsc::Receiver<PeerIncoming>>,
-    /// Whether a publisher is registered, so `listen` adds it once.
-    publishing: Mutex<bool>,
+    /// Where the accept task queues admitted connections; `None` once
+    /// closed, which ends `accept` after the queues drain.
+    queues: Mutex<Option<Queues>>,
+    incoming: tokio::sync::Mutex<Incoming>,
+    /// Held for the whole of `listen`, so concurrent calls apply in turn;
+    /// holds whether a publisher is registered, so it is added once.
+    listening: tokio::sync::Mutex<bool>,
+}
+
+/// The sending halves of the accept queues, one per protocol.
+#[derive(Clone)]
+struct Queues {
+    tunnel: mpsc::Sender<PeerIncoming>,
+    pair: mpsc::Sender<PeerIncoming>,
+}
+
+impl Queues {
+    /// Queues an admitted connection, or drops it when its queue is full.
+    fn push(&self, arrived: PeerIncoming) {
+        let queue = match arrived.alpn {
+            Alpn::Tunnel => &self.tunnel,
+            Alpn::Pair => &self.pair,
+        };
+        let peer = arrived.peer.short();
+        if queue.try_send(arrived).is_err() {
+            tracing::debug!(%peer, "dropping a peer connection: too many waiting");
+        }
+    }
+}
+
+/// The receiving halves of the accept queues.
+struct Incoming {
+    tunnel: mpsc::Receiver<PeerIncoming>,
+    pair: mpsc::Receiver<PeerIncoming>,
 }
 
 /// The bound iroh endpoint and its accept task.
@@ -111,35 +147,79 @@ impl Drop for Bound {
     }
 }
 
+/// Weak handles of one peer's session connections, by `stable_id`.
+type Sessions = HashMap<usize, WeakConnectionHandle>;
+
 /// What the handshake hook and the accept task share with the endpoint.
 /// Never holds the iroh `Endpoint`: the hook lives inside it, and a strong
 /// reference would keep it alive forever.
 #[derive(Default)]
 struct Shared {
     admission: RwLock<Option<Arc<dyn Admission>>>,
-    /// Admitted connections by peer, weak so `close_peer` can find them
-    /// without keeping them open.
-    peers: Mutex<HashMap<PeerId, Vec<WeakConnectionHandle>>>,
+    /// Admitted session connections by peer, for `close_peer`: weak so they
+    /// stay closable without being kept open, and each removed when its
+    /// connection closes.
+    peers: Mutex<HashMap<PeerId, Sessions>>,
 }
 
 impl Shared {
     /// Whether the current admission lets `peer` in for `alpn`.
     fn admits(&self, peer: &PeerId, alpn: Alpn) -> bool {
-        self.admission
+        // Called without the lock held: the daemon may hold its own lock on
+        // the key set while it calls `listen`, which takes this one for
+        // writing, and `admit` takes the daemon's lock.
+        let admission = self
+            .admission
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .is_some_and(|admission| admission.admit(peer, alpn))
+            .clone();
+        admission.is_some_and(|admission| admission.admit(peer, alpn))
     }
 
-    /// The admitted connections by peer.
-    fn peers(&self) -> MutexGuard<'_, HashMap<PeerId, Vec<WeakConnectionHandle>>> {
+    /// Replaces the admission.
+    fn set_admission(&self, admission: Option<Arc<dyn Admission>>) {
+        *self
+            .admission
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = admission;
+    }
+
+    /// The admitted session connections by peer.
+    fn peers(&self) -> MutexGuard<'_, HashMap<PeerId, Sessions>> {
         self.peers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Records a session connection of `peer` until it closes.
+    ///
+    /// Pairing connections are not recorded: any key may open one while a
+    /// ticket is outstanding, so recording them would let strangers grow
+    /// this map, and nothing closes a pairing connection by peer.
+    fn record(self: &Arc<Self>, peer: PeerId, connection: &endpoint::Connection) {
+        let handle = connection.weak_handle();
+        let id = connection.stable_id();
+        // Registered while the connection is alive, so it resolves however
+        // the connection ends.
+        let closed = handle.closed();
+        self.peers().entry(peer).or_default().insert(id, handle);
+        let shared = Arc::downgrade(self);
+        tokio::spawn(async move {
+            closed.await;
+            let Some(shared) = shared.upgrade() else {
+                return;
+            };
+            let mut peers = shared.peers();
+            if let Some(sessions) = peers.get_mut(&peer) {
+                sessions.remove(&id);
+                if sessions.is_empty() {
+                    peers.remove(&peer);
+                }
+            }
+        });
     }
 }
 
-/// Decides in the handshake, before any stream, which incoming connections
-/// stay open.
+/// Decides right after the TLS handshake, before any stream, which incoming
+/// connections stay open.
 struct Gatekeeper {
     shared: Arc<Shared>,
 }
@@ -196,6 +276,12 @@ fn transport_config() -> QuicTransportConfig {
         .stream_receive_window(VarInt::from_u32(STREAM_WINDOW))
         .receive_window(VarInt::from_u32(CONNECTION_WINDOW))
         .send_window(SEND_WINDOW)
+        // The protocol sends no datagrams. noq buffers about 1.25 MB of
+        // received ones per connection by default, which any peer, also an
+        // unpaired one on the pairing protocol, could fill; `None` tells the
+        // peer it may send none. Nothing here sends one, so the send buffer
+        // stays empty.
+        .datagram_receive_buffer_size(None)
         .max_idle_timeout(Some(VarInt::from_u32(IDLE_TIMEOUT_MS).into()))
         .keep_alive_interval(KEEP_ALIVE)
         .build()
@@ -218,24 +304,28 @@ fn reach_rank(addr: &SocketAddr) -> u8 {
 impl IrohEndpoint {
     /// An endpoint that binds nothing and reads no file until it is used.
     pub fn new(options: IrohOptions) -> Self {
-        let (incoming_tx, incoming) = mpsc::channel(ACCEPT_QUEUE);
+        let (tunnel, tunnel_rx) = mpsc::channel(TUNNEL_QUEUE);
+        let (pair, pair_rx) = mpsc::channel(PAIR_QUEUE);
         Self {
             options,
             key: OnceCell::new(),
             bound: OnceCell::new(),
             shared: Arc::default(),
-            incoming_tx: Mutex::new(Some(incoming_tx)),
-            incoming: tokio::sync::Mutex::new(incoming),
-            publishing: Mutex::new(false),
+            queues: Mutex::new(Some(Queues { tunnel, pair })),
+            incoming: tokio::sync::Mutex::new(Incoming {
+                tunnel: tunnel_rx,
+                pair: pair_rx,
+            }),
+            listening: tokio::sync::Mutex::new(false),
         }
     }
 
-    /// Whether `close` ran.
-    fn is_closed(&self) -> bool {
-        self.incoming_tx
+    /// The accept queues; `None` once `close` ran.
+    fn queues(&self) -> Option<Queues> {
+        self.queues
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .is_none()
+            .clone()
     }
 
     /// Whether this endpoint publishes and looks up through n0's DNS.
@@ -260,10 +350,16 @@ impl IrohEndpoint {
 
     /// The bound endpoint, binding it the first time.
     async fn bound(&self) -> Result<&Endpoint, PeerError> {
-        if self.is_closed() {
+        if self.queues().is_none() {
             return Err(PeerError::Closed);
         }
         let bound = self.bound.get_or_try_init(|| self.bind()).await?;
+        // `close` may have run while this call or another was binding, and
+        // found nothing to close then. Closing twice is a no-op in iroh.
+        if self.queues().is_none() {
+            bound.endpoint.close().await;
+            return Err(PeerError::Closed);
+        }
         Ok(&bound.endpoint)
     }
 
@@ -314,25 +410,27 @@ impl IrohEndpoint {
             .await
             .map_err(|error| PeerError::Bind(error.to_string()))?;
         tracing::debug!(sockets = ?endpoint.bound_sockets(), "peer-to-peer endpoint bound");
-        let queue = self
-            .incoming_tx
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-            .ok_or(PeerError::Closed)?;
-        let accepting = tokio::spawn(accept_loop(endpoint.clone(), self.shared.clone(), queue));
+        let Some(queues) = self.queues() else {
+            // Closed while binding: dropping an endpoint without closing it
+            // aborts its connections and iroh logs that as an error.
+            endpoint.close().await;
+            return Err(PeerError::Closed);
+        };
+        let accepting = tokio::spawn(accept_loop(endpoint.clone(), self.shared.clone(), queues));
         Ok(Bound {
             endpoint,
             accepting,
         })
     }
 
-    /// Starts or stops publishing this endpoint's relay to n0's DNS.
-    fn publish(&self, endpoint: &Endpoint, on: bool) -> Result<(), PeerError> {
-        let mut publishing = self
-            .publishing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+    /// Starts or stops publishing this endpoint's relay to n0's DNS;
+    /// `publishing` is whether it does now.
+    fn publish(
+        &self,
+        endpoint: &Endpoint,
+        publishing: &mut bool,
+        on: bool,
+    ) -> Result<(), PeerError> {
         if !self.looks_up() || *publishing == on {
             return Ok(());
         }
@@ -431,10 +529,10 @@ fn dial_failed(error: endpoint::ConnectError) -> PeerError {
 
 /// Accepts incoming connections until the endpoint closes, each in its own
 /// task so a slow handshake holds up no other.
-async fn accept_loop(endpoint: Endpoint, shared: Arc<Shared>, queue: mpsc::Sender<PeerIncoming>) {
+async fn accept_loop(endpoint: Endpoint, shared: Arc<Shared>, queues: Queues) {
     while let Some(incoming) = endpoint.accept().await {
         let shared = shared.clone();
-        let queue = queue.clone();
+        let queues = queues.clone();
         tokio::spawn(async move {
             // Refused peers end here: the hook closed their connection.
             let connection = match incoming.await {
@@ -448,11 +546,8 @@ async fn accept_loop(endpoint: Endpoint, shared: Arc<Shared>, queue: mpsc::Sende
                 return;
             };
             let peer = peer_id(&connection.remote_id());
-            {
-                let mut peers = shared.peers();
-                let handles = peers.entry(peer).or_default();
-                handles.retain(|handle| handle.upgrade().is_some());
-                handles.push(connection.weak_handle());
+            if alpn == Alpn::Tunnel {
+                shared.record(peer, &connection);
             }
             // `close_peer` may have run between the hook and the line above,
             // and missed this connection; the admission tells.
@@ -460,14 +555,11 @@ async fn accept_loop(endpoint: Endpoint, shared: Arc<Shared>, queue: mpsc::Sende
                 connection.close(VarInt::from_u32(REFUSED), b"refused");
                 return;
             }
-            let arrived = PeerIncoming {
+            queues.push(PeerIncoming {
                 peer,
                 alpn,
                 connection: Box::new(IrohServerConnection::new(connection)),
-            };
-            if queue.try_send(arrived).is_err() {
-                tracing::debug!(peer = %peer.short(), "dropping a peer connection: too many waiting");
-            }
+            });
         });
     }
 }
@@ -517,7 +609,8 @@ impl PeerEndpoint for IrohEndpoint {
 
     /// Dials `addr`, then waits up to [`DIRECT_PATH_WAIT`] for the box to
     /// admit this machine and for a direct path to be selected. Only then
-    /// is the connection handed out, so no session data crosses a relay.
+    /// is the connection handed out; its relay watcher then closes it once
+    /// it has had no direct path for `RELAY_GRACE`.
     ///
     /// A refused key does not fail the dial itself: the connection opens
     /// and the box closes it with the refused code, which both waits see.
@@ -528,6 +621,9 @@ impl PeerEndpoint for IrohEndpoint {
             .connect(target, alpn.bytes())
             .await
             .map_err(dial_failed)?;
+        // Subscribed before the gate: the subscription delivers only later
+        // events, so a relay selected after the gate's snapshot is not missed.
+        let events = connection.path_events();
         let deadline = tokio::time::Instant::now() + DIRECT_PATH_WAIT;
         // The box grants stream credit only once it admitted this key, so a
         // stream that opens means no refusal is on its way.
@@ -552,7 +648,7 @@ impl PeerEndpoint for IrohEndpoint {
         })
         .await;
         match direct {
-            Ok(true) => Ok(Box::new(IrohConnection::new(connection, first))),
+            Ok(true) => Ok(Box::new(IrohConnection::new(connection, first, events))),
             // The paths end when the connection closes.
             Ok(false) => Err(connection
                 .close_reason()
@@ -569,42 +665,52 @@ impl PeerEndpoint for IrohEndpoint {
     }
 
     /// Sets the admission and the accepted ALPNs, and publishes or stops.
+    /// `None` on an endpoint that never bound only clears the admission:
+    /// binding to stop listening would contact the relay and the router for
+    /// nothing.
     async fn listen(&self, admission: Option<Arc<dyn Admission>>) -> Result<(), PeerError> {
+        let mut publishing = self.listening.lock().await;
+        if self.queues().is_none() {
+            return Err(PeerError::Closed);
+        }
+        if admission.is_none() && self.bound.get().is_none() {
+            self.shared.set_admission(None);
+            return Ok(());
+        }
         let endpoint = self.bound().await?;
         let listening = admission.is_some();
         // The admission is in place before the first handshake can arrive,
         // and gone only after the last one that could use it.
         if listening {
-            *self
-                .shared
-                .admission
-                .write()
-                .unwrap_or_else(PoisonError::into_inner) = admission;
+            self.shared.set_admission(admission);
             endpoint.set_alpns(vec![TUNNEL_ALPN.to_vec(), PAIR_ALPN.to_vec()]);
         } else {
             // With no ALPN, rustls refuses every handshake, so a stopped box
             // looks unreachable instead of refusing keys.
             endpoint.set_alpns(Vec::new());
-            *self
-                .shared
-                .admission
-                .write()
-                .unwrap_or_else(PoisonError::into_inner) = None;
+            self.shared.set_admission(None);
         }
-        self.publish(endpoint, listening)
+        self.publish(endpoint, &mut publishing, listening)
     }
 
-    /// The next admitted connection.
+    /// The next admitted connection, sessions before pairing exchanges.
     async fn accept(&self) -> Option<PeerIncoming> {
-        self.incoming.lock().await.recv().await
+        let mut incoming = self.incoming.lock().await;
+        let Incoming { tunnel, pair } = &mut *incoming;
+        tokio::select! {
+            biased;
+            Some(arrived) = tunnel.recv() => Some(arrived),
+            Some(arrived) = pair.recv() => Some(arrived),
+            else => None,
+        }
     }
 
-    /// Closes `peer`'s connections with the refused-key code.
+    /// Closes `peer`'s session connections with the refused-key code.
     fn close_peer(&self, peer: &PeerId) {
-        let Some(handles) = self.shared.peers().remove(peer) else {
+        let Some(sessions) = self.shared.peers().remove(peer) else {
             return;
         };
-        for connection in handles.iter().filter_map(WeakConnectionHandle::upgrade) {
+        for connection in sessions.values().filter_map(WeakConnectionHandle::upgrade) {
             connection.close(VarInt::from_u32(REFUSED), b"refused");
         }
     }
@@ -612,7 +718,7 @@ impl PeerEndpoint for IrohEndpoint {
     /// Closes the iroh endpoint, which closes every connection with code 0
     /// and waits, bounded, for the peers to learn it.
     async fn close(&self) {
-        self.incoming_tx
+        self.queues
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();

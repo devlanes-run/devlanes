@@ -1,6 +1,6 @@
 //! Sessions over iroh connections: one QUIC stream per protocol stream, an
 //! activity marker for the session's ping timeout, and the watcher that ends
-//! a client's connection when only the relay is left.
+//! a client's connection once it has had no direct path for a few seconds.
 
 use std::io;
 use std::pin::Pin;
@@ -13,13 +13,12 @@ use devlanes_transport::{
     BoxDuplex, Connection, ConnectionError, Joined, PeerError, ServerConnection,
 };
 use futures_util::StreamExt;
-use iroh::endpoint::{self, PathEvent, RecvStream, SendStream, VarInt, WeakConnectionHandle};
+use iroh::endpoint::{self, RecvStream, SendStream, VarInt, WeakConnectionHandle};
 use tokio::io::{AsyncRead, ReadBuf};
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-/// How long the relay may stay the selected path before the client closes
-/// the connection. On a network switch iroh selected the relay for 1 to 22 ms
+/// How long a session may go without a direct path selected (the relay or
+/// nothing) before the client closes the connection. On a network switch iroh selected the relay for 1 to 22 ms
 /// before a new direct path; a blocked direct path left it there for 24 to
 /// 37 s. 3 s keeps switches alive with room for internet round trips and
 /// still ends blocked paths, so relayed session data is bounded by the
@@ -40,7 +39,7 @@ pub(crate) const REFUSED: u32 = 403;
 pub(crate) const NO_DIRECT_PATH: u32 = 1;
 
 /// What the relay watcher records when it closes the connection.
-const LOST_DIRECT_PATH: &str = "the direct path to the box was lost and only the relay is left";
+const LOST_DIRECT_PATH: &str = "the direct connection to the box was lost for 3 seconds";
 
 /// When stream data last arrived from the peer, on tokio's clock.
 ///
@@ -130,17 +129,26 @@ pub(crate) struct IrohConnection {
     activity: Arc<Activity>,
     /// Why this side closed the connection, when the relay watcher did.
     recorded: Arc<Mutex<Option<String>>>,
-    watcher: JoinHandle<()>,
 }
 
 impl IrohConnection {
     /// Wraps a dialed `connection`, with `first` its first stream, and starts
-    /// its relay watcher.
-    pub(crate) fn new(connection: endpoint::Connection, first: (SendStream, RecvStream)) -> Self {
+    /// its relay watcher on `events`, which the dial subscribed to before it
+    /// checked the paths.
+    ///
+    /// The watcher is never aborted, also not when this wrapper drops: open
+    /// streams keep the connection alive after that, and it must still close
+    /// a session left on the relay. It holds only a weak handle and ends once
+    /// the connection is closed, so it cannot outlive it.
+    pub(crate) fn new(
+        connection: endpoint::Connection,
+        first: (SendStream, RecvStream),
+        events: endpoint::PathEventStream,
+    ) -> Self {
         let recorded = Arc::new(Mutex::new(None));
-        let watcher = tokio::spawn(watch_relay(
+        tokio::spawn(watch_relay(
             connection.weak_handle(),
-            connection.path_events(),
+            events,
             recorded.clone(),
         ));
         Self {
@@ -148,15 +156,7 @@ impl IrohConnection {
             first: Mutex::new(Some(first)),
             activity: Activity::new(),
             recorded,
-            watcher,
         }
-    }
-}
-
-impl Drop for IrohConnection {
-    /// Stops the relay watcher; the connection closes once its streams are gone.
-    fn drop(&mut self) {
-        self.watcher.abort();
     }
 }
 
@@ -265,22 +265,28 @@ impl Drop for IrohServerConnection {
     }
 }
 
-/// Whether the relay has been the selected path long enough to give up on
-/// a direct one: a relay selection starts [`RELAY_GRACE`], a direct one
-/// cancels it, and moving between relays or between direct paths changes
-/// nothing.
+/// How often the relay watcher reads the selected path without an event:
+/// iroh clears the selection without one when the selected path's address
+/// is no longer among the connection's paths (`record_selected` in
+/// `path_watcher.rs`).
+const SELECTION_TICK: Duration = Duration::from_secs(1);
+
+/// Whether a session has gone without a direct path long enough to give
+/// up: anything but a direct (IP) path selected, a relay or nothing, starts
+/// [`RELAY_GRACE`], a direct path cancels it, and staying in either state
+/// changes nothing.
 #[derive(Debug, Default)]
 pub(crate) struct RelayWatch {
     deadline: Option<Instant>,
 }
 
 impl RelayWatch {
-    /// Records that iroh selected a relay (`relay`) or a direct path at `now`.
-    pub(crate) fn selected(&mut self, relay: bool, now: Instant) {
-        match (relay, self.deadline) {
-            (true, None) => self.deadline = Some(now + RELAY_GRACE),
-            (true, Some(_)) => {}
-            (false, _) => self.deadline = None,
+    /// Records at `now` whether a direct path is the selected one.
+    pub(crate) fn observe(&mut self, direct: bool, now: Instant) {
+        match (direct, self.deadline) {
+            (false, None) => self.deadline = Some(now + RELAY_GRACE),
+            (false, Some(_)) => {}
+            (true, _) => self.deadline = None,
         }
     }
 
@@ -290,17 +296,44 @@ impl RelayWatch {
     }
 }
 
-/// Closes the connection with [`NO_DIRECT_PATH`] once the relay has been
-/// selected for [`RELAY_GRACE`], and records why.
+/// Whether the connection behind `handle` has a direct path selected;
+/// `None` once it is gone or closed.
+fn direct_selected(handle: &WeakConnectionHandle) -> Option<bool> {
+    let connection = handle.upgrade()?;
+    if connection.close_reason().is_some() {
+        return None;
+    }
+    let direct = connection
+        .paths()
+        .iter()
+        .any(|path| path.is_selected() && path.is_ip());
+    Some(direct)
+}
+
+/// Closes the connection with [`NO_DIRECT_PATH`] once it has had no direct
+/// path selected for [`RELAY_GRACE`], and records why.
 ///
-/// Holds a weak handle: a strong one would keep the connection open after
-/// the session dropped it. Ends with the connection's path events.
+/// `events` was subscribed before the dial's gate read the paths. The state
+/// is seeded from the current selection, then read again on every path event
+/// and every [`SELECTION_TICK`], since iroh changes the selection without an
+/// event in one case; the event only says when to look. A missed event
+/// (`Lagged`) needs nothing more for the same reason.
+///
+/// Holds a weak handle, upgraded only for each read: a strong one would keep
+/// the connection open after the session dropped it. Ends once the
+/// connection is closed, when its path events end or a read finds it gone.
 async fn watch_relay(
     handle: WeakConnectionHandle,
     mut events: endpoint::PathEventStream,
     recorded: Arc<Mutex<Option<String>>>,
 ) {
     let mut watch = RelayWatch::default();
+    let Some(direct) = direct_selected(&handle) else {
+        return;
+    };
+    watch.observe(direct, Instant::now());
+    let mut tick = tokio::time::interval(SELECTION_TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let expiry = async {
             match watch.deadline() {
@@ -309,22 +342,17 @@ async fn watch_relay(
             }
         };
         tokio::select! {
-            event = events.next() => match event {
-                None => return,
-                Some(PathEvent::Selected { remote_addr, .. }) => {
-                    watch.selected(remote_addr.is_relay(), Instant::now());
+            event = events.next() => {
+                if event.is_none() {
+                    return;
                 }
-                // Missed events may include selections; the current selected
-                // path is what counts.
-                Some(PathEvent::Lagged { .. }) => {
-                    let Some(connection) = handle.upgrade() else { return };
-                    let selected = connection.paths().iter().find(|path| path.is_selected()).map(|path| path.is_relay());
-                    if let Some(relay) = selected {
-                        watch.selected(relay, Instant::now());
-                    }
-                }
-                Some(_) => {}
-            },
+                let Some(direct) = direct_selected(&handle) else { return };
+                watch.observe(direct, Instant::now());
+            }
+            _ = tick.tick() => {
+                let Some(direct) = direct_selected(&handle) else { return };
+                watch.observe(direct, Instant::now());
+            }
             () = expiry => {
                 tracing::debug!("{LOST_DIRECT_PATH}; closing the connection");
                 *recorded.lock().unwrap_or_else(PoisonError::into_inner) =
@@ -342,43 +370,56 @@ async fn watch_relay(
 mod tests {
     use super::*;
 
-    /// The watcher gives up only after the relay stayed selected for the
-    /// whole grace: a direct path selected in time cancels it, and direct
-    /// to direct moves never start it.
+    /// The watcher gives up only after the session went without a direct
+    /// path for the whole grace, whatever it had instead (a relay or
+    /// nothing) and whether that was already so when it started: a direct
+    /// path selected in time cancels it, and direct to direct moves never
+    /// start it.
     #[test]
-    fn only_a_relay_selected_for_the_whole_grace_closes() {
+    fn only_a_session_without_a_direct_path_for_the_whole_grace_closes() {
         let start = Instant::now();
         let at = |millis| start + Duration::from_millis(millis);
-        // Selections as (milliseconds after the start, relay), and when the
-        // connection must close.
+        // Reads as (milliseconds after the start, a direct path selected),
+        // and when the connection must close.
         type Case<'a> = (&'a str, &'a [(u64, bool)], Option<Instant>);
-        let cases: [Case; 5] = [
-            ("relay stays", &[(0, false), (100, true)], Some(at(3_100))),
+        let cases: [Case; 8] = [
+            ("relay stays", &[(0, true), (100, false)], Some(at(3_100))),
+            ("seeded on the relay", &[(0, false)], Some(at(3_000))),
+            (
+                "selection cleared, no path at all",
+                &[(0, true), (500, false), (1_500, false)],
+                Some(at(3_500)),
+            ),
             (
                 "relay, then direct within the grace",
-                &[(0, true), (2_900, false)],
+                &[(0, false), (2_900, true)],
                 None,
             ),
             (
                 "direct to direct",
-                &[(0, false), (5_000, false), (9_000, false)],
+                &[(0, true), (5_000, true), (9_000, true)],
                 None,
             ),
             (
-                "relay to another relay keeps the first deadline",
-                &[(0, false), (100, true), (2_000, true)],
+                "staying off a direct path keeps the first deadline",
+                &[(0, true), (100, false), (2_000, false)],
                 Some(at(3_100)),
             ),
             (
-                "relay again after a direct path starts over",
-                &[(0, true), (1_000, false), (4_000, true)],
+                "losing the direct path again starts over",
+                &[(0, false), (1_000, true), (4_000, false)],
                 Some(at(7_000)),
             ),
+            (
+                "a direct path at the last read before the deadline",
+                &[(0, false), (2_999, true), (3_500, true)],
+                None,
+            ),
         ];
-        for (name, selections, closes) in cases {
+        for (name, reads, closes) in cases {
             let mut watch = RelayWatch::default();
-            for &(millis, relay) in selections {
-                watch.selected(relay, at(millis));
+            for &(millis, direct) in reads {
+                watch.observe(direct, at(millis));
             }
             assert_eq!(watch.deadline(), closes, "{name}");
         }
