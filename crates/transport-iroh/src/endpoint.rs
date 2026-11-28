@@ -51,6 +51,10 @@ const MAX_DIRECT_ADDRS: usize = 8;
 /// in the spike; 576 blocked at cycle 65.
 const BOX_STREAMS: u32 = 640;
 
+/// Streams a peer may have open at once on a pairing connection: the
+/// exchange is one request and one answer on one stream.
+const PAIR_STREAMS: u32 = 1;
+
 /// Unread data a single stream may hold: 4 MiB reaches 40 MiB/s at 100 ms
 /// round trip, the ceiling yamux's 4 MiB stream window gives over SSH.
 const STREAM_WINDOW: u32 = 4 * 1024 * 1024;
@@ -241,9 +245,10 @@ impl std::fmt::Debug for Gatekeeper {
 
 impl EndpointHooks for Gatekeeper {
     /// Accepts every connection this side dialed, and for incoming ones asks
-    /// the admission. An admitted connection gets its stream credit here:
-    /// the box's endpoint grants none in the handshake, so the credit is the
-    /// client's sign that it was admitted, sent before any refusal could be.
+    /// the admission. An admitted connection gets its stream credit here, 640
+    /// streams for a session and 1 for pairing: the box's endpoint grants
+    /// none in the handshake, so the credit is the client's sign that it was
+    /// admitted, sent before any refusal could be.
     async fn after_handshake<'a>(
         &'a self,
         connection: &'a endpoint::Connection,
@@ -253,15 +258,26 @@ impl EndpointHooks for Gatekeeper {
         }
         let peer = peer_id(&connection.remote_id());
         let admitted =
-            Alpn::from_bytes(connection.alpn()).is_some_and(|alpn| self.shared.admits(&peer, alpn));
-        if !admitted {
+            Alpn::from_bytes(connection.alpn()).filter(|alpn| self.shared.admits(&peer, *alpn));
+        let Some(alpn) = admitted else {
             tracing::debug!(peer = %peer.short(), "refused a peer in the handshake");
             return AfterHandshakeOutcome::Reject {
                 error_code: VarInt::from_u32(REFUSED),
                 reason: b"refused".to_vec(),
             };
-        }
-        connection.set_max_concurrent_bi_streams(VarInt::from_u32(BOX_STREAMS));
+        };
+        let streams = match alpn {
+            Alpn::Tunnel => BOX_STREAMS,
+            // The exchange is one stream, and while a ticket is outstanding
+            // any key gets here, so a stranger gets credit for that stream
+            // and no more. The receive windows stay as the handshake
+            // announced them: noq 1.5.0 cannot take back credit already
+            // granted (`set_receive_window` only stops later grants until
+            // the shrink is paid off), so one stream bounds what the peer
+            // can make the box buffer to its 4 MiB `STREAM_WINDOW`.
+            Alpn::Pair => PAIR_STREAMS,
+        };
+        connection.set_max_concurrent_bi_streams(VarInt::from_u32(streams));
         AfterHandshakeOutcome::Accept
     }
 }
@@ -278,7 +294,8 @@ fn transport_config() -> QuicTransportConfig {
     QuicTransportConfig::builder()
         // The peer may open no stream: on a client only the client opens
         // streams, which replaces yamux's limit on streams a box opens, and a
-        // box raises it to `BOX_STREAMS` once the hook admitted the peer.
+        // box raises it once the hook admitted the peer: to `BOX_STREAMS` for
+        // a session, to `PAIR_STREAMS` for pairing.
         .max_concurrent_bidi_streams(VarInt::from_u32(0))
         .max_concurrent_uni_streams(VarInt::from_u32(0))
         .stream_receive_window(VarInt::from_u32(STREAM_WINDOW))

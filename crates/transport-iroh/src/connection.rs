@@ -165,8 +165,9 @@ impl IrohConnection {
 #[async_trait]
 impl Connection for IrohConnection {
     /// Hands out the stream opened while dialing, then opens new ones. The
-    /// box grants 640 at once, so `open` waits only for streams the session
-    /// dropped and the box has not freed yet.
+    /// box grants a session 640 at once, so `open` waits only for streams the
+    /// session dropped and the box has not freed yet; a pairing connection
+    /// gets 1, the one its exchange uses.
     async fn open(&self) -> Result<BoxDuplex, ConnectionError> {
         if self.connection.close_reason().is_some() {
             return Err(ConnectionError::Closed);
